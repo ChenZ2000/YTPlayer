@@ -151,9 +151,7 @@ CodeCoverage/
 
 # AI-related documentation and tools
 .claude/
-AGENTS.md
-CLAUDE.md
-SECURITY_FIX_REPORT.md
-*REFACTOR*.md
-*PLAYBACK*.md
-*SEEK*.md
+
+# Ignore all markdown files in root directory except README.md
+/*.md
+!README.md
