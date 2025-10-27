@@ -1,0 +1,170 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003" ToolsVersion="15.0">
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{B1234567-C890-1234-5678-901234567890}</ProjectGuid>
+    <OutputType>WinExe</OutputType>
+    <RootNamespace>YTPlayer</RootNamespace>
+    <AssemblyName>YTPlayer</AssemblyName>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <FileAlignment>512</FileAlignment>
+    <LangVersion>9.0</LangVersion>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>bin\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+    <PlatformTarget>x64</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <!-- ✅ 增强调试配置 -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <CheckForOverflowUnderflow>true</CheckForOverflowUnderflow>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <FileAlignment>4096</FileAlignment>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+    <PlatformTarget>x64</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="Accessibility" />
+    <Reference Include="Microsoft.Activities.Build" />
+    <Reference Include="Microsoft.Build" />
+    <Reference Include="Microsoft.Build.Conversion.v4.0" />
+    <Reference Include="Microsoft.Build.Engine" />
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.IO.Log" />
+    <Reference Include="System.Numerics" />
+    <Reference Include="System.Web" />
+    <Reference Include="System.Data" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Net.Http" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Xml" />
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>packages\Newtonsoft.Json.13.0.3\lib\net45\Newtonsoft.Json.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+    <Reference Include="QRCoder, Version=1.4.3.0, Culture=neutral, processorArchitecture=MSIL">
+      <HintPath>packages\QRCoder.1.4.3\lib\net40\QRCoder.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+    <Reference Include="taglib-sharp, Version=2.1.0.0, Culture=neutral, processorArchitecture=MSIL">
+      <HintPath>packages\taglib-sharp-netstandard2.0.2.1.0\lib\netstandard2.0\taglib-sharp.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+    <Reference Include="BrotliSharpLib, Version=0.3.2.0, Culture=neutral, processorArchitecture=MSIL">
+      <HintPath>packages\BrotliSharpLib.0.3.3\lib\net45\BrotliSharpLib.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+    <Reference Include="System.Runtime.CompilerServices.Unsafe, Version=4.0.4.1, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a, processorArchitecture=MSIL">
+      <HintPath>packages\System.Runtime.CompilerServices.Unsafe.4.5.3\lib\net461\System.Runtime.CompilerServices.Unsafe.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="MainForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Forms\MainForm.Playback.cs">
+      <DependentUpon>MainForm.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Forms\MainForm.CommandQueue.cs">
+      <DependentUpon>MainForm.cs</DependentUpon>
+    </Compile>
+    <Compile Include="MainForm.Designer.cs">
+      <DependentUpon>MainForm.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="Core\NeteaseApiClient.cs" />
+    <Compile Include="Core\BassAudioEngine.cs" />
+    <Compile Include="Core\SeekManager.cs" />
+    <Compile Include="Core\ConfigManager.cs" />
+    <Compile Include="Core\Exceptions\SongResourceNotFoundException.cs" />
+    <Compile Include="Core\Playback\PlaybackQueueManager.cs" />
+    <Compile Include="Core\Playback\PlaybackCommandQueue.cs" />
+    <Compile Include="Core\Playback\PlaybackStateMachine.cs" />
+    <Compile Include="Core\Playback\PlaybackOrchestrator.cs" />
+    <Compile Include="Core\Playback\NextSongPreloader.cs" />
+    <Compile Include="Core\Playback\Cache\CacheHealthInfo.cs" />
+    <Compile Include="Core\Playback\Cache\ChunkDownloadManager.cs" />
+    <Compile Include="Core\Playback\Cache\DownloadStrategy.cs" />
+    <Compile Include="Core\Playback\Cache\BufferingState.cs" />
+    <Compile Include="Core\Playback\Cache\PriorityDownloadScheduler.cs" />
+    <Compile Include="Core\Playback\Cache\SmartCacheManager.cs" />
+    <Compile Include="Core\Playback\Cache\SmartPreCacheManager.cs" />
+    <Compile Include="Core\Playback\Cache\LastChunkCacheManager.cs" />
+    <Compile Include="Core\Playback\Cache\BandwidthAllocator.cs" />
+    <Compile Include="Core\Auth\AuthContext.cs" />
+    <Compile Include="Core\AccountStateStore.cs" />
+    <Compile Include="Core\LyricsManager.cs" />
+    <Compile Include="Core\Streaming\BassStreamProvider.cs" />
+    <Compile Include="Core\Streaming\StreamSkipDownloader.cs" />
+    <Compile Include="Core\Streaming\HttpRangeHelper.cs" />
+    <Compile Include="Core\Streaming\ChunkData.cs" />
+    <Compile Include="Core\Streaming\OptimizedHttpClientFactory.cs" />
+    <Compile Include="Core\Streaming\DynamicBufferOptimizer.cs" />
+    <Compile Include="Utils\EncryptionHelper.cs" />
+    <Compile Include="Utils\DebugLogger.cs" />
+    <Compile Include="Utils\PerformanceMonitor.cs" />
+    <Compile Include="Models\SongInfo.cs" />
+    <Compile Include="Models\PlaylistInfo.cs" />
+    <Compile Include="Models\CommentInfo.cs" />
+    <Compile Include="Models\ConfigModel.cs" />
+    <Compile Include="Models\ListItemInfo.cs" />
+    <Compile Include="Models\SearchResult.cs" />
+    <Compile Include="Models\UserAccountInfo.cs" />
+    <Compile Include="Models\Auth\QrLoginModels.cs" />
+    <Compile Include="Forms\LoginForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Forms\LoginForm.Designer.cs">
+      <DependentUpon>LoginForm.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Forms\UserInfoForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Forms\UserInfoForm.Designer.cs">
+      <DependentUpon>UserInfoForm.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Forms\JumpToPositionDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="bass.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="bassflac.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="MainForm.resx">
+      <DependentUpon>MainForm.cs</DependentUpon>
+    </EmbeddedResource>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="packages.config" />
+    <None Include="App.config" />
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>
