@@ -915,6 +915,25 @@ namespace YTPlayer.Core.Playback.Cache
 
         private Task OnChunkReadyAsync(int chunkIndex, byte[] data)
         {
+            // ⭐⭐⭐ 关键修复：验证最后chunk的完整性，防止不完整chunk进入缓存
+            int lastChunkIndex = _totalChunks - 1;
+            if (chunkIndex == lastChunkIndex)
+            {
+                // 计算最后chunk的预期大小
+                long lastChunkStart = lastChunkIndex * (long)ChunkSize;
+                int expectedLastChunkSize = (int)(_totalSize - lastChunkStart);
+
+                if (data.Length < expectedLastChunkSize)
+                {
+                    // 最后chunk不完整，记录警告但拒绝添加到缓存
+                    DebugLogger.Log(
+                        DebugLogger.LogLevel.Warning,
+                        "SmartCache",
+                        $"⚠️ 拒绝不完整的最后块 {chunkIndex}: {data.Length} bytes < {expectedLastChunkSize} bytes (缺少 {expectedLastChunkSize - data.Length} bytes)");
+                    return Task.CompletedTask; // 不添加到缓存，让顺序下载继续
+                }
+            }
+
             if (_cache.TryAdd(chunkIndex, data))
             {
                 Interlocked.Add(ref _cachedBytes, data.Length);
@@ -925,8 +944,6 @@ namespace YTPlayer.Core.Playback.Cache
             // 这确保 BASS 初始化时 seek 到文件末尾不会失败，同时确保前几块数据完整
             if (_initialBufferTcs != null && !_initialBufferTcs.Task.IsCompleted)
             {
-                int lastChunkIndex = _totalChunks - 1;
-
                 // 检查前 MinReadyChunks 个块是否都存在（连续的块0, 1, 2, ...）
                 bool hasFirstChunks = true;
                 for (int i = 0; i < MinReadyChunks; i++)
@@ -1115,6 +1132,44 @@ namespace YTPlayer.Core.Playback.Cache
 
             // ⭐ 使用统一的预缓存合并方法
             CheckAndMergePreCache(position);
+
+            // ⭐⭐⭐ 关键修复：如果 seek 到接近结尾（>90%），立即触发末尾 chunks 的优先下载
+            // 避免用户 seek 到结尾时，BASS 读取末尾 chunks 时缓存还没准备好
+            if (_totalSize > 0)
+            {
+                double progress = (double)position / _totalSize;
+                if (progress >= 0.90)
+                {
+                    int lastChunkIndex = GetChunkIndex(_totalSize - 1);
+                    int startChunk = Math.Max(chunkIndex + 1, lastChunkIndex - 2);
+
+                    // 立即请求最后 3 个 chunks 的下载（异步，不阻塞当前 seek）
+                    for (int i = startChunk; i <= lastChunkIndex; i++)
+                    {
+                        int chunkToDownload = i; // 捕获循环变量
+                        _ = Task.Run(async () =>
+                        {
+                            try
+                            {
+                                await EnsureChunkAsync(chunkToDownload, CancellationToken.None).ConfigureAwait(false);
+                                DebugLogger.Log(
+                                    DebugLogger.LogLevel.Info,
+                                    "SmartCache",
+                                    $"✓ Seek触发：末尾chunk {chunkToDownload} 已下载");
+                            }
+                            catch (Exception ex)
+                            {
+                                DebugLogger.LogException("SmartCache", ex, $"Seek触发末尾chunk {chunkToDownload} 下载失败");
+                            }
+                        });
+                    }
+
+                    DebugLogger.Log(
+                        DebugLogger.LogLevel.Info,
+                        "SmartCache",
+                        $"⚡ Seek到{progress:P1}，已触发末尾chunks [{startChunk}, {lastChunkIndex}] 优先下载");
+                }
+            }
 
             await EnsureChunkAsync(chunkIndex, token).ConfigureAwait(false);
             return true;

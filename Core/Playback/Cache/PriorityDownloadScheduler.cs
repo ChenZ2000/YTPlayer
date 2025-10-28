@@ -178,6 +178,23 @@ namespace YTPlayer.Core.Playback.Cache
             int windowStart = Math.Max(0, _currentChunk - _preloadBehind);
             int windowEnd = Math.Min(_totalChunks - 1, _currentChunk + _preloadAhead);
 
+            // ⭐⭐⭐ 关键修复：如果接近文件结尾，扩展窗口到包括最后的 chunks
+            // 避免播放到结尾时，末尾 chunks 不在窗口内导致缓存未准备好
+            if (_totalChunks > 0)
+            {
+                double progress = (double)_currentChunk / (_totalChunks - 1);
+                if (progress >= 0.85)
+                {
+                    // 确保窗口包括最后 3 个 chunks
+                    int lastChunk = _totalChunks - 1;
+                    windowEnd = Math.Max(windowEnd, lastChunk);
+                    windowStart = Math.Max(0, lastChunk - 10); // 扩展窗口到后 10 个 chunks
+
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[PriorityScheduler] ⚡ 接近结尾（{progress:P1}），扩展窗口到 [{windowStart}, {windowEnd}]");
+                }
+            }
+
             for (int idx = windowStart; idx <= windowEnd; idx++)
             {
                 desiredWindow.Add(idx);
@@ -228,10 +245,19 @@ namespace YTPlayer.Core.Playback.Cache
             _queuedLookup[chunkIndex] = request;
         }
 
-        private static int CalculatePriority(int chunkIndex, int currentChunk)
+        private int CalculatePriority(int chunkIndex, int currentChunk)
         {
             int distance = Math.Abs(chunkIndex - currentChunk);
             int directionPenalty = chunkIndex >= currentChunk ? 0 : 100;
+
+            // ⭐⭐⭐ 关键修复：末尾 chunks 获得最高优先级
+            // 避免播放到结尾时，末尾 chunks 还在队列末尾等待下载
+            if (_totalChunks > 0 && chunkIndex >= _totalChunks - 3)
+            {
+                // 最后 3 个 chunks 的优先级为 -100（最高）
+                return -100 + (chunkIndex - (_totalChunks - 3)); // -100, -99, -98
+            }
+
             return distance + directionPenalty;
         }
 

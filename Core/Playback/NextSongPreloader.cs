@@ -178,35 +178,78 @@ namespace YTPlayer.Core.Playback
             {
                 System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] 开始预加载: {nextSong.Name}");
 
-                // 步骤 1: 获取 URL（如果还没有）
-                if (string.IsNullOrEmpty(nextSong.Url))
+                // 步骤 1: 获取 URL（支持多音质缓存 + 音质一致性检查）
+
+                // 子步骤1：确定当前选择的音质
+                string qualityLevel = quality.ToString().ToLower();
+
+                // 子步骤2：检查是否需要重新获取URL
+                bool needRefreshUrl = string.IsNullOrEmpty(nextSong.Url);
+
+                if (!needRefreshUrl && !string.IsNullOrEmpty(nextSong.Level))
                 {
-                    bool shouldSkipCheck = nextSong.IsAvailable == true;
-                    System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] 获取 URL: {nextSong.Name}, IsAvailable={nextSong.IsAvailable}, skipCheck={shouldSkipCheck}");
-
-                    var urlResult = await _apiClient.GetSongUrlAsync(
-                        new[] { nextSong.Id },
-                        quality,
-                        skipAvailabilityCheck: shouldSkipCheck).ConfigureAwait(false);
-
-                    if (cancellationToken.IsCancellationRequested) return false;
-
-                    if (urlResult == null ||
-                        !urlResult.TryGetValue(nextSong.Id, out var songUrl) ||
-                        string.IsNullOrEmpty(songUrl?.Url))
+                    // ⭐⭐ 音质一致性检查：如果缓存的音质与当前选择的不一致，必须重新获取
+                    string cachedLevel = nextSong.Level.ToLower();
+                    if (cachedLevel != qualityLevel)
                     {
-                        // 🎯 标记歌曲为不可用，下次预加载会自动跳过
-                        nextSong.IsAvailable = false;
-                        System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] 🎯 无法获取 URL，标记为不可用: {nextSong.Name}");
-                        return false;
+                        System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] ⚠ 音质不一致（缓存: {nextSong.Level}, 当前选择: {qualityLevel}），重新获取URL");
+                        nextSong.Url = null;
+                        nextSong.Level = null;
+                        nextSong.Size = 0;
+                        needRefreshUrl = true;
                     }
+                    else
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] ✓ 音质一致性检查通过: {nextSong.Name}, 音质: {nextSong.Level}");
+                    }
+                }
 
-                    // ✅ 成功获取 URL，标记为可用并缓存信息
-                    nextSong.IsAvailable = true;
-                    nextSong.Url = songUrl.Url;
-                    nextSong.Level = songUrl.Level;
-                    nextSong.Size = songUrl.Size;
-                    System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] ✓ URL 已获取并标记为可用: {nextSong.Name}");
+                // 子步骤3：如果需要获取URL
+                if (needRefreshUrl)
+                {
+                    // ⭐⭐ 首先检查多音质缓存
+                    var cachedQuality = nextSong.GetQualityUrl(qualityLevel);
+                    if (cachedQuality != null && !string.IsNullOrEmpty(cachedQuality.Url))
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] ✓ 命中多音质缓存: {nextSong.Name}, 音质: {qualityLevel}");
+                        nextSong.Url = cachedQuality.Url;
+                        nextSong.Level = cachedQuality.Level;
+                        nextSong.Size = cachedQuality.Size;
+                    }
+                    else
+                    {
+                        // 没有缓存，需要获取URL
+                        bool shouldSkipCheck = nextSong.IsAvailable == true;
+                        System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] 获取 URL: {nextSong.Name}, 音质: {qualityLevel}, IsAvailable={nextSong.IsAvailable}, skipCheck={shouldSkipCheck}");
+
+                        var urlResult = await _apiClient.GetSongUrlAsync(
+                            new[] { nextSong.Id },
+                            quality,
+                            skipAvailabilityCheck: shouldSkipCheck).ConfigureAwait(false);
+
+                        if (cancellationToken.IsCancellationRequested) return false;
+
+                        if (urlResult == null ||
+                            !urlResult.TryGetValue(nextSong.Id, out var songUrl) ||
+                            string.IsNullOrEmpty(songUrl?.Url))
+                        {
+                            // 🎯 标记歌曲为不可用，下次预加载会自动跳过
+                            nextSong.IsAvailable = false;
+                            System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] 🎯 无法获取 URL，标记为不可用: {nextSong.Name}");
+                            return false;
+                        }
+
+                        // ⭐⭐ 将获取的URL缓存到多音质字典中
+                        string actualLevel = songUrl.Level?.ToLower() ?? qualityLevel;
+                        nextSong.SetQualityUrl(actualLevel, songUrl.Url, songUrl.Size, true);
+                        System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] ✓ 已缓存音质URL: {nextSong.Name}, 音质: {actualLevel}, 大小: {songUrl.Size}");
+
+                        // ✅ 成功获取 URL，标记为可用并更新当前字段
+                        nextSong.IsAvailable = true;
+                        nextSong.Url = songUrl.Url;
+                        nextSong.Level = songUrl.Level;
+                        nextSong.Size = songUrl.Size;
+                    }
                 }
 
                 System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] URL 已获取: {nextSong.Url}");
@@ -457,5 +500,8 @@ namespace YTPlayer.Core.Playback
         public BassStreamProvider StreamProvider { get; set; }
         public int StreamHandle { get; set; }
         public bool IsReady { get; set; }
+
+        // ⭐ 新增：歌词数据
+        public YTPlayer.Core.Lyrics.LyricsData LyricsData { get; set; }
     }
 }

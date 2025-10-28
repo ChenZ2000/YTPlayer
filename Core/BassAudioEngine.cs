@@ -977,6 +977,10 @@ namespace YTPlayer.Core
 
         private void StopInternal(bool raiseEvent)
         {
+            BassStreamProvider? oldStreamProvider = null;
+            SmartCacheManager? oldCacheManager = null;
+            int oldStream = 0;
+
             lock (_syncRoot)
             {
                 _positionMonitorCts?.Cancel();
@@ -1000,22 +1004,61 @@ namespace YTPlayer.Core
                         _nearEndSyncHandle = 0;
                     }
 
-                    BASS_StreamFree(_currentStream);
+                    // ⭐ 保存引用，稍后异步释放
+                    oldStream = _currentStream;
                     _currentStream = 0;
                 }
 
-                if (_currentStreamProvider != null)
-                {
-                    _currentStreamProvider.Dispose();
-                    _currentStreamProvider = null;
-                }
+                // ⭐ 保存引用，稍后异步释放
+                oldStreamProvider = _currentStreamProvider;
+                _currentStreamProvider = null;
 
-                if (_currentCacheManager != null)
+                oldCacheManager = _currentCacheManager;
+                _currentCacheManager = null;
+            }
+
+            // ⭐⭐⭐ 异步释放资源（避免 CallbackOnCollectedDelegate）
+            // 与 OnStreamEnded 相同的修复策略
+            if (oldStream != 0 || oldStreamProvider != null || oldCacheManager != null)
+            {
+                Task.Run(async () =>
                 {
-                    DetachCacheManager(_currentCacheManager);
-                    _currentCacheManager.Dispose();
-                    _currentCacheManager = null;
-                }
+                    try
+                    {
+                        Debug.WriteLine($"[BassAudioEngine] ⚙️ StopInternal: 开始异步释放资源（stream={oldStream}）...");
+
+                        // 释放 BASS stream
+                        if (oldStream != 0)
+                        {
+                            BASS_StreamFree(oldStream);
+                            Debug.WriteLine($"[BassAudioEngine] ✓ StopInternal: 已调用 BASS_StreamFree: {oldStream}");
+                        }
+
+                        // ⭐ 延迟释放托管资源（避免 GC 回收委托）
+                        Debug.WriteLine("[BassAudioEngine] ⏳ StopInternal: 等待 200ms，确保 BASS 完成所有回调...");
+                        await Task.Delay(200);
+                        Debug.WriteLine("[BassAudioEngine] ✓ StopInternal: 延迟完成，开始释放托管资源");
+
+                        if (oldStreamProvider != null)
+                        {
+                            oldStreamProvider.Dispose();
+                            Debug.WriteLine("[BassAudioEngine] ✓ StopInternal: 已释放 StreamProvider");
+                        }
+
+                        if (oldCacheManager != null)
+                        {
+                            DetachCacheManager(oldCacheManager);
+                            oldCacheManager.Dispose();
+                            Debug.WriteLine("[BassAudioEngine] ✓ StopInternal: 已释放 CacheManager");
+                        }
+
+                        Debug.WriteLine("[BassAudioEngine] ✓✓✓ StopInternal: 资源释放完成");
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"[BassAudioEngine] ❌ StopInternal 释放资源异常: {ex.Message}");
+                    }
+                });
             }
 
             if (raiseEvent)
@@ -1118,7 +1161,7 @@ namespace YTPlayer.Core
             }
 
             // 7. 异步释放前一首的资源（不阻塞下一首启动）
-            Task.Run(() =>
+            Task.Run(async () =>
             {
                 try
                 {
@@ -1128,8 +1171,17 @@ namespace YTPlayer.Core
                     if (oldStream != 0)
                     {
                         BASS_StreamFree(oldStream);
-                        Debug.WriteLine($"[BassAudioEngine] ✓ 已释放流句柄: {oldStream}");
+                        Debug.WriteLine($"[BassAudioEngine] ✓ 已调用 BASS_StreamFree: {oldStream}");
                     }
+
+                    // ⭐⭐⭐ 关键修复：延迟释放 BassStreamProvider
+                    // 原因：BASS_StreamFree 是异步的，BASS 可能仍在后台清理
+                    //       如果立即释放 BassStreamProvider，GC 可能会回收委托
+                    //       导致 BASS 稍后调用 FileClose 等回调时触发 CallbackOnCollectedDelegate
+                    // 延迟时间：200ms 足以让 BASS 完成内部清理并调用所有回调
+                    Debug.WriteLine("[BassAudioEngine] ⏳ 等待 200ms，确保 BASS 完成所有回调...");
+                    await Task.Delay(200);
+                    Debug.WriteLine("[BassAudioEngine] ✓ 延迟完成，开始释放托管资源");
 
                     // 释放 StreamProvider
                     if (oldStreamProvider != null)

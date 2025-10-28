@@ -254,7 +254,19 @@ namespace YTPlayer.Core.Streaming
                         {
                             if (progressPercent >= 0.98)
                             {
-                                Debug.WriteLine($"[BassStreamProvider] ⏱ FileRead timeout ({timeoutMs}ms) at position {position} (EOF近端), 返回 EOF");
+                                // ⭐⭐⭐ EOF近端超时：可能是最后chunk下载不完整
+                                // 先检查是否真的是EOF（position >= totalSize - 256）
+                                long distanceToEOF = _cacheManager.TotalSize - position;
+                                if (distanceToEOF <= 256)
+                                {
+                                    // 真的接近EOF，允许返回0
+                                    Debug.WriteLine($"[BassStreamProvider] ⏱ FileRead timeout at EOF-{distanceToEOF}B, 返回 EOF（正常结束）");
+                                }
+                                else
+                                {
+                                    // 不应该超时！记录详细信息
+                                    Debug.WriteLine($"[BassStreamProvider] ⚠️⚠️⚠️ FileRead timeout at position {position} ({progressPercent:P1}, EOF-{distanceToEOF}B), 这可能是chunk不完整导致的！");
+                                }
                             }
                             else
                             {
@@ -271,7 +283,16 @@ namespace YTPlayer.Core.Streaming
                     {
                         if (progressPercent >= 0.98)
                         {
-                            Debug.WriteLine($"[BassStreamProvider] ⏱ FileRead timeout ({timeoutMs}ms) at position {position} (EOF近端), 返回 EOF");
+                            // ⭐⭐⭐ EOF近端超时：增强日志
+                            long distanceToEOF = _cacheManager.TotalSize - position;
+                            if (distanceToEOF <= 256)
+                            {
+                                Debug.WriteLine($"[BassStreamProvider] ⏱ FileRead timeout at EOF-{distanceToEOF}B, 返回 EOF（正常结束）");
+                            }
+                            else
+                            {
+                                Debug.WriteLine($"[BassStreamProvider] ⚠️⚠️⚠️ FileRead timeout at position {position} ({progressPercent:P1}, EOF-{distanceToEOF}B), 这可能是chunk不完整导致的！");
+                            }
                         }
                         else
                         {

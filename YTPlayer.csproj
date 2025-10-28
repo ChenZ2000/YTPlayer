@@ -116,6 +116,11 @@
     <Compile Include="Core\Auth\AuthContext.cs" />
     <Compile Include="Core\AccountStateStore.cs" />
     <Compile Include="Core\LyricsManager.cs" />
+    <Compile Include="Core\Lyrics\EnhancedLyricsModels.cs" />
+    <Compile Include="Core\Lyrics\EnhancedLyricsParser.cs" />
+    <Compile Include="Core\Lyrics\LyricsCacheManager.cs" />
+    <Compile Include="Core\Lyrics\LyricsDisplayManager.cs" />
+    <Compile Include="Core\Lyrics\LyricsLoader.cs" />
     <Compile Include="Core\Streaming\BassStreamProvider.cs" />
     <Compile Include="Core\Streaming\StreamSkipDownloader.cs" />
     <Compile Include="Core\Streaming\HttpRangeHelper.cs" />
@@ -125,6 +130,7 @@
     <Compile Include="Utils\EncryptionHelper.cs" />
     <Compile Include="Utils\DebugLogger.cs" />
     <Compile Include="Utils\PerformanceMonitor.cs" />
+    <Compile Include="Utils\TtsHelper.cs" />
     <Compile Include="Models\SongInfo.cs" />
     <Compile Include="Models\PlaylistInfo.cs" />
     <Compile Include="Models\CommentInfo.cs" />
@@ -154,6 +160,15 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
     <Content Include="bassflac.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="nvdaControllerClient.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="ZDSRAPI.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="BoyCtrl.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>

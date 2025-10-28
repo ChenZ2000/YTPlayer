@@ -276,6 +276,11 @@ namespace YTPlayer.Models
         /// </summary>
         public int LyricsFontSize { get; set; } = 12;
 
+        /// <summary>
+        /// 歌词朗读开关状态（默认关闭）
+        /// </summary>
+        public bool LyricsReadingEnabled { get; set; } = false;
+
         #endregion
     }
 

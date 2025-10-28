@@ -161,7 +161,16 @@ namespace YTPlayer.Core.Streaming
 
                             if (bytesRead == 0)
                             {
-                                // 流结束，保存最后一个不完整的块
+                                // ⭐⭐⭐ 流结束，检查是否真的完成了
+                                if (currentPosition < _totalSize)
+                                {
+                                    DebugLogger.Log(
+                                        DebugLogger.LogLevel.Warning,
+                                        "StreamSkip",
+                                        $"⚠️ HTTP stream提前结束: {currentPosition:N0}/{_totalSize:N0} (缺少 {_totalSize - currentPosition:N0} bytes)");
+                                }
+
+                                // 保存最后一个不完整的块
                                 if (bufferOffset > 0)
                                 {
                                     byte[] lastChunk = new byte[bufferOffset];

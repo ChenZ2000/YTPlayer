@@ -251,95 +251,137 @@ namespace YTPlayer
                     return;
                 }
 
-                // ⭐ 获取URL
-                if (string.IsNullOrEmpty(song.Url))
+                // ⭐ 获取URL（支持多音质缓存 + 音质一致性检查）
+
+                // 步骤1：确定当前选择的音质
+                string defaultQualityName = _config.DefaultQuality ?? "超清母带";
+                QualityLevel selectedQuality = NeteaseApiClient.GetQualityLevelFromName(defaultQualityName);
+                string selectedQualityLevel = selectedQuality.ToString().ToLower();
+
+                // 步骤2：检查是否需要重新获取URL
+                bool needRefreshUrl = string.IsNullOrEmpty(song.Url);
+
+                if (!needRefreshUrl && !string.IsNullOrEmpty(song.Level))
                 {
-                    System.Diagnostics.Debug.WriteLine($"[MainForm] 无预加载数据，重新获取URL: {song.Name}");
-
-                    if (cancellationToken.IsCancellationRequested)
+                    // ⭐⭐ 音质一致性检查：如果缓存的音质与当前选择的不一致，必须重新获取
+                    string cachedLevel = song.Level.ToLower();
+                    if (cachedLevel != selectedQualityLevel)
                     {
-                        SetPlaybackLoadingState(false, "播放已取消");
-                        loadingStateActive = false;
-                        return;
+                        System.Diagnostics.Debug.WriteLine($"[MainForm] ⚠ 音质不一致（缓存: {song.Level}, 当前选择: {selectedQualityLevel}），重新获取URL");
+                        song.Url = null;
+                        song.Level = null;
+                        song.Size = 0;
+                        needRefreshUrl = true;
                     }
-
-                    string defaultQualityName = _config.DefaultQuality ?? "超清母带";
-                    QualityLevel selectedQuality = NeteaseApiClient.GetQualityLevelFromName(defaultQualityName);
-                    System.Diagnostics.Debug.WriteLine($"[MainForm] 用户选择的音质: {defaultQualityName} ({selectedQuality})");
-
-                    // ⭐ 如果已预检可用，跳过可用性检查以加快播放速度
-                    bool skipCheck = (song.IsAvailable == true);
-                    if (skipCheck)
+                    else
                     {
-                        System.Diagnostics.Debug.WriteLine($"[MainForm] 歌曲已预检可用，跳过可用性检查: {song.Name}");
+                        System.Diagnostics.Debug.WriteLine($"[MainForm] ✓ 音质一致性检查通过: {song.Name}, 音质: {song.Level}");
                     }
+                }
 
-                    Dictionary<string, SongUrlInfo> urlResult;
-                    try
+                // 步骤3：如果需要获取URL
+                if (needRefreshUrl)
+                {
+                    // ⭐⭐ 首先检查多音质缓存
+                    var cachedQuality = song.GetQualityUrl(selectedQualityLevel);
+                    if (cachedQuality != null && !string.IsNullOrEmpty(cachedQuality.Url))
                     {
-                        urlResult = await GetSongUrlWithRetryAsync(
-                            new[] { song.Id },
-                            selectedQuality,
-                            cancellationToken,
-                            skipAvailabilityCheck: skipCheck).ConfigureAwait(false);
+                        System.Diagnostics.Debug.WriteLine($"[MainForm] ✓ 命中多音质缓存: {song.Name}, 音质: {selectedQualityLevel}");
+                        song.Url = cachedQuality.Url;
+                        song.Level = cachedQuality.Level;
+                        song.Size = cachedQuality.Size;
                     }
-                    catch (SongResourceNotFoundException missingEx)
+                    else
                     {
-                        System.Diagnostics.Debug.WriteLine($"[MainForm] 获取播放链接时检测到歌曲缺失: {missingEx.Message}");
-                        SetPlaybackLoadingState(false, "歌曲不存在，已跳过");
-                        loadingStateActive = false;
-                        HandleSongResourceNotFoundDuringPlayback(song, isAutoPlayback);
-                        return;
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        System.Diagnostics.Debug.WriteLine("[MainForm] 播放链接获取被取消");
-                        SetPlaybackLoadingState(false, "播放已取消");
-                        loadingStateActive = false;
-                        return;
-                    }
-                    catch (Exception ex)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"[MainForm] 获取播放链接失败: {ex.Message}");
-                        SetPlaybackLoadingState(false, "获取播放链接失败");
-                        loadingStateActive = false;
-                        MessageBox.Show(
-                            "无法获取播放链接，请尝试播放其他歌曲",
-                            "错误",
-                            MessageBoxButtons.OK,
-                            MessageBoxIcon.Error);
-                        UpdateStatusBar("获取播放链接失败");
-                        return;
-                    }
+                        // 没有缓存，需要获取URL
+                        System.Diagnostics.Debug.WriteLine($"[MainForm] 无URL缓存，重新获取: {song.Name}, 目标音质: {defaultQualityName}");
 
-                    if (cancellationToken.IsCancellationRequested)
-                    {
-                        SetPlaybackLoadingState(false, "播放已取消");
-                        loadingStateActive = false;
-                        return;
+                        if (cancellationToken.IsCancellationRequested)
+                        {
+                            SetPlaybackLoadingState(false, "播放已取消");
+                            loadingStateActive = false;
+                            return;
+                        }
+
+                        // ⭐ 如果已预检可用，跳过可用性检查以加快播放速度
+                        bool skipCheck = (song.IsAvailable == true);
+                        if (skipCheck)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[MainForm] 歌曲已预检可用，跳过可用性检查: {song.Name}");
+                        }
+
+                        Dictionary<string, SongUrlInfo> urlResult;
+                        try
+                        {
+                            urlResult = await GetSongUrlWithRetryAsync(
+                                new[] { song.Id },
+                                selectedQuality,
+                                cancellationToken,
+                                skipAvailabilityCheck: skipCheck).ConfigureAwait(false);
+                        }
+                        catch (SongResourceNotFoundException missingEx)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[MainForm] 获取播放链接时检测到歌曲缺失: {missingEx.Message}");
+                            SetPlaybackLoadingState(false, "歌曲不存在，已跳过");
+                            loadingStateActive = false;
+                            HandleSongResourceNotFoundDuringPlayback(song, isAutoPlayback);
+                            return;
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            System.Diagnostics.Debug.WriteLine("[MainForm] 播放链接获取被取消");
+                            SetPlaybackLoadingState(false, "播放已取消");
+                            loadingStateActive = false;
+                            return;
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[MainForm] 获取播放链接失败: {ex.Message}");
+                            SetPlaybackLoadingState(false, "获取播放链接失败");
+                            loadingStateActive = false;
+                            MessageBox.Show(
+                                "无法获取播放链接，请尝试播放其他歌曲",
+                                "错误",
+                                MessageBoxButtons.OK,
+                                MessageBoxIcon.Error);
+                            UpdateStatusBar("获取播放链接失败");
+                            return;
+                        }
+
+                        if (cancellationToken.IsCancellationRequested)
+                        {
+                            SetPlaybackLoadingState(false, "播放已取消");
+                            loadingStateActive = false;
+                            return;
+                        }
+
+                        if (!urlResult.TryGetValue(song.Id, out SongUrlInfo songUrl) ||
+                            string.IsNullOrEmpty(songUrl?.Url))
+                        {
+                            System.Diagnostics.Debug.WriteLine("[MainForm ERROR] 无法获取播放链接");
+                            SetPlaybackLoadingState(false, "获取播放链接失败");
+                            loadingStateActive = false;
+                            MessageBox.Show(
+                                "无法获取播放链接，请尝试播放其他歌曲",
+                                "错误",
+                                MessageBoxButtons.OK,
+                                MessageBoxIcon.Error);
+                            UpdateStatusBar("获取播放链接失败");
+                            return;
+                        }
+
+                        // ⭐⭐ 将获取的URL缓存到多音质字典中
+                        string actualLevel = songUrl.Level?.ToLower() ?? selectedQualityLevel;
+                        song.SetQualityUrl(actualLevel, songUrl.Url, songUrl.Size, true);
+                        System.Diagnostics.Debug.WriteLine($"[MainForm] ✓ 已缓存音质URL: {song.Name}, 音质: {actualLevel}, 大小: {songUrl.Size}");
+
+                        song.Url = songUrl.Url;
+                        song.Level = songUrl.Level;
+                        song.Size = songUrl.Size;
+
+                        // ⭐ Pre-warm HTTP connection to reduce TTFB for download
+                        Core.Streaming.OptimizedHttpClientFactory.PreWarmConnection(song.Url);
                     }
-
-                    if (!urlResult.TryGetValue(song.Id, out SongUrlInfo songUrl) ||
-                        string.IsNullOrEmpty(songUrl?.Url))
-                    {
-                        System.Diagnostics.Debug.WriteLine("[MainForm ERROR] 无法获取播放链接");
-                        SetPlaybackLoadingState(false, "获取播放链接失败");
-                        loadingStateActive = false;
-                        MessageBox.Show(
-                            "无法获取播放链接，请尝试播放其他歌曲",
-                            "错误",
-                            MessageBoxButtons.OK,
-                            MessageBoxIcon.Error);
-                        UpdateStatusBar("获取播放链接失败");
-                        return;
-                    }
-
-                    song.Url = songUrl.Url;
-                    song.Level = songUrl.Level;
-                    song.Size = songUrl.Size;
-
-                    // ⭐ Pre-warm HTTP connection to reduce TTFB for download
-                    Core.Streaming.OptimizedHttpClientFactory.PreWarmConnection(song.Url);
                 }
 
                 if (cancellationToken.IsCancellationRequested)
@@ -349,6 +391,11 @@ namespace YTPlayer
                     System.Diagnostics.Debug.WriteLine("[MainForm] 播放请求已取消（播放前）");
                     return;
                 }
+
+                // ⭐ 立即清空旧歌词，避免在新歌词加载前输出旧歌词
+                _lyricsDisplayManager?.Clear();
+                _currentLyrics?.Clear();
+                System.Diagnostics.Debug.WriteLine("[MainForm] 已清空旧歌词，准备播放新歌曲");
 
                 // ⭐⭐⭐ 关键修复：直接调用 PlayAsync，避免通过 .Result 阻塞线程
                 // ⭐ 传递预加载的数据（含完整流对象，如果有）

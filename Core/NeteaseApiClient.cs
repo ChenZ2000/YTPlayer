@@ -4229,14 +4229,16 @@ namespace YTPlayer.Core
                 }
             }
 
-            // 2. 尝试 WEAPI
+            // 2. 尝试 WEAPI（请求所有类型的歌词，包括逐字歌词）
             try
             {
                 var payload = new Dictionary<string, object>
                 {
                     { "id", songId },
-                    { "lv", -1 },
-                    { "tv", -1 }
+                    { "lv", -1 },    // lrc version
+                    { "tv", -1 },    // translation version
+                    { "rv", -1 },    // roma version
+                    { "yv", -1 }     // yrc version (逐字歌词)
                 };
 
                 var response = await PostWeApiAsync<JObject>("/song/lyric", payload);
@@ -5080,7 +5082,8 @@ namespace YTPlayer.Core
             {
                 Lyric = lyricData["lrc"]?["lyric"]?.Value<string>(),
                 TLyric = lyricData["tlyric"]?["lyric"]?.Value<string>(),
-                RomaLyric = lyricData["romalrc"]?["lyric"]?.Value<string>()
+                RomaLyric = lyricData["romalrc"]?["lyric"]?.Value<string>(),
+                YrcLyric = lyricData["yrc"]?["lyric"]?.Value<string>()
             };
         }
 
@@ -5093,7 +5096,8 @@ namespace YTPlayer.Core
 
             return !string.IsNullOrWhiteSpace(lyric.Lyric) ||
                    !string.IsNullOrWhiteSpace(lyric.TLyric) ||
-                   !string.IsNullOrWhiteSpace(lyric.RomaLyric);
+                   !string.IsNullOrWhiteSpace(lyric.RomaLyric) ||
+                   !string.IsNullOrWhiteSpace(lyric.YrcLyric);
         }
 
         /// <summary>
@@ -5365,6 +5369,8 @@ namespace YTPlayer.Core
         public string TLyric { get; set; }
         /// <summary>罗马音歌词</summary>
         public string RomaLyric { get; set; }
+        /// <summary>逐字歌词（yrc格式，包含每个字的时间信息）</summary>
+        public string YrcLyric { get; set; }
     }
 
     /// <summary>

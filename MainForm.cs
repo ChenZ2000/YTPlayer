@@ -9,6 +9,7 @@ using System.Runtime.InteropServices;
 using YTPlayer.Core;
 using YTPlayer.Core.Playback;
 using YTPlayer.Core.Playback.Cache;
+using YTPlayer.Core.Lyrics;
 using YTPlayer.Models;
 using YTPlayer.Models.Auth;
 
@@ -28,7 +29,14 @@ namespace YTPlayer
         private List<PlaylistInfo> _currentPlaylists = new List<PlaylistInfo>();
         private List<AlbumInfo> _currentAlbums = new List<AlbumInfo>();
         private List<ListItemInfo> _currentListItems = new List<ListItemInfo>(); // 统一的列表项
-        private List<LyricLine> _currentLyrics = new List<LyricLine>();
+        private List<LyricLine> _currentLyrics = new List<LyricLine>();  // 保留用于向后兼容
+
+        // ⭐ 新的歌词系统
+        private LyricsCacheManager _lyricsCacheManager;
+        private LyricsDisplayManager _lyricsDisplayManager;
+        private LyricsLoader _lyricsLoader;
+        private bool _autoReadLyrics = false;  // 自动朗读歌词开关
+
         private System.Windows.Forms.Timer _updateTimer;
         private System.Windows.Forms.NotifyIcon _trayIcon;
         private bool _isUserDragging = false;
@@ -288,6 +296,17 @@ namespace YTPlayer
                 // ⭐⭐⭐ 订阅缓冲状态变化事件
                 _audioEngine.BufferingStateChanged += OnBufferingStateChanged;
 
+                // ⭐ 初始化歌词系统
+                _lyricsCacheManager = new LyricsCacheManager();
+                _lyricsDisplayManager = new LyricsDisplayManager(_lyricsCacheManager);
+                _lyricsLoader = new LyricsLoader(_apiClient);
+
+                // 订阅歌词更新事件
+                _lyricsDisplayManager.LyricUpdated += OnLyricUpdated;
+
+                // 订阅播放进度事件（用于歌词同步）
+                _audioEngine.PositionChanged += OnAudioPositionChanged;
+
                 // 初始化下一首歌曲预加载器（新）
                 _nextSongPreloader = new NextSongPreloader(_apiClient);
 
@@ -447,6 +466,19 @@ namespace YTPlayer
 
             // 更新登录菜单项文本
             UpdateLoginMenuItemText();
+
+            // 加载歌词朗读状态
+            _autoReadLyrics = config.LyricsReadingEnabled;
+            try
+            {
+                autoReadLyricsMenuItem.Checked = _autoReadLyrics;
+                autoReadLyricsMenuItem.Text = _autoReadLyrics ? "关闭歌词朗读\tF11" : "打开歌词朗读\tF11";
+            }
+            catch
+            {
+                // 忽略菜单更新错误
+            }
+            System.Diagnostics.Debug.WriteLine($"[CONFIG] LyricsReadingEnabled={_autoReadLyrics}");
 
             // UsePersonalCookie 现在根据 MusicU 是否为空自动判断，无需手动设置
             System.Diagnostics.Debug.WriteLine($"[CONFIG] UsePersonalCookie={_apiClient.UsePersonalCookie} (自动检测)");
@@ -672,6 +704,9 @@ namespace YTPlayer
                 config.MusicU = _apiClient.MusicU;
                 config.CsrfToken = _apiClient.CsrfToken;
 
+                // 保存歌词朗读状态
+                config.LyricsReadingEnabled = _autoReadLyrics;
+
                 if (refreshCookieFromClient)
                 {
                     var cookies = _apiClient.GetAllCookies();
@@ -804,6 +839,12 @@ namespace YTPlayer
             }
 
             StopScrubKeyTimerIfIdle();
+
+            // ⭐ 如果两个方向键都已松开，通知 SeekManager 完成 Seek 序列
+            if (!_leftKeyPressed && !_rightKeyPressed && _seekManager != null)
+            {
+                _seekManager.FinishSeek();
+            }
 
             // Scrubbing 机制已移除（基于缓存层的新架构不需要）
         }
@@ -1992,7 +2033,7 @@ namespace YTPlayer
         /// </summary>
         /// <param name="isAutoPlayback">是否是自动播放（歌曲结束自动切歌）</param>
         /// <summary>
-        /// 加载歌词
+        /// 加载歌词（新版本：使用增强的歌词系统）
         /// </summary>
         private async Task LoadLyrics(string songId, System.Threading.CancellationToken cancellationToken = default)
         {
@@ -2001,14 +2042,20 @@ namespace YTPlayer
                 if (cancellationToken.IsCancellationRequested)
                     return;
 
-                var lyricInfo = await _apiClient.GetLyricsAsync(songId);
+                // ⭐ 使用新的歌词加载器
+                var lyricsData = await _lyricsLoader.LoadLyricsAsync(songId, cancellationToken);
 
                 if (cancellationToken.IsCancellationRequested)
                     return;
 
-                if (!string.IsNullOrEmpty(lyricInfo?.Lyric))
+                // 加载到显示管理器
+                _lyricsDisplayManager.LoadLyrics(lyricsData);
+
+                // ⭐ 向后兼容：保持旧的 _currentLyrics 字段（用于旧代码）
+                if (lyricsData != null && !lyricsData.IsEmpty)
                 {
-                    _currentLyrics = LyricsManager.ParseLyrics(lyricInfo.Lyric);
+                    _currentLyrics = lyricsData.Lines.Select(line =>
+                        new LyricLine(line.Time, line.Text)).ToList();
                 }
                 else
                 {
@@ -2018,9 +2065,13 @@ namespace YTPlayer
             catch (TaskCanceledException)
             {
                 // 忽略取消异常
+                _lyricsDisplayManager.Clear();
+                _currentLyrics.Clear();
             }
-            catch
+            catch (Exception ex)
             {
+                System.Diagnostics.Debug.WriteLine($"[Lyrics] 加载失败: {ex.Message}");
+                _lyricsDisplayManager.Clear();
                 _currentLyrics.Clear();
             }
         }
@@ -2647,6 +2698,66 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
         }
 
         /// <summary>
+        /// 音频播放进度变化事件（用于歌词同步）
+        /// </summary>
+        private void OnAudioPositionChanged(object? sender, TimeSpan position)
+        {
+            // 更新歌词显示（这是同步调用，由 BassAudioEngine 的位置监控线程调用）
+            _lyricsDisplayManager?.UpdatePosition(position);
+        }
+
+        /// <summary>
+        /// 歌词更新事件（在检测到歌词变化时触发）
+        /// </summary>
+        private void OnLyricUpdated(object? sender, LyricUpdateEventArgs e)
+        {
+            // 检查是否需要切换到 UI 线程
+            if (this.InvokeRequired)
+            {
+                this.BeginInvoke(new Action(() => OnLyricUpdated(sender, e)));
+                return;
+            }
+
+            try
+            {
+                // 格式化歌词文本
+                string lyricText = _lyricsDisplayManager.GetFormattedLyricText(e.CurrentLine);
+
+                // 更新 UI
+                lyricsLabel.Text = lyricText;
+
+                // ⭐ 自动朗读歌词（如果开启）
+                if (_autoReadLyrics && e.IsNewLine && e.CurrentLine != null)
+                {
+                    // 只朗读原文歌词，不包括翻译和罗马音
+                    string textToSpeak = e.CurrentLine.Text;
+
+                    if (!string.IsNullOrWhiteSpace(textToSpeak))
+                    {
+                        // 在后台线程朗读，避免阻塞UI
+                        System.Threading.Tasks.Task.Run(() =>
+                        {
+                            bool success = Utils.TtsHelper.SpeakText(textToSpeak);
+                            System.Diagnostics.Debug.WriteLine($"[TTS] Speak '{textToSpeak}': {(success ? "成功" : "失败")}");
+                        });
+                    }
+                }
+
+                // ⭐ 更新无障碍支持（屏幕阅读器）
+                if (e.IsNewLine && e.CurrentLine != null)
+                {
+                    // 为屏幕阅读器用户朗读新歌词
+                    lyricsLabel.AccessibleName = $"当前歌词: {lyricText}";
+                    System.Diagnostics.Debug.WriteLine($"[Lyrics] 歌词更新: {lyricText}");
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[Lyrics] 更新UI失败: {ex.Message}");
+            }
+        }
+
+        /// <summary>
         /// 播放停止事件
         /// </summary>
         private void AudioEngine_PlaybackStopped(object sender, EventArgs e)
@@ -2765,20 +2876,65 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
         }
 
         /// <summary>
-        /// 播放即将结束事件（用于无缝播放预创建）
+        /// 清除所有歌曲的URL缓存（用于音质切换）
         /// </summary>
-        /// <summary>
-        /// 更新状态栏
-        /// </summary>
-        /// <summary>
-        /// 刷新下一首歌曲预加载（每次新歌开始、队列改变、插播等情况时调用）
-        /// </summary>
+        private void ClearAllSongUrlCache()
+        {
+            int clearedCount = 0;
+
+            try
+            {
+                // 清除播放队列中的所有歌曲URL缓存
+                var queueSongs = _playbackQueue?.CurrentQueue;
+                if (queueSongs != null)
+                {
+                    foreach (var song in queueSongs)
+                    {
+                        if (song != null && !string.IsNullOrEmpty(song.Url))
+                        {
+                            song.Url = null;
+                            song.Level = null;
+                            song.Size = 0;
+                            song.IsAvailable = null; // 重置可用性状态，以便重新检查
+                            clearedCount++;
+                        }
+                    }
+                }
+
+                // 清除插播队列中的所有歌曲URL缓存
+                var injectionSongs = _playbackQueue?.InjectionChain;
+                if (injectionSongs != null)
+                {
+                    foreach (var song in injectionSongs)
+                    {
+                        if (song != null && !string.IsNullOrEmpty(song.Url))
+                        {
+                            song.Url = null;
+                            song.Level = null;
+                            song.Size = 0;
+                            song.IsAvailable = null;
+                            clearedCount++;
+                        }
+                    }
+                }
+
+                System.Diagnostics.Debug.WriteLine($"[Quality] 已清除 {clearedCount} 首歌曲的URL缓存");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[Quality] 清除URL缓存时出错: {ex.Message}");
+            }
+        }
+
         private void RefreshNextSongPreload()
         {
             try
             {
-                // 取消当前预加载任务
-                _nextSongPreloader?.Clear();
+                // ⭐ 修复：不再无条件调用 Clear()，因为：
+                // 1. 调用方（如 qualityMenuItem_Click）已经在需要时调用了 Clear()
+                // 2. StartPreloadAsync 内部已有音质一致性检查，会自动处理音质不匹配的情况
+                // 3. 无条件 Clear() 会取消正在进行的关键下载（如当前歌曲的尾部 chunk），
+                //    导致 PlaybackEnded 事件无法触发，自动切歌失效
 
                 string defaultQualityName = _config?.DefaultQuality ?? "超清母带";
                 QualityLevel quality = NeteaseApiClient.GetQualityLevelFromName(defaultQualityName);
@@ -2833,7 +2989,12 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
                             nextSong.Url = songUrl.Url;
                             nextSong.Level = songUrl.Level;
                             nextSong.Size = songUrl.Size;
-                            System.Diagnostics.Debug.WriteLine($"[MainForm] ✓ 歌曲可用: {nextSong.Name}");
+
+                            // ⭐⭐ 将获取的URL缓存到多音质字典中（确保多音质缓存完整性）
+                            string qualityLevel = quality.ToString().ToLower();
+                            string actualLevel = songUrl.Level?.ToLower() ?? qualityLevel;
+                            nextSong.SetQualityUrl(actualLevel, songUrl.Url, songUrl.Size, true);
+                            System.Diagnostics.Debug.WriteLine($"[MainForm] ✓ 歌曲可用并已缓存: {nextSong.Name}, 音质: {actualLevel}");
                         }
                         else
                         {
@@ -3262,6 +3423,13 @@ private void MainForm_KeyDown(object sender, KeyEventArgs e)
             volumeTrackBar.Value = Math.Min(100, volumeTrackBar.Value + 2);
             volumeTrackBar_Scroll(null, null);
         }
+    }
+    else if (e.KeyCode == Keys.F11)
+    {
+        e.Handled = true;
+        e.SuppressKeyPress = true;
+        // 切换自动朗读歌词
+        ToggleAutoReadLyrics();
     }
     else if (e.KeyCode == Keys.F12)
     {
@@ -4084,11 +4252,35 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             if (menuItem == null) return;
 
             string selectedQuality = menuItem.Text;
+
+            // 检查是否真的发生了变化
+            if (_config.DefaultQuality == selectedQuality)
+            {
+                return; // 没有变化，无需处理
+            }
+
+            string oldQuality = _config.DefaultQuality;
             _config.DefaultQuality = selectedQuality;
             SaveConfig();
             UpdateQualityMenuCheck();
 
+            // ⭐ 不再清除URL缓存，因为现在使用多音质缓存系统，所有音质的URL都被保留
+            // 这样切换音质时，已缓存的其他音质URL可以直接使用，加速播放启动
+
+            // ⭐⭐ 修复：不在此处调用 Clear()，因为：
+            // 1. StartPreloadAsync 内部会调用 CancelCurrentPreload()，已经足够
+            // 2. 外部调用 Clear() 会导致取消操作与新的预加载操作产生竞态条件
+            // 3. 可能影响到当前播放歌曲的资源管理
+            // 因此，只需调用 RefreshNextSongPreload()，让预加载器自己处理音质切换
+
+            // 重新触发预加载（如果正在播放）
+            if (_audioEngine?.IsPlaying == true)
+            {
+                RefreshNextSongPreload();
+            }
+
             UpdateStatusBar($"已切换到 {selectedQuality}");
+            System.Diagnostics.Debug.WriteLine($"[Quality] 音质已从 {oldQuality} 切换到 {selectedQuality}，多音质缓存已保留，将重新预加载下一首");
         }
 
         /// <summary>
@@ -4104,10 +4296,52 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 "  空格 - 播放/暂停\n" +
                 "  左右箭头 - 快退/快进5秒\n" +
                 "  F5/F6 - 上一首/下一首\n" +
-                "  F7/F8 - 音量减/加",
+                "  F7/F8 - 音量减/加\n" +
+                "  F11 - 切换歌词朗读\n" +
+                "  F12 - 跳转到位置",
                 "关于",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information);
+        }
+
+        /// <summary>
+        /// 切换自动朗读歌词（菜单项点击事件）
+        /// </summary>
+        private void autoReadLyricsMenuItem_Click(object sender, EventArgs e)
+        {
+            ToggleAutoReadLyrics();
+        }
+
+        /// <summary>
+        /// 切换自动朗读歌词
+        /// </summary>
+        private void ToggleAutoReadLyrics()
+        {
+            _autoReadLyrics = !_autoReadLyrics;
+
+            // 更新菜单项状态
+            try
+            {
+                autoReadLyricsMenuItem.Checked = _autoReadLyrics;
+                autoReadLyricsMenuItem.Text = _autoReadLyrics ? "关闭歌词朗读\tF11" : "打开歌词朗读\tF11";
+            }
+            catch
+            {
+                // 忽略菜单更新错误
+            }
+
+            // 朗读状态提示
+            string message = _autoReadLyrics
+                ? "已开启歌词朗读"
+                : "已关闭歌词朗读";
+
+            Utils.TtsHelper.SpeakText(message);
+            UpdateStatusBar(message);
+
+            System.Diagnostics.Debug.WriteLine($"[TTS] 歌词朗读: {(_autoReadLyrics ? "开启" : "关闭")}");
+
+            // 保存配置
+            SaveConfig();
         }
 
         /// <summary>

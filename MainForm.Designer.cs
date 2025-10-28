@@ -53,6 +53,7 @@
             this.prevMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.nextMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.jumpToPositionMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.autoReadLyricsMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.helpMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.aboutMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.searchPanel = new System.Windows.Forms.Panel();
@@ -159,7 +160,8 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             this.qualityMenuItem,
             this.prevMenuItem,
             this.nextMenuItem,
-            this.jumpToPositionMenuItem});
+            this.jumpToPositionMenuItem,
+            this.autoReadLyricsMenuItem});
             this.playControlMenuItem.Name = "playControlMenuItem";
             this.playControlMenuItem.Size = new System.Drawing.Size(98, 24);
             this.playControlMenuItem.Text = "播放控制(&M)";
@@ -305,6 +307,14 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             this.jumpToPositionMenuItem.Size = new System.Drawing.Size(180, 26);
             this.jumpToPositionMenuItem.Text = "跳转到位置(&J)...";
             this.jumpToPositionMenuItem.Click += new System.EventHandler(this.jumpToPositionMenuItem_Click);
+            //
+            // autoReadLyricsMenuItem
+            //
+            this.autoReadLyricsMenuItem.Name = "autoReadLyricsMenuItem";
+            this.autoReadLyricsMenuItem.ShortcutKeys = System.Windows.Forms.Keys.F11;
+            this.autoReadLyricsMenuItem.Size = new System.Drawing.Size(180, 26);
+            this.autoReadLyricsMenuItem.Text = "打开歌词朗读\tF11";
+            this.autoReadLyricsMenuItem.Click += new System.EventHandler(this.autoReadLyricsMenuItem_Click);
             //
             // helpMenuItem
             //
@@ -468,13 +478,18 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             //
             this.lyricsLabel.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left)
             | System.Windows.Forms.AnchorStyles.Right)));
-            this.lyricsLabel.Font = new System.Drawing.Font("Microsoft YaHei UI", 10F);
-            this.lyricsLabel.Location = new System.Drawing.Point(12, 110);
+            this.lyricsLabel.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(245)))), ((int)(((byte)(245)))), ((int)(((byte)(245)))));
+            this.lyricsLabel.Font = new System.Drawing.Font("Microsoft YaHei UI", 11F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
+            this.lyricsLabel.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(51)))), ((int)(((byte)(51)))), ((int)(((byte)(51)))));
+            this.lyricsLabel.Location = new System.Drawing.Point(12, 90);
             this.lyricsLabel.Name = "lyricsLabel";
-            this.lyricsLabel.Size = new System.Drawing.Size(1176, 30);
+            this.lyricsLabel.Padding = new System.Windows.Forms.Padding(10, 8, 10, 8);
+            this.lyricsLabel.Size = new System.Drawing.Size(1176, 50);
             this.lyricsLabel.TabIndex = 7;
             this.lyricsLabel.Text = "暂无歌词";
             this.lyricsLabel.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
+            this.lyricsLabel.AccessibleName = "歌词显示";
+            this.lyricsLabel.AccessibleRole = System.Windows.Forms.AccessibleRole.Text;
             //
             // volumeLabel
             //
@@ -683,6 +698,7 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
         private System.Windows.Forms.ToolStripMenuItem prevMenuItem;
         private System.Windows.Forms.ToolStripMenuItem nextMenuItem;
         private System.Windows.Forms.ToolStripMenuItem jumpToPositionMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem autoReadLyricsMenuItem;
         private System.Windows.Forms.ToolStripMenuItem helpMenuItem;
         private System.Windows.Forms.ToolStripMenuItem aboutMenuItem;
         private System.Windows.Forms.Panel searchPanel;

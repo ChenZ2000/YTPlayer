@@ -143,7 +143,14 @@ namespace YTPlayer.Core.Playback.Cache
 
                         if (read == 0)
                         {
-                            // 流结束
+                            // ⭐⭐⭐ 流结束，检查是否真的完成了
+                            if (totalBytesRead < _totalSize)
+                            {
+                                DebugLogger.Log(
+                                    DebugLogger.LogLevel.Warning,
+                                    "ChunkDownload",
+                                    $"⚠️ HTTP stream提前结束: {totalBytesRead:N0}/{_totalSize:N0} (缺少 {_totalSize - totalBytesRead:N0} bytes)");
+                            }
                             break;
                         }
 
