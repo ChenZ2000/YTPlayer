@@ -286,10 +286,13 @@ namespace YTPlayer
                     var cachedQuality = song.GetQualityUrl(selectedQualityLevel);
                     if (cachedQuality != null && !string.IsNullOrEmpty(cachedQuality.Url))
                     {
-                        System.Diagnostics.Debug.WriteLine($"[MainForm] ✓ 命中多音质缓存: {song.Name}, 音质: {selectedQualityLevel}");
+                        System.Diagnostics.Debug.WriteLine($"[MainForm] ✓ 命中多音质缓存: {song.Name}, 音质: {selectedQualityLevel}, 试听: {cachedQuality.IsTrial}");
                         song.Url = cachedQuality.Url;
                         song.Level = cachedQuality.Level;
                         song.Size = cachedQuality.Size;
+                        song.IsTrial = cachedQuality.IsTrial;
+                        song.TrialStart = cachedQuality.TrialStart;
+                        song.TrialEnd = cachedQuality.TrialEnd;
                     }
                     else
                     {
@@ -370,14 +373,27 @@ namespace YTPlayer
                             return;
                         }
 
-                        // ⭐⭐ 将获取的URL缓存到多音质字典中
+                        // ⭐ 设置试听信息
+                        bool isTrial = songUrl.FreeTrialInfo != null;
+                        long trialStart = songUrl.FreeTrialInfo?.Start ?? 0;
+                        long trialEnd = songUrl.FreeTrialInfo?.End ?? 0;
+
+                        if (isTrial)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[MainForm] 🎵 试听版本: {song.Name}, 片段: {trialStart/1000}s - {trialEnd/1000}s");
+                        }
+
+                        // ⭐⭐ 将获取的URL缓存到多音质字典中（包含试听信息）
                         string actualLevel = songUrl.Level?.ToLower() ?? selectedQualityLevel;
-                        song.SetQualityUrl(actualLevel, songUrl.Url, songUrl.Size, true);
-                        System.Diagnostics.Debug.WriteLine($"[MainForm] ✓ 已缓存音质URL: {song.Name}, 音质: {actualLevel}, 大小: {songUrl.Size}");
+                        song.SetQualityUrl(actualLevel, songUrl.Url, songUrl.Size, true, isTrial, trialStart, trialEnd);
+                        System.Diagnostics.Debug.WriteLine($"[MainForm] ✓ 已缓存音质URL: {song.Name}, 音质: {actualLevel}, 大小: {songUrl.Size}, 试听: {isTrial}");
 
                         song.Url = songUrl.Url;
                         song.Level = songUrl.Level;
                         song.Size = songUrl.Size;
+                        song.IsTrial = isTrial;
+                        song.TrialStart = trialStart;
+                        song.TrialEnd = trialEnd;
 
                         // ⭐ Pre-warm HTTP connection to reduce TTFB for download
                         Core.Streaming.OptimizedHttpClientFactory.PreWarmConnection(song.Url);
@@ -432,18 +448,21 @@ namespace YTPlayer
 
                 if (loadingStateActive)
                 {
-                    SetPlaybackLoadingState(false, $"正在播放: {song.Name}");
+                    string statusText = song.IsTrial ? $"正在播放: {song.Name} [试听版]" : $"正在播放: {song.Name}";
+                    SetPlaybackLoadingState(false, statusText);
                     loadingStateActive = false;
                 }
                 else
                 {
-                    UpdateStatusBar($"正在播放: {song.Name}");
+                    string statusText = song.IsTrial ? $"正在播放: {song.Name} [试听版]" : $"正在播放: {song.Name}";
+                    UpdateStatusBar(statusText);
                 }
 
                 // ⭐ 修复：使用 SafeInvoke 确保 UI 线程安全
                 SafeInvoke(() =>
                 {
-                    currentSongLabel.Text = $"{song.Name} - {song.Artist}";
+                    string songDisplayName = song.IsTrial ? $"{song.Name}(试听版)" : song.Name;
+                    currentSongLabel.Text = $"{songDisplayName} - {song.Artist}";
                     playPauseButton.Text = "暂停";
                     System.Diagnostics.Debug.WriteLine("[PlaySongDirect] 播放成功，按钮设置为: 暂停");
                 });
@@ -922,7 +941,10 @@ namespace YTPlayer
                 if (currentSong != null)
                 {
                     UpdateTrayIconTooltip(currentSong);
-                    UpdateStatusBar($"正在播放: {currentSong.Name} - {currentSong.Artist}");
+                    string statusText = currentSong.IsTrial
+                        ? $"正在播放: {currentSong.Name} - {currentSong.Artist} [试听版]"
+                        : $"正在播放: {currentSong.Name} - {currentSong.Artist}";
+                    UpdateStatusBar(statusText);
                 }
                 else
                 {

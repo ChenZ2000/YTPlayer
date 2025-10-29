@@ -44,10 +44,10 @@ namespace YTPlayer.Models
         #region 下载设置
 
         /// <summary>
-        /// 下载路径（null 表示使用默认路径）
+        /// 下载目录路径（便携式设计：默认保存在程序目录\downloads）
         /// Python: cfg.setdefault("download_path", None)
         /// </summary>
-        public string DownloadPath { get; set; }
+        public string DownloadDirectory { get; set; }
 
         #endregion
 

@@ -19,13 +19,13 @@ namespace YTPlayer
     {
         #region 字段声明
 
-        private NeteaseApiClient _apiClient;
+        protected NeteaseApiClient _apiClient;  // Changed to protected for partial class access
         private BassAudioEngine _audioEngine;
         private SeekManager _seekManager;  // ⭐ 新增：Seek 管理器
-        private ConfigManager _configManager;
+        protected ConfigManager _configManager;  // Changed to protected for partial class access
         private ConfigModel _config;
         private AccountState _accountState;
-        private List<SongInfo> _currentSongs = new List<SongInfo>();
+        protected List<SongInfo> _currentSongs = new List<SongInfo>();  // Changed to protected for partial class access
         private List<PlaylistInfo> _currentPlaylists = new List<PlaylistInfo>();
         private List<AlbumInfo> _currentAlbums = new List<AlbumInfo>();
         private List<ListItemInfo> _currentListItems = new List<ListItemInfo>(); // 统一的列表项
@@ -336,6 +336,9 @@ namespace YTPlayer
                     searchTypeComboBox.SelectedIndex = 0; // 默认选择"歌曲"
                 }
 
+                // 初始化下载功能
+                InitializeDownload();
+
                 UpdateStatusBar("就绪");
             }
             catch (Exception ex)
@@ -466,6 +469,9 @@ namespace YTPlayer
 
             // 更新登录菜单项文本
             UpdateLoginMenuItemText();
+
+            // 刷新音质菜单可用性
+            RefreshQualityMenuAvailability();
 
             // 加载歌词朗读状态
             _autoReadLyrics = config.LyricsReadingEnabled;
@@ -2248,7 +2254,8 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
             }
 
             // 构建描述文本：正在播放：歌曲名 - 艺术家 [专辑名] | X音质
-            string description = $"正在播放：{song.Name} - {song.Artist}";
+            string songDisplayName = song.IsTrial ? $"{song.Name}(试听版)" : song.Name;
+            string description = $"正在播放：{songDisplayName} - {song.Artist}";
 
             // 如果有专辑信息，添加专辑名
             if (!string.IsNullOrEmpty(song.Album))
@@ -2984,17 +2991,30 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
                             urlResult.TryGetValue(nextSong.Id, out var songUrl) &&
                             !string.IsNullOrEmpty(songUrl?.Url))
                         {
+                            // ⭐ 设置试听信息
+                            bool isTrial = songUrl.FreeTrialInfo != null;
+                            long trialStart = songUrl.FreeTrialInfo?.Start ?? 0;
+                            long trialEnd = songUrl.FreeTrialInfo?.End ?? 0;
+
+                            if (isTrial)
+                            {
+                                System.Diagnostics.Debug.WriteLine($"[MainForm] 🎵 试听版本（预加载检查）: {nextSong.Name}, 片段: {trialStart/1000}s - {trialEnd/1000}s");
+                            }
+
                             // 歌曲可用，缓存 URL 信息
                             nextSong.IsAvailable = true;
                             nextSong.Url = songUrl.Url;
                             nextSong.Level = songUrl.Level;
                             nextSong.Size = songUrl.Size;
+                            nextSong.IsTrial = isTrial;
+                            nextSong.TrialStart = trialStart;
+                            nextSong.TrialEnd = trialEnd;
 
-                            // ⭐⭐ 将获取的URL缓存到多音质字典中（确保多音质缓存完整性）
+                            // ⭐⭐ 将获取的URL缓存到多音质字典中（确保多音质缓存完整性，包含试听信息）
                             string qualityLevel = quality.ToString().ToLower();
                             string actualLevel = songUrl.Level?.ToLower() ?? qualityLevel;
-                            nextSong.SetQualityUrl(actualLevel, songUrl.Url, songUrl.Size, true);
-                            System.Diagnostics.Debug.WriteLine($"[MainForm] ✓ 歌曲可用并已缓存: {nextSong.Name}, 音质: {actualLevel}");
+                            nextSong.SetQualityUrl(actualLevel, songUrl.Url, songUrl.Size, true, isTrial, trialStart, trialEnd);
+                            System.Diagnostics.Debug.WriteLine($"[MainForm] ✓ 歌曲可用并已缓存: {nextSong.Name}, 音质: {actualLevel}, 试听: {isTrial}");
                         }
                         else
                         {
@@ -3472,6 +3492,12 @@ private void UpdateTrayIconTooltip(SongInfo song, bool isPaused = false)
     string prefix = isPaused ? "已暂停：" : "正在播放：";
     string tooltipText = $"{prefix}{song.Name} - {song.Artist}";
 
+    // 添加试听标识
+    if (song.IsTrial)
+    {
+        tooltipText += " [试听版]";
+    }
+
     // 添加专辑信息
     if (!string.IsNullOrEmpty(song.Album))
     {
@@ -3698,6 +3724,7 @@ private void TrayIcon_MouseClick(object sender, System.Windows.Forms.MouseEventA
                             this.Invoke(new Action(() =>
                             {
                                 UpdateLoginMenuItemText();
+                                RefreshQualityMenuAvailability(); // 刷新音质菜单可用性
                                 UpdateStatusBar("已退出登录");
 
                                 // 如果当前在主页，自动刷新主页列表以隐藏需要登录的内容
@@ -3726,6 +3753,7 @@ private void TrayIcon_MouseClick(object sender, System.Windows.Forms.MouseEventA
                         else
                         {
                             UpdateLoginMenuItemText();
+                            RefreshQualityMenuAvailability(); // 刷新音质菜单可用性
                             UpdateStatusBar("已退出登录");
 
                             // 如果当前在主页，自动刷新主页列表以隐藏需要登录的内容
@@ -3911,6 +3939,7 @@ private void TrayIcon_MouseClick(object sender, System.Windows.Forms.MouseEventA
             UpdateStatusBar($"登录成功！欢迎 {args.Nickname} ({GetVipDescription(args.VipType)})");
 
             UpdateLoginMenuItemText();
+            RefreshQualityMenuAvailability(); // 刷新音质菜单可用性
             menuStrip1.Invalidate();
             menuStrip1.Update();
             menuStrip1.Refresh();
@@ -4241,6 +4270,68 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             bool isMaster = (currentQuality == "超清母带");
             masterQualityMenuItem.Checked = isMaster;
             masterQualityMenuItem.AccessibleName = isMaster ? "超清母带 已选中" : "超清母带";
+        }
+
+        /// <summary>
+        /// 刷新音质菜单可用性（根据登录状态和VIP等级）
+        /// </summary>
+        private void RefreshQualityMenuAvailability()
+        {
+            bool isLoggedIn = IsUserLoggedIn();
+            int vipType = _config?.LoginVipType ?? 0;
+
+            if (!isLoggedIn)
+            {
+                // 未登录用户：仅标准和极高可用
+                standardQualityMenuItem.Enabled = true;
+                highQualityMenuItem.Enabled = true;
+                losslessQualityMenuItem.Enabled = false;
+                hiresQualityMenuItem.Enabled = false;
+                surroundHDQualityMenuItem.Enabled = false;
+                dolbyQualityMenuItem.Enabled = false;
+                masterQualityMenuItem.Enabled = false;
+
+                System.Diagnostics.Debug.WriteLine("[QualityMenu] 未登录状态 - 仅标准和极高可用");
+            }
+            else if (vipType >= 11)
+            {
+                // SVIP用户：所有音质可用
+                standardQualityMenuItem.Enabled = true;
+                highQualityMenuItem.Enabled = true;
+                losslessQualityMenuItem.Enabled = true;
+                hiresQualityMenuItem.Enabled = true;
+                surroundHDQualityMenuItem.Enabled = true;
+                dolbyQualityMenuItem.Enabled = true;
+                masterQualityMenuItem.Enabled = true;
+
+                System.Diagnostics.Debug.WriteLine($"[QualityMenu] SVIP用户 (VipType={vipType}) - 所有音质可用");
+            }
+            else if (vipType >= 1)
+            {
+                // VIP用户：up to Hi-Res
+                standardQualityMenuItem.Enabled = true;
+                highQualityMenuItem.Enabled = true;
+                losslessQualityMenuItem.Enabled = true;
+                hiresQualityMenuItem.Enabled = true;
+                surroundHDQualityMenuItem.Enabled = false;
+                dolbyQualityMenuItem.Enabled = false;
+                masterQualityMenuItem.Enabled = false;
+
+                System.Diagnostics.Debug.WriteLine($"[QualityMenu] VIP用户 (VipType={vipType}) - up to Hi-Res可用");
+            }
+            else
+            {
+                // 普通登录用户：标准、极高、无损
+                standardQualityMenuItem.Enabled = true;
+                highQualityMenuItem.Enabled = true;
+                losslessQualityMenuItem.Enabled = true;
+                hiresQualityMenuItem.Enabled = false;
+                surroundHDQualityMenuItem.Enabled = false;
+                dolbyQualityMenuItem.Enabled = false;
+                masterQualityMenuItem.Enabled = false;
+
+                System.Diagnostics.Debug.WriteLine($"[QualityMenu] 普通用户 (VipType={vipType}) - 标准/极高/无损可用");
+            }
         }
 
         /// <summary>
@@ -4893,6 +4984,12 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             unsubscribeAlbumMenuItem.Visible = false;
             insertPlayMenuItem.Visible = true;
 
+            // 默认隐藏所有下载菜单项
+            downloadSongMenuItem.Visible = false;
+            downloadPlaylistMenuItem.Visible = false;
+            downloadAlbumMenuItem.Visible = false;
+            batchDownloadMenuItem.Visible = false;
+
             var selectedItem = resultListView.SelectedItems.Count > 0 ? resultListView.SelectedItems[0] : null;
             if (selectedItem == null) return;
 
@@ -4910,6 +5007,9 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 unsubscribePlaylistMenuItem.Visible = !isCreatedByCurrentUser;
                 deletePlaylistMenuItem.Visible = isCreatedByCurrentUser;
                 insertPlayMenuItem.Visible = false; // 歌单项不支持插播
+
+                // 只显示下载歌单（不显示批量下载，因为歌单本身就是批量下载）
+                downloadPlaylistMenuItem.Visible = true;
             }
             else if (selectedItem.Tag is AlbumInfo)
             {
@@ -4917,11 +5017,18 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 subscribeAlbumMenuItem.Visible = !isUserAlbumsView;
                 unsubscribeAlbumMenuItem.Visible = true;
                 insertPlayMenuItem.Visible = false; // 专辑项不支持插播
+
+                // 只显示下载专辑（不显示批量下载，因为专辑本身就是批量下载）
+                downloadAlbumMenuItem.Visible = true;
             }
             else
             {
                 // 歌曲：显示插播，不显示收藏（歌曲收藏需要先选择歌单，暂不实现）
                 insertPlayMenuItem.Visible = true;
+
+                // 显示下载歌曲和批量下载（批量下载用于选择多首歌曲）
+                downloadSongMenuItem.Visible = true;
+                batchDownloadMenuItem.Visible = true;
             }
         }
 

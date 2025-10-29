@@ -45,6 +45,9 @@ namespace YTPlayer
                     return;
                 }
 
+                // ✅ 初始化质量管理器（设置默认音质为"极高"）
+                InitializeQualityManager();
+
                 // 正常启动GUI
                 DebugLogger.Log(DebugLogger.LogLevel.Info, "Program", "启动 GUI 模式");
                 Application.EnableVisualStyles();
@@ -63,6 +66,47 @@ namespace YTPlayer
             finally
             {
                 DebugLogger.Log(DebugLogger.LogLevel.Info, "Program", "应用程序退出");
+            }
+        }
+
+        /// <summary>
+        /// 初始化质量管理器
+        /// 设置默认音质为"极高"，处理登录状态联动
+        /// </summary>
+        private static void InitializeQualityManager()
+        {
+            try
+            {
+                var configManager = ConfigManager.Instance;
+                var config = configManager.Load();
+
+                // 检查登录状态并设置默认音质
+                // 如果未登录且配置的音质不可用，降级到"极高音质"
+                bool isLoggedIn = !string.IsNullOrEmpty(config.MusicU) && !string.IsNullOrEmpty(config.CsrfToken);
+
+                if (string.IsNullOrEmpty(config.DefaultQuality))
+                {
+                    config.DefaultQuality = "极高音质"; // 默认极高
+                    configManager.Save(config);
+                }
+                else if (!isLoggedIn)
+                {
+                    // 未登录时，仅允许标准和极高
+                    if (config.DefaultQuality != "标准音质" && config.DefaultQuality != "极高音质")
+                    {
+                        DebugLogger.Log(DebugLogger.LogLevel.Info, "Program",
+                            $"User not logged in, downgrading quality from {config.DefaultQuality} to 极高音质");
+                        config.DefaultQuality = "极高音质";
+                        configManager.Save(config);
+                    }
+                }
+
+                DebugLogger.Log(DebugLogger.LogLevel.Info, "Program",
+                    $"✓ 默认音质已设置为: {config.DefaultQuality}");
+            }
+            catch (Exception ex)
+            {
+                DebugLogger.LogException("Program", ex, "初始化默认音质失败（非致命）");
             }
         }
 

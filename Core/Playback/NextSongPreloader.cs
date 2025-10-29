@@ -211,10 +211,13 @@ namespace YTPlayer.Core.Playback
                     var cachedQuality = nextSong.GetQualityUrl(qualityLevel);
                     if (cachedQuality != null && !string.IsNullOrEmpty(cachedQuality.Url))
                     {
-                        System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] ✓ 命中多音质缓存: {nextSong.Name}, 音质: {qualityLevel}");
+                        System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] ✓ 命中多音质缓存: {nextSong.Name}, 音质: {qualityLevel}, 试听: {cachedQuality.IsTrial}");
                         nextSong.Url = cachedQuality.Url;
                         nextSong.Level = cachedQuality.Level;
                         nextSong.Size = cachedQuality.Size;
+                        nextSong.IsTrial = cachedQuality.IsTrial;
+                        nextSong.TrialStart = cachedQuality.TrialStart;
+                        nextSong.TrialEnd = cachedQuality.TrialEnd;
                     }
                     else
                     {
@@ -239,16 +242,29 @@ namespace YTPlayer.Core.Playback
                             return false;
                         }
 
-                        // ⭐⭐ 将获取的URL缓存到多音质字典中
+                        // ⭐ 设置试听信息
+                        bool isTrial = songUrl.FreeTrialInfo != null;
+                        long trialStart = songUrl.FreeTrialInfo?.Start ?? 0;
+                        long trialEnd = songUrl.FreeTrialInfo?.End ?? 0;
+
+                        if (isTrial)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] 🎵 试听版本: {nextSong.Name}, 片段: {trialStart/1000}s - {trialEnd/1000}s");
+                        }
+
+                        // ⭐⭐ 将获取的URL缓存到多音质字典中（包含试听信息）
                         string actualLevel = songUrl.Level?.ToLower() ?? qualityLevel;
-                        nextSong.SetQualityUrl(actualLevel, songUrl.Url, songUrl.Size, true);
-                        System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] ✓ 已缓存音质URL: {nextSong.Name}, 音质: {actualLevel}, 大小: {songUrl.Size}");
+                        nextSong.SetQualityUrl(actualLevel, songUrl.Url, songUrl.Size, true, isTrial, trialStart, trialEnd);
+                        System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] ✓ 已缓存音质URL: {nextSong.Name}, 音质: {actualLevel}, 大小: {songUrl.Size}, 试听: {isTrial}");
 
                         // ✅ 成功获取 URL，标记为可用并更新当前字段
                         nextSong.IsAvailable = true;
                         nextSong.Url = songUrl.Url;
                         nextSong.Level = songUrl.Level;
                         nextSong.Size = songUrl.Size;
+                        nextSong.IsTrial = isTrial;
+                        nextSong.TrialStart = trialStart;
+                        nextSong.TrialEnd = trialEnd;
                     }
                 }
 

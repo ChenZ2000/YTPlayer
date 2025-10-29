@@ -2438,13 +2438,13 @@ namespace YTPlayer.Core
         {
             var payload = new Dictionary<string, object>
             {
-                { "cellphone", phone },  // 使用cellphone而不是phone
+                { "cellphone", phone },
                 { "ctcode", ctcode }
             };
 
             System.Diagnostics.Debug.WriteLine($"[SMS] 发送验证码请求: phone={phone}, ctcode={ctcode}");
 
-            // ⭐ 修复：使用正确的 API endpoint（参考 NeteaseCloudMusicApi/module/captcha_sent.js line 8）
+            // 使用 WEAPI 端点（/weapi/sms/captcha/sent）
             var result = await PostWeApiAsync<JObject>("/sms/captcha/sent", payload);
 
             int code = result["code"]?.Value<int>() ?? -1;
@@ -2455,7 +2455,6 @@ namespace YTPlayer.Core
 
             if (code != 200)
             {
-                // ⭐ 修复：抛出异常而不是返回 false
                 throw new Exception($"发送验证码失败: {message} (code={code})");
             }
 
@@ -2464,15 +2463,27 @@ namespace YTPlayer.Core
 
         /// <summary>
         /// 验证短信验证码并登录
+        /// ⭐ 参考 NeteaseCloudMusicApi/module/login_cellphone.js
+        /// 关键: 必须设置 os=ios 和 appver=8.7.01 cookie 避免 -462 风控错误
         /// </summary>
         public async Task<LoginResult> LoginByCaptchaAsync(string phone, string captcha, string ctcode = "86")
         {
-            // ⭐ 参考 NeteaseCloudMusicApi/module/login_cellphone.js
+            // ⭐ 关键修复: 设置必要的cookie避免-462风控错误
+            // 参考 NeteaseCloudMusicApi/module/login_cellphone.js line 6-7
+            // query.cookie.os = 'ios'
+            // query.cookie.appver = '8.7.01'
+
+            // 使用UpsertCookie正确更新cookie值（避免重复）
+            UpsertCookie("os", "ios");
+            UpsertCookie("appver", "8.7.01");
+
+            System.Diagnostics.Debug.WriteLine("[LOGIN] 已设置临时cookie: os=ios, appver=8.7.01");
+
             var payload = new Dictionary<string, object>
             {
                 { "phone", phone },
                 { "captcha", captcha },
-                { "countrycode", ctcode },  // 使用countrycode
+                { "countrycode", ctcode },
                 { "rememberLogin", "true" }
             };
 
@@ -3057,6 +3068,18 @@ namespace YTPlayer.Core
                             }
                         }
 
+                        // 解析试听信息
+                        FreeTrialInfo trialInfo = null;
+                        var freeTrialInfoToken = item["freeTrialInfo"];
+                        if (freeTrialInfoToken != null && freeTrialInfoToken.Type != Newtonsoft.Json.Linq.JTokenType.Null)
+                        {
+                            trialInfo = new FreeTrialInfo
+                            {
+                                Start = freeTrialInfoToken["start"]?.Value<long>() ?? 0,
+                                End = freeTrialInfoToken["end"]?.Value<long>() ?? 0
+                            };
+                        }
+
                         result[id] = new SongUrlInfo
                         {
                             Id = id,
@@ -3065,10 +3088,13 @@ namespace YTPlayer.Core
                             Size = item["size"]?.Value<long>() ?? 0,
                             Br = item["br"]?.Value<int>() ?? 0,
                             Type = item["type"]?.Value<string>(),
-                            Md5 = item["md5"]?.Value<string>()
+                            Md5 = item["md5"]?.Value<string>(),
+                            Fee = item["fee"]?.Value<int>() ?? 0,
+                            FreeTrialInfo = trialInfo
                         };
 
-                        System.Diagnostics.Debug.WriteLine($"[EAPI] ✓ 歌曲{id}: level={result[id].Level}, br={result[id].Br}, URL={url.Substring(0, Math.Min(50, url.Length))}...");
+                        string trialIndicator = trialInfo != null ? $" [试听: {trialInfo.Start / 1000}s-{trialInfo.End / 1000}s]" : "";
+                        System.Diagnostics.Debug.WriteLine($"[EAPI] ✓ 歌曲{id}: level={result[id].Level}, br={result[id].Br}, fee={result[id].Fee}{trialIndicator}, URL={url.Substring(0, Math.Min(50, url.Length))}...");
                     }
 
                     if (missingSongIds.Count > 0)
@@ -5344,6 +5370,32 @@ namespace YTPlayer.Core
         public int Br { get; set; }
         public string Type { get; set; }
         public string Md5 { get; set; }
+
+        /// <summary>
+        /// 费用类型（0=免费, 1=VIP, 8=付费专辑）
+        /// </summary>
+        public int Fee { get; set; }
+
+        /// <summary>
+        /// 试听信息（非VIP用户会员歌曲时存在）
+        /// </summary>
+        public FreeTrialInfo FreeTrialInfo { get; set; }
+    }
+
+    /// <summary>
+    /// 试听信息
+    /// </summary>
+    public class FreeTrialInfo
+    {
+        /// <summary>
+        /// 试听片段开始时间（毫秒）
+        /// </summary>
+        public long Start { get; set; }
+
+        /// <summary>
+        /// 试听片段结束时间（毫秒）
+        /// </summary>
+        public long End { get; set; }
     }
 
     /// <summary>

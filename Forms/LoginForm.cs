@@ -485,17 +485,29 @@ namespace YTPlayer.Forms
                     smsStatusLabel.Text = "登录成功！";
                     smsStatusLabel.ForeColor = Color.Green;
 
+                    // ⭐ 修复：刷新登录token（与二维码登录保持一致）
+                    try
+                    {
+                        await _apiClient.RefreshLoginAsync();
+                        System.Diagnostics.Debug.WriteLine("[LoginForm SMS] RefreshLoginAsync 调用成功");
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[LoginForm SMS] ⚠️ RefreshLoginAsync 失败: {ex.Message}");
+                        // 继续登录流程，不因刷新失败而中断
+                    }
+
                     // ⭐ 修复：获取用户账号信息，即使失败也继续登录流程
                     UserAccountInfo userInfo = null;
                     try
                     {
                         userInfo = await _apiClient.GetUserAccountAsync();
-                        System.Diagnostics.Debug.WriteLine($"[LoginForm] 短信登录成功，用户昵称={userInfo?.Nickname}");
+                        System.Diagnostics.Debug.WriteLine($"[LoginForm SMS] 短信登录成功，用户昵称={userInfo?.Nickname}");
                     }
                     catch (Exception ex)
                     {
-                        System.Diagnostics.Debug.WriteLine($"[LoginForm] 获取用户信息失败: {ex.Message}");
-                        System.Diagnostics.Debug.WriteLine($"[LoginForm] 继续使用基本信息完成登录");
+                        System.Diagnostics.Debug.WriteLine($"[LoginForm SMS] 获取用户信息失败: {ex.Message}");
+                        System.Diagnostics.Debug.WriteLine($"[LoginForm SMS] 继续使用基本信息完成登录");
 
                         // 即使获取用户信息失败，也继续登录流程
                         smsStatusLabel.Text = "登录成功（部分信息加载失败）";

@@ -90,6 +90,9 @@
     <Compile Include="Forms\MainForm.CommandQueue.cs">
       <DependentUpon>MainForm.cs</DependentUpon>
     </Compile>
+    <Compile Include="Forms\MainForm.Download.cs">
+      <DependentUpon>MainForm.cs</DependentUpon>
+    </Compile>
     <Compile Include="MainForm.Designer.cs">
       <DependentUpon>MainForm.cs</DependentUpon>
     </Compile>
@@ -127,6 +130,10 @@
     <Compile Include="Core\Streaming\ChunkData.cs" />
     <Compile Include="Core\Streaming\OptimizedHttpClientFactory.cs" />
     <Compile Include="Core\Streaming\DynamicBufferOptimizer.cs" />
+    <Compile Include="Core\Download\DownloadManager.cs" />
+    <Compile Include="Core\Download\DownloadExecutor.cs" />
+    <Compile Include="Core\Download\DownloadBandwidthCoordinator.cs" />
+    <Compile Include="Core\Download\DownloadFileHelper.cs" />
     <Compile Include="Utils\EncryptionHelper.cs" />
     <Compile Include="Utils\DebugLogger.cs" />
     <Compile Include="Utils\PerformanceMonitor.cs" />
@@ -139,6 +146,10 @@
     <Compile Include="Models\SearchResult.cs" />
     <Compile Include="Models\UserAccountInfo.cs" />
     <Compile Include="Models\Auth\QrLoginModels.cs" />
+    <Compile Include="Models\Download\DownloadTask.cs" />
+    <Compile Include="Models\Download\DownloadStatus.cs" />
+    <Compile Include="Models\Download\DownloadBatch.cs" />
+    <Compile Include="Models\Download\ConflictResolution.cs" />
     <Compile Include="Forms\LoginForm.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -153,6 +164,24 @@
     </Compile>
     <Compile Include="Forms\JumpToPositionDialog.cs">
       <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Forms\Download\DownloadManagerForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Forms\Download\DownloadManagerForm.Designer.cs">
+      <DependentUpon>DownloadManagerForm.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Forms\Download\BatchDownloadDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Forms\Download\BatchDownloadDialog.Designer.cs">
+      <DependentUpon>BatchDownloadDialog.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Forms\Download\DownloadConflictDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Forms\Download\DownloadConflictDialog.Designer.cs">
+      <DependentUpon>DownloadConflictDialog.cs</DependentUpon>
     </Compile>
   </ItemGroup>
   <ItemGroup>

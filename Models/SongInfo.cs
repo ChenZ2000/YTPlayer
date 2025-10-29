@@ -12,6 +12,21 @@ namespace YTPlayer.Models
         public string Level { get; set; }
         public long Size { get; set; }
         public bool IsAvailable { get; set; }
+
+        /// <summary>
+        /// 是否为试听版本
+        /// </summary>
+        public bool IsTrial { get; set; }
+
+        /// <summary>
+        /// 试听片段起始时间（毫秒）
+        /// </summary>
+        public long TrialStart { get; set; }
+
+        /// <summary>
+        /// 试听片段结束时间（毫秒）
+        /// </summary>
+        public long TrialEnd { get; set; }
     }
 
     /// <summary>
@@ -124,9 +139,24 @@ namespace YTPlayer.Models
         public bool? IsAvailable { get; set; }
 
         /// <summary>
+        /// 是否为试听版本（非VIP用户播放VIP歌曲时）
+        /// </summary>
+        public bool IsTrial { get; set; }
+
+        /// <summary>
+        /// 试听片段起始时间（毫秒）
+        /// </summary>
+        public long TrialStart { get; set; }
+
+        /// <summary>
+        /// 试听片段结束时间（毫秒）
+        /// </summary>
+        public long TrialEnd { get; set; }
+
+        /// <summary>
         /// 设置特定音质的URL信息
         /// </summary>
-        public void SetQualityUrl(string level, string url, long size, bool isAvailable)
+        public void SetQualityUrl(string level, string url, long size, bool isAvailable, bool isTrial = false, long trialStart = 0, long trialEnd = 0)
         {
             if (string.IsNullOrEmpty(level)) return;
 
@@ -135,7 +165,10 @@ namespace YTPlayer.Models
                 Url = url,
                 Level = level,
                 Size = size,
-                IsAvailable = isAvailable
+                IsAvailable = isAvailable,
+                IsTrial = isTrial,
+                TrialStart = trialStart,
+                TrialEnd = trialEnd
             };
         }
 

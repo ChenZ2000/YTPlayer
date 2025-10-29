@@ -158,32 +158,35 @@ namespace YTPlayer.Core
         }
 
         /// <summary>
-        /// 获取默认下载路径（便携式设计：保存在程序目录下的 downloads 子目录）
+        /// 获取默认下载路径（相对路径：程序目录上一级的 downloads 文件夹）
         /// </summary>
-        /// <returns>默认下载路径</returns>
+        /// <returns>默认下载路径（相对路径）</returns>
         public static string GetDefaultDownloadPath()
         {
-            // 使用程序目录下的 downloads 子目录，实现便携性
-            string defaultPath = Path.Combine(
-                GetApplicationDirectory(),
-                "downloads"
-            );
+            // 返回相对路径：程序目录上一级的 downloads 文件夹
+            // 例如：如果程序在 D:\Program\YTPlayer\bin\Debug\，则返回 ..\downloads
+            return Path.Combine("..", "downloads");
+        }
 
-            try
+        /// <summary>
+        /// 获取下载目录的完整路径（将相对路径转换为绝对路径）
+        /// </summary>
+        /// <param name="downloadDirectory">下载目录（可能是相对路径或绝对路径）</param>
+        /// <returns>绝对路径</returns>
+        public static string GetFullDownloadPath(string downloadDirectory)
+        {
+            if (string.IsNullOrWhiteSpace(downloadDirectory))
             {
-                if (!Directory.Exists(defaultPath))
-                {
-                    Directory.CreateDirectory(defaultPath);
-                }
-            }
-            catch (Exception ex)
-            {
-                // 如果创建失败，返回程序目录
-                System.Diagnostics.Debug.WriteLine($"无法创建默认下载目录: {ex.Message}");
-                return GetApplicationDirectory();
+                downloadDirectory = GetDefaultDownloadPath();
             }
 
-            return defaultPath;
+            // 如果是相对路径，转换为基于程序目录的绝对路径
+            if (!Path.IsPathRooted(downloadDirectory))
+            {
+                downloadDirectory = Path.Combine(GetApplicationDirectory(), downloadDirectory);
+            }
+
+            return Path.GetFullPath(downloadDirectory);
         }
 
         /// <summary>
@@ -321,7 +324,7 @@ namespace YTPlayer.Core
                 SearchHistory = new List<string>(),
 
                 // 下载设置
-                DownloadPath = GetDefaultDownloadPath(),
+                DownloadDirectory = GetDefaultDownloadPath(),
 
                 // Cookie 和登录（UsePersonalCookie 已移除，自动根据 MusicU 判断）
                 Cookies = new List<CookieItem>(),
@@ -419,28 +422,26 @@ namespace YTPlayer.Core
                 changed = true;
             }
 
-            // 验证下载路径
-            if (string.IsNullOrWhiteSpace(config.DownloadPath))
+            // 验证下载目录路径（仅在为空时设置默认值，不要重置已有配置）
+            if (string.IsNullOrWhiteSpace(config.DownloadDirectory))
             {
-                config.DownloadPath = GetDefaultDownloadPath();
+                config.DownloadDirectory = GetDefaultDownloadPath();
                 changed = true;
             }
-            else
+
+            // 尝试创建下载目录（如果失败，不重置配置，让用户自己处理）
+            try
             {
-                // 尝试创建下载目录
-                try
+                string fullPath = GetFullDownloadPath(config.DownloadDirectory);
+                if (!Directory.Exists(fullPath))
                 {
-                    if (!Directory.Exists(config.DownloadPath))
-                    {
-                        Directory.CreateDirectory(config.DownloadPath);
-                    }
+                    Directory.CreateDirectory(fullPath);
                 }
-                catch
-                {
-                    // 如果无法创建，使用默认路径
-                    config.DownloadPath = GetDefaultDownloadPath();
-                    changed = true;
-                }
+            }
+            catch (Exception ex)
+            {
+                // 记录警告但不重置配置
+                System.Diagnostics.Debug.WriteLine($"[ConfigManager] 无法创建下载目录: {ex.Message}");
             }
 
             // 验证 Cookie 列表

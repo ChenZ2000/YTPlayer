@@ -1046,11 +1046,15 @@ namespace YTPlayer.Core.Playback.Cache
         {
             SetBufferingState(BufferingState.Buffering);
 
-            int required = forPlayback ? MinReadyChunks : 1;
+            // ⭐⭐⭐ 关键修复：限制required不超过实际总块数
+            // 对于小文件（如试听版），总块数可能小于MinReadyChunks，必须适配
+            int targetChunk = GetChunkIndex(position);
+            int requiredBase = forPlayback ? MinReadyChunks : 1;
+            int required = Math.Min(requiredBase, Math.Max(1, _totalChunks - targetChunk));
 
             while (!token.IsCancellationRequested)
             {
-                var health = CheckCacheHealth(position);
+                var health = CheckCacheHealth(position, forPlayback);
                 if (health.ReadyChunks >= required)
                 {
                     SetBufferingState(forPlayback ? BufferingState.Ready : BufferingState.Buffering);
@@ -1060,7 +1064,7 @@ namespace YTPlayer.Core.Playback.Cache
                 await Task.Delay(HealthPollDelayMs, token).ConfigureAwait(false);
             }
 
-            return CheckCacheHealth(position).ReadyChunks >= required;
+            return CheckCacheHealth(position, forPlayback).ReadyChunks >= required;
         }
 
         public async Task<int> ReadAsync(
