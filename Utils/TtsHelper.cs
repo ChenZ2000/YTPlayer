@@ -191,15 +191,14 @@ namespace YTPlayer.Utils
             {
                 switch (type)
                 {
-                    case 0: // NVDA - 先取消当前朗读，再朗读新内容（打断模式）
-                        nvdaController_cancelSpeech(); // 忽略返回值，即使失败也继续朗读
+                    case 0: // NVDA - 队列模式（不打断当前朗读）
                         return nvdaController_speakText(text) == 0;
 
-                    case 1: // 争渡 - 使用 interrupt=true 打断当前朗读
-                        return Speak(text, interrupt: true) == 0;
+                    case 1: // 争渡 - 使用 interrupt=false 队列模式
+                        return Speak(text, interrupt: false) == 0;
 
-                    case 2: // 阳光 - 使用 purge=true 清除并打断当前朗读
-                        return BoyCtrlSpeak(text, async: false, purge: true, spell: true, IntPtr.Zero) == 0;
+                    case 2: // 阳光 - 使用 purge=false 队列模式
+                        return BoyCtrlSpeak(text, async: false, purge: false, spell: true, IntPtr.Zero) == 0;
 
                     default:
                         return false;
@@ -231,14 +230,11 @@ namespace YTPlayer.Utils
                     return false;
                 }
 
-                // ⭐ 先取消当前朗读（打断模式）
-                nvdaController_cancelSpeech(); // 忽略返回值
-
-                // 尝试朗读新内容
+                // ⭐ 队列模式：直接朗读新内容（不打断当前朗读）
                 int result = nvdaController_speakText(text);
                 if (result == 0)
                 {
-                    System.Diagnostics.Debug.WriteLine("[TTS] NVDA speak succeeded (interrupt mode)");
+                    System.Diagnostics.Debug.WriteLine("[TTS] NVDA speak succeeded (queue mode)");
                     return true;
                 }
                 System.Diagnostics.Debug.WriteLine($"[TTS] NVDA speak failed with code {result}");
@@ -276,11 +272,11 @@ namespace YTPlayer.Utils
                     return false;
                 }
 
-                // ⭐ 朗读文本（使用 interrupt=true 打断模式）
-                int speakResult = Speak(text, interrupt: true);
+                // ⭐ 朗读文本（使用 interrupt=false 队列模式）
+                int speakResult = Speak(text, interrupt: false);
                 if (speakResult == 0)
                 {
-                    System.Diagnostics.Debug.WriteLine("[TTS] 争渡 speak succeeded (interrupt mode)");
+                    System.Diagnostics.Debug.WriteLine("[TTS] 争渡 speak succeeded (queue mode)");
                     return true;
                 }
 
@@ -319,11 +315,11 @@ namespace YTPlayer.Utils
                     return false;
                 }
 
-                // ⭐ 朗读文本（使用 purge=true 打断模式）
-                int speakResult = BoyCtrlSpeak(text, async: false, purge: true, spell: true, IntPtr.Zero);
+                // ⭐ 朗读文本（使用 purge=false 队列模式）
+                int speakResult = BoyCtrlSpeak(text, async: false, purge: false, spell: true, IntPtr.Zero);
                 if (speakResult == 0)
                 {
-                    System.Diagnostics.Debug.WriteLine("[TTS] 阳光 speak succeeded (interrupt mode)");
+                    System.Diagnostics.Debug.WriteLine("[TTS] 阳光 speak succeeded (queue mode)");
                     return true;
                 }
 

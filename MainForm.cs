@@ -39,6 +39,9 @@ namespace YTPlayer
 
         private System.Windows.Forms.Timer _updateTimer;
         private System.Windows.Forms.NotifyIcon _trayIcon;
+        private Utils.ContextMenuHost? _contextMenuHost;  // ⭐ 自定义菜单宿主窗口
+        private bool _isExitingFromTrayMenu = false;  // ⭐ 标志：是否正在从托盘菜单退出
+        private DateTime _appStartTime = DateTime.Now;  // ⭐ 应用启动时间（用于冷启动风控检测）
         private bool _isUserDragging = false;
         private int _currentPage = 1;
         private int _resultsPerPage = 100;
@@ -245,14 +248,21 @@ namespace YTPlayer
             InitializeServices();
             SetupEventHandlers();
             LoadConfig();
-            // 托盘图标初始化（使用窗体自身图标，默认不显示）
+            // ⭐ 托盘图标初始化（使用自定义宿主窗口方案）
             _trayIcon = new System.Windows.Forms.NotifyIcon();
             _trayIcon.Icon = this.Icon;                      // 复用窗体图标
             _trayIcon.Text = "易听";
             _trayIcon.Visible = true;  // ⭐ 启动时就显示，且保持常驻
-            _trayIcon.Click += TrayIcon_Click;                 // 键盘 Enter/Space 激活时通常触发 Click
-            _trayIcon.MouseClick += TrayIcon_MouseClick;       // 鼠标单击（左键）触发
+            _trayIcon.MouseClick += TrayIcon_MouseClick;       // 鼠标单击（左键/右键/中键）手动处理
             _trayIcon.DoubleClick += TrayIcon_DoubleClick;     // 兼容保留双击
+
+            // ⭐ 创建自定义菜单宿主窗口（防止虚拟窗口被 Alt+F4 关闭）
+            _contextMenuHost = new Utils.ContextMenuHost();
+
+            // ⭐ 绑定托盘菜单的事件，确保焦点正确管理
+            trayContextMenu.Opening += TrayContextMenu_Opening;
+            trayContextMenu.Opened += TrayContextMenu_Opened;
+            trayContextMenu.Closed += TrayContextMenu_Closed;
 
 
             SyncPlayPauseButtonText();
@@ -266,6 +276,20 @@ namespace YTPlayer
         /// </summary>
         private async void MainForm_Load(object sender, EventArgs e)
         {
+            // ⭐ 方案1：会话热身，避免冷启动风控（在后台静默执行）
+            // 不阻塞UI，允许用户立即操作，但实际API请求会等待热身完成
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await _apiClient.WarmupSessionAsync();
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[MainForm] 热身失败（忽略）: {ex.Message}");
+                }
+            });
+
             // 加载主页内容（用户歌单和官方歌单）
             await LoadHomePageAsync();
         }
@@ -982,7 +1006,8 @@ namespace YTPlayer
 
                     if (_currentSongs == null || _currentSongs.Count == 0)
                     {
-                        DisplaySongs(new List<SongInfo>(), showPagination: true, hasNextPage: false);
+                        int startIndex = (_currentPage - 1) * _resultsPerPage + 1;
+                        DisplaySongs(new List<SongInfo>(), showPagination: true, hasNextPage: false, startIndex: startIndex);
                         _hasNextSearchPage = false;
                         _maxPage = Math.Max(1, _currentPage);
 
@@ -995,7 +1020,8 @@ namespace YTPlayer
                     }
                     else
                     {
-                        DisplaySongs(_currentSongs, showPagination: true, hasNextPage: _hasNextSearchPage);
+                        int startIndex = (_currentPage - 1) * _resultsPerPage + 1;
+                        DisplaySongs(_currentSongs, showPagination: true, hasNextPage: _hasNextSearchPage, startIndex: startIndex);
                         int totalCount = songResult?.TotalCount ?? _currentSongs.Count;
                         UpdateStatusBar($"第 {_currentPage}/{_maxPage} 页，本页 {_currentSongs.Count} 首 / 总 {totalCount} 首");
 
@@ -1238,6 +1264,15 @@ namespace YTPlayer
         {
             try
             {
+                // ⭐ 方案2：冷启动保护 - 如果应用刚启动不到3秒，延迟请求
+                var timeSinceStartup = (DateTime.Now - _appStartTime).TotalSeconds;
+                if (timeSinceStartup < 3.0)
+                {
+                    int delayMs = (int)((3.0 - timeSinceStartup) * 1000);
+                    System.Diagnostics.Debug.WriteLine($"[ColdStartProtection] 应用启动仅 {timeSinceStartup:F1}秒，延迟 {delayMs}ms 以避免风控");
+                    await Task.Delay(Math.Min(delayMs, 2000));  // 最多延迟2秒
+                }
+
                 UpdateStatusBar($"正在加载 {categoryId}...");
 
                 // 保存当前状态到导航历史
@@ -1643,7 +1678,8 @@ namespace YTPlayer
         /// <summary>
         /// 显示歌曲列表
         /// </summary>
-        private void DisplaySongs(List<SongInfo> songs, bool showPagination = false, bool hasNextPage = false)
+        /// <param name="startIndex">起始序号（默认为1，分页时应传入正确的起始序号）</param>
+        private void DisplaySongs(List<SongInfo> songs, bool showPagination = false, bool hasNextPage = false, int startIndex = 1)
         {
             // 清空所有列表（确保只有一种类型的数据）
             _currentSongs = songs ?? new List<SongInfo>();
@@ -1663,12 +1699,14 @@ namespace YTPlayer
                 return;
             }
 
-            int index = 0;
+            // 使用 startIndex 来支持分页序号连续累加
+            int displayNumber = startIndex;  // 显示序号（从 startIndex 开始）
+            int index = 0;  // 内部索引（从0开始，用于Tag）
             foreach (var song in songs)
             {
                 var item = new ListViewItem(new[]
                 {
-                    (index + 1).ToString(),
+                    displayNumber.ToString(),  // 使用连续的显示序号
                     song.Name ?? "未知",
                     song.Artist ?? "未知",
                     song.Album ?? "未知",
@@ -1676,7 +1714,8 @@ namespace YTPlayer
                 });
                 item.Tag = index;  // 使用索引作为 Tag
                 resultListView.Items.Add(item);
-                index++;
+                displayNumber++;  // 显示序号递增
+                index++;  // 内部索引递增
             }
 
             if (showPagination)
@@ -2115,11 +2154,22 @@ private void SyncPlayPauseButtonText()
 
     var state = _audioEngine.GetPlaybackState();
     string expectedText = state == PlaybackState.Playing ? "暂停" : "播放";
-    
+
     if (playPauseButton.Text != expectedText)
     {
         playPauseButton.Text = expectedText;
         System.Diagnostics.Debug.WriteLine($"[SyncPlayPauseButtonText] 按钮文本已更新: {expectedText} (状态={state})");
+    }
+
+    // ⭐ 同步更新托盘菜单的播放/暂停文本
+    if (trayPlayPauseMenuItem != null && !trayPlayPauseMenuItem.IsDisposed)
+    {
+        string trayMenuText = state == PlaybackState.Playing ? "暂停(&P)" : "播放(&P)";
+        if (trayPlayPauseMenuItem.Text != trayMenuText)
+        {
+            trayPlayPauseMenuItem.Text = trayMenuText;
+            System.Diagnostics.Debug.WriteLine($"[SyncPlayPauseButtonText] 托盘菜单文本已更新: {trayMenuText}");
+        }
     }
 }
 
@@ -3683,18 +3733,18 @@ private void RestoreFromTray()
     }
 }
 
-// 托盘“单击或键盘激活”(Click) → 恢复
-private void TrayIcon_Click(object sender, System.EventArgs e)
-{
-    RestoreFromTray();
-}
-
-// 托盘“鼠标单击”(MouseClick) → 仅左键才恢复
+// 托盘"鼠标单击"(MouseClick) → 手动处理左键和右键
 private void TrayIcon_MouseClick(object sender, System.Windows.Forms.MouseEventArgs e)
 {
     if (e.Button == System.Windows.Forms.MouseButtons.Left)
     {
+        // 左键：恢复窗口
         RestoreFromTray();
+    }
+    else if (e.Button == System.Windows.Forms.MouseButtons.Right)
+    {
+        // ⭐ 右键：使用自定义宿主窗口显示菜单（防止虚拟窗口问题）
+        ShowTrayContextMenu(System.Windows.Forms.Cursor.Position);
     }
 }
 
@@ -4039,6 +4089,186 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
 {
     RestoreFromTray();
 }
+
+        #region 托盘菜单事件处理
+
+        /// <summary>
+        /// 托盘菜单 - 显示易听
+        /// </summary>
+        private void trayShowMenuItem_Click(object sender, EventArgs e)
+        {
+            RestoreFromTray();
+        }
+
+        /// <summary>
+        /// 托盘菜单 - 播放/暂停
+        /// </summary>
+        private void trayPlayPauseMenuItem_Click(object sender, EventArgs e)
+        {
+            TogglePlayPause();
+        }
+
+        /// <summary>
+        /// 托盘菜单 - 上一首
+        /// </summary>
+        private void trayPrevMenuItem_Click(object sender, EventArgs e)
+        {
+            PlayPrevious();
+        }
+
+        /// <summary>
+        /// 托盘菜单 - 下一首
+        /// </summary>
+        private void trayNextMenuItem_Click(object sender, EventArgs e)
+        {
+            PlayNext();
+        }
+
+        /// <summary>
+        /// 托盘菜单 - 退出
+        /// </summary>
+        private void trayExitMenuItem_Click(object sender, EventArgs e)
+        {
+            System.Diagnostics.Debug.WriteLine("[trayExitMenuItem] 退出菜单项被点击");
+
+            // ⭐ 关键：设置退出标志，防止 Closed 事件中的操作与退出冲突
+            _isExitingFromTrayMenu = true;
+
+            // ⭐ 延迟退出，避免在菜单事件处理过程中直接操作
+            this.BeginInvoke(new Action(() =>
+            {
+                System.Diagnostics.Debug.WriteLine("[trayExitMenuItem] 延迟执行退出...");
+
+                // ⭐⭐⭐ 修复：不使用 Application.Exit()，而是关闭主窗体
+                // 对于单窗体应用，关闭主窗体会让 Application.Run() 自然结束
+                // 这避免了 Application.Exit() 遍历窗体集合时可能发生的集合修改异常
+                // 原因：OnFormClosing() 中会关闭 _contextMenuHost，导致 OpenForms 集合被修改
+                this.Close();
+            }));
+        }
+
+        /// <summary>
+        /// 显示托盘上下文菜单（使用自定义宿主窗口）
+        /// </summary>
+        private void ShowTrayContextMenu(System.Drawing.Point position)
+        {
+            if (_contextMenuHost == null || trayContextMenu == null) return;
+
+            try
+            {
+                System.Diagnostics.Debug.WriteLine($"[ShowTrayContextMenu] 在位置 ({position.X}, {position.Y}) 显示菜单");
+
+                // ⭐ 先显示宿主窗口（不可见，但提供窗口句柄）
+                _contextMenuHost.ShowHost();
+
+                // ⭐ 使用宿主窗口来显示菜单
+                trayContextMenu.Show(_contextMenuHost, new System.Drawing.Point(0, 0));
+
+                // ⭐ 立即将菜单移动到正确位置
+                trayContextMenu.Left = position.X;
+                trayContextMenu.Top = position.Y;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[ShowTrayContextMenu] 显示菜单失败: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 托盘菜单打开前事件 - 预处理
+        /// </summary>
+        private void TrayContextMenu_Opening(object sender, System.ComponentModel.CancelEventArgs e)
+        {
+            System.Diagnostics.Debug.WriteLine("[TrayContextMenu] 菜单正在打开...");
+        }
+
+        /// <summary>
+        /// 托盘菜单已打开事件 - 设置焦点到第一个菜单项（关键！）
+        /// </summary>
+        private void TrayContextMenu_Opened(object sender, EventArgs e)
+        {
+            System.Diagnostics.Debug.WriteLine("[TrayContextMenu] 菜单已打开，设置焦点...");
+
+            // ⭐ 关键：手动设置焦点到第一个菜单项
+            // 这确保屏幕阅读器用户可以立即导航菜单
+            if (trayContextMenu.Items.Count > 0)
+            {
+                // 延迟设置焦点，确保菜单完全显示后再设置
+                this.BeginInvoke(new Action(() =>
+                {
+                    try
+                    {
+                        // 选中第一个菜单项
+                        var firstItem = trayContextMenu.Items[0];
+                        if (firstItem != null && firstItem.Available && firstItem.Enabled)
+                        {
+                            trayContextMenu.Select();  // 先选中菜单本身
+                            firstItem.Select();        // 再选中第一个项目
+                            System.Diagnostics.Debug.WriteLine($"[TrayContextMenu] 焦点已设置到: {firstItem.Text}");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[TrayContextMenu] 设置焦点失败: {ex.Message}");
+                    }
+                }));
+            }
+        }
+
+        /// <summary>
+        /// 托盘菜单关闭事件 - 隐藏宿主窗口，确保焦点正确恢复
+        /// </summary>
+        private void TrayContextMenu_Closed(object sender, System.Windows.Forms.ToolStripDropDownClosedEventArgs e)
+        {
+            System.Diagnostics.Debug.WriteLine("[TrayContextMenu] 菜单已关闭");
+
+            // ⭐⭐⭐ 关键：如果是从退出菜单触发的，跳过所有后续操作
+            // 避免与 Application.Exit() 冲突导致 "Collection was modified" 异常
+            if (_isExitingFromTrayMenu)
+            {
+                System.Diagnostics.Debug.WriteLine("[TrayContextMenu] 检测到退出操作，跳过 Closed 事件处理");
+                return;
+            }
+
+            // ⭐ 关键：隐藏宿主窗口（而非销毁，可重用）
+            if (_contextMenuHost != null)
+            {
+                try
+                {
+                    this.BeginInvoke(new Action(() =>
+                    {
+                        _contextMenuHost.HideHost();
+                        System.Diagnostics.Debug.WriteLine("[TrayContextMenu] 宿主窗口已隐藏");
+                    }));
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[TrayContextMenu] 隐藏宿主窗口失败: {ex.Message}");
+                }
+            }
+
+            // ⭐ 如果主窗口可见，显式将焦点设置回主窗口
+            if (this.Visible && !this.IsDisposed)
+            {
+                try
+                {
+                    this.BeginInvoke(new Action(() =>
+                    {
+                        if (this.CanFocus)
+                        {
+                            this.Focus();
+                            System.Diagnostics.Debug.WriteLine("[TrayContextMenu] 焦点已恢复到主窗口");
+                        }
+                    }));
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[TrayContextMenu] 恢复焦点失败: {ex.Message}");
+                }
+            }
+        }
+
+        #endregion
 
         /// <summary>
         /// 播放/暂停菜单
@@ -4739,7 +4969,8 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                     _maxPage = totalPages;
                     _hasNextSearchPage = songResult?.HasMore ?? false;
 
-                    DisplaySongs(_currentSongs, showPagination: true, hasNextPage: _hasNextSearchPage);
+                    int startIndex = (page - 1) * _resultsPerPage + 1;
+                    DisplaySongs(_currentSongs, showPagination: true, hasNextPage: _hasNextSearchPage, startIndex: startIndex);
                     _currentViewSource = $"search:{keyword}";
                     resultListView.AccessibleName = $"搜索: {keyword}";
                     int totalCount = songResult?.TotalCount ?? _currentSongs.Count;
@@ -4989,6 +5220,15 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             downloadPlaylistMenuItem.Visible = false;
             downloadAlbumMenuItem.Visible = false;
             batchDownloadMenuItem.Visible = false;
+            downloadCategoryMenuItem.Visible = false;
+            batchDownloadPlaylistsMenuItem.Visible = false;
+
+            // ⭐ 检查登录状态 - 未登录时收藏相关菜单项保持隐藏
+            bool isLoggedIn = IsUserLoggedIn();
+            if (!isLoggedIn)
+            {
+                System.Diagnostics.Debug.WriteLine("[ContextMenu] 用户未登录，所有收藏/取消收藏菜单项保持隐藏");
+            }
 
             var selectedItem = resultListView.SelectedItems.Count > 0 ? resultListView.SelectedItems[0] : null;
             if (selectedItem == null) return;
@@ -4997,29 +5237,43 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             bool isUserAlbumsView = string.Equals(_currentViewSource, "user_albums", StringComparison.OrdinalIgnoreCase);
 
             // 根据Tag类型决定显示哪些菜单项
-            if (selectedItem.Tag is PlaylistInfo)
+            if (selectedItem.Tag is ListItemInfo listItem && listItem.Type == ListItemType.Category)
             {
-                // 歌单：显示收藏/取消收藏歌单
+                // 分类：不支持插播，只显示下载分类
+                insertPlayMenuItem.Visible = false;
+                downloadCategoryMenuItem.Visible = true;
+            }
+            else if (selectedItem.Tag is PlaylistInfo)
+            {
+                // 歌单：显示收藏/取消收藏歌单（仅在登录时）
                 var playlist = (PlaylistInfo)selectedItem.Tag;
                 bool isCreatedByCurrentUser = isMyPlaylistsView && IsPlaylistCreatedByCurrentUser(playlist);
 
-                subscribePlaylistMenuItem.Visible = !isMyPlaylistsView;
-                unsubscribePlaylistMenuItem.Visible = !isCreatedByCurrentUser;
-                deletePlaylistMenuItem.Visible = isCreatedByCurrentUser;
+                if (isLoggedIn)
+                {
+                    subscribePlaylistMenuItem.Visible = !isMyPlaylistsView;
+                    unsubscribePlaylistMenuItem.Visible = !isCreatedByCurrentUser;
+                    deletePlaylistMenuItem.Visible = isCreatedByCurrentUser;
+                }
                 insertPlayMenuItem.Visible = false; // 歌单项不支持插播
 
-                // 只显示下载歌单（不显示批量下载，因为歌单本身就是批量下载）
+                // 显示下载歌单和批量下载（当视图包含多个歌单时）
                 downloadPlaylistMenuItem.Visible = true;
+                batchDownloadPlaylistsMenuItem.Visible = true;
             }
             else if (selectedItem.Tag is AlbumInfo)
             {
-                // 专辑：显示收藏/取消收藏专辑
-                subscribeAlbumMenuItem.Visible = !isUserAlbumsView;
-                unsubscribeAlbumMenuItem.Visible = true;
+                // 专辑：显示收藏/取消收藏专辑（仅在登录时）
+                if (isLoggedIn)
+                {
+                    subscribeAlbumMenuItem.Visible = !isUserAlbumsView;
+                    unsubscribeAlbumMenuItem.Visible = true;
+                }
                 insertPlayMenuItem.Visible = false; // 专辑项不支持插播
 
-                // 只显示下载专辑（不显示批量下载，因为专辑本身就是批量下载）
+                // 显示下载专辑和批量下载（当视图包含多个专辑时）
                 downloadAlbumMenuItem.Visible = true;
+                batchDownloadPlaylistsMenuItem.Visible = true;
             }
             else
             {
@@ -5323,12 +5577,29 @@ protected override void OnFormClosing(FormClosingEventArgs e)
         _audioEngine?.Dispose();
         _apiClient?.Dispose();
 
-        // ⭐ 释放托盘图标
+        // ⭐ 释放托盘图标和宿主窗口
         if (_trayIcon != null)
         {
             _trayIcon.Visible = false;  // 程序退出时才隐藏
             _trayIcon.Dispose();
             _trayIcon = null;
+        }
+
+        // ⭐ 释放菜单宿主窗口
+        if (_contextMenuHost != null)
+        {
+            // ⭐⭐⭐ 修复：只调用 Dispose()，不调用 Close()
+            // 原因：Close() 可能修改 Application.OpenForms 集合，导致集合修改异常
+            // Dispose() 会自动处理资源释放，无需手动 Close()
+            try
+            {
+                _contextMenuHost.Dispose();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[OnFormClosing] 释放菜单宿主窗口异常: {ex.Message}");
+            }
+            _contextMenuHost = null;
         }
 
         SaveConfig();

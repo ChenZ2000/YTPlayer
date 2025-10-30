@@ -259,6 +259,39 @@ namespace YTPlayer.Core
             }
         }
 
+        /// <summary>
+        /// 会话热身：发起轻量级API请求，避免冷启动风控
+        /// 解决应用刚启动后立即请求复杂API导致的空响应问题
+        /// </summary>
+        public async Task WarmupSessionAsync()
+        {
+            try
+            {
+                System.Diagnostics.Debug.WriteLine("[SessionWarmup] 开始会话热身...");
+
+                // ⭐ 方案1-1: 请求轻量级登录状态接口（不处理结果）
+                try
+                {
+                    await GetLoginStatusAsync();
+                    System.Diagnostics.Debug.WriteLine("[SessionWarmup] ✓ 登录状态接口热身成功");
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[SessionWarmup] 热身请求失败（忽略）: {ex.Message}");
+                }
+
+                // ⭐ 方案1-2: 短暂延迟，给服务器建立会话的时间
+                await Task.Delay(800);
+
+                System.Diagnostics.Debug.WriteLine("[SessionWarmup] ✓ 会话热身完成");
+            }
+            catch (Exception ex)
+            {
+                // 完全静默失败，不影响主流程
+                System.Diagnostics.Debug.WriteLine($"[SessionWarmup] 热身异常（忽略）: {ex.Message}");
+            }
+        }
+
         #endregion
 
         #region 私有方法
@@ -3055,17 +3088,15 @@ namespace YTPlayer.Core
                             break;
                         }
 
+                        // ⭐ 获取服务器实际返回的音质级别
                         string returnedLevel = item["level"]?.Value<string>();
+
+                        // ⭐ 修复：即使返回的音质与请求不同，只要URL有效，就接受这个结果
+                        // 原因：服务器返回的音质就是该歌曲的最佳可用音质（例如请求HiRes但歌曲只有Lossless）
+                        // 删除了错误的"服务器降级"检测逻辑，避免不必要的fallback
                         if (!string.IsNullOrEmpty(returnedLevel) && !returnedLevel.Equals(currentLevel, StringComparison.OrdinalIgnoreCase))
                         {
-                            int requestedIdx = Array.IndexOf(qualityOrder, currentLevel);
-                            int returnedIdx = Array.IndexOf(qualityOrder, returnedLevel);
-                            if (returnedIdx > requestedIdx)
-                            {
-                                System.Diagnostics.Debug.WriteLine($"[EAPI] ⚠️ 服务器降级: 请求={currentLevel}, 返回={returnedLevel}, 自动尝试下一个音质");
-                                fallbackToLowerQuality = true;
-                                break;
-                            }
+                            System.Diagnostics.Debug.WriteLine($"[EAPI] ℹ️ 音质差异: 请求={currentLevel}, 返回={returnedLevel}（接受服务器返回的最佳可用音质）");
                         }
 
                         // 解析试听信息

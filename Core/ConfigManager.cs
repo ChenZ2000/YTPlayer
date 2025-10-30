@@ -158,14 +158,14 @@ namespace YTPlayer.Core
         }
 
         /// <summary>
-        /// 获取默认下载路径（相对路径：程序目录上一级的 downloads 文件夹）
+        /// 获取默认下载路径（相对路径：程序目录的 Downloads 文件夹）
         /// </summary>
         /// <returns>默认下载路径（相对路径）</returns>
         public static string GetDefaultDownloadPath()
         {
-            // 返回相对路径：程序目录上一级的 downloads 文件夹
-            // 例如：如果程序在 D:\Program\YTPlayer\bin\Debug\，则返回 ..\downloads
-            return Path.Combine("..", "downloads");
+            // 返回相对路径：程序目录的 Downloads 文件夹
+            // 例如：如果程序在 D:\Program\YTPlayer\bin\Debug\，则返回 .\Downloads
+            return Path.Combine(".", "Downloads");
         }
 
         /// <summary>

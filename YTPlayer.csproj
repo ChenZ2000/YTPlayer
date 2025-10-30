@@ -134,10 +134,14 @@
     <Compile Include="Core\Download\DownloadExecutor.cs" />
     <Compile Include="Core\Download\DownloadBandwidthCoordinator.cs" />
     <Compile Include="Core\Download\DownloadFileHelper.cs" />
+    <Compile Include="Core\Download\AudioMetadataWriter.cs" />
     <Compile Include="Utils\EncryptionHelper.cs" />
     <Compile Include="Utils\DebugLogger.cs" />
     <Compile Include="Utils\PerformanceMonitor.cs" />
     <Compile Include="Utils\TtsHelper.cs" />
+    <Compile Include="Utils\ContextMenuHost.cs">
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Include="Models\SongInfo.cs" />
     <Compile Include="Models\PlaylistInfo.cs" />
     <Compile Include="Models\CommentInfo.cs" />

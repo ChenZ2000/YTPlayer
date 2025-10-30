@@ -87,6 +87,15 @@
             this.downloadPlaylistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.downloadAlbumMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.batchDownloadMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.downloadCategoryMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.batchDownloadPlaylistsMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.trayContextMenu = new System.Windows.Forms.ContextMenuStrip();
+            this.trayShowMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.trayPlayPauseMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.trayPrevMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.trayNextMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.trayMenuSeparator = new System.Windows.Forms.ToolStripSeparator();
+            this.trayExitMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.volumeLabel = new System.Windows.Forms.Label();
             this.volumeTrackBar = new System.Windows.Forms.TrackBar();
             this.timeLabel = new System.Windows.Forms.Label();
@@ -102,6 +111,7 @@
             ((System.ComponentModel.ISupportInitialize)(this.progressTrackBar)).BeginInit();
             this.statusStrip1.SuspendLayout();
             this.songContextMenu.SuspendLayout();
+            this.trayContextMenu.SuspendLayout();
             this.SuspendLayout();
             //
             // menuStrip1
@@ -200,7 +210,7 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             this.autoReadLyricsMenuItem});
             this.playControlMenuItem.Name = "playControlMenuItem";
             this.playControlMenuItem.Size = new System.Drawing.Size(98, 24);
-            this.playControlMenuItem.Text = "播放控制(&M)";
+            this.playControlMenuItem.Text = "播放/控制(&M)";
             //
             // playPauseMenuItem
             //
@@ -269,7 +279,7 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             this.masterQualityMenuItem});
             this.qualityMenuItem.Name = "qualityMenuItem";
             this.qualityMenuItem.Size = new System.Drawing.Size(180, 26);
-            this.qualityMenuItem.Text = "播放音质";
+            this.qualityMenuItem.Text = "音质";
             //
             // standardQualityMenuItem
             //
@@ -633,7 +643,9 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             this.downloadSongMenuItem,
             this.downloadPlaylistMenuItem,
             this.downloadAlbumMenuItem,
-            this.batchDownloadMenuItem});
+            this.batchDownloadMenuItem,
+            this.downloadCategoryMenuItem,
+            this.batchDownloadPlaylistsMenuItem});
             this.songContextMenu.Name = "songContextMenu";
             this.songContextMenu.Size = new System.Drawing.Size(211, 250);
             this.songContextMenu.Opening += new System.ComponentModel.CancelEventHandler(this.songContextMenu_Opening);
@@ -713,6 +725,73 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             this.batchDownloadMenuItem.Text = "批量下载(&B)...";
             this.batchDownloadMenuItem.Click += new System.EventHandler(this.BatchDownloadSongs_Click);
             //
+            // downloadCategoryMenuItem
+            //
+            this.downloadCategoryMenuItem.Name = "downloadCategoryMenuItem";
+            this.downloadCategoryMenuItem.Size = new System.Drawing.Size(210, 24);
+            this.downloadCategoryMenuItem.Text = "下载分类(&C)...";
+            this.downloadCategoryMenuItem.Click += new System.EventHandler(this.DownloadCategory_Click);
+            //
+            // batchDownloadPlaylistsMenuItem
+            //
+            this.batchDownloadPlaylistsMenuItem.Name = "batchDownloadPlaylistsMenuItem";
+            this.batchDownloadPlaylistsMenuItem.Size = new System.Drawing.Size(210, 24);
+            this.batchDownloadPlaylistsMenuItem.Text = "批量下载(&B)...";
+            this.batchDownloadPlaylistsMenuItem.Click += new System.EventHandler(this.BatchDownloadPlaylistsOrAlbums_Click);
+            //
+            // trayContextMenu
+            //
+            this.trayContextMenu.ImageScalingSize = new System.Drawing.Size(20, 20);
+            this.trayContextMenu.Items.AddRange(new System.Windows.Forms.ToolStripItem[] {
+            this.trayShowMenuItem,
+            this.trayPlayPauseMenuItem,
+            this.trayPrevMenuItem,
+            this.trayNextMenuItem,
+            this.trayMenuSeparator,
+            this.trayExitMenuItem});
+            this.trayContextMenu.Name = "trayContextMenu";
+            this.trayContextMenu.Size = new System.Drawing.Size(161, 136);
+            //
+            // trayShowMenuItem
+            //
+            this.trayShowMenuItem.Name = "trayShowMenuItem";
+            this.trayShowMenuItem.Size = new System.Drawing.Size(160, 24);
+            this.trayShowMenuItem.Text = "显示易听(&S)";
+            this.trayShowMenuItem.Click += new System.EventHandler(this.trayShowMenuItem_Click);
+            //
+            // trayPlayPauseMenuItem
+            //
+            this.trayPlayPauseMenuItem.Name = "trayPlayPauseMenuItem";
+            this.trayPlayPauseMenuItem.Size = new System.Drawing.Size(160, 24);
+            this.trayPlayPauseMenuItem.Text = "播放/暂停(&P)";
+            this.trayPlayPauseMenuItem.Click += new System.EventHandler(this.trayPlayPauseMenuItem_Click);
+            //
+            // trayPrevMenuItem
+            //
+            this.trayPrevMenuItem.Name = "trayPrevMenuItem";
+            this.trayPrevMenuItem.Size = new System.Drawing.Size(160, 24);
+            this.trayPrevMenuItem.Text = "上一首(&R)";
+            this.trayPrevMenuItem.Click += new System.EventHandler(this.trayPrevMenuItem_Click);
+            //
+            // trayNextMenuItem
+            //
+            this.trayNextMenuItem.Name = "trayNextMenuItem";
+            this.trayNextMenuItem.Size = new System.Drawing.Size(160, 24);
+            this.trayNextMenuItem.Text = "下一首(&N)";
+            this.trayNextMenuItem.Click += new System.EventHandler(this.trayNextMenuItem_Click);
+            //
+            // trayMenuSeparator
+            //
+            this.trayMenuSeparator.Name = "trayMenuSeparator";
+            this.trayMenuSeparator.Size = new System.Drawing.Size(157, 6);
+            //
+            // trayExitMenuItem
+            //
+            this.trayExitMenuItem.Name = "trayExitMenuItem";
+            this.trayExitMenuItem.Size = new System.Drawing.Size(160, 24);
+            this.trayExitMenuItem.Text = "退出(&X)";
+            this.trayExitMenuItem.Click += new System.EventHandler(this.trayExitMenuItem_Click);
+            //
             // MainForm
             //
             this.AutoScaleDimensions = new System.Drawing.SizeF(120F, 120F);
@@ -740,6 +819,7 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             this.statusStrip1.ResumeLayout(false);
             this.statusStrip1.PerformLayout();
             this.songContextMenu.ResumeLayout(false);
+            this.trayContextMenu.ResumeLayout(false);
             this.ResumeLayout(false);
             this.PerformLayout();
 
@@ -814,5 +894,14 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
         private System.Windows.Forms.ToolStripMenuItem downloadPlaylistMenuItem;
         private System.Windows.Forms.ToolStripMenuItem downloadAlbumMenuItem;
         private System.Windows.Forms.ToolStripMenuItem batchDownloadMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem downloadCategoryMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem batchDownloadPlaylistsMenuItem;
+        private System.Windows.Forms.ContextMenuStrip trayContextMenu;
+        private System.Windows.Forms.ToolStripMenuItem trayShowMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem trayPlayPauseMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem trayPrevMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem trayNextMenuItem;
+        private System.Windows.Forms.ToolStripSeparator trayMenuSeparator;
+        private System.Windows.Forms.ToolStripMenuItem trayExitMenuItem;
     }
 }

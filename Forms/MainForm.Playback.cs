@@ -484,6 +484,17 @@ namespace YTPlayer
                     }
                 });
 
+                // ⭐ 试听版本：始终通过 TTS 发送提示（不受歌词朗读开关控制）
+                if (song.IsTrial)
+                {
+                    System.Threading.Tasks.Task.Run(() =>
+                    {
+                        bool success = Utils.TtsHelper.SpeakText("[试听片段 30 秒]");
+                        System.Diagnostics.Debug.WriteLine($"[TTS] 试听提示: {(success ? "成功" : "失败")}");
+                    });
+                }
+
+                // 加载歌词
                 _ = LoadLyrics(song.Id, cancellationToken);
 
                 // ⭐ 播放成功后立即刷新预加载（新歌曲已开始，队列状态已稳定）
