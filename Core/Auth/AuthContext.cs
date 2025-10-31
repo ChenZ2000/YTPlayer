@@ -800,36 +800,25 @@ namespace YTPlayer.Core.Auth
             return null;
         }
 
+        /// <summary>
+        /// 构建基础 Cookie 映射
+        /// ⭐⭐⭐ 移动端重构：只返回登录凭证，设备参数通过 EAPI header 传递
+        /// 参照参考项目：config.cookies 初始为空，登录后只保存 MUSIC_U 和 __csrf
+        /// </summary>
         internal IReadOnlyDictionary<string, string> BuildBaseCookieMap(bool includeAnonymousToken)
         {
-            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["__remember_me"] = "true",
-                ["os"] = "pc",
-                ["osver"] = _resolvedOsVersion,
-                ["appver"] = AuthConstants.DesktopAppVersion,
-                ["buildver"] = _config.DeviceBuildVersion ?? AuthConstants.MobileBuildVersion,
-                ["channel"] = AuthConstants.PcChannel,
-                ["deviceId"] = _config.DeviceId,
-                ["sDeviceId"] = _config.SDeviceId ?? _config.DeviceId,
-                ["NMTID"] = _config.NmtId,
-                ["_ntes_nuid"] = _config.NtesNuid
-            };
+            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-            if (!string.IsNullOrEmpty(_config.WnmCid))
-            {
-                map["WNMCID"] = _config.WnmCid;
-            }
-
+            // ⭐ 只保留 CSRF token (如果存在)
+            // 移除所有设备指纹 Cookie：os, osver, appver, buildver, channel, deviceId, sDeviceId, NMTID, _ntes_nuid, WNMCID
+            // 这些参数现在通过 EAPI header 传递，不再混入 Cookie
             if (!string.IsNullOrEmpty(_config.CsrfToken))
             {
                 map["__csrf"] = _config.CsrfToken;
             }
 
-            if (includeAnonymousToken && !string.IsNullOrEmpty(_config.MusicA))
-            {
-                map["MUSIC_A"] = _config.MusicA;
-            }
+            // ⭐ 移除匿名令牌 (MUSIC_A) - 不再需要
+            // 移动端 EAPI 不依赖此令牌
 
             return map;
         }

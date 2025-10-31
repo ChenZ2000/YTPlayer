@@ -29,6 +29,13 @@ namespace YTPlayer.Forms
 
         public LoginForm(NeteaseApiClient apiClient)
         {
+            // ⭐ Layer 3 防护：确保 API 客户端不为 null
+            if (apiClient == null)
+            {
+                throw new ArgumentNullException(nameof(apiClient),
+                    "API客户端不能为null。登录功能需要有效的API客户端实例。");
+            }
+
             _apiClient = apiClient;
             InitializeComponent();
             InitializeCustomComponents();
@@ -239,6 +246,28 @@ namespace YTPlayer.Forms
                                 _apiClient.ApplyLoginProfile(userInfo);
                             }
 
+                            // ⭐⭐⭐ 新增：调用 CompleteLoginAsync 进行会话预热
+                            // 构造 LoginResult 对象以便进行会话预热
+                            try
+                            {
+                                var loginResult = new LoginResult
+                                {
+                                    Code = 200,
+                                    Cookie = result.Cookie ?? _apiClient.GetCurrentCookieString(),
+                                    UserId = userInfo?.UserId.ToString() ?? "0",
+                                    Nickname = userInfo?.Nickname ?? "网易云用户",
+                                    VipType = userInfo?.VipType ?? 0,
+                                    AvatarUrl = userInfo?.AvatarUrl
+                                };
+
+                                await _apiClient.CompleteLoginAsync(loginResult);
+                                System.Diagnostics.Debug.WriteLine("[LoginForm QR] ✅ CompleteLoginAsync 调用成功");
+                            }
+                            catch (Exception ex)
+                            {
+                                System.Diagnostics.Debug.WriteLine($"[LoginForm QR] ⚠️ CompleteLoginAsync 失败（不影响登录）: {ex.Message}");
+                            }
+
                             var eventArgs = new LoginSuccessEventArgs
                             {
                                 Cookie = result.Cookie ?? _apiClient.GetCurrentCookieString(),
@@ -382,7 +411,15 @@ namespace YTPlayer.Forms
 
         private async void sendSmsButton_Click(object sender, EventArgs e)
         {
+            string countryCode = countryCodeTextBox.Text.Trim();
             string phone = phoneTextBox.Text.Trim();
+
+            // 验证国家号
+            if (string.IsNullOrEmpty(countryCode))
+            {
+                MessageBox.Show("请输入国家号", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
 
             if (string.IsNullOrEmpty(phone))
             {
@@ -390,9 +427,10 @@ namespace YTPlayer.Forms
                 return;
             }
 
-            if (phone.Length != 11 || !phone.StartsWith("1"))
+            // 中国手机号验证（仅当国家号为86时）
+            if (countryCode == "86" && (phone.Length != 11 || !phone.StartsWith("1")))
             {
-                MessageBox.Show("请输入正确的手机号", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("请输入正确的中国大陆手机号（11位，以1开头）", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
@@ -402,15 +440,15 @@ namespace YTPlayer.Forms
                 smsStatusLabel.Text = "正在发送验证码...";
                 smsStatusLabel.ForeColor = Color.Gray;
 
-                // ⭐ 修复：捕获详细异常信息
-                bool success = await _apiClient.SendCaptchaAsync(phone);
+                // ⭐ 修复：传递国家号参数
+                bool success = await _apiClient.SendCaptchaAsync(phone, countryCode);
 
                 if (success)
                 {
                     smsStatusLabel.Text = "验证码已发送";
                     smsStatusLabel.ForeColor = Color.Green;
 
-                    // 启动60秒倒计时
+                    // 启动60秒倒计时（按钮保持禁用状态）
                     _smsCountdown = 60;
                     sendSmsButton.Text = $"重新发送({_smsCountdown}s)";
                     _smsTimer.Start();
@@ -434,7 +472,7 @@ namespace YTPlayer.Forms
                 sendSmsButton.Enabled = true;
 
                 // ⭐ 修复：显示更友好的错误对话框
-                MessageBox.Show($"发送验证码失败：\n\n{ex.Message}\n\n请检查：\n1. 网络连接是否正常\n2. 手机号是否正确\n3. 稍后重试",
+                MessageBox.Show($"发送验证码失败：\n\n{ex.Message}\n\n请检查：\n1. 网络连接是否正常\n2. 手机号和国家号是否正确\n3. 稍后重试",
                     "发送失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
@@ -457,8 +495,16 @@ namespace YTPlayer.Forms
 
         private async void smsLoginButton_Click(object sender, EventArgs e)
         {
+            string countryCode = countryCodeTextBox.Text.Trim();
             string phone = phoneTextBox.Text.Trim();
             string captcha = captchaTextBox.Text.Trim();
+
+            // 验证国家号
+            if (string.IsNullOrEmpty(countryCode))
+            {
+                MessageBox.Show("请输入国家号", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
 
             if (string.IsNullOrEmpty(phone))
             {
@@ -478,7 +524,8 @@ namespace YTPlayer.Forms
                 smsStatusLabel.Text = "正在登录...";
                 smsStatusLabel.ForeColor = Color.Gray;
 
-                var result = await _apiClient.LoginByCaptchaAsync(phone, captcha);
+                // ⭐ 修复：传递国家号参数
+                var result = await _apiClient.LoginByCaptchaAsync(phone, captcha, countryCode);
 
                 if (result.Code == 200)
                 {
@@ -516,6 +563,18 @@ namespace YTPlayer.Forms
                     if (userInfo != null)
                     {
                         _apiClient.ApplyLoginProfile(userInfo);
+                    }
+
+                    // ⭐⭐⭐ 新增：调用 CompleteLoginAsync 进行会话预热
+                    // 确保登录后立即同步Cookie并向服务器发送账户数据，避免后续风控
+                    try
+                    {
+                        await _apiClient.CompleteLoginAsync(result);
+                        System.Diagnostics.Debug.WriteLine("[LoginForm SMS] ✅ CompleteLoginAsync 调用成功");
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[LoginForm SMS] ⚠️ CompleteLoginAsync 失败（不影响登录）: {ex.Message}");
                     }
 
                     var eventArgs = new LoginSuccessEventArgs

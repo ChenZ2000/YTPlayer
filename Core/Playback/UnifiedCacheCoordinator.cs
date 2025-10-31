@@ -467,14 +467,33 @@ namespace YTPlayer.Core.Playback
         {
             UnsubscribeFromEvents();
 
+            // 🔧 修复：先取消清理任务，然后等待其完成
             _cleanupCts?.Cancel();
+
+            // 等待清理任务完成（避免在 Dispose 期间后台任务仍在访问资源）
+            try
+            {
+                _cleanupTask?.Wait(TimeSpan.FromSeconds(2));
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[UnifiedCacheCoordinator] 等待清理任务完成时异常: {ex.Message}");
+            }
+
             _cleanupCts?.Dispose();
 
             lock (_lock)
             {
                 foreach (var entry in _cacheEntries.Values)
                 {
-                    entry.Dispose();
+                    try
+                    {
+                        entry.Dispose();
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[UnifiedCacheCoordinator] 释放缓存条目时异常: {ex.Message}");
+                    }
                 }
                 _cacheEntries.Clear();
             }

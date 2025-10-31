@@ -311,7 +311,7 @@ namespace YTPlayer.Core
         /// 创建默认配置（参考 Python 版本 Netease-music.py:2505-2525）
         /// </summary>
         /// <returns>默认配置对象</returns>
-        private ConfigModel CreateDefaultConfig()
+        public ConfigModel CreateDefaultConfig()
         {
             return new ConfigModel
             {

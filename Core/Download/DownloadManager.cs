@@ -563,6 +563,7 @@ namespace YTPlayer.Core.Download
             _isRunning = false;
             _schedulerCts?.Cancel();
 
+            // 🔧 修复：先等待调度器任务完成
             try
             {
                 _schedulerTask?.Wait(TimeSpan.FromSeconds(5));
@@ -570,6 +571,39 @@ namespace YTPlayer.Core.Download
             catch
             {
                 // 忽略等待超时
+            }
+
+            // 🔧 修复：取消所有活动的下载任务并等待它们响应取消
+            System.Collections.Generic.List<System.Threading.CancellationTokenSource> activeCancellations;
+            lock (_queueLock)
+            {
+                activeCancellations = new System.Collections.Generic.List<System.Threading.CancellationTokenSource>();
+                foreach (var task in _activeQueue)
+                {
+                    if (task.CancellationTokenSource != null && !task.CancellationTokenSource.IsCancellationRequested)
+                    {
+                        activeCancellations.Add(task.CancellationTokenSource);
+                    }
+                }
+            }
+
+            // 发送取消信号给所有活动任务
+            foreach (var cts in activeCancellations)
+            {
+                try
+                {
+                    cts.Cancel();
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[DownloadManager] 取消任务时异常: {ex.Message}");
+                }
+            }
+
+            // 给予短暂时间让任务响应取消（避免长时间阻塞）
+            if (activeCancellations.Count > 0)
+            {
+                System.Threading.Thread.Sleep(500); // 500ms 应该足够任务响应取消
             }
 
             _schedulerCts?.Dispose();
@@ -811,9 +845,23 @@ namespace YTPlayer.Core.Download
 
             lock (_queueLock)
             {
-                foreach (var task in _pendingQueue.Concat(_activeQueue).Concat(_completedQueue))
+                // 🔧 修复：使用 ToList() 创建快照，避免在枚举时集合被后台线程修改
+                // 原问题：Concat() 创建延迟执行的枚举器，后台线程可能在枚举期间修改集合
+                var allTasks = _pendingQueue
+                    .Concat(_activeQueue)
+                    .Concat(_completedQueue)
+                    .ToList();  // 立即物化为列表快照
+
+                foreach (var task in allTasks)
                 {
-                    task.Dispose();
+                    try
+                    {
+                        task.Dispose();
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[DownloadManager] 释放任务时异常: {ex.Message}");
+                    }
                 }
 
                 _pendingQueue.Clear();

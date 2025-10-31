@@ -367,9 +367,40 @@ namespace YTPlayer
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"初始化失败: {ex.Message}\n\n音频功能可能不可用。", "警告",
+                // ⭐ 关键修复：即使初始化失败，也要确保核心组件可用
+                System.Diagnostics.Debug.WriteLine($"[MainForm] 初始化异常: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[MainForm] 异常堆栈: {ex.StackTrace}");
+
+                // 尝试创建最小可用配置
+                try
+                {
+                    if (_configManager == null)
+                    {
+                        _configManager = ConfigManager.Instance;
+                    }
+
+                    if (_config == null)
+                    {
+                        _config = _configManager.CreateDefaultConfig();
+                        System.Diagnostics.Debug.WriteLine("[MainForm] 使用默认配置");
+                    }
+
+                    // ⭐ 确保 API 客户端一定被初始化（即使是基本配置）
+                    if (_apiClient == null)
+                    {
+                        _apiClient = new NeteaseApiClient(_config);
+                        _apiClient.UseSimplifiedApi = false;
+                        System.Diagnostics.Debug.WriteLine("[MainForm] 已使用默认配置初始化 API 客户端");
+                    }
+                }
+                catch (Exception fallbackEx)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[MainForm] 后备初始化失败: {fallbackEx.Message}");
+                }
+
+                MessageBox.Show($"初始化失败: {ex.Message}\n\n音频功能可能不可用，但登录功能仍可使用。", "警告",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                UpdateStatusBar("初始化失败");
+                UpdateStatusBar("初始化失败（部分功能可用）");
             }
         }
 
@@ -3837,6 +3868,28 @@ private void TrayIcon_MouseClick(object sender, System.Windows.Forms.MouseEventA
                 {
                     // 未登录，打开登录对话框
                     System.Diagnostics.Debug.WriteLine($"[LoginMenuItem] ========== 开始登录流程 ==========");
+
+                    // ⭐ Layer 2 防护：检查 API 客户端是否可用
+                    if (_apiClient == null)
+                    {
+                        System.Diagnostics.Debug.WriteLine("[LoginMenuItem] ⚠️ API客户端为null，尝试重新初始化");
+                        try
+                        {
+                            _configManager = _configManager ?? ConfigManager.Instance;
+                            _config = _config ?? _configManager.Load();
+                            _apiClient = new NeteaseApiClient(_config);
+                            _apiClient.UseSimplifiedApi = false;
+                            System.Diagnostics.Debug.WriteLine("[LoginMenuItem] ✓ API客户端重新初始化成功");
+                        }
+                        catch (Exception initEx)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[LoginMenuItem] ✗ API客户端初始化失败: {initEx.Message}");
+                            MessageBox.Show($"无法初始化登录功能：\n\n{initEx.Message}\n\n请尝试重新启动应用程序。",
+                                "初始化错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                            return;
+                        }
+                    }
+
                     using (var loginForm = new Forms.LoginForm(_apiClient))
                     {
                         // 订阅登录成功事件
@@ -5576,6 +5629,16 @@ protected override void OnFormClosing(FormClosingEventArgs e)
         _nextSongPreloader?.Dispose();
         _audioEngine?.Dispose();
         _apiClient?.Dispose();
+
+        // 🔧 修复：释放下载管理器，停止所有下载任务
+        try
+        {
+            YTPlayer.Core.Download.DownloadManager.Instance?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[OnFormClosing] DownloadManager释放异常: {ex.Message}");
+        }
 
         // ⭐ 释放托盘图标和宿主窗口
         if (_trayIcon != null)
