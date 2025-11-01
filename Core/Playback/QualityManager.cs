@@ -140,8 +140,7 @@ namespace YTPlayer.Core.Playback
             }
 
             // 已登录：根据 VIP 等级返回
-            var config = _configManager.LoadConfig();
-            int vipType = config.LoginVipType;
+            int vipType = _authContext.CurrentAccountState?.VipType ?? 0;
 
             if (vipType >= 11)
             {

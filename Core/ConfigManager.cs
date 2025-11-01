@@ -285,14 +285,7 @@ namespace YTPlayer.Core
                     string tempFile = ConfigFilePath + ".tmp";
                     File.WriteAllText(tempFile, json);
 
-                    // 如果原文件存在，先备份
-                    if (File.Exists(ConfigFilePath))
-                    {
-                        string backupFile = ConfigFilePath + ".bak";
-                        File.Copy(ConfigFilePath, backupFile, true);
-                    }
-
-                    // 用临时文件替换原文件
+                    // 用临时文件替换原文件（原子操作，不再生成 .bak 文件）
                     File.Copy(tempFile, ConfigFilePath, true);
                     File.Delete(tempFile);
                 }
@@ -326,53 +319,17 @@ namespace YTPlayer.Core
                 // 下载设置
                 DownloadDirectory = GetDefaultDownloadPath(),
 
-                // Cookie 和登录（UsePersonalCookie 已移除，自动根据 MusicU 判断）
-                Cookies = new List<CookieItem>(),
-                MusicU = null,
-                CsrfToken = null,
-                LoginUserId = null,
-                LoginUserNickname = null,
-                LoginAvatarUrl = null,
-                LoginVipType = 0,
-                MusicA = AuthConstants.AnonymousToken,
-                NmtId = EncryptionHelper.GenerateRandomHex(32),
-                NtesNuid = EncryptionHelper.GenerateRandomHex(32),
-                WnmCid = EncryptionHelper.GenerateWNMCID(),
-                AntiCheatToken = AntiCheatTokenUtility.Generate(),
-                AntiCheatTokenGeneratedAt = DateTimeOffset.UtcNow,
-                AntiCheatTokenExpiresAt = DateTimeOffset.UtcNow + AuthConstants.AntiCheatTokenLifetime,
-                FingerprintLastUpdated = DateTimeOffset.UtcNow,
-
-                // 设备信息
-                DeviceId = Guid.NewGuid().ToString("N"),
-                SDeviceId = Guid.NewGuid().ToString("N"),
-                DeviceMachineId = AuthConstants.MobileMachineId,
-                DeviceOs = AuthConstants.MobileOs,
-                DeviceOsVersion = AuthConstants.MobileOsVersion,
-                DeviceAppVersion = AuthConstants.MobileAppVersion,
-                DeviceBuildVersion = AuthConstants.MobileBuildVersion,
-                DeviceVersionCode = AuthConstants.DefaultMobileVersionCode,
-                DeviceUserAgent = AuthConstants.MobileUserAgent,
-                DesktopUserAgent = AuthConstants.DesktopUserAgent,
-                DeviceResolution = AuthConstants.DefaultMobileResolution,
-                DeviceChannel = AuthConstants.DefaultMobileChannel,
-                DeviceMobileName = AuthConstants.DefaultMobileName,
-                DeviceMark = AuthConstants.MobileCustomMark,
-                DeviceMConfigInfo = AuthConstants.MobileMConfigInfo,
+                // Note: Account-related fields (Cookies, MusicU, CsrfToken, MusicA, etc.) are now managed by AccountState
+                // Note: Device fingerprint fields are now managed by AccountState
+                // Note: Window configuration fields have been removed (hardcoded defaults)
 
                 // UI 和交互
                 FollowCursor = true,
                 SeekMinIntervalMs = 30,
-                WindowX = -1,
-                WindowY = -1,
-                WindowWidth = 1200,
-                WindowHeight = 800,
-                WindowMaximized = false,
 
                 // 其他设置
                 LastPlayingSongId = null,
                 LastPlayingPosition = 0,
-                ShowLyrics = true,
                 LyricsFontSize = 12
             };
         }
@@ -444,167 +401,9 @@ namespace YTPlayer.Core
                 System.Diagnostics.Debug.WriteLine($"[ConfigManager] 无法创建下载目录: {ex.Message}");
             }
 
-            // 验证 Cookie 列表
-            if (config.Cookies == null)
-            {
-                config.Cookies = new List<CookieItem>();
-                changed = true;
-            }
-
-            if (config.LoginVipType < 0)
-            {
-                config.LoginVipType = 0;
-                changed = true;
-            }
-
-            // 验证设备 ID（Python: uuid.uuid4().hex）
-            if (string.IsNullOrWhiteSpace(config.DeviceId))
-            {
-                config.DeviceId = Guid.NewGuid().ToString("N");
-                changed = true;
-            }
-
-            if (string.IsNullOrWhiteSpace(config.SDeviceId))
-            {
-                config.SDeviceId = Guid.NewGuid().ToString("N");
-                changed = true;
-            }
-
-            if (string.IsNullOrWhiteSpace(config.DeviceMachineId))
-            {
-                config.DeviceMachineId = AuthConstants.MobileMachineId;
-                changed = true;
-            }
-
-            if (string.IsNullOrWhiteSpace(config.DeviceOs))
-            {
-                config.DeviceOs = AuthConstants.MobileOs;
-                changed = true;
-            }
-
-            if (string.IsNullOrWhiteSpace(config.DeviceOsVersion))
-            {
-                config.DeviceOsVersion = AuthConstants.MobileOsVersion;
-                changed = true;
-            }
-
-            if (string.IsNullOrWhiteSpace(config.DeviceAppVersion))
-            {
-                config.DeviceAppVersion = AuthConstants.MobileAppVersion;
-                changed = true;
-            }
-
-            if (string.IsNullOrWhiteSpace(config.DeviceBuildVersion))
-            {
-                config.DeviceBuildVersion = AuthConstants.MobileBuildVersion;
-                changed = true;
-            }
-
-            if (string.IsNullOrWhiteSpace(config.DeviceVersionCode))
-            {
-                config.DeviceVersionCode = AuthConstants.DefaultMobileVersionCode;
-                changed = true;
-            }
-
-            if (string.IsNullOrWhiteSpace(config.DeviceMark))
-            {
-                config.DeviceMark = AuthConstants.MobileCustomMark;
-                changed = true;
-            }
-
-            if (string.IsNullOrWhiteSpace(config.DeviceMConfigInfo))
-            {
-                config.DeviceMConfigInfo = AuthConstants.MobileMConfigInfo;
-                changed = true;
-            }
-
-            if (string.IsNullOrWhiteSpace(config.DeviceResolution))
-            {
-                config.DeviceResolution = AuthConstants.DefaultMobileResolution;
-                changed = true;
-            }
-
-            if (string.IsNullOrWhiteSpace(config.DeviceChannel))
-            {
-                config.DeviceChannel = AuthConstants.DefaultMobileChannel;
-                changed = true;
-            }
-
-            if (string.IsNullOrWhiteSpace(config.DeviceMobileName))
-            {
-                config.DeviceMobileName = config.DeviceMachineId ?? AuthConstants.DefaultMobileName;
-                changed = true;
-            }
-
-            if (string.IsNullOrWhiteSpace(config.DeviceUserAgent))
-            {
-                config.DeviceUserAgent = AuthConstants.BuildMobileUserAgent(
-                    config.DeviceAppVersion,
-                    config.DeviceBuildVersion,
-                    config.DeviceOsVersion);
-                changed = true;
-            }
-
-            if (string.IsNullOrWhiteSpace(config.DesktopUserAgent))
-            {
-                var seed = !string.IsNullOrEmpty(config.DeviceId)
-                    ? config.DeviceId
-                    : config.SDeviceId ?? Guid.NewGuid().ToString("N");
-                config.DesktopUserAgent = AuthConstants.GetDesktopUserAgent(seed);
-                changed = true;
-            }
-
-            if (string.IsNullOrWhiteSpace(config.NmtId))
-            {
-                config.NmtId = EncryptionHelper.GenerateRandomHex(32);
-                changed = true;
-            }
-
-            if (string.IsNullOrWhiteSpace(config.NtesNuid))
-            {
-                config.NtesNuid = EncryptionHelper.GenerateRandomHex(32);
-                changed = true;
-            }
-
-            if (string.IsNullOrWhiteSpace(config.WnmCid))
-            {
-                config.WnmCid = EncryptionHelper.GenerateWNMCID();
-                changed = true;
-            }
-
-            if (string.IsNullOrWhiteSpace(config.MusicA))
-            {
-                config.MusicA = AuthConstants.AnonymousToken;
-                changed = true;
-            }
-
-            if (!AntiCheatTokenUtility.IsValid(config.AntiCheatToken))
-            {
-                config.AntiCheatToken = AntiCheatTokenUtility.Generate();
-                config.AntiCheatTokenGeneratedAt = DateTimeOffset.UtcNow;
-                config.AntiCheatTokenExpiresAt = config.AntiCheatTokenGeneratedAt.Value + AuthConstants.AntiCheatTokenLifetime;
-                changed = true;
-            }
-            else
-            {
-                if (!config.AntiCheatTokenGeneratedAt.HasValue)
-                {
-                    config.AntiCheatTokenGeneratedAt = DateTimeOffset.UtcNow;
-                    changed = true;
-                }
-
-                if (!config.AntiCheatTokenExpiresAt.HasValue && config.AntiCheatTokenGeneratedAt.HasValue)
-                {
-                    config.AntiCheatTokenExpiresAt = config.AntiCheatTokenGeneratedAt.Value + AuthConstants.AntiCheatTokenLifetime;
-                    changed = true;
-                }
-            }
-
-            if (!config.FingerprintLastUpdated.HasValue)
-            {
-                config.FingerprintLastUpdated = DateTimeOffset.UtcNow;
-                changed = true;
-            }
+            // Note: Cookies and LoginVipType are now managed by AccountState, not ConfigModel
+            // Note: Device fingerprint fields (DeviceId, SDeviceId, etc.) are now managed by AccountState
+            // Note: NmtId, NtesNuid, WnmCid, MusicA, AntiCheatToken are managed by AccountState
 
             // 验证跳转间隔
             if (config.SeekMinIntervalMs < 0 || config.SeekMinIntervalMs > 1000)
@@ -613,17 +412,7 @@ namespace YTPlayer.Core
                 changed = true;
             }
 
-            // 验证窗口尺寸
-            if (config.WindowWidth < 800)
-            {
-                config.WindowWidth = 1200;
-                changed = true;
-            }
-            if (config.WindowHeight < 600)
-            {
-                config.WindowHeight = 800;
-                changed = true;
-            }
+            // Note: Window configuration fields have been removed (hardcoded defaults)
 
             // 验证歌词字体大小
             if (config.LyricsFontSize < 8 || config.LyricsFontSize > 32)

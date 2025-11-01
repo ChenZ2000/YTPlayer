@@ -187,23 +187,8 @@ namespace YTPlayer.Forms
             {
                 try
                 {
-                    // 清除配置
-                    if (_configManager != null)
-                    {
-                        var config = _configManager.Load();
-                        // UsePersonalCookie 已移除，会自动根据 MusicU 是否为空判断
-                        config.MusicU = string.Empty;
-                        config.CsrfToken = string.Empty;
-                        if (config.Cookies != null)
-                        {
-                            config.Cookies.Clear();
-                        }
-                        config.LoginUserId = null;
-                        config.LoginUserNickname = null;
-                        _configManager.Save(config);
-
-                        System.Diagnostics.Debug.WriteLine("[UserInfoForm] 已清除登录配置");
-                    }
+                    // Note: Account state clearing is now handled by AccountStateStore and AuthContext
+                    // The logout callback (_onLogout) will handle the proper cleanup
 
                     // 清除API客户端的Cookie（如果有的话）
                     _apiClient?.ClearCookies();

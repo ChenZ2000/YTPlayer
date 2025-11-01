@@ -60,6 +60,7 @@ namespace YTPlayer.Core
         private readonly HttpClient _httpClient;
         private readonly HttpClient _simplifiedClient;
         private readonly HttpClient _eapiClient;  // 专用于EAPI请求，不使用CookieContainer
+        private readonly HttpClient _iOSLoginClient;  // iOS登录专用（UseCookies=false，避免自动Cookie注入）
         private readonly CookieContainer _cookieContainer;
         private readonly object _cookieLock = new object();
         private readonly ConfigManager _configManager;
@@ -97,10 +98,6 @@ namespace YTPlayer.Core
             set
             {
                 _musicU = value;
-                if (_config != null)
-                {
-                    _config.MusicU = value;
-                }
                 UpdateCookies();
             }
         }
@@ -114,10 +111,6 @@ namespace YTPlayer.Core
             set
             {
                 _csrfToken = value;
-                if (_config != null)
-                {
-                    _config.CsrfToken = value;
-                }
                 UpdateCookies();
             }
         }
@@ -141,20 +134,12 @@ namespace YTPlayer.Core
                 config = new ConfigModel();
             }
 
-            if (!string.IsNullOrWhiteSpace(deviceId))
-            {
-                config.DeviceId = deviceId;
-            }
+            // Note: DeviceId is now managed by AccountState, not ConfigModel
+            // If you need to set a custom deviceId for testing, it should be set on AccountState
+            // after creating the NeteaseApiClient instance
 
-            if (!string.IsNullOrWhiteSpace(musicU))
-            {
-                config.MusicU = musicU;
-            }
-
-            if (!string.IsNullOrWhiteSpace(csrfToken))
-            {
-                config.CsrfToken = csrfToken;
-            }
+            // Note: MusicU and CsrfToken are now managed by AccountState, not ConfigModel
+            // These will be set directly on the NeteaseApiClient properties in the constructor
 
             return config;
         }
@@ -165,8 +150,8 @@ namespace YTPlayer.Core
             _config = config ?? _configManager.Load();
             _authContext = new AuthContext(_configManager, _config);
 
-            _deviceId = _authContext.Config.DeviceId;
-            _desktopUserAgent = _authContext?.Config?.DesktopUserAgent ?? AuthConstants.DesktopUserAgent;
+            _deviceId = _authContext.CurrentAccountState?.DeviceId;
+            _desktopUserAgent = _authContext.CurrentAccountState?.DesktopUserAgent ?? AuthConstants.DesktopUserAgent;
 
             _cookieContainer = new CookieContainer();
             var handler = new HttpClientHandler
@@ -197,11 +182,22 @@ namespace YTPlayer.Core
                 Timeout = TimeSpan.FromSeconds(15)
             };
 
+            // iOS登录专用客户端：模拟参考项目 netease-music-simple-player (UseCookies=false)
+            // 关键修复：避免 HttpClientHandler 自动注入 _cookieContainer 中的访客Cookie
+            // 参考项目使用 UseCookies=false + 手动Cookie管理，确保首次登录时发送零Cookie
+            var iOSLoginHandler = new HttpClientHandler
+            {
+                UseCookies = false,  // ⭐ 核心：禁用自动Cookie管理，完全手动控制Cookie
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate
+            };
+            _iOSLoginClient = new HttpClient(iOSLoginHandler)
+            {
+                Timeout = TimeSpan.FromSeconds(15)
+            };
+
             SetupDefaultHeaders();
 
-            _musicU = _config?.MusicU;
-            _csrfToken = _config?.CsrfToken;
-
+            // 只从 account.json 读取账户数据（不再从 config.json 读取）
             var persistedState = _authContext.CurrentAccountState;
             if (persistedState != null && persistedState.IsLoggedIn)
             {
@@ -224,30 +220,23 @@ namespace YTPlayer.Core
                 if (!string.IsNullOrEmpty(persistedState.MusicU))
                 {
                     _musicU = persistedState.MusicU;
-                    if (_config != null)
-                    {
-                        _config.MusicU = persistedState.MusicU;
-                    }
                 }
 
                 if (!string.IsNullOrEmpty(persistedState.CsrfToken))
                 {
                     _csrfToken = persistedState.CsrfToken;
-                    if (_config != null)
-                    {
-                        _config.CsrfToken = persistedState.CsrfToken;
-                    }
                 }
             }
 
             _authContext.GetActiveAntiCheatToken();
 
-            // ⭐⭐⭐ 移动端重构：不再预填充Cookie
-            // 原代码：ApplyBaseCookies(includeAnonymousToken: string.IsNullOrEmpty(_musicU));
-            // 问题：会预填充 os=pc, appver=2.10.13 等桌面端Cookie，与移动端User-Agent混合导致风控
-            // 新方案：保持Cookie为空，只在登录成功后保存 MUSIC_U 和 __csrf
-            //        设备参数通过 EAPI header 传递，不混入 Cookie
-            // ApplyBaseCookies(includeAnonymousToken: string.IsNullOrEmpty(_musicU));  // ❌ 已注释
+            // ⭐ 访客模式下必须初始化基础 Cookie（WEAPI 请求依赖这些 Cookie）
+            // EAPI 请求通过 header 传递设备信息，不依赖 Cookie
+            // WEAPI 请求（榜单、搜索、登录状态等）必须有访客令牌（MUSIC_A, NMTID 等）
+            if (string.IsNullOrEmpty(_musicU))
+            {
+                ApplyBaseCookies(includeAnonymousToken: true);
+            }
 
             UpdateCookies();
         }
@@ -390,7 +379,8 @@ namespace YTPlayer.Core
 
         /// <summary>
         /// 更新Cookies
-        /// ⭐⭐⭐ 移动端重构：只更新登录凭证，不再调用 ApplyBaseCookies
+        /// ⭐⭐⭐ 核心修复：恢复 ApplyBaseCookies 调用，确保桌面设备指纹Cookie始终存在
+        /// 修复8821风控错误：WEAPI请求（包括二维码登录）必须包含完整设备指纹
         /// </summary>
         private void UpdateCookies()
         {
@@ -399,11 +389,10 @@ namespace YTPlayer.Core
                 return;
             }
 
-            // ⭐⭐⭐ 移动端重构：移除 ApplyBaseCookies 调用
-            // 原代码：ApplyBaseCookies(includeAnonymousToken: string.IsNullOrEmpty(_musicU));
-            // 问题：登录后又会重新添加桌面端Cookie (os=pc, appver=2.10.13, ...)
-            // 新方案：只更新登录凭证 (MUSIC_U 和 __csrf)
-            // ApplyBaseCookies(includeAnonymousToken: string.IsNullOrEmpty(_musicU));  // ❌ 已移除
+            // ⭐⭐⭐ 核心修复：恢复 ApplyBaseCookies 调用
+            // 参考备份版本成功实现，始终确保桌面设备指纹Cookie存在
+            // 这些Cookie包括: __remember_me, os, osver, appver, buildver, channel, deviceId, sDeviceId
+            ApplyBaseCookies(includeAnonymousToken: string.IsNullOrEmpty(_musicU));
 
             if (!string.IsNullOrEmpty(_musicU))
             {
@@ -413,19 +402,12 @@ namespace YTPlayer.Core
                     _csrfToken = EncryptionHelper.ComputeMd5(_musicU).Substring(0, Math.Min(32, _musicU.Length));
                 }
 
-                if (_config != null)
-                {
-                    _config.MusicU = _musicU;
-                }
-
                 System.Diagnostics.Debug.WriteLine($"[Cookie] ✅ 已更新登录凭证: MUSIC_U (长度={_musicU.Length}), __csrf={_csrfToken?.Substring(0, Math.Min(8, _csrfToken.Length))}...");
             }
 
-            var csrfValue = !string.IsNullOrEmpty(_csrfToken) ? _csrfToken : _config?.CsrfToken;
-            if (!string.IsNullOrEmpty(csrfValue))
+            if (!string.IsNullOrEmpty(_csrfToken))
             {
-                UpsertCookie("__csrf", csrfValue);
-                _config.CsrfToken = csrfValue;
+                UpsertCookie("__csrf", _csrfToken);
             }
         }
 
@@ -468,10 +450,7 @@ namespace YTPlayer.Core
                         _csrfToken = value;
                         break;
                     case "MUSIC_A":
-                        if (_config != null)
-                        {
-                            _config.MusicA = value;
-                        }
+                        // Note: MUSIC_A is now managed by AccountState via AuthContext
                         break;
                 }
             }
@@ -723,11 +702,6 @@ namespace YTPlayer.Core
             // 清理登录凭证
             _musicU = null;
             _csrfToken = null;
-            if (_config != null)
-            {
-                _config.MusicU = null;
-                _config.CsrfToken = null;
-            }
 
             System.Diagnostics.Debug.WriteLine("[Cookie] ✅ 已清理 MUSIC_U 和 __csrf");
 
@@ -766,20 +740,12 @@ namespace YTPlayer.Core
                     if (music != null && !string.IsNullOrEmpty(music.Value))
                     {
                         _musicU = music.Value;
-                        if (_config != null)
-                        {
-                            _config.MusicU = music.Value;
-                        }
                     }
 
                     var csrf = cookies["__csrf"];
                     if (csrf != null && !string.IsNullOrEmpty(csrf.Value))
                     {
                         _csrfToken = csrf.Value;
-                        if (_config != null)
-                        {
-                            _config.CsrfToken = csrf.Value;
-                        }
                     }
 
                     _authContext?.SyncFromCookies(cookies);
@@ -1323,12 +1289,14 @@ namespace YTPlayer.Core
         /// <summary>
         /// 使用 iOS User-Agent 的 WEAPI 接口调用，专门用于短信验证码登录
         /// ⭐ 参考 netease-music-simple-player/Net/NetClasses.cs:2054-2203
+        /// 关键修复：使用独立的 _iOSLoginClient (UseCookies=false) + 手动添加访客Cookie
+        /// 模拟参考项目的 ApplyCookiesToRequest 行为
         /// </summary>
         /// <param name="path">API路径</param>
         /// <param name="data">请求数据</param>
         /// <param name="maxRetries">最大重试次数</param>
-        /// <param name="sendCleanRequest">是否发送干净请求（不携带任何Cookie）- 模拟参考项目首次登录时的空Cookie状态</param>
-        private async Task<T> PostWeApiWithiOSAsync<T>(string path, Dictionary<string, object> data, int maxRetries = 3, bool sendCleanRequest = false)
+        /// <param name="sendCookies">是否发送访客Cookie（验证码发送需要true，登录需要false）</param>
+        private async Task<T> PostWeApiWithiOSAsync<T>(string path, Dictionary<string, object> data, int maxRetries = 3, bool sendCookies = false)
         {
             const string IOS_USER_AGENT = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 CloudMusic/0.1.1 NeteaseMusic/9.0.65";
 
@@ -1378,24 +1346,23 @@ namespace YTPlayer.Core
                         request.Headers.TryAddWithoutValidation("Accept", "*/*");
                         request.Headers.TryAddWithoutValidation("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8");
 
-                        // ⭐ 关键：Cookie 处理策略
+                        // ⭐⭐⭐ 双模式Cookie策略：
+                        // 1. 验证码发送（sendCookies=true）：需要访客Cookie（MUSIC_A、NMTID等）
+                        //    - 服务器需要验证这是一个有效的访客会话
+                        //    - 发送桌面环境生成的访客Cookie，但过滤掉os/osver等
+                        // 2. 登录请求（sendCookies=false）：完全零Cookie
+                        //    - 模拟真实iPhone首次登录场景
+                        //    - 避免桌面Cookie与iOS UA的设备指纹不匹配
                         string cookieHeader = "";
 
-                        if (sendCleanRequest)
+                        if (sendCookies)
                         {
-                            // ⭐⭐⭐ 模拟参考项目首次登录：发送零Cookie请求
-                            // 参考项目的 config.cookies = [] 是空列表，所以第一次SMS登录请求不携带任何Cookie
-                            // 这是避免风控的关键：iOS User-Agent + 零Cookie = 干净的移动设备初次登录
-                            System.Diagnostics.Debug.WriteLine("[iOS WEAPI] 🧹 Clean Request Mode: Sending ZERO cookies (mimicking reference project's first login)");
-                        }
-                        else
-                        {
-                            // 常规模式：过滤PC相关Cookie但保留设备指纹Cookie
+                            // 模式1: 发送访客Cookie（用于验证码发送）
                             var cookies = _cookieContainer.GetCookies(MUSIC_URI);
                             var cookieBuilder = new StringBuilder();
                             foreach (Cookie cookie in cookies)
                             {
-                                // 跳过所有桌面系统相关的 Cookie，避免与 iOS User-Agent 冲突
+                                // 过滤桌面相关Cookie，避免与iOS User-Agent冲突
                                 if (cookie.Name == "os" ||
                                     cookie.Name == "osver" ||
                                     cookie.Name == "channel" ||
@@ -1411,20 +1378,23 @@ namespace YTPlayer.Core
                                 cookieBuilder.Append($"{cookie.Name}={cookie.Value}");
                             }
                             cookieHeader = cookieBuilder.ToString();
-                        }
 
-                        // 只有在有 Cookie 内容时才添加 Cookie 头
-                        if (!string.IsNullOrEmpty(cookieHeader))
-                        {
-                            request.Headers.TryAddWithoutValidation("Cookie", cookieHeader);
+                            if (!string.IsNullOrEmpty(cookieHeader))
+                            {
+                                request.Headers.TryAddWithoutValidation("Cookie", cookieHeader);
+                            }
                         }
+                        // 模式2: sendCookies=false时，完全不发送任何Cookie（用于登录）
 
                         System.Diagnostics.Debug.WriteLine($"[iOS WEAPI] Attempt {attempt}/{maxRetries}");
                         System.Diagnostics.Debug.WriteLine($"[iOS WEAPI] URL: {url}");
                         System.Diagnostics.Debug.WriteLine($"[iOS WEAPI] User-Agent: {IOS_USER_AGENT}");
-                        System.Diagnostics.Debug.WriteLine($"[iOS WEAPI] Cookie: {(string.IsNullOrEmpty(cookieHeader) ? "(empty - clean request)" : cookieHeader.Substring(0, Math.Min(200, cookieHeader.Length)) + "...")}");
+                        System.Diagnostics.Debug.WriteLine($"[iOS WEAPI] Cookie Mode: {(sendCookies ? "访客Cookie" : "ZERO Cookie")}");
+                        System.Diagnostics.Debug.WriteLine($"[iOS WEAPI] Cookie: {(string.IsNullOrEmpty(cookieHeader) ? "(empty)" : cookieHeader.Substring(0, Math.Min(200, cookieHeader.Length)) + "...")}");
 
-                        var response = await _httpClient.SendAsync(request).ConfigureAwait(false);
+                        // ⭐ 核心修复：使用iOS登录专用客户端（UseCookies=false），避免HttpClientHandler自动注入Cookie
+                        // 参考项目 netease-music-simple-player 使用 UseCookies=false，确保零Cookie请求真正发送零Cookie
+                        var response = await _iOSLoginClient.SendAsync(request).ConfigureAwait(false);
                         byte[] rawBytes = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
                         string responseText = DecodeResponseContent(response, rawBytes);
 
@@ -1491,6 +1461,122 @@ namespace YTPlayer.Core
                 }
 
                 // 重试延迟（参考 netease-music-simple-player）
+                if (attempt < maxRetries)
+                {
+                    int delayMs = attempt <= 3 ? 50 : Math.Min(attempt * 100, 500);
+                    if (delayMs > 0)
+                    {
+                        await Task.Delay(delayMs);
+                    }
+                }
+            }
+
+            throw new Exception("所有重试均失败");
+        }
+
+        /// <summary>
+        /// 二维码登录专用的WEAPI请求
+        /// ⭐ 核心修复：使用标准 _httpClient（UseCookies=true）自动发送CookieContainer中的所有Cookie
+        /// 参考备份版本（二维码登录工作正常）的实现，避免手动Cookie构建可能的格式错误
+        /// 使用桌面User-Agent（因为二维码在桌面浏览器环境显示）
+        /// </summary>
+        private async Task<T> PostWeApiWithoutCookiesAsync<T>(string path, Dictionary<string, object> data, int maxRetries = 3)
+        {
+            for (int attempt = 1; attempt <= maxRetries; attempt++)
+            {
+                try
+                {
+                    // 添加 csrf_token 到 payload
+                    var payloadDict = new Dictionary<string, object>(data);
+                    if (!string.IsNullOrEmpty(_csrfToken))
+                    {
+                        payloadDict["csrf_token"] = _csrfToken;
+                    }
+
+                    // 构造 URL
+                    string url = $"{OFFICIAL_API_BASE}/weapi{path}";
+                    if (!string.IsNullOrEmpty(_csrfToken))
+                    {
+                        string sep = url.Contains("?") ? "&" : "?";
+                        url = $"{url}{sep}csrf_token={_csrfToken}";
+                    }
+                    // 添加时间戳
+                    string sep2 = url.Contains("?") ? "&" : "?";
+                    long timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    url = $"{url}{sep2}t={timestamp}";
+
+                    // WEAPI 加密
+                    string jsonPayload = JsonConvert.SerializeObject(payloadDict, Formatting.None);
+                    var encrypted = EncryptionHelper.EncryptWeapi(jsonPayload);
+
+                    var formData = new Dictionary<string, string>
+                    {
+                        { "params", encrypted.Params },
+                        { "encSecKey", encrypted.EncSecKey }
+                    };
+                    var content = new FormUrlEncodedContent(formData);
+
+                    // 创建请求，使用桌面User-Agent（二维码在桌面浏览器环境显示）
+                    using (var request = new HttpRequestMessage(HttpMethod.Post, url))
+                    {
+                        request.Content = content;
+
+                        // ⭐ 关键：使用桌面User-Agent（二维码是在桌面浏览器环境展示的）
+                        request.Headers.TryAddWithoutValidation("User-Agent", USER_AGENT);
+                        request.Headers.TryAddWithoutValidation("Referer", REFERER);
+                        request.Headers.TryAddWithoutValidation("Origin", ORIGIN);
+                        request.Headers.TryAddWithoutValidation("Accept", "*/*");
+                        request.Headers.TryAddWithoutValidation("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8");
+
+                        System.Diagnostics.Debug.WriteLine($"[QR WEAPI] Attempt {attempt}/{maxRetries}");
+                        System.Diagnostics.Debug.WriteLine($"[QR WEAPI] URL: {url}");
+                        System.Diagnostics.Debug.WriteLine($"[QR WEAPI] User-Agent: Desktop");
+
+                        // ⭐⭐⭐ 核心修复：使用标准 _httpClient（UseCookies=true）
+                        // 参考备份版本（二维码登录工作正常）的实现
+                        // _httpClient 会自动附加 _cookieContainer 中的所有Cookie（包括访客Cookie）
+                        // 避免手动构建Cookie header可能导致的格式错误
+                        var response = await _httpClient.SendAsync(request).ConfigureAwait(false);
+                        byte[] rawBytes = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+                        string responseText = DecodeResponseContent(response, rawBytes);
+
+                        System.Diagnostics.Debug.WriteLine($"[QR WEAPI] Response Status: {response.StatusCode}");
+                        System.Diagnostics.Debug.WriteLine($"[QR WEAPI] Response Preview: {(string.IsNullOrEmpty(responseText) ? "<empty>" : responseText.Substring(0, Math.Min(200, responseText.Length)))}");
+
+                        if (response.StatusCode == HttpStatusCode.OK)
+                        {
+                            // 解析 JSON 响应
+                            try
+                            {
+                                string cleanedResponse = CleanJsonResponse(responseText);
+                                var json = JObject.Parse(cleanedResponse);
+                                return json.ToObject<T>();
+                            }
+                            catch (JsonReaderException ex)
+                            {
+                                System.Diagnostics.Debug.WriteLine($"[QR WEAPI] JSON parse error (attempt {attempt}/{maxRetries}): {ex.Message}");
+                                if (attempt == maxRetries)
+                                {
+                                    throw new Exception($"JSON 解析失败: {ex.Message}");
+                                }
+                            }
+                        }
+                        else if (attempt == maxRetries)
+                        {
+                            throw new Exception($"HTTP {response.StatusCode}: {responseText}");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[QR WEAPI] Exception (attempt {attempt}/{maxRetries}): {ex.Message}");
+                    if (attempt == maxRetries)
+                    {
+                        throw;
+                    }
+                }
+
+                // 重试延迟
                 if (attempt < maxRetries)
                 {
                     int delayMs = attempt <= 3 ? 50 : Math.Min(attempt * 100, 500);
@@ -2068,19 +2154,19 @@ namespace YTPlayer.Core
 
         private IDictionary<string, object> CreateDefaultEapiHeader()
         {
-            var authConfig = _authContext?.Config;
+            var accountState = _authContext?.CurrentAccountState;
             var header = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase)
             {
-                ["osver"] = authConfig?.DeviceOsVersion ?? "13.0",
-                ["deviceId"] = _deviceId ?? authConfig?.DeviceId ?? EncryptionHelper.GenerateDeviceId(),
-                ["appver"] = authConfig?.DeviceAppVersion ?? "8.10.90",
-                ["versioncode"] = authConfig?.DeviceVersionCode ?? "8010090",
-                ["mobilename"] = authConfig?.DeviceMobileName ?? "Xiaomi 2211133C",
+                ["osver"] = accountState?.DeviceOsVersion ?? "13.0",
+                ["deviceId"] = _deviceId ?? accountState?.DeviceId ?? EncryptionHelper.GenerateDeviceId(),
+                ["appver"] = accountState?.DeviceAppVersion ?? "8.10.90",
+                ["versioncode"] = accountState?.DeviceVersionCode ?? "8010090",
+                ["mobilename"] = accountState?.DeviceMobileName ?? "Xiaomi 2211133C",
                 ["buildver"] = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(),
-                ["resolution"] = authConfig?.DeviceResolution ?? "1080x2400",
-                ["__csrf"] = _csrfToken ?? authConfig?.CsrfToken ?? string.Empty,
-                ["os"] = authConfig?.DeviceOs ?? "android",
-                ["channel"] = authConfig?.DeviceChannel ?? "xiaomi",
+                ["resolution"] = accountState?.DeviceResolution ?? "1080x2400",
+                ["__csrf"] = _csrfToken ?? string.Empty,
+                ["os"] = accountState?.DeviceOs ?? "android",
+                ["channel"] = accountState?.DeviceChannel ?? "xiaomi",
                 ["requestId"] = EncryptionHelper.GenerateRequestId()
             };
 
@@ -2285,18 +2371,18 @@ namespace YTPlayer.Core
             {
                 cookieMap["MUSIC_U"] = _musicU;
             }
-            else if (_authContext?.Config?.MusicA != null)
+            else if (_authContext?.CurrentAccountState?.MusicA != null)
             {
-                cookieMap["MUSIC_A"] = _authContext.Config.MusicA;
+                cookieMap["MUSIC_A"] = _authContext.CurrentAccountState.MusicA;
             }
 
             if (!string.IsNullOrEmpty(_csrfToken))
             {
                 cookieMap["__csrf"] = _csrfToken;
             }
-            else if (_authContext?.Config?.CsrfToken != null && !cookieMap.ContainsKey("__csrf"))
+            else if (_authContext?.CurrentAccountState?.CsrfToken != null && !cookieMap.ContainsKey("__csrf"))
             {
-                cookieMap["__csrf"] = _authContext.Config.CsrfToken;
+                cookieMap["__csrf"] = _authContext.CurrentAccountState.CsrfToken;
             }
 
             return cookieMap.Count == 0
@@ -2384,7 +2470,8 @@ namespace YTPlayer.Core
             }
 
             System.Diagnostics.Debug.WriteLine("[QR LOGIN] 请求新的二维码登录会话 (type=1)");
-            var result = await PostWeApiAsync<JObject>("/login/qrcode/unikey", payload);
+            // ⭐ 核心修复：使用标准 _httpClient，自动发送CookieContainer中的所有Cookie
+            var result = await PostWeApiWithoutCookiesAsync<JObject>("/login/qrcode/unikey", payload);
 
             int code = result["code"]?.Value<int>() ?? -1;
             if (code != 200)
@@ -2438,7 +2525,8 @@ namespace YTPlayer.Core
             JObject result;
             try
             {
-                result = await PostWeApiAsync<JObject>("/login/qrcode/client/login", payload, retryCount: 0, skipErrorHandling: true);
+                // ⭐ 核心修复：使用标准 _httpClient，自动发送CookieContainer中的所有Cookie
+                result = await PostWeApiWithoutCookiesAsync<JObject>("/login/qrcode/client/login", payload);
                 System.Diagnostics.Debug.WriteLine($"[QR LOGIN] 状态检查响应: {result.ToString(Formatting.Indented)}");
             }
             catch (Exception ex)
@@ -2694,9 +2782,10 @@ namespace YTPlayer.Core
 
             System.Diagnostics.Debug.WriteLine($"[SMS] 发送验证码请求: phone={phone}, ctcode={ctcode}");
 
-            // ⭐⭐⭐ 使用 iOS WEAPI 端点 + 零Cookie模式 避免风控
-            // sendCleanRequest=true 模拟参考项目首次登录的空Cookie状态，这是避免 -460 风控的关键
-            var result = await PostWeApiWithiOSAsync<JObject>("/sms/captcha/sent", payload, maxRetries: 3, sendCleanRequest: true);
+            // ⭐ 核心修复：验证码发送需要访客Cookie
+            // 使用 iOS User-Agent + 访客Cookie（过滤桌面Cookie）
+            // 访客Cookie（MUSIC_A、NMTID等）是必需的，否则触发-462风控
+            var result = await PostWeApiWithiOSAsync<JObject>("/sms/captcha/sent", payload, maxRetries: 3, sendCookies: true);
 
             int code = result["code"]?.Value<int>() ?? -1;
             string message = result["message"]?.Value<string>() ?? result["msg"]?.Value<string>() ?? "未知错误";
@@ -2723,20 +2812,22 @@ namespace YTPlayer.Core
             // 因为 PostWeApiWithiOSAsync 已经使用 iOS User-Agent
             // 在 Cookie 中设置 os=ios 会与桌面系统的其他 Cookie 冲突，触发风控
 
+            // ⭐ 核心修复：完全模拟参考项目的payload，只发送3个字段
+            // 参考项目 netease-music-simple-player/Net/NetClasses.cs:2525-2530
+            // 任何额外字段（如 rememberLogin）都可能触发风控
             var payload = new Dictionary<string, object>
             {
                 { "phone", phone },
-                { "captcha", captcha },
                 { "countrycode", ctcode },
-                { "rememberLogin", "true" }
+                { "captcha", captcha }
             };
 
             System.Diagnostics.Debug.WriteLine($"[LOGIN] 短信登录请求: phone={phone}, captcha={captcha}, countrycode={ctcode}");
-            System.Diagnostics.Debug.WriteLine("[LOGIN] 使用 iOS User-Agent + 零Cookie模式（模拟参考项目首次登录）");
+            System.Diagnostics.Debug.WriteLine("[LOGIN] 使用 iOS User-Agent + 零Cookie模式 + 精简payload（仅3字段）");
 
-            // ⭐⭐⭐ sendCleanRequest=true 发送零Cookie请求，完全模拟参考项目的干净初始状态
-            // 这避免了"iOS User-Agent + 桌面设备指纹Cookie"的混合信号导致的 -460 风控
-            var result = await PostWeApiWithiOSAsync<JObject>("/login/cellphone", payload, maxRetries: 3, sendCleanRequest: true);
+            // ⭐ 核心修复：登录请求使用零Cookie模式（sendCookies默认为false）
+            // 模拟真实iPhone首次登录场景，避免桌面Cookie与iOS UA的设备指纹不匹配
+            var result = await PostWeApiWithiOSAsync<JObject>("/login/cellphone", payload, maxRetries: 3);
 
             System.Diagnostics.Debug.WriteLine($"[LOGIN] 短信登录完整响应: {result.ToString(Formatting.Indented)}");
             int code = result["code"]?.Value<int>() ?? -1;
@@ -5548,6 +5639,7 @@ namespace YTPlayer.Core
                     _httpClient?.Dispose();
                     _simplifiedClient?.Dispose();
                     _eapiClient?.Dispose();
+                    _iOSLoginClient?.Dispose();
                 }
                 _disposed = true;
             }

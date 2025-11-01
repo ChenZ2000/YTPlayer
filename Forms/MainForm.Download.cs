@@ -532,12 +532,11 @@ namespace YTPlayer
                         case "user_playlists":
                             totalTasks = await DownloadPlaylistListCategory(categoryName, async () =>
                             {
-                                var config = _configManager.Load();
-                                if (string.IsNullOrEmpty(config.LoginUserId))
+                                if (string.IsNullOrEmpty(_accountState?.UserId))
                                 {
                                     throw new Exception("请先登录");
                                 }
-                                long userId = long.Parse(config.LoginUserId);
+                                long userId = long.Parse(_accountState.UserId);
                                 var playlists = await _apiClient.GetUserPlaylistsAsync(userId);
                                 if (playlists == null || playlists.Count == 0)
                                 {

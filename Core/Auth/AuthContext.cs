@@ -268,92 +268,13 @@ namespace YTPlayer.Core.Auth
         }
 
         /// <summary>
-        /// 从 account.json 恢复设备指纹到 config.json。
-        /// 这样可以确保同一设备在多次登录后保持一致的指纹。
+        /// 从 account.json 恢复设备指纹（不再保存到 config.json）。
+        /// 设备指纹现在只存储在 AccountState 中。
         /// </summary>
         private void RestoreDeviceFingerprintFromAccountState()
         {
-            if (_accountState == null)
-            {
-                return;
-            }
-
-            bool changed = false;
-
-            // 恢复设备指纹字段
-            if (!string.IsNullOrEmpty(_accountState.DeviceId) && string.IsNullOrEmpty(_config.DeviceId))
-            {
-                _config.DeviceId = _accountState.DeviceId;
-                changed = true;
-            }
-
-            if (!string.IsNullOrEmpty(_accountState.SDeviceId) && string.IsNullOrEmpty(_config.SDeviceId))
-            {
-                _config.SDeviceId = _accountState.SDeviceId;
-                changed = true;
-            }
-
-            if (!string.IsNullOrEmpty(_accountState.DeviceMachineId) && string.IsNullOrEmpty(_config.DeviceMachineId))
-            {
-                _config.DeviceMachineId = _accountState.DeviceMachineId;
-                changed = true;
-            }
-
-            if (!string.IsNullOrEmpty(_accountState.DeviceOs) && string.IsNullOrEmpty(_config.DeviceOs))
-            {
-                _config.DeviceOs = _accountState.DeviceOs;
-                changed = true;
-            }
-
-            if (!string.IsNullOrEmpty(_accountState.DeviceOsVersion) && string.IsNullOrEmpty(_config.DeviceOsVersion))
-            {
-                _config.DeviceOsVersion = _accountState.DeviceOsVersion;
-                changed = true;
-            }
-
-            if (!string.IsNullOrEmpty(_accountState.DeviceAppVersion) && string.IsNullOrEmpty(_config.DeviceAppVersion))
-            {
-                _config.DeviceAppVersion = _accountState.DeviceAppVersion;
-                changed = true;
-            }
-
-            if (!string.IsNullOrEmpty(_accountState.DeviceBuildVersion) && string.IsNullOrEmpty(_config.DeviceBuildVersion))
-            {
-                _config.DeviceBuildVersion = _accountState.DeviceBuildVersion;
-                changed = true;
-            }
-
-            if (!string.IsNullOrEmpty(_accountState.NmtId) && string.IsNullOrEmpty(_config.NmtId))
-            {
-                _config.NmtId = _accountState.NmtId;
-                changed = true;
-            }
-
-            if (!string.IsNullOrEmpty(_accountState.NtesNuid) && string.IsNullOrEmpty(_config.NtesNuid))
-            {
-                _config.NtesNuid = _accountState.NtesNuid;
-                changed = true;
-            }
-
-            if (!string.IsNullOrEmpty(_accountState.WnmCid) && string.IsNullOrEmpty(_config.WnmCid))
-            {
-                _config.WnmCid = _accountState.WnmCid;
-                changed = true;
-            }
-
-            if (!string.IsNullOrEmpty(_accountState.AntiCheatToken) && string.IsNullOrEmpty(_config.AntiCheatToken))
-            {
-                _config.AntiCheatToken = _accountState.AntiCheatToken;
-                _config.AntiCheatTokenGeneratedAt = _accountState.AntiCheatTokenGeneratedAt;
-                _config.AntiCheatTokenExpiresAt = _accountState.AntiCheatTokenExpiresAt;
-                changed = true;
-            }
-
-            if (changed)
-            {
-                System.Diagnostics.Debug.WriteLine("[AuthContext] 已从 account.json 恢复设备指纹到 config.json");
-                _configManager.Save(_config);
-            }
+            // 设备指纹已完全移到 AccountState，不再需要同步到 config
+            // 此方法保留用于兼容性，但不执行任何操作
         }
 
         internal ConfigModel Config => _config;
@@ -368,15 +289,8 @@ namespace YTPlayer.Core.Auth
                     {
                         _accountState = new AccountState
                         {
-                            IsLoggedIn = false,
-                            AntiCheatToken = _config.AntiCheatToken,
-                            AntiCheatTokenExpiresAt = _config.AntiCheatTokenExpiresAt
+                            IsLoggedIn = false
                         };
-                    }
-                    else if (string.IsNullOrEmpty(_accountState.AntiCheatToken) && AntiCheatTokenUtility.IsValid(_config.AntiCheatToken))
-                    {
-                        _accountState.AntiCheatToken = _config.AntiCheatToken;
-                        _accountState.AntiCheatTokenExpiresAt = _config.AntiCheatTokenExpiresAt;
                     }
 
                     return _accountState;
@@ -407,64 +321,13 @@ namespace YTPlayer.Core.Auth
 
         /// <summary>
         /// 应用登录资料（用户信息和认证凭证）。
-        /// 更新 config.json（用于向后兼容）和 account.json。
+        /// 只更新 account.json（账户数据不再保存在 config.json 中）。
         /// </summary>
         internal void ApplyLoginProfile(UserAccountInfo profile, string musicU, string csrfToken)
         {
             lock (_syncRoot)
             {
-                bool configChanged = false;
-
-                // 更新 config.json 中的登录信息（向后兼容）
-                if (!string.IsNullOrWhiteSpace(musicU) && !string.Equals(_config.MusicU, musicU, StringComparison.Ordinal))
-                {
-                    _config.MusicU = musicU;
-                    configChanged = true;
-                }
-
-                if (!string.IsNullOrWhiteSpace(csrfToken) && !string.Equals(_config.CsrfToken, csrfToken, StringComparison.Ordinal))
-                {
-                    _config.CsrfToken = csrfToken;
-                    configChanged = true;
-                }
-
-                if (profile != null)
-                {
-                    if (profile.UserId > 0)
-                    {
-                        string userId = profile.UserId.ToString();
-                        if (!string.Equals(_config.LoginUserId, userId, StringComparison.Ordinal))
-                        {
-                            _config.LoginUserId = userId;
-                            configChanged = true;
-                        }
-                    }
-
-                    if (!string.IsNullOrEmpty(profile.Nickname) && !string.Equals(_config.LoginUserNickname, profile.Nickname, StringComparison.Ordinal))
-                    {
-                        _config.LoginUserNickname = profile.Nickname;
-                        configChanged = true;
-                    }
-
-                    if (!string.IsNullOrEmpty(profile.AvatarUrl) && !string.Equals(_config.LoginAvatarUrl, profile.AvatarUrl, StringComparison.Ordinal))
-                    {
-                        _config.LoginAvatarUrl = profile.AvatarUrl;
-                        configChanged = true;
-                    }
-
-                    if (profile.VipType != 0 && _config.LoginVipType != profile.VipType)
-                    {
-                        _config.LoginVipType = profile.VipType;
-                        configChanged = true;
-                    }
-                }
-
-                if (configChanged)
-                {
-                    _configManager.Save(_config);
-                }
-
-                // 同时更新 account.json
+                // 更新 account.json
                 if (_accountState != null)
                 {
                     _accountState.MusicU = musicU;
@@ -493,22 +356,12 @@ namespace YTPlayer.Core.Auth
 
         /// <summary>
         /// 清空登录资料。
-        /// 清理 config.json 和 account.json 中的登录信息，但保留设备指纹。
+        /// 清理 account.json 中的登录信息，但保留设备指纹。
         /// </summary>
         internal void ClearLoginProfile()
         {
             lock (_syncRoot)
             {
-                // 清空 config.json 中的登录信息
-                _config.MusicU = null;
-                _config.CsrfToken = null;
-                _config.LoginUserId = null;
-                _config.LoginUserNickname = null;
-                _config.LoginAvatarUrl = null;
-                _config.LoginVipType = 0;
-                _configManager.Save(_config);
-                System.Diagnostics.Debug.WriteLine("[AuthContext] 已清空 config.json 中的登录信息");
-
                 // 清空 account.json 中的登录信息，但保留设备指纹
                 try
                 {
@@ -540,45 +393,47 @@ namespace YTPlayer.Core.Auth
                 {
                     IsLoggedIn = !string.IsNullOrEmpty(cookieSnapshot),
 
-                    // 用户信息
-                    UserId = _config.LoginUserId,
-                    Nickname = _config.LoginUserNickname,
-                    AvatarUrl = _config.LoginAvatarUrl,
-                    VipType = _config.LoginVipType,
+                    // 用户信息（从 profile 参数获取，如果为空则保留当前 accountState 中的数据）
+                    UserId = profile?.UserId > 0 ? profile.UserId.ToString() : _accountState?.UserId,
+                    Nickname = profile?.Nickname ?? _accountState?.Nickname,
+                    AvatarUrl = profile?.AvatarUrl ?? _accountState?.AvatarUrl,
+                    VipType = profile?.VipType ?? _accountState?.VipType ?? 0,
 
                     // Cookie 和认证凭证
                     Cookie = cookieSnapshot ?? string.Empty,
-                    MusicU = _config.MusicU,
-                    CsrfToken = _config.CsrfToken,
+                    MusicU = _accountState?.MusicU,
+                    CsrfToken = _accountState?.CsrfToken,
                     Cookies = cookies != null ? new List<CookieItem>(cookies) : new List<CookieItem>(),
 
-                    // 设备指纹和会话信息
-                    DeviceId = _config.DeviceId,
-                    SDeviceId = _config.SDeviceId,
-                    DeviceMachineId = _config.DeviceMachineId,
-                    DeviceOs = _config.DeviceOs,
-                    DeviceOsVersion = _config.DeviceOsVersion,
-                    DeviceAppVersion = _config.DeviceAppVersion,
-                    DeviceBuildVersion = _config.DeviceBuildVersion,
-                    DeviceVersionCode = _config.DeviceVersionCode,
-                    DeviceUserAgent = _config.DeviceUserAgent,
-                    DeviceResolution = _config.DeviceResolution,
-                    DeviceChannel = _config.DeviceChannel,
-                    DeviceMobileName = _config.DeviceMobileName,
-                    DesktopUserAgent = _config.DesktopUserAgent,
-                    DeviceMark = _config.DeviceMark,
-                    DeviceMConfigInfo = _config.DeviceMConfigInfo,
-                    MusicA = _config.MusicA,
-                    NmtId = _config.NmtId,
-                    NtesNuid = _config.NtesNuid,
-                    WnmCid = _config.WnmCid,
-                    AntiCheatToken = _config.AntiCheatToken,
-                    AntiCheatTokenGeneratedAt = _config.AntiCheatTokenGeneratedAt,
-                    AntiCheatTokenExpiresAt = _config.AntiCheatTokenExpiresAt,
+                    // 设备指纹和会话信息（从 accountState 保留，确保设备指纹持久化）
+                    DeviceId = _accountState?.DeviceId,
+                    SDeviceId = _accountState?.SDeviceId,
+                    DeviceMachineId = _accountState?.DeviceMachineId,
+                    DeviceOs = _accountState?.DeviceOs,
+                    DeviceOsVersion = _accountState?.DeviceOsVersion,
+                    DeviceAppVersion = _accountState?.DeviceAppVersion,
+                    DeviceBuildVersion = _accountState?.DeviceBuildVersion,
+                    DeviceVersionCode = _accountState?.DeviceVersionCode,
+                    DeviceUserAgent = _accountState?.DeviceUserAgent,
+                    DeviceResolution = _accountState?.DeviceResolution,
+                    DeviceChannel = _accountState?.DeviceChannel,
+                    DeviceMobileName = _accountState?.DeviceMobileName,
+                    DesktopUserAgent = _accountState?.DesktopUserAgent,
+                    DeviceMark = _accountState?.DeviceMark,
+                    DeviceMConfigInfo = _accountState?.DeviceMConfigInfo,
+
+                    // 访客令牌和反作弊令牌（从当前 accountState 保留，不再从 config 读取）
+                    MusicA = _accountState?.MusicA,
+                    NmtId = _accountState?.NmtId,
+                    NtesNuid = _accountState?.NtesNuid,
+                    WnmCid = _accountState?.WnmCid,
+                    AntiCheatToken = _accountState?.AntiCheatToken,
+                    AntiCheatTokenGeneratedAt = _accountState?.AntiCheatTokenGeneratedAt,
+                    AntiCheatTokenExpiresAt = _accountState?.AntiCheatTokenExpiresAt,
 
                     // 元数据
                     LastUpdated = DateTimeOffset.UtcNow,
-                    FingerprintLastUpdated = _config.FingerprintLastUpdated
+                    FingerprintLastUpdated = _accountState?.FingerprintLastUpdated ?? DateTimeOffset.UtcNow
                 };
 
                 // 如果提供了 profile，使用 profile 中的信息覆盖
@@ -608,68 +463,70 @@ namespace YTPlayer.Core.Auth
 
         private void EnsureFingerprintInitialized()
         {
-            bool changed = false;
-
             lock (_syncRoot)
             {
-                EnsureDeviceProfileInternal(ref changed);
+                bool accountChanged = false;
 
-                if (string.IsNullOrWhiteSpace(_config.NmtId))
+                // 初始化设备指纹（DeviceId, SDeviceId, DeviceOs 等15个字段）
+                EnsureDeviceProfileInternal(ref accountChanged);
+
+                if (string.IsNullOrWhiteSpace(_accountState.NmtId))
                 {
-                    _config.NmtId = EncryptionHelper.GenerateRandomHex(32);
-                    changed = true;
+                    _accountState.NmtId = EncryptionHelper.GenerateRandomHex(32);
+                    accountChanged = true;
                 }
 
-                if (string.IsNullOrWhiteSpace(_config.NtesNuid))
+                if (string.IsNullOrWhiteSpace(_accountState.NtesNuid))
                 {
-                    _config.NtesNuid = EncryptionHelper.GenerateRandomHex(32);
-                    changed = true;
+                    _accountState.NtesNuid = EncryptionHelper.GenerateRandomHex(32);
+                    accountChanged = true;
                 }
 
-                if (string.IsNullOrWhiteSpace(_config.WnmCid))
+                if (string.IsNullOrWhiteSpace(_accountState.WnmCid))
                 {
-                    _config.WnmCid = EncryptionHelper.GenerateWNMCID();
-                    changed = true;
+                    _accountState.WnmCid = EncryptionHelper.GenerateWNMCID();
+                    accountChanged = true;
                 }
 
-                if (string.IsNullOrWhiteSpace(_config.MusicA))
+                if (string.IsNullOrWhiteSpace(_accountState.MusicA))
                 {
-                    _config.MusicA = AuthConstants.AnonymousToken;
-                    changed = true;
+                    _accountState.MusicA = AuthConstants.AnonymousToken;
+                    accountChanged = true;
                 }
 
-                if (!AntiCheatTokenUtility.IsValid(_config.AntiCheatToken))
+                if (!AntiCheatTokenUtility.IsValid(_accountState.AntiCheatToken))
                 {
-                    _config.AntiCheatToken = AntiCheatTokenUtility.Generate();
-                    _config.AntiCheatTokenGeneratedAt = DateTimeOffset.UtcNow;
-                    _config.AntiCheatTokenExpiresAt = _config.AntiCheatTokenGeneratedAt.Value + AuthConstants.AntiCheatTokenLifetime;
-                    changed = true;
+                    _accountState.AntiCheatToken = AntiCheatTokenUtility.Generate();
+                    _accountState.AntiCheatTokenGeneratedAt = DateTimeOffset.UtcNow;
+                    _accountState.AntiCheatTokenExpiresAt = _accountState.AntiCheatTokenGeneratedAt.Value + AuthConstants.AntiCheatTokenLifetime;
+                    accountChanged = true;
                 }
                 else
                 {
-                    if (!_config.AntiCheatTokenGeneratedAt.HasValue)
+                    if (!_accountState.AntiCheatTokenGeneratedAt.HasValue)
                     {
-                        _config.AntiCheatTokenGeneratedAt = DateTimeOffset.UtcNow;
-                        changed = true;
+                        _accountState.AntiCheatTokenGeneratedAt = DateTimeOffset.UtcNow;
+                        accountChanged = true;
                     }
 
-                    if (!_config.AntiCheatTokenExpiresAt.HasValue && _config.AntiCheatTokenGeneratedAt.HasValue)
+                    if (!_accountState.AntiCheatTokenExpiresAt.HasValue && _accountState.AntiCheatTokenGeneratedAt.HasValue)
                     {
-                        _config.AntiCheatTokenExpiresAt = _config.AntiCheatTokenGeneratedAt.Value + AuthConstants.AntiCheatTokenLifetime;
-                        changed = true;
+                        _accountState.AntiCheatTokenExpiresAt = _accountState.AntiCheatTokenGeneratedAt.Value + AuthConstants.AntiCheatTokenLifetime;
+                        accountChanged = true;
                     }
                 }
 
-                if (!_config.FingerprintLastUpdated.HasValue)
+                if (!_accountState.FingerprintLastUpdated.HasValue)
                 {
-                    _config.FingerprintLastUpdated = DateTimeOffset.UtcNow;
-                    changed = true;
+                    _accountState.FingerprintLastUpdated = DateTimeOffset.UtcNow;
+                    accountChanged = true;
                 }
 
-                if (changed)
+                // 设备指纹不再保存到 config.json，只保存到 account.json
+                if (accountChanged)
                 {
-                    _config.FingerprintLastUpdated = DateTimeOffset.UtcNow;
-                    _configManager.Save(_config);
+                    _accountState.FingerprintLastUpdated = DateTimeOffset.UtcNow;
+                    _accountStore.Save(_accountState);
                 }
             }
         }
@@ -678,10 +535,10 @@ namespace YTPlayer.Core.Auth
         {
             lock (_syncRoot)
             {
-                var expiresAt = _config.AntiCheatTokenExpiresAt ??
-                                (_config.AntiCheatTokenGeneratedAt?.Add(AuthConstants.AntiCheatTokenLifetime));
+                var expiresAt = _accountState.AntiCheatTokenExpiresAt ??
+                                (_accountState.AntiCheatTokenGeneratedAt?.Add(AuthConstants.AntiCheatTokenLifetime));
 
-                bool needRefresh = !AntiCheatTokenUtility.IsValid(_config.AntiCheatToken) ||
+                bool needRefresh = !AntiCheatTokenUtility.IsValid(_accountState.AntiCheatToken) ||
                                    !expiresAt.HasValue ||
                                    DateTimeOffset.UtcNow >= expiresAt.Value;
 
@@ -690,13 +547,13 @@ namespace YTPlayer.Core.Auth
                     var newToken = AntiCheatTokenUtility.Generate();
                     ApplyAntiCheatTokenInternal(newToken, AuthConstants.AntiCheatTokenLifetime);
                 }
-                else if (!_config.AntiCheatTokenExpiresAt.HasValue && expiresAt.HasValue)
+                else if (!_accountState.AntiCheatTokenExpiresAt.HasValue && expiresAt.HasValue)
                 {
-                    _config.AntiCheatTokenExpiresAt = expiresAt;
-                    _configManager.Save(_config);
+                    _accountState.AntiCheatTokenExpiresAt = expiresAt;
+                    _accountStore.Save(_accountState);
                 }
 
-                return _config.AntiCheatToken;
+                return _accountState.AntiCheatToken;
             }
         }
 
@@ -802,23 +659,45 @@ namespace YTPlayer.Core.Auth
 
         /// <summary>
         /// 构建基础 Cookie 映射
-        /// ⭐⭐⭐ 移动端重构：只返回登录凭证，设备参数通过 EAPI header 传递
-        /// 参照参考项目：config.cookies 初始为空，登录后只保存 MUSIC_U 和 __csrf
+        /// ⭐⭐⭐ 核心修复：返回完整的桌面客户端设备指纹Cookie，避免8821风控错误
+        /// 参考备份版本成功实现，WEAPI请求（包括二维码登录）必须包含完整设备指纹
         /// </summary>
         internal IReadOnlyDictionary<string, string> BuildBaseCookieMap(bool includeAnonymousToken)
         {
-            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
-            // ⭐ 只保留 CSRF token (如果存在)
-            // 移除所有设备指纹 Cookie：os, osver, appver, buildver, channel, deviceId, sDeviceId, NMTID, _ntes_nuid, WNMCID
-            // 这些参数现在通过 EAPI header 传递，不再混入 Cookie
-            if (!string.IsNullOrEmpty(_config.CsrfToken))
+            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
-                map["__csrf"] = _config.CsrfToken;
+                // ⭐ 桌面客户端设备指纹Cookie（8个必需字段，避免8821风控）
+                ["__remember_me"] = "true",
+                ["os"] = "pc",
+                ["osver"] = _resolvedOsVersion,
+                ["appver"] = AuthConstants.DesktopAppVersion,
+                ["buildver"] = _accountState.DeviceBuildVersion ?? AuthConstants.MobileBuildVersion,
+                ["channel"] = AuthConstants.PcChannel,
+                ["deviceId"] = _accountState.DeviceId,
+                ["sDeviceId"] = _accountState.SDeviceId ?? _accountState.DeviceId,
+
+                // 访客设备标识（WEAPI请求验证关键字段）
+                ["NMTID"] = _accountState.NmtId ?? "",
+                ["_ntes_nuid"] = _accountState.NtesNuid ?? ""
+            };
+
+            // WNMCID（可选）
+            if (!string.IsNullOrEmpty(_accountState.WnmCid))
+            {
+                map["WNMCID"] = _accountState.WnmCid;
             }
 
-            // ⭐ 移除匿名令牌 (MUSIC_A) - 不再需要
-            // 移动端 EAPI 不依赖此令牌
+            // CSRF Token（如果存在）
+            if (!string.IsNullOrEmpty(_accountState.CsrfToken))
+            {
+                map["__csrf"] = _accountState.CsrfToken;
+            }
+
+            // 匿名访问令牌（未登录状态必需）
+            if (includeAnonymousToken && !string.IsNullOrEmpty(_accountState.MusicA))
+            {
+                map["MUSIC_A"] = _accountState.MusicA;
+            }
 
             return map;
         }
@@ -830,35 +709,39 @@ namespace YTPlayer.Core.Auth
                 return;
             }
 
-            bool changed = false;
+            bool configChanged = false;
+            bool accountChanged = false;
 
             lock (_syncRoot)
             {
-                string UpdateIfChanged(string name, string current)
+                string UpdateIfChanged(string name, string current, ref bool changedFlag)
                 {
                     var value = cookies[name]?.Value;
                     if (!string.IsNullOrEmpty(value) && !string.Equals(value, current, StringComparison.Ordinal))
                     {
-                        changed = true;
+                        changedFlag = true;
                         return value;
                     }
 
                     return current;
                 }
 
-                _config.NmtId = UpdateIfChanged("NMTID", _config.NmtId);
-                _config.NtesNuid = UpdateIfChanged("_ntes_nuid", _config.NtesNuid);
-                _config.WnmCid = UpdateIfChanged("WNMCID", _config.WnmCid);
-                _config.MusicA = UpdateIfChanged("MUSIC_A", _config.MusicA);
-                _config.CsrfToken = UpdateIfChanged("__csrf", _config.CsrfToken);
-                _config.DeviceId = UpdateIfChanged("deviceId", _config.DeviceId);
-                _config.SDeviceId = UpdateIfChanged("sDeviceId", _config.SDeviceId);
-
-                if (changed)
+                // 同步访客令牌和反作弊令牌到 accountState（不再保存到 config）
+                if (_accountState != null)
                 {
-                    _config.FingerprintLastUpdated = DateTimeOffset.UtcNow;
-                    _configManager.Save(_config);
+                    _accountState.NmtId = UpdateIfChanged("NMTID", _accountState.NmtId, ref accountChanged);
+                    _accountState.NtesNuid = UpdateIfChanged("_ntes_nuid", _accountState.NtesNuid, ref accountChanged);
+                    _accountState.WnmCid = UpdateIfChanged("WNMCID", _accountState.WnmCid, ref accountChanged);
+                    _accountState.MusicA = UpdateIfChanged("MUSIC_A", _accountState.MusicA, ref accountChanged);
+                    _accountState.CsrfToken = UpdateIfChanged("__csrf", _accountState.CsrfToken, ref accountChanged);
+
+                    if (accountChanged)
+                    {
+                        _accountStore.Save(_accountState);
+                    }
                 }
+
+                // 设备指纹现在完全由 AccountState 管理，不再同步到 config
             }
         }
 
@@ -870,30 +753,29 @@ namespace YTPlayer.Core.Auth
                 EnsureDeviceProfileInternal(ref changed);
                 if (changed)
                 {
-                    _config.FingerprintLastUpdated = DateTimeOffset.UtcNow;
-                    _configManager.Save(_config);
+                    _accountStore.Save(_accountState);
                 }
 
                 if (useMobileMode)
                 {
-                    var osFlag = (_config.DeviceOs ?? AuthConstants.MobileOs).Equals("Android", StringComparison.OrdinalIgnoreCase)
+                    var osFlag = (_accountState.DeviceOs ?? AuthConstants.MobileOs).Equals("Android", StringComparison.OrdinalIgnoreCase)
                         ? "android"
                         : "ios";
                     return new Dictionary<string, object>
                     {
                         { "os", osFlag },
-                        { "appver", _config.DeviceAppVersion ?? AuthConstants.MobileAppVersion },
-                        { "osver", _config.DeviceOsVersion ?? AuthConstants.MobileOsVersion },
-                        { "deviceId", _config.DeviceId },
-                        { "sDeviceId", _config.SDeviceId ?? _config.DeviceId },
-                        { "buildver", _config.DeviceBuildVersion ?? AuthConstants.MobileBuildVersion },
-                        { "versioncode", _config.DeviceVersionCode ?? AuthConstants.DefaultMobileVersionCode },
-                        { "resolution", _config.DeviceResolution ?? AuthConstants.DefaultMobileResolution },
-                        { "channel", _config.DeviceChannel ?? AuthConstants.DefaultMobileChannel },
-                        { "machine", _config.DeviceMachineId ?? AuthConstants.MobileMachineId },
-                        { "mobilename", _config.DeviceMobileName ?? _config.DeviceMachineId ?? AuthConstants.DefaultMobileName },
+                        { "appver", _accountState.DeviceAppVersion ?? AuthConstants.MobileAppVersion },
+                        { "osver", _accountState.DeviceOsVersion ?? AuthConstants.MobileOsVersion },
+                        { "deviceId", _accountState.DeviceId },
+                        { "sDeviceId", _accountState.SDeviceId ?? _accountState.DeviceId },
+                        { "buildver", _accountState.DeviceBuildVersion ?? AuthConstants.MobileBuildVersion },
+                        { "versioncode", _accountState.DeviceVersionCode ?? AuthConstants.DefaultMobileVersionCode },
+                        { "resolution", _accountState.DeviceResolution ?? AuthConstants.DefaultMobileResolution },
+                        { "channel", _accountState.DeviceChannel ?? AuthConstants.DefaultMobileChannel },
+                        { "machine", _accountState.DeviceMachineId ?? AuthConstants.MobileMachineId },
+                        { "mobilename", _accountState.DeviceMobileName ?? _accountState.DeviceMachineId ?? AuthConstants.DefaultMobileName },
                         { "requestId", EncryptionHelper.GenerateRequestId() },
-                        { "__csrf", _config.CsrfToken ?? string.Empty }
+                        { "__csrf", _accountState.CsrfToken ?? string.Empty }
                     };
                 }
 
@@ -902,9 +784,9 @@ namespace YTPlayer.Core.Auth
                     { "os", "pc" },
                     { "appver", AuthConstants.DesktopAppVersion },
                     { "osver", _resolvedOsVersion },
-                    { "deviceId", _config.DeviceId },
+                    { "deviceId", _accountState.DeviceId },
                     { "requestId", EncryptionHelper.GenerateRequestId() },
-                    { "__csrf", _config.CsrfToken ?? string.Empty }
+                    { "__csrf", _accountState.CsrfToken ?? string.Empty }
                 };
             }
         }
@@ -917,32 +799,31 @@ namespace YTPlayer.Core.Auth
                 EnsureDeviceProfileInternal(ref changed);
                 if (changed)
                 {
-                    _config.FingerprintLastUpdated = DateTimeOffset.UtcNow;
-                    _configManager.Save(_config);
+                    _accountStore.Save(_accountState);
                 }
 
-                var deviceOs = _config.DeviceOs ?? AuthConstants.MobileOs;
+                var deviceOs = _accountState.DeviceOs ?? AuthConstants.MobileOs;
                 var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
                 {
                     ["Accept"] = "*/*",
                     ["Accept-Encoding"] = "gzip, deflate, br",
                     ["Accept-Language"] = "zh-Hans-CN;q=1, en-CN;q=0.9",
                     ["Connection"] = "keep-alive",
-                    ["User-Agent"] = _config.DeviceUserAgent ?? AuthConstants.MobileUserAgent,
-                    ["x-appver"] = _config.DeviceAppVersion ?? AuthConstants.MobileAppVersion,
-                    ["x-buildver"] = _config.DeviceBuildVersion ?? AuthConstants.MobileBuildVersion,
+                    ["User-Agent"] = _accountState.DeviceUserAgent ?? AuthConstants.MobileUserAgent,
+                    ["x-appver"] = _accountState.DeviceAppVersion ?? AuthConstants.MobileAppVersion,
+                    ["x-buildver"] = _accountState.DeviceBuildVersion ?? AuthConstants.MobileBuildVersion,
                     ["x-os"] = deviceOs,
-                    ["x-osver"] = _config.DeviceOsVersion ?? AuthConstants.MobileOsVersion,
-                    ["x-deviceId"] = _config.DeviceId,
-                    ["x-sDeviceId"] = _config.SDeviceId ?? _config.DeviceId,
-                    ["x-versioncode"] = _config.DeviceVersionCode ?? AuthConstants.DefaultMobileVersionCode,
-                    ["x-resolution"] = _config.DeviceResolution ?? AuthConstants.DefaultMobileResolution,
-                    ["x-channel"] = _config.DeviceChannel ?? AuthConstants.DefaultMobileChannel,
+                    ["x-osver"] = _accountState.DeviceOsVersion ?? AuthConstants.MobileOsVersion,
+                    ["x-deviceId"] = _accountState.DeviceId,
+                    ["x-sDeviceId"] = _accountState.SDeviceId ?? _accountState.DeviceId,
+                    ["x-versioncode"] = _accountState.DeviceVersionCode ?? AuthConstants.DefaultMobileVersionCode,
+                    ["x-resolution"] = _accountState.DeviceResolution ?? AuthConstants.DefaultMobileResolution,
+                    ["x-channel"] = _accountState.DeviceChannel ?? AuthConstants.DefaultMobileChannel,
                     ["x-aeapi"] = "true",
                     ["x-netlib"] = "Cronet",
-                    ["X-MAM-CustomMark"] = _config.DeviceMark ?? AuthConstants.MobileCustomMark,
-                    ["MConfig-Info"] = _config.DeviceMConfigInfo ?? AuthConstants.MobileMConfigInfo,
-                    ["x-machineid"] = _config.DeviceMachineId ?? AuthConstants.MobileMachineId,
+                    ["X-MAM-CustomMark"] = _accountState.DeviceMark ?? AuthConstants.MobileCustomMark,
+                    ["MConfig-Info"] = _accountState.DeviceMConfigInfo ?? AuthConstants.MobileMConfigInfo,
+                    ["x-machineid"] = _accountState.DeviceMachineId ?? AuthConstants.MobileMachineId,
                     ["Origin"] = "https://music.163.com",
                     ["Referer"] = "https://music.163.com"
                 };
@@ -963,107 +844,107 @@ namespace YTPlayer.Core.Auth
 
         private void EnsureDeviceProfileInternal(ref bool changed)
         {
-            if (string.IsNullOrWhiteSpace(_config.DeviceId))
+            if (string.IsNullOrWhiteSpace(_accountState.DeviceId))
             {
-                _config.DeviceId = Guid.NewGuid().ToString("N");
+                _accountState.DeviceId = Guid.NewGuid().ToString("N");
                 changed = true;
             }
 
-            if (string.IsNullOrWhiteSpace(_config.SDeviceId))
+            if (string.IsNullOrWhiteSpace(_accountState.SDeviceId))
             {
-                _config.SDeviceId = Guid.NewGuid().ToString("N");
+                _accountState.SDeviceId = Guid.NewGuid().ToString("N");
                 changed = true;
             }
 
-            string presetSeed = !string.IsNullOrEmpty(_config.DeviceId)
-                ? _config.DeviceId
-                : _config.SDeviceId ?? Guid.NewGuid().ToString("N");
+            string presetSeed = !string.IsNullOrEmpty(_accountState.DeviceId)
+                ? _accountState.DeviceId
+                : _accountState.SDeviceId ?? Guid.NewGuid().ToString("N");
 
             var preset = AuthConstants.GetMobilePreset(presetSeed);
 
-            if (string.IsNullOrWhiteSpace(_config.DeviceMachineId))
+            if (string.IsNullOrWhiteSpace(_accountState.DeviceMachineId))
             {
-                _config.DeviceMachineId = preset.MachineId;
+                _accountState.DeviceMachineId = preset.MachineId;
                 changed = true;
             }
 
-            if (string.IsNullOrWhiteSpace(_config.DeviceOs))
+            if (string.IsNullOrWhiteSpace(_accountState.DeviceOs))
             {
-                _config.DeviceOs = preset.Platform;
+                _accountState.DeviceOs = preset.Platform;
                 changed = true;
             }
 
-            if (string.IsNullOrWhiteSpace(_config.DeviceOsVersion))
+            if (string.IsNullOrWhiteSpace(_accountState.DeviceOsVersion))
             {
-                _config.DeviceOsVersion = preset.OsVersion;
+                _accountState.DeviceOsVersion = preset.OsVersion;
                 changed = true;
             }
 
-            if (string.IsNullOrWhiteSpace(_config.DeviceAppVersion))
+            if (string.IsNullOrWhiteSpace(_accountState.DeviceAppVersion))
             {
-                _config.DeviceAppVersion = preset.AppVersion;
+                _accountState.DeviceAppVersion = preset.AppVersion;
                 changed = true;
             }
 
-            if (string.IsNullOrWhiteSpace(_config.DeviceBuildVersion))
+            if (string.IsNullOrWhiteSpace(_accountState.DeviceBuildVersion))
             {
-                _config.DeviceBuildVersion = preset.BuildVersion;
+                _accountState.DeviceBuildVersion = preset.BuildVersion;
                 changed = true;
             }
 
-            if (string.IsNullOrWhiteSpace(_config.DeviceVersionCode))
+            if (string.IsNullOrWhiteSpace(_accountState.DeviceVersionCode))
             {
-                _config.DeviceVersionCode = preset.VersionCode ?? AuthConstants.DefaultMobileVersionCode;
+                _accountState.DeviceVersionCode = preset.VersionCode ?? AuthConstants.DefaultMobileVersionCode;
                 changed = true;
             }
 
-            if (string.IsNullOrWhiteSpace(_config.DeviceResolution))
+            if (string.IsNullOrWhiteSpace(_accountState.DeviceResolution))
             {
-                _config.DeviceResolution = preset.Resolution ?? AuthConstants.DefaultMobileResolution;
+                _accountState.DeviceResolution = preset.Resolution ?? AuthConstants.DefaultMobileResolution;
                 changed = true;
             }
 
-            if (string.IsNullOrWhiteSpace(_config.DeviceChannel))
+            if (string.IsNullOrWhiteSpace(_accountState.DeviceChannel))
             {
-                _config.DeviceChannel = preset.Channel ?? AuthConstants.DefaultMobileChannel;
+                _accountState.DeviceChannel = preset.Channel ?? AuthConstants.DefaultMobileChannel;
                 changed = true;
             }
 
-            if (string.IsNullOrWhiteSpace(_config.DeviceMobileName))
+            if (string.IsNullOrWhiteSpace(_accountState.DeviceMobileName))
             {
-                _config.DeviceMobileName = preset.MobileName ?? _config.DeviceMachineId ?? AuthConstants.DefaultMobileName;
+                _accountState.DeviceMobileName = preset.MobileName ?? _accountState.DeviceMachineId ?? AuthConstants.DefaultMobileName;
                 changed = true;
             }
 
-            if (string.IsNullOrWhiteSpace(_config.DeviceMark))
+            if (string.IsNullOrWhiteSpace(_accountState.DeviceMark))
             {
-                _config.DeviceMark = AuthConstants.GetDeviceMark(presetSeed);
+                _accountState.DeviceMark = AuthConstants.GetDeviceMark(presetSeed);
                 changed = true;
             }
 
-            if (string.IsNullOrWhiteSpace(_config.DeviceMConfigInfo))
+            if (string.IsNullOrWhiteSpace(_accountState.DeviceMConfigInfo))
             {
-                _config.DeviceMConfigInfo = AuthConstants.MobileMConfigInfo;
+                _accountState.DeviceMConfigInfo = AuthConstants.MobileMConfigInfo;
                 changed = true;
             }
 
             var desiredUa = !string.IsNullOrEmpty(preset.UserAgent)
                 ? preset.UserAgent
                 : AuthConstants.BuildMobileUserAgent(
-                    _config.DeviceAppVersion,
-                    _config.DeviceBuildVersion,
-                    _config.DeviceOsVersion);
+                    _accountState.DeviceAppVersion,
+                    _accountState.DeviceBuildVersion,
+                    _accountState.DeviceOsVersion);
 
-            if (string.IsNullOrWhiteSpace(_config.DeviceUserAgent) ||
-                !string.Equals(_config.DeviceUserAgent, desiredUa, StringComparison.Ordinal))
+            if (string.IsNullOrWhiteSpace(_accountState.DeviceUserAgent) ||
+                !string.Equals(_accountState.DeviceUserAgent, desiredUa, StringComparison.Ordinal))
             {
-                _config.DeviceUserAgent = desiredUa;
+                _accountState.DeviceUserAgent = desiredUa;
                 changed = true;
             }
 
-            if (string.IsNullOrWhiteSpace(_config.DesktopUserAgent))
+            if (string.IsNullOrWhiteSpace(_accountState.DesktopUserAgent))
             {
-                _config.DesktopUserAgent = AuthConstants.GetDesktopUserAgent(presetSeed);
+                _accountState.DesktopUserAgent = AuthConstants.GetDesktopUserAgent(presetSeed);
                 changed = true;
             }
         }
@@ -1079,18 +960,18 @@ namespace YTPlayer.Core.Auth
             var effectiveTtl = ttl <= TimeSpan.Zero ? AuthConstants.AntiCheatTokenLifetime : ttl;
             var expiresAt = now.Add(effectiveTtl);
 
-            _config.AntiCheatToken = token;
-            _config.AntiCheatTokenGeneratedAt = now;
-            _config.AntiCheatTokenExpiresAt = expiresAt;
-            _config.FingerprintLastUpdated = now;
+            _accountState.AntiCheatToken = token;
+            _accountState.AntiCheatTokenGeneratedAt = now;
+            _accountState.AntiCheatTokenExpiresAt = expiresAt;
+            _accountState.FingerprintLastUpdated = now;
 
             try
             {
-                _configManager.Save(_config);
+                _accountStore.Save(_accountState);
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[AuthContext] 保存配置中的反作弊令牌失败: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[AuthContext] 保存账户状态中的反作弊令牌失败: {ex.Message}");
             }
 
             if (_accountState == null)

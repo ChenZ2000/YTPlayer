@@ -82,7 +82,9 @@ namespace YTPlayer
 
                 // 检查登录状态并设置默认音质
                 // 如果未登录且配置的音质不可用，降级到"极高音质"
-                bool isLoggedIn = !string.IsNullOrEmpty(config.MusicU) && !string.IsNullOrEmpty(config.CsrfToken);
+                var accountStore = new AccountStateStore();
+                var accountState = accountStore.Load();
+                bool isLoggedIn = accountState.IsLoggedIn;
 
                 if (string.IsNullOrEmpty(config.DefaultQuality))
                 {

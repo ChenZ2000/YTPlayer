@@ -189,11 +189,11 @@ namespace YTPlayer.Forms
             //
             // captchaTextBox
             //
-            this.captchaTextBox.AccessibleDescription = "输入手机收到的6位验证码";
+            this.captchaTextBox.AccessibleDescription = "输入手机收到的4位验证码";
             this.captchaTextBox.AccessibleName = "验证码";
             this.captchaTextBox.Font = new System.Drawing.Font("Microsoft YaHei UI", 10F);
             this.captchaTextBox.Location = new System.Drawing.Point(90, 220);
-            this.captchaTextBox.MaxLength = 6;
+            this.captchaTextBox.MaxLength = 4;
             this.captchaTextBox.Name = "captchaTextBox";
             this.captchaTextBox.Size = new System.Drawing.Size(296, 34);
             this.captchaTextBox.TabIndex = 3;

@@ -458,10 +458,7 @@ namespace YTPlayer
                 _config = new ConfigModel();
             }
 
-            if (_config.Cookies == null)
-            {
-                _config.Cookies = new List<CookieItem>();
-            }
+            // Note: Cookies are now managed by AccountState, not ConfigModel
 
             return _config;
         }
@@ -470,31 +467,8 @@ namespace YTPlayer
         {
             var config = EnsureConfigInitialized();
 
-            // 应用 Cookies 到 API 客户端
-            if (config.Cookies != null && config.Cookies.Count > 0)
-            {
-                _apiClient.ApplyCookies(config.Cookies);
-
-                if (string.IsNullOrEmpty(config.MusicU) && !string.IsNullOrEmpty(_apiClient.MusicU))
-                {
-                    config.MusicU = _apiClient.MusicU;
-                }
-
-                if (string.IsNullOrEmpty(config.CsrfToken) && !string.IsNullOrEmpty(_apiClient.CsrfToken))
-                {
-                    config.CsrfToken = _apiClient.CsrfToken;
-                }
-            }
-
-            // 设置 API 凭证
-            if (!string.IsNullOrEmpty(config.MusicU))
-            {
-                _apiClient.MusicU = config.MusicU;
-            }
-            if (!string.IsNullOrEmpty(config.CsrfToken))
-            {
-                _apiClient.CsrfToken = config.CsrfToken;
-            }
+            // Note: Cookies, MusicU, and CsrfToken are now managed by AccountState and AuthContext
+            // The API client will get these from AuthContext automatically
 
             // 设置音量
             if (_audioEngine != null)
@@ -543,8 +517,9 @@ namespace YTPlayer
 
             // UsePersonalCookie 现在根据 MusicU 是否为空自动判断，无需手动设置
             System.Diagnostics.Debug.WriteLine($"[CONFIG] UsePersonalCookie={_apiClient.UsePersonalCookie} (自动检测)");
-            System.Diagnostics.Debug.WriteLine($"[CONFIG] MusicU={(string.IsNullOrEmpty(config.MusicU) ? "未设置" : "已设置")}");
-            System.Diagnostics.Debug.WriteLine($"[CONFIG] CsrfToken={(string.IsNullOrEmpty(config.CsrfToken) ? "未设置" : "已设置")}");
+            System.Diagnostics.Debug.WriteLine($"[CONFIG] AccountState.IsLoggedIn={_accountState?.IsLoggedIn}");
+            System.Diagnostics.Debug.WriteLine($"[CONFIG] AccountState.MusicU={(string.IsNullOrEmpty(_accountState?.MusicU) ? "未设置" : "已设置")}");
+            System.Diagnostics.Debug.WriteLine($"[CONFIG] AccountState.CsrfToken={(string.IsNullOrEmpty(_accountState?.CsrfToken) ? "未设置" : "已设置")}");
 
             // 如果已登录，异步刷新用户资料
             if (_apiClient.UsePersonalCookie)
@@ -560,73 +535,17 @@ namespace YTPlayer
                 return true;
             }
 
-            var config = EnsureConfigInitialized();
-            return !string.IsNullOrEmpty(config?.MusicU);
+            return _accountState?.IsLoggedIn == true;
         }
 
         private void SyncConfigFromApiClient(Forms.LoginSuccessEventArgs args = null, bool persist = false)
         {
-            if (_apiClient == null)
-            {
-                return;
-            }
-
-            var config = EnsureConfigInitialized();
-            if (config == null)
-            {
-                return;
-            }
-
-            bool metadataChanged = false;
-
-            string clientMusicU = _apiClient.MusicU;
-            if (!string.Equals(config.MusicU, clientMusicU, StringComparison.Ordinal))
-            {
-                config.MusicU = clientMusicU;
-                metadataChanged = true;
-            }
-
-            string clientCsrf = _apiClient.CsrfToken;
-            if (!string.Equals(config.CsrfToken, clientCsrf, StringComparison.Ordinal))
-            {
-                config.CsrfToken = clientCsrf;
-                metadataChanged = true;
-            }
-
-            if (args != null)
-            {
-                if (!string.IsNullOrEmpty(args.UserId) && !string.Equals(config.LoginUserId, args.UserId, StringComparison.Ordinal))
-                {
-                    config.LoginUserId = args.UserId;
-                    metadataChanged = true;
-                }
-
-                if (!string.IsNullOrEmpty(args.Nickname) && !string.Equals(config.LoginUserNickname, args.Nickname, StringComparison.Ordinal))
-                {
-                    config.LoginUserNickname = args.Nickname;
-                    metadataChanged = true;
-                }
-
-                if (!string.IsNullOrEmpty(args.AvatarUrl) && !string.Equals(config.LoginAvatarUrl, args.AvatarUrl, StringComparison.Ordinal))
-                {
-                    config.LoginAvatarUrl = args.AvatarUrl;
-                    metadataChanged = true;
-                }
-
-                if (config.LoginVipType != args.VipType)
-                {
-                    config.LoginVipType = args.VipType;
-                    metadataChanged = true;
-                }
-            }
+            // Note: Account-related fields (MusicU, CsrfToken, LoginUserId, etc.) are now managed by AccountState
+            // This method is no longer needed for account synchronization, but kept for potential future config updates
 
             if (persist)
             {
                 SaveConfig();
-            }
-            else if (metadataChanged)
-            {
-                System.Diagnostics.Debug.WriteLine("[Config] 登录信息已同步（延迟保存）");
             }
         }
 
@@ -634,19 +553,8 @@ namespace YTPlayer
         {
             _apiClient?.ClearCookies();
 
-            var config = EnsureConfigInitialized();
-            if (config == null)
-            {
-                return;
-            }
-
-            config.MusicU = string.Empty;
-            config.CsrfToken = string.Empty;
-            config.LoginUserId = null;
-            config.LoginUserNickname = null;
-            config.LoginAvatarUrl = null;
-            config.LoginVipType = 0;
-            config.Cookies?.Clear();
+            // Note: Account-related fields are now managed by AccountState
+            // Login state clearing is handled by AccountStateStore and AuthContext
 
             if (persist)
             {
@@ -690,21 +598,11 @@ namespace YTPlayer
 
         private void UpdateUiFromAccountState(bool reapplyCookies)
         {
-            var config = EnsureConfigInitialized();
-            if (config == null)
-            {
-                return;
-            }
+            // Note: Account-related fields are now managed directly from _accountState
+            // No need to sync to config
 
             if (_accountState != null && _accountState.IsLoggedIn)
             {
-                config.MusicU = _accountState.MusicU;
-                config.CsrfToken = _accountState.CsrfToken;
-                config.LoginUserId = _accountState.UserId;
-                config.LoginUserNickname = _accountState.Nickname;
-                config.LoginAvatarUrl = _accountState.AvatarUrl;
-                config.LoginVipType = _accountState.VipType;
-
                 if (reapplyCookies && _accountState.Cookies != null && _accountState.Cookies.Count > 0)
                 {
                     try
@@ -721,10 +619,6 @@ namespace YTPlayer
             }
             else
             {
-                config.LoginUserId = null;
-                config.LoginUserNickname = null;
-                config.LoginAvatarUrl = null;
-                config.LoginVipType = 0;
                 UpdateLoginMenuItemText();
             }
         }
@@ -761,18 +655,10 @@ namespace YTPlayer
                     config.Volume = volumeValue / 100.0;
                 }
 
-                // 保存 Cookie 设置（UsePersonalCookie 已移除，自动根据 MusicU 判断）
-                config.MusicU = _apiClient.MusicU;
-                config.CsrfToken = _apiClient.CsrfToken;
+                // Note: MusicU, CsrfToken, and Cookies are now managed by AccountState, not ConfigModel
 
                 // 保存歌词朗读状态
                 config.LyricsReadingEnabled = _autoReadLyrics;
-
-                if (refreshCookieFromClient)
-                {
-                    var cookies = _apiClient.GetAllCookies();
-                    config.Cookies = cookies ?? new List<CookieItem>();
-                }
 
                 _configManager.Save(config);
             }
@@ -815,22 +701,19 @@ namespace YTPlayer
                 }
                 if (string.IsNullOrEmpty(userIdString))
                 {
-                    userIdString = config.LoginUserId;
+                    userIdString = _accountState?.UserId;
                 }
 
-                string nickname = status.Nickname ?? accountDetail?.Nickname ?? config.LoginUserNickname;
-                string avatarUrl = status.AvatarUrl ?? accountDetail?.AvatarUrl ?? config.LoginAvatarUrl;
+                string nickname = status.Nickname ?? accountDetail?.Nickname ?? _accountState?.Nickname;
+                string avatarUrl = status.AvatarUrl ?? accountDetail?.AvatarUrl ?? _accountState?.AvatarUrl;
                 int vipType = accountDetail?.VipType ?? status.VipType;
 
-                bool nicknameChanged = !string.Equals(config.LoginUserNickname, nickname, StringComparison.Ordinal);
-                bool userIdChanged = !string.Equals(config.LoginUserId, userIdString, StringComparison.Ordinal);
-                bool avatarChanged = !string.Equals(config.LoginAvatarUrl, avatarUrl, StringComparison.Ordinal);
-                bool vipChanged = config.LoginVipType != vipType;
+                bool nicknameChanged = !string.Equals(_accountState?.Nickname, nickname, StringComparison.Ordinal);
+                bool userIdChanged = !string.Equals(_accountState?.UserId, userIdString, StringComparison.Ordinal);
+                bool avatarChanged = !string.Equals(_accountState?.AvatarUrl, avatarUrl, StringComparison.Ordinal);
+                bool vipChanged = _accountState?.VipType != vipType;
 
-                config.LoginUserId = userIdString;
-                config.LoginUserNickname = nickname;
-                config.LoginAvatarUrl = avatarUrl;
-                config.LoginVipType = vipType;
+                // Note: Account info is now stored in AccountState, will be updated via ApplyLoginProfile
 
                 if ((nicknameChanged || userIdChanged || avatarChanged) && !IsDisposed)
                 {
@@ -1150,7 +1033,7 @@ namespace YTPlayer
                 resultListView.Items.Clear();
 
                 var homeItems = new List<ListItemInfo>();
-                bool isLoggedIn = _config != null && !string.IsNullOrEmpty(_config.MusicU);
+                bool isLoggedIn = _accountState?.IsLoggedIn == true;
 
                 // 如果已登录，添加个人资源分类（在前面）
                 if (isLoggedIn)
@@ -3926,20 +3809,20 @@ private void TrayIcon_MouseClick(object sender, System.Windows.Forms.MouseEventA
         private void UpdateLoginMenuItemText()
         {
             System.Diagnostics.Debug.WriteLine($"[UpdateLoginMenuItemText] 开始更新");
-            var config = EnsureConfigInitialized();
             bool loggedIn = IsUserLoggedIn();
 
             System.Diagnostics.Debug.WriteLine($"[UpdateLoginMenuItemText] UsePersonalCookie={_apiClient.UsePersonalCookie} (自动检测)");
-            System.Diagnostics.Debug.WriteLine($"[UpdateLoginMenuItemText] MusicU={(string.IsNullOrEmpty(config?.MusicU) ? "未设置" : "已设置")}");
-            System.Diagnostics.Debug.WriteLine($"[UpdateLoginMenuItemText] LoginUserNickname={config?.LoginUserNickname ?? "null"}");
-            System.Diagnostics.Debug.WriteLine($"[UpdateLoginMenuItemText] LoginAvatarUrl={config?.LoginAvatarUrl ?? "null"}");
-            System.Diagnostics.Debug.WriteLine($"[UpdateLoginMenuItemText] LoginVipType={config?.LoginVipType ?? 0}");
+            System.Diagnostics.Debug.WriteLine($"[UpdateLoginMenuItemText] IsLoggedIn={_accountState?.IsLoggedIn}");
+            System.Diagnostics.Debug.WriteLine($"[UpdateLoginMenuItemText] MusicU={(string.IsNullOrEmpty(_accountState?.MusicU) ? "未设置" : "已设置")}");
+            System.Diagnostics.Debug.WriteLine($"[UpdateLoginMenuItemText] Nickname={_accountState?.Nickname ?? "null"}");
+            System.Diagnostics.Debug.WriteLine($"[UpdateLoginMenuItemText] AvatarUrl={_accountState?.AvatarUrl ?? "null"}");
+            System.Diagnostics.Debug.WriteLine($"[UpdateLoginMenuItemText] VipType={_accountState?.VipType ?? 0}");
 
             if (loggedIn)
             {
-                string displayName = string.IsNullOrEmpty(config?.LoginUserNickname)
+                string displayName = string.IsNullOrEmpty(_accountState?.Nickname)
                     ? "用户信息"
-                    : config.LoginUserNickname;
+                    : _accountState.Nickname;
 
                 System.Diagnostics.Debug.WriteLine($"[UpdateLoginMenuItemText] 设置菜单项为: {displayName}");
 
@@ -4029,14 +3912,14 @@ private void TrayIcon_MouseClick(object sender, System.Windows.Forms.MouseEventA
             _apiClient.ApplyLoginProfile(profile);
             ReloadAccountState(false);
 
-            var config = EnsureConfigInitialized();
-            System.Diagnostics.Debug.WriteLine($"[LoginMenuItem] 配置对象已更新:");
-            System.Diagnostics.Debug.WriteLine($"[LoginMenuItem]   _config.MusicU={(string.IsNullOrEmpty(config.MusicU) ? "未设置⚠️" : $"已设置({config.MusicU.Substring(0, Math.Min(20, config.MusicU.Length))}...)")}");
-            System.Diagnostics.Debug.WriteLine($"[LoginMenuItem]   _config.CsrfToken={config.CsrfToken ?? "未设置⚠️"}");
-            System.Diagnostics.Debug.WriteLine($"[LoginMenuItem]   _config.LoginUserNickname={config.LoginUserNickname}");
-            System.Diagnostics.Debug.WriteLine($"[LoginMenuItem]   _config.LoginUserId={config.LoginUserId}");
-            System.Diagnostics.Debug.WriteLine($"[LoginMenuItem]   _config.LoginAvatarUrl={config.LoginAvatarUrl ?? "未设置⚠️"}");
-            System.Diagnostics.Debug.WriteLine($"[LoginMenuItem]   _config.LoginVipType={config.LoginVipType}");
+            System.Diagnostics.Debug.WriteLine($"[LoginMenuItem] 账户状态已更新:");
+            System.Diagnostics.Debug.WriteLine($"[LoginMenuItem]   _accountState.IsLoggedIn={_accountState?.IsLoggedIn}");
+            System.Diagnostics.Debug.WriteLine($"[LoginMenuItem]   _accountState.MusicU={(string.IsNullOrEmpty(_accountState?.MusicU) ? "未设置⚠️" : $"已设置({_accountState.MusicU.Substring(0, Math.Min(20, _accountState.MusicU.Length))}...)")}");
+            System.Diagnostics.Debug.WriteLine($"[LoginMenuItem]   _accountState.CsrfToken={_accountState?.CsrfToken ?? "未设置⚠️"}");
+            System.Diagnostics.Debug.WriteLine($"[LoginMenuItem]   _accountState.Nickname={_accountState?.Nickname}");
+            System.Diagnostics.Debug.WriteLine($"[LoginMenuItem]   _accountState.UserId={_accountState?.UserId}");
+            System.Diagnostics.Debug.WriteLine($"[LoginMenuItem]   _accountState.AvatarUrl={_accountState?.AvatarUrl ?? "未设置⚠️"}");
+            System.Diagnostics.Debug.WriteLine($"[LoginMenuItem]   _accountState.VipType={_accountState?.VipType}");
             System.Diagnostics.Debug.WriteLine($"[LoginMenuItem]   UsePersonalCookie(自动)={_apiClient.UsePersonalCookie}");
 
             UpdateStatusBar($"登录成功！欢迎 {args.Nickname} ({GetVipDescription(args.VipType)})");
@@ -4561,7 +4444,7 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
         private void RefreshQualityMenuAvailability()
         {
             bool isLoggedIn = IsUserLoggedIn();
-            int vipType = _config?.LoginVipType ?? 0;
+            int vipType = _accountState?.VipType ?? 0;
 
             if (!isLoggedIn)
             {

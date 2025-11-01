@@ -590,16 +590,31 @@ namespace YTPlayer.Forms
                 }
                 else
                 {
-                    smsStatusLabel.Text = $"登录失败: {result.Message}";
+                    // ⭐ 修复：登录失败时弹出对话框提示
+                    string errorMessage = result.Message ?? "未知错误";
+                    smsStatusLabel.Text = $"登录失败: {errorMessage}";
                     smsStatusLabel.ForeColor = Color.Red;
                     smsLoginButton.Enabled = true;
+
+                    MessageBox.Show(
+                        $"登录失败：\n\n{errorMessage}\n\n请检查：\n1. 验证码是否正确\n2. 验证码是否过期（有效期5分钟）\n3. 手机号是否正确",
+                        "登录失败",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Error);
                 }
             }
             catch (Exception ex)
             {
+                // ⭐ 修复：登录异常时弹出对话框提示
                 smsStatusLabel.Text = $"登录失败: {ex.Message}";
                 smsStatusLabel.ForeColor = Color.Red;
                 smsLoginButton.Enabled = true;
+
+                MessageBox.Show(
+                    $"登录失败：\n\n{ex.Message}\n\n请检查：\n1. 网络连接是否正常\n2. 验证码是否正确\n3. 稍后重试",
+                    "登录异常",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
             }
         }
 
