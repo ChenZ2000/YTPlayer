@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Diagnostics;
 using System.Net.Http;
 using System.Runtime.InteropServices;
@@ -114,6 +114,18 @@ namespace YTPlayer.Core
 
         #endregion
 
+        private sealed class GaplessPreloadEntry
+        {
+            public GaplessPreloadEntry(SongInfo song, Playback.PreloadedData data)
+            {
+                Song = song;
+                Data = data;
+            }
+
+            public SongInfo Song { get; }
+            public Playback.PreloadedData Data { get; }
+        }
+
         #region 字段
 
         private readonly object _syncRoot = new object();
@@ -121,6 +133,7 @@ namespace YTPlayer.Core
         private readonly PlaybackStateMachine _stateMachine;
         private readonly SemaphoreSlim _playSemaphore = new SemaphoreSlim(1, 1);
         private readonly SYNCPROC _endSyncProc;
+        private readonly object _gaplessPreloadLock = new object();
 
         private CancellationTokenSource? _positionMonitorCts;
         private Task? _positionMonitorTask;
@@ -133,6 +146,7 @@ namespace YTPlayer.Core
         private int _currentStream;
         private int _endSyncHandle;
         private int _nearEndSyncHandle;
+        private GaplessPreloadEntry? _gaplessPreload;
 
         private float _volume = 0.8f;
         private PlayMode _playMode = PlayMode.Loop;
@@ -150,6 +164,7 @@ namespace YTPlayer.Core
         public event EventHandler<string>? PlaybackError;
         public event EventHandler? PlaybackStopped;
         public event EventHandler<BufferingState>? BufferingStateChanged;
+        public event EventHandler<GaplessTransitionEventArgs>? GaplessTransitionCompleted;
 
         #endregion
 
@@ -197,6 +212,8 @@ namespace YTPlayer.Core
                 OnPlaybackError("无效的歌曲信息或 URL");
                 return false;
             }
+
+            preloadedData ??= ConsumeGaplessPreload(song.Id);
 
             await _playSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
 
@@ -980,6 +997,12 @@ namespace YTPlayer.Core
             BassStreamProvider? oldStreamProvider = null;
             SmartCacheManager? oldCacheManager = null;
             int oldStream = 0;
+            var pendingPreload = TakeGaplessPreload();
+
+            if (pendingPreload != null)
+            {
+                ReleasePreloadedResources(pendingPreload);
+            }
 
             lock (_syncRoot)
             {
@@ -1110,8 +1133,7 @@ namespace YTPlayer.Core
         {
             Debug.WriteLine("[BassAudioEngine] ⚡ BASS SYNC_END 回调触发（流播放结束）");
 
-            // ⭐⭐⭐ 关键优化：保存前一首的资源引用，立即触发下一首，然后异步清理
-            // 避免 StopInternal 中的 BASS_ChannelStop 同步等待输出缓冲区清空（可能 4-5 秒）
+            var gaplessEntry = TakeGaplessPreload();
 
             int oldStream;
             BassStreamProvider? oldStreamProvider;
@@ -1120,77 +1142,74 @@ namespace YTPlayer.Core
 
             lock (_syncRoot)
             {
-                // 1. 保存前一首的资源引用
                 oldStream = _currentStream;
                 oldStreamProvider = _currentStreamProvider;
                 oldCacheManager = _currentCacheManager;
                 finishedSong = _currentSong;
 
-                // 2. 停止位置监控
                 _positionMonitorCts?.Cancel();
                 _positionMonitorCts?.Dispose();
                 _positionMonitorCts = null;
                 _positionMonitorTask = null;
 
-                // 3. 清空当前引用（为下一首腾出位置）
                 _currentStream = 0;
                 _currentStreamProvider = null;
                 _currentCacheManager = null;
                 _currentSong = null;
-
-                Debug.WriteLine("[BassAudioEngine] ✓ 已保存前一首资源引用并清空当前引用");
             }
 
-            // 4. ⭐⭐⭐ 关键修复：立即停止前一首的音频输出（同步执行）
-            // BASS_ChannelStop 会立即停止混音器输出，避免与下一首冲突
+            bool gaplessStarted = false;
+            SongInfo? nextSong = null;
+
+            if (gaplessEntry != null)
+            {
+                gaplessStarted = TryStartGaplessPlayback(gaplessEntry, finishedSong, out nextSong);
+                if (!gaplessStarted)
+                {
+                    RestoreGaplessPreload(gaplessEntry);
+                }
+            }
+
             if (oldStream != 0)
             {
                 Debug.WriteLine($"[BassAudioEngine] ⚡ 立即停止前一首音频输出（stream={oldStream}）");
                 BASS_ChannelStop(oldStream);
-                Debug.WriteLine($"[BassAudioEngine] ✓ 前一首已停止");
+                Debug.WriteLine("[BassAudioEngine] ✓ 前一首已停止");
             }
 
-            // 5. 转换状态到 Idle（允许下一首启动）
-            _stateMachine.TransitionTo(PlaybackState.Idle);
-
-            // 6. 立即触发事件，启动下一首（不等待资源释放）
-            if (finishedSong != null)
+            if (!gaplessStarted)
             {
-                Debug.WriteLine($"[BassAudioEngine] ✓ 触发 PlaybackEnded 事件: {finishedSong.Name}");
-                PlaybackEnded?.Invoke(this, finishedSong);
+                _stateMachine.TransitionTo(PlaybackState.Idle);
+
+                if (finishedSong != null)
+                {
+                    Debug.WriteLine($"[BassAudioEngine] ✓ 触发 PlaybackEnded 事件: {finishedSong.Name}");
+                    PlaybackEnded?.Invoke(this, finishedSong);
+                }
             }
 
-            // 7. 异步释放前一首的资源（不阻塞下一首启动）
             Task.Run(async () =>
             {
                 try
                 {
                     Debug.WriteLine($"[BassAudioEngine] ⚙️ 开始异步释放前一首资源（stream={oldStream}）...");
 
-                    // 释放 BASS stream
                     if (oldStream != 0)
                     {
                         BASS_StreamFree(oldStream);
                         Debug.WriteLine($"[BassAudioEngine] ✓ 已调用 BASS_StreamFree: {oldStream}");
                     }
 
-                    // ⭐⭐⭐ 关键修复：延迟释放 BassStreamProvider
-                    // 原因：BASS_StreamFree 是异步的，BASS 可能仍在后台清理
-                    //       如果立即释放 BassStreamProvider，GC 可能会回收委托
-                    //       导致 BASS 稍后调用 FileClose 等回调时触发 CallbackOnCollectedDelegate
-                    // 延迟时间：200ms 足以让 BASS 完成内部清理并调用所有回调
                     Debug.WriteLine("[BassAudioEngine] ⏳ 等待 200ms，确保 BASS 完成所有回调...");
                     await Task.Delay(200);
                     Debug.WriteLine("[BassAudioEngine] ✓ 延迟完成，开始释放托管资源");
 
-                    // 释放 StreamProvider
                     if (oldStreamProvider != null)
                     {
                         oldStreamProvider.Dispose();
                         Debug.WriteLine("[BassAudioEngine] ✓ 已释放 StreamProvider");
                     }
 
-                    // 释放 CacheManager
                     if (oldCacheManager != null)
                     {
                         DetachCacheManager(oldCacheManager);
@@ -1205,6 +1224,150 @@ namespace YTPlayer.Core
                     Debug.WriteLine($"[BassAudioEngine] ❌ 释放资源异常: {ex.Message}");
                 }
             });
+        }
+
+        private bool TryStartGaplessPlayback(GaplessPreloadEntry entry, SongInfo? previousSong, out SongInfo? nextSong)
+        {
+            nextSong = null;
+            if (entry == null || entry.Data == null || entry.Data.StreamHandle == 0 || entry.Data.StreamProvider == null || entry.Data.CacheManager == null)
+            {
+                return false;
+            }
+
+            var data = entry.Data;
+            int newStreamHandle = data.StreamHandle;
+
+            lock (_syncRoot)
+            {
+                _currentStream = newStreamHandle;
+                _currentStreamProvider = data.StreamProvider;
+                _currentCacheManager = data.CacheManager;
+                _currentSong = entry.Song;
+            }
+
+            nextSong = entry.Song;
+
+            AttachCacheManager(data.CacheManager);
+
+            BASS_ChannelSetPosition(newStreamHandle, 0, BASS_POS_BYTE);
+            ApplyVolume();
+
+            _endSyncHandle = 0;
+            _nearEndSyncHandle = 0;
+            SetupSyncs();
+            StartPositionMonitor();
+
+            bool playResult = BASS_ChannelPlay(newStreamHandle, true);
+            if (!playResult)
+            {
+                int error = BASS_ErrorGetCode();
+                Debug.WriteLine($"[BassAudioEngine] ❌ Gapless 启动失败: error={error}");
+
+                lock (_syncRoot)
+                {
+                    _currentStream = 0;
+                    _currentStreamProvider = null;
+                    _currentCacheManager = null;
+                    _currentSong = null;
+                }
+
+                DetachCacheManager(data.CacheManager);
+                return false;
+            }
+
+            data.CacheManager.SetPlayingState();
+            _stateMachine.TransitionTo(PlaybackState.Playing);
+            OnPlaybackStarted(entry.Song);
+
+            GaplessTransitionCompleted?.Invoke(this, new GaplessTransitionEventArgs(previousSong, entry.Song));
+
+            return true;
+        }
+
+        private GaplessPreloadEntry? TakeGaplessPreload()
+        {
+            lock (_gaplessPreloadLock)
+            {
+                var entry = _gaplessPreload;
+                _gaplessPreload = null;
+                return entry;
+            }
+        }
+
+        private void RestoreGaplessPreload(GaplessPreloadEntry entry)
+        {
+            if (entry == null)
+            {
+                return;
+            }
+
+            lock (_gaplessPreloadLock)
+            {
+                if (_gaplessPreload == null)
+                {
+                    _gaplessPreload = entry;
+                }
+                else
+                {
+                    ReleasePreloadedResources(entry);
+                }
+            }
+        }
+
+        private void ReleasePreloadedResources(GaplessPreloadEntry entry)
+        {
+            try
+            {
+                if (entry.Data.StreamHandle != 0)
+                {
+                    BASS_StreamFree(entry.Data.StreamHandle);
+                }
+
+                entry.Data.StreamProvider?.Dispose();
+                entry.Data.CacheManager?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[BassAudioEngine] 释放预加载资源异常: {ex.Message}");
+            }
+        }
+
+        public void RegisterGaplessPreload(SongInfo song, Playback.PreloadedData data)
+        {
+            if (song == null || data == null)
+            {
+                return;
+            }
+
+            lock (_gaplessPreloadLock)
+            {
+                if (_gaplessPreload != null)
+                {
+                    ReleasePreloadedResources(_gaplessPreload);
+                }
+
+                _gaplessPreload = new GaplessPreloadEntry(song, data);
+            }
+        }
+
+        public Playback.PreloadedData? ConsumeGaplessPreload(string songId)
+        {
+            if (string.IsNullOrWhiteSpace(songId))
+            {
+                return null;
+            }
+
+            lock (_gaplessPreloadLock)
+            {
+                if (_gaplessPreload != null && _gaplessPreload.Song != null && string.Equals(_gaplessPreload.Song.Id, songId, StringComparison.Ordinal))
+                {
+                    var data = _gaplessPreload.Data;
+                    _gaplessPreload = null;
+                    return data;
+                }
+            }
+
+            return null;
         }
 
         private void OnPlaybackStarted(SongInfo song)
@@ -1240,6 +1403,18 @@ namespace YTPlayer.Core
         }
 
         #endregion
+    }
+
+    public sealed class GaplessTransitionEventArgs : EventArgs
+    {
+        public GaplessTransitionEventArgs(SongInfo? previousSong, SongInfo nextSong)
+        {
+            PreviousSong = previousSong;
+            NextSong = nextSong ?? throw new ArgumentNullException(nameof(nextSong));
+        }
+
+        public SongInfo? PreviousSong { get; }
+        public SongInfo NextSong { get; }
     }
 
     /// <summary>

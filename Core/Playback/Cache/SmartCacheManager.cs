@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -48,6 +48,14 @@ namespace YTPlayer.Core.Playback.Cache
         private long _cachedBytes;
         private int _currentChunk;
         private bool _disposed;
+
+        private Task? _mainDownloadTask;
+        private CancellationTokenSource? _mainDownloadCts;
+        private bool _isPreloadMode;
+        private bool _initialBufferSignaled;
+        private bool _isFullyCached;
+        private bool _rangePreloaderStarted;
+        private readonly object _downloadLock = new object();
 
         private readonly object _stateLock = new object();
         private readonly object _bufferingLock = new object();
@@ -135,6 +143,27 @@ namespace YTPlayer.Core.Playback.Cache
                 }
             }
         }
+        public bool IsFullyCached => _isFullyCached;
+        public double CacheFillFraction => _totalSize == 0 ? 0 : Math.Min(1.0, TotalCachedBytes / (double)_totalSize);
+        public bool CanSpareBandwidthForPreload
+        {
+            get
+            {
+                if (IsFullyCached)
+                {
+                    return true;
+                }
+
+                double fill = CacheFillFraction;
+
+                if (_strategy == DownloadStrategy.Range)
+                {
+                    return CurrentBufferingState == BufferingState.Playing && fill >= 0.20;
+                }
+
+                return fill >= 0.65;
+            }
+        }
 
         /// <summary>
         /// 初始化缓存管理器
@@ -145,14 +174,11 @@ namespace YTPlayer.Core.Playback.Cache
         {
             EnsureNotDisposed();
 
-            // ⚡⚡⚡ 网易云音乐所有 CDN 都不支持 Range 请求
-            // 直接使用 SequentialFull 策略，跳过 HEAD 请求检测（节省 100-300ms）
-            _strategy = DownloadStrategy.SequentialFull;
-
-            DebugLogger.Log(
-                DebugLogger.LogLevel.Info,
-                "SmartCache",
-                $"⚡ [优化] 直接使用 SequentialFull 策略（网易云不支持 Range）");
+            if (!_strategyCache.TryGetValue(GetStrategyCacheKey(), out _strategy))
+            {
+                _strategy = await DetectStrategyAsync(token).ConfigureAwait(false);
+                _strategyCache[GetStrategyCacheKey()] = _strategy;
+            }
 
             StrategyDetermined?.Invoke(this, _strategy);
             DebugLogger.Log(
@@ -168,15 +194,17 @@ namespace YTPlayer.Core.Playback.Cache
             switch (_strategy)
             {
                 case DownloadStrategy.Range:
-                    initResult = await InitializeRangeModeAsync(token).ConfigureAwait(false);
+                    initResult = await InitializeRangeModeAsync(token, isPreload).ConfigureAwait(false);
                     break;
 
                 case DownloadStrategy.ParallelFull:
                 case DownloadStrategy.SequentialFull:
                     initResult = await InitializeFullDownloadModeAsync(token, isPreload).ConfigureAwait(false);
 
-                    // ⭐ 阶段3：对于大文件（>100MB），启动智能预缓存
-                    if (initResult && _totalSize > 100 * 1024 * 1024)
+                    // ⭐ 阶段3：仅在多连接策略下启用智能预缓存，避免顺序流重复跳读
+                    if (initResult &&
+                        _totalSize > 100 * 1024 * 1024 &&
+                        _strategy != DownloadStrategy.SequentialFull)
                     {
                         StartSmartPreCache(token);
                     }
@@ -384,6 +412,9 @@ namespace YTPlayer.Core.Playback.Cache
 
             try
             {
+                _mainDownloadCts?.Cancel();
+                _mainDownloadTask?.Wait(TimeSpan.FromSeconds(1));
+
                 _preloadCts?.Cancel();
                 _preloadTask?.Wait(TimeSpan.FromSeconds(1));
             }
@@ -400,19 +431,24 @@ namespace YTPlayer.Core.Playback.Cache
             }
             finally
             {
+                _mainDownloadCts?.Dispose();
+                _mainDownloadCts = null;
+                _mainDownloadTask = null;
+
                 _preloadCts?.Dispose();
                 _preloadTask = null;
             }
 
             _scheduler?.Dispose();
             _cache.Clear();
+            _rangePreloaderStarted = false;
 
             // ⭐ 阶段3：清理智能预缓存
             _smartPreCache?.Dispose();
             _smartPreCache = null;
         }
 
-        private async Task<bool> InitializeRangeModeAsync(CancellationToken token)
+        private async Task<bool> InitializeRangeModeAsync(CancellationToken token, bool isPreload)
         {
             SetBufferingState(BufferingState.Buffering);
 
@@ -444,43 +480,54 @@ namespace YTPlayer.Core.Playback.Cache
                     $"✓ Chunk 0 下载完成 ({chunk0Data.Length:N0} bytes)，立即启动播放");
             }
 
-            // ⭐ 立即启动后台预加载器（下载 chunk 1, 2, 3...）
-            StartRangePreloader(token);
-
-            // ⭐ 后台并发下载接下来的几个 chunks（不等待完成）
-            _ = Task.Run(async () =>
+            if (!isPreload)
             {
-                try
-                {
-                    // 并发下载 chunk 1-5（MinReadyChunks + PreloadAheadChunks 的一部分）
-                    int backgroundChunks = Math.Min(5, _totalChunks - 1);
-                    var backgroundTasks = new List<Task>();
+                // ⭐ 立即启动后台预加载器（下载 chunk 1, 2, 3...）
+                StartRangePreloader(token);
+            }
+            else
+            {
+                _isPreloadMode = true;
+                _rangePreloaderStarted = false;
+            }
 
-                    for (int i = 1; i <= backgroundChunks; i++)
+            if (!isPreload)
+            {
+                // ⭐ 后台并发下载接下来的几个 chunks（不等待完成）
+                _ = Task.Run(async () =>
+                {
+                    try
                     {
-                        int chunkIndex = i;
-                        backgroundTasks.Add(Task.Run(async () =>
+                        // 并发下载 chunk 1-5（MinReadyChunks + PreloadAheadChunks 的一部分）
+                        int backgroundChunks = Math.Min(5, _totalChunks - 1);
+                        var backgroundTasks = new List<Task>();
+
+                        for (int i = 1; i <= backgroundChunks; i++)
                         {
-                            var data = await _downloader.DownloadChunkAsync(chunkIndex, token).ConfigureAwait(false);
-                            if (data != null && _cache.TryAdd(chunkIndex, data))
+                            int chunkIndex = i;
+                            backgroundTasks.Add(Task.Run(async () =>
                             {
-                                Interlocked.Add(ref _cachedBytes, data.Length);
-                            }
-                        }, token));
+                                var data = await _downloader.DownloadChunkAsync(chunkIndex, token).ConfigureAwait(false);
+                                if (data != null && _cache.TryAdd(chunkIndex, data))
+                                {
+                                    Interlocked.Add(ref _cachedBytes, data.Length);
+                                }
+                            }, token));
+                        }
+
+                        await Task.WhenAll(backgroundTasks).ConfigureAwait(false);
+
+                        DebugLogger.Log(
+                            DebugLogger.LogLevel.Info,
+                            "SmartCache",
+                            $"✓ 后台初始缓存完成: chunks 1-{backgroundChunks}");
                     }
-
-                    await Task.WhenAll(backgroundTasks).ConfigureAwait(false);
-
-                    DebugLogger.Log(
-                        DebugLogger.LogLevel.Info,
-                        "SmartCache",
-                        $"✓ 后台初始缓存完成: chunks 1-{backgroundChunks}");
-                }
-                catch (Exception ex)
-                {
-                    DebugLogger.LogException("SmartCache", ex, "后台初始缓存失败");
-                }
-            }, token);
+                    catch (Exception ex)
+                    {
+                        DebugLogger.LogException("SmartCache", ex, "后台初始缓存失败");
+                    }
+                }, token);
+            }
 
             ReportProgress();
             SetBufferingState(BufferingState.Ready);
@@ -491,292 +538,12 @@ namespace YTPlayer.Core.Playback.Cache
         {
             SetBufferingState(BufferingState.Buffering);
 
+            _initialBufferSignaled = false;
             _initialBufferTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _preloadCts = CancellationTokenSource.CreateLinkedTokenSource(token);
-            var preloadToken = _preloadCts.Token;
 
-            // ⭐⭐⭐ 快速启动优化：优先下载 Chunk 0，立即初始化播放
-            // BASS 初始化只需要：
-            // 1. Chunk 0 - 验证格式并开始播放（必需）
-            // 2. 最后块 - 验证文件完整性（可选，改为后台下载）
-            //
-            // 修复：移除最后块的强制要求，避免大文件初始化失败
-            // 原因：网易云不支持 Range，下载最后块需要"假跳转"整个文件，
-            //       对于大文件（>100MB）可能需要 10+ 秒，导致启动缓慢或失败
-
-            var chunk0DownloadTask = Task.Run(async () =>
-            {
-                try
-                {
-                    DebugLogger.Log(
-                        DebugLogger.LogLevel.Info,
-                        "SmartCache",
-                        "⚡ [并发优化] 开始优先下载 Chunk 0，以支持 BASS 初始化");
-
-                    var stopwatch = Stopwatch.StartNew();
-
-                    // 使用 Range 请求下载 Chunk 0（即使服务器不支持完整 Range，通常也支持从头开始的请求）
-                    byte[]? chunk0Data = await _downloader.DownloadChunkAsync(0, preloadToken).ConfigureAwait(false);
-
-                    stopwatch.Stop();
-
-                    if (chunk0Data != null)
-                    {
-                        await OnChunkReadyAsync(0, chunk0Data).ConfigureAwait(false);
-                        DebugLogger.Log(
-                            DebugLogger.LogLevel.Info,
-                            "SmartCache",
-                            $"⚡ ✓ Chunk 0 下载完成，耗时 {stopwatch.ElapsedMilliseconds}ms，大小 {chunk0Data.Length} bytes");
-                    }
-                    else
-                    {
-                        DebugLogger.Log(
-                            DebugLogger.LogLevel.Warning,
-                            "SmartCache",
-                            "⚡ ✗ Chunk 0 下载失败");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    DebugLogger.LogException("SmartCache", ex, "⚡ Chunk 0 下载失败");
-                }
-            }, preloadToken);
-
-            var lastChunkDownloadTask = Task.Run(async () =>
-            {
-                try
-                {
-                    int lastChunkIndex = _totalChunks - 1;
-
-                    // 🎯🎯🎯 检查预缓存系统是否有最后块
-                    var cachedData = LastChunkCacheManager.Instance.TryGet(_songId, _url, _totalSize);
-                    if (cachedData != null && cachedData.Chunks.Count > 0)
-                    {
-                        DebugLogger.Log(
-                            DebugLogger.LogLevel.Info,
-                            "SmartCache",
-                            $"🎯 [预缓存命中] 使用预缓存的最后块 (共 {cachedData.Chunks.Count} 块)");
-
-                        // 直接使用预缓存的块
-                        foreach (var kvp in cachedData.Chunks)
-                        {
-                            await OnChunkReadyAsync(kvp.Key, kvp.Value).ConfigureAwait(false);
-                        }
-
-                        DebugLogger.Log(
-                            DebugLogger.LogLevel.Info,
-                            "SmartCache",
-                            "🎯 ✓ 预缓存最后块加载完成（0ms，即时加载）");
-
-                        return;  // 跳过下载
-                    }
-
-                    DebugLogger.Log(
-                        DebugLogger.LogLevel.Info,
-                        "SmartCache",
-                        $"⚡ [并发优化] 开始预下载最后块 (块索引 {lastChunkIndex})，以支持 BASS 初始化");
-
-                    var stopwatch = Stopwatch.StartNew();
-                    var skipDownloader = new StreamSkipDownloader(_httpClient, _url, _totalSize);
-                    var skipProgress = new Progress<(long Current, long Total, bool IsSkipping)>(p =>
-                    {
-                        if (p.IsSkipping && p.Current % (64 * 1024 * 1024) == 0) // 每 64MB 报告一次
-                        {
-                            DebugLogger.Log(
-                                DebugLogger.LogLevel.Info,
-                                "StreamSkip",
-                                $"⚡ 跳转进度: {p.Current:N0} / {p.Total:N0} ({p.Current * 100.0 / p.Total:F1}%)");
-                        }
-                    });
-
-                    bool success = await skipDownloader.DownloadLastChunksAsync(
-                        lastNChunks: 2, // 下载最后 2 个块以确保安全
-                        chunkSize: ChunkSize,
-                        onChunkReady: OnChunkReadyAsync,
-                        progress: skipProgress,
-                        token: preloadToken).ConfigureAwait(false);
-
-                    stopwatch.Stop();
-
-                    if (success)
-                    {
-                        DebugLogger.Log(
-                            DebugLogger.LogLevel.Info,
-                            "SmartCache",
-                            $"⚡ ✓ 最后块预下载完成，耗时 {stopwatch.ElapsedMilliseconds}ms");
-                    }
-                    else
-                    {
-                        DebugLogger.Log(
-                            DebugLogger.LogLevel.Warning,
-                            "SmartCache",
-                            "⚡ ✗ 最后块预下载失败，可能影响播放初始化");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    DebugLogger.LogException("SmartCache", ex, "⚡ 预下载最后块失败");
-                }
-            }, preloadToken);
-
-            // ⭐⭐⭐ 快速启动：只等待 Chunk 0，立即初始化 BASS
-            // 修复：不再等待最后块，避免大文件初始化超时
-            // 最后块在后台下载，不阻塞播放启动
-            var criticalChunksTask = Task.Run(async () =>
-            {
-                try
-                {
-                    var overallStopwatch = Stopwatch.StartNew();
-                    DebugLogger.Log(
-                        DebugLogger.LogLevel.Info,
-                        "SmartCache",
-                        "⚡ [快速启动] 等待 Chunk 0 下载完成（最后块在后台下载）...");
-
-                    // 🎯 关键修复：只等待 Chunk 0，添加 10 秒超时保护
-                    using (var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(10)))
-                    using (var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(preloadToken, timeoutCts.Token))
-                    {
-                        try
-                        {
-                            await chunk0DownloadTask.ConfigureAwait(false);
-                        }
-                        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
-                        {
-                            DebugLogger.Log(
-                                DebugLogger.LogLevel.Warning,
-                                "SmartCache",
-                                "⚡ ✗ Chunk 0 下载超时（10秒），初始化失败");
-                            _initialBufferTcs?.TrySetResult(false);
-                            return;
-                        }
-                    }
-
-                    overallStopwatch.Stop();
-
-                    // 检查 Chunk 0 是否成功下载
-                    bool hasChunk0 = _cache.ContainsKey(0);
-
-                    DebugLogger.Log(
-                        DebugLogger.LogLevel.Info,
-                        "SmartCache",
-                        $"⚡ ✓✓✓ Chunk 0 下载完成，总耗时 {overallStopwatch.ElapsedMilliseconds}ms，BASS 现在可以初始化了！");
-
-                    DebugLogger.Log(
-                        DebugLogger.LogLevel.Info,
-                        "SmartCache",
-                        $"⚡ 初始化就绪检查: Chunk0={hasChunk0}, Ready={hasChunk0} (最后块在后台下载)");
-
-                    _initialBufferTcs?.TrySetResult(hasChunk0);
-
-                    if (hasChunk0)
-                    {
-                        SetBufferingState(BufferingState.Ready);
-                    }
-                }
-                catch (OperationCanceledException)
-                {
-                    _initialBufferTcs?.TrySetCanceled();
-                }
-                catch (Exception ex)
-                {
-                    DebugLogger.LogException("SmartCache", ex, "⚡ Chunk 0 下载任务异常");
-                    _initialBufferTcs?.TrySetException(ex);
-                }
-            }, preloadToken);
-
-            // ⭐⭐⭐ 后台顺序下载任务：在 Chunk 0 下载完成后，继续在后台填充剩余的块
-            // 这个任务不影响 BASS 初始化，但会逐步填充完整文件以支持播放和 seek
-            // 修复：最后块的下载也在此后台任务中完成（与顺序下载并行）
-            _preloadTask = Task.Run(async () =>
-            {
-                try
-                {
-                    DebugLogger.Log(
-                        DebugLogger.LogLevel.Info,
-                        "SmartCache",
-                        "⚡ [后台下载] 启动后台任务：顺序下载剩余块 + 最后块预下载...");
-
-                    var progress = new Progress<double>(p => ReportProgress((int)(p * 100)));
-
-                    // 🎯 并行启动两个后台任务：
-                    // 1. 顺序下载所有块（从 chunk 1 开始）
-                    // 2. 最后块预下载（用于文件完整性验证）
-                    var sequentialDownloadTask = Task.Run(async () =>
-                    {
-                        try
-                        {
-                            if (_strategy == DownloadStrategy.ParallelFull)
-                            {
-                                bool success = await _downloader.DownloadAllChunksParallelAsync(
-                                    maxConnections: MaxPreloadConcurrency,
-                                    onChunkReady: OnChunkReadyAsync,
-                                    progress: progress,
-                                    token: preloadToken).ConfigureAwait(false);
-
-                                if (!success)
-                                {
-                                    DebugLogger.Log(
-                                        DebugLogger.LogLevel.Warning,
-                                        "SmartCache",
-                                        "⚡ Parallel 模式失败，降级为顺序全量下载");
-
-                                    await _downloader.DownloadAllChunksSequentialAsync(
-                                        OnChunkReadyAsync,
-                                        progress,
-                                        preloadToken).ConfigureAwait(false);
-                                }
-                            }
-                            else
-                            {
-                                await _downloader.DownloadAllChunksSequentialAsync(
-                                    OnChunkReadyAsync,
-                                    progress,
-                                    preloadToken).ConfigureAwait(false);
-                            }
-
-                            DebugLogger.Log(
-                                DebugLogger.LogLevel.Info,
-                                "SmartCache",
-                                "⚡ ✓ 后台顺序下载完成，文件已完全缓存");
-                        }
-                        catch (OperationCanceledException)
-                        {
-                            DebugLogger.Log(
-                                DebugLogger.LogLevel.Info,
-                                "SmartCache",
-                                "⚡ 后台顺序下载被取消");
-                        }
-                        catch (Exception ex)
-                        {
-                            DebugLogger.LogException("SmartCache", ex, "⚡ 后台顺序下载异常");
-                        }
-                    }, preloadToken);
-
-                    // 等待两个后台任务完成（或其中一个取消）
-                    await Task.WhenAny(
-                        Task.WhenAll(sequentialDownloadTask, lastChunkDownloadTask),
-                        Task.Delay(Timeout.Infinite, preloadToken)).ConfigureAwait(false);
-
-                    DebugLogger.Log(
-                        DebugLogger.LogLevel.Info,
-                        "SmartCache",
-                        "⚡ ✓ 后台下载任务完成");
-                }
-                catch (OperationCanceledException)
-                {
-                    DebugLogger.Log(
-                        DebugLogger.LogLevel.Info,
-                        "SmartCache",
-                        "⚡ 后台下载任务被取消（正常，用户可能切换了歌曲）");
-                }
-                catch (Exception ex)
-                {
-                    DebugLogger.LogException("SmartCache", ex, "⚡ 后台下载任务异常");
-                }
-            }, preloadToken);
+            StartSequentialDownload(token, isPreload);
 
             using (token.Register(() => _initialBufferTcs.TrySetCanceled()))
-            using (preloadToken.Register(() => _initialBufferTcs.TrySetCanceled()))
             {
                 try
                 {
@@ -789,33 +556,205 @@ namespace YTPlayer.Core.Playback.Cache
                 }
                 catch (TaskCanceledException)
                 {
-                    int lastChunkIndex = _totalChunks - 1;
-
-                    // 检查前 MinReadyChunks 个块是否都存在（连续的块0, 1, 2, ...）
-                    bool hasFirstChunks = true;
-                    for (int i = 0; i < MinReadyChunks; i++)
-                    {
-                        if (!_cache.ContainsKey(i))
-                        {
-                            hasFirstChunks = false;
-                            break;
-                        }
-                    }
-
-                    bool hasLastChunk = _cache.ContainsKey(lastChunkIndex);
-                    bool hasFirstAndLast = hasFirstChunks && hasLastChunk;
-
-                    if (hasFirstAndLast)
-                    {
-                        SetBufferingState(BufferingState.Ready);
-                    }
-                    return hasFirstAndLast;
+                    return CheckCacheHealth(0).IsReady;
                 }
+            }
+        }
+
+        private void StartSequentialDownload(CancellationToken externalToken, bool preloadOnly)
+        {
+            lock (_downloadLock)
+            {
+                _mainDownloadCts?.Cancel();
+                _mainDownloadCts?.Dispose();
+
+                _mainDownloadCts = CancellationTokenSource.CreateLinkedTokenSource(externalToken);
+                var downloadToken = _mainDownloadCts.Token;
+
+                _isPreloadMode = preloadOnly;
+
+                _mainDownloadTask = Task.Run(
+                    () => RunSequentialDownloadAsync(downloadToken, preloadOnly),
+                    downloadToken);
+            }
+        }
+
+        private async Task RunSequentialDownloadAsync(CancellationToken token, bool preloadOnly)
+        {
+            DebugLogger.Log(
+                DebugLogger.LogLevel.Info,
+                "SmartCache",
+                preloadOnly
+                    ? "🚀 顺序预加载任务启动（仅首段缓冲）"
+                    : "🚀 顺序下载任务启动（完整文件）");
+
+            var tailChunks = new Dictionary<int, byte[]>();
+            int chunkIndex = 0;
+
+            try
+            {
+                using var response = await _httpClient.GetAsync(
+                    _url,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    token).ConfigureAwait(false);
+
+                response.EnsureSuccessStatusCode();
+
+                using var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+                var buffer = new byte[ChunkSize];
+
+                while (!token.IsCancellationRequested)
+                {
+                    int bytesRead = await ReadSequentialChunkAsync(stream, buffer, token).ConfigureAwait(false);
+                    if (bytesRead <= 0)
+                    {
+                        break;
+                    }
+
+                    var chunkCopy = new byte[bytesRead];
+                    Buffer.BlockCopy(buffer, 0, chunkCopy, 0, bytesRead);
+
+                    if (_cache.TryAdd(chunkIndex, chunkCopy))
+                    {
+                        Interlocked.Add(ref _cachedBytes, chunkCopy.Length);
+                        ReportProgress();
+                    }
+
+                    TrySignalInitialBufferReady();
+                    TrackTailChunk(tailChunks, chunkIndex, chunkCopy);
+
+                    chunkIndex++;
+
+                    if (preloadOnly && chunkIndex >= MinReadyChunks + 1)
+                    {
+                        DebugLogger.Log(
+                            DebugLogger.LogLevel.Info,
+                            "SmartCache",
+                            $"✅ 预加载首段完成，共下载 {chunkIndex} 个块");
+                        break;
+                    }
+                }
+
+                if (!preloadOnly)
+                {
+                    if (tailChunks.Count > 0)
+                    {
+                        LastChunkCacheManager.Instance.Add(_songId, _url, _totalSize, tailChunks);
+                    }
+
+                    _isFullyCached = true;
+                    ReportProgress();
+                    DebugLogger.Log(
+                        DebugLogger.LogLevel.Info,
+                        "SmartCache",
+                        "✅ 顺序下载完成，文件已全部缓存");
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                DebugLogger.Log(
+                    DebugLogger.LogLevel.Info,
+                    "SmartCache",
+                    preloadOnly ? "⏹ 预加载任务取消" : "⏹ 顺序下载任务取消");
+            }
+            catch (Exception ex)
+            {
+                DebugLogger.LogException("SmartCache", ex, "顺序下载任务异常");
+                _initialBufferTcs?.TrySetException(ex);
+            }
+            finally
+            {
+                if (!_initialBufferSignaled)
+                {
+                    _initialBufferTcs?.TrySetResult(_cache.ContainsKey(0));
+                }
+
+                if (preloadOnly)
+                {
+                    lock (_downloadLock)
+                    {
+                        _mainDownloadTask = null;
+                    }
+                }
+            }
+        }
+
+        private static async Task<int> ReadSequentialChunkAsync(
+            System.IO.Stream stream,
+            byte[] buffer,
+            CancellationToken token)
+        {
+            int totalRead = 0;
+
+            while (totalRead < buffer.Length)
+            {
+                int read = await stream.ReadAsync(
+                    buffer,
+                    totalRead,
+                    buffer.Length - totalRead,
+                    token).ConfigureAwait(false);
+
+                if (read == 0)
+                {
+                    break;
+                }
+
+                totalRead += read;
+            }
+
+            return totalRead;
+        }
+
+        private void TrySignalInitialBufferReady()
+        {
+            if (_initialBufferSignaled || _initialBufferTcs == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < MinReadyChunks; i++)
+            {
+                if (!_cache.ContainsKey(i))
+                {
+                    return;
+                }
+            }
+
+            _initialBufferSignaled = true;
+            _initialBufferTcs.TrySetResult(true);
+        }
+
+        private void TrackTailChunk(Dictionary<int, byte[]> tailChunks, int chunkIndex, byte[] data)
+        {
+            if (_totalChunks <= 0)
+            {
+                return;
+            }
+
+            int firstTail = Math.Max(0, _totalChunks - 4);
+            if (chunkIndex >= firstTail)
+            {
+                tailChunks[chunkIndex] = data;
+            }
+
+            // 保持最多 4 个块
+            while (tailChunks.Count > 4)
+            {
+                int minKey = int.MaxValue;
+                foreach (var key in tailChunks.Keys)
+                {
+                    if (key < minKey)
+                    {
+                        minKey = key;
+                    }
+                }
+                tailChunks.Remove(minKey);
             }
         }
 
         private void StartRangePreloader(CancellationToken externalToken)
         {
+            _rangePreloaderStarted = true;
             _scheduler = new PriorityDownloadScheduler(
                 _totalChunks,
                 PreloadAheadChunks,
@@ -1005,6 +944,19 @@ namespace YTPlayer.Core.Playback.Cache
             return DownloadStrategy.SequentialFull;
         }
 
+        private string GetStrategyCacheKey()
+        {
+            try
+            {
+                var uri = new Uri(_url);
+                return uri.Host;
+            }
+            catch
+            {
+                return _url;
+            }
+        }
+
         private int GetChunkIndex(long bytePosition)
         {
             if (bytePosition <= 0)
@@ -1037,6 +989,7 @@ namespace YTPlayer.Core.Playback.Cache
         public void SetPlayingState()
         {
             SetBufferingState(BufferingState.Playing);
+            EnsureActiveDownload();
         }
 
         public async Task<bool> WaitForCacheReadyAsync(
@@ -1129,6 +1082,18 @@ namespace YTPlayer.Core.Playback.Cache
             }
         }
 
+        private void PrioritizeDestination(long position)
+        {
+            if (_strategy != DownloadStrategy.Range || _scheduler == null)
+            {
+                return;
+            }
+
+            int chunkIndex = GetChunkIndex(position);
+            int radius = Math.Max(2, PreloadAheadChunks / 2);
+            _scheduler.BoostChunkPriority(chunkIndex, radius);
+        }
+
         public async Task<bool> SeekAsync(long position, CancellationToken token)
         {
             int chunkIndex = GetChunkIndex(position);
@@ -1136,6 +1101,8 @@ namespace YTPlayer.Core.Playback.Cache
 
             // ⭐ 使用统一的预缓存合并方法
             CheckAndMergePreCache(position);
+            PrioritizeDestination(position);
+            EnsureActiveDownload();
 
             // ⭐⭐⭐ 关键修复：如果 seek 到接近结尾（>90%），立即触发末尾 chunks 的优先下载
             // 避免用户 seek 到结尾时，BASS 读取末尾 chunks 时缓存还没准备好
@@ -1202,6 +1169,64 @@ namespace YTPlayer.Core.Playback.Cache
             if (_disposed)
             {
                 throw new ObjectDisposedException(nameof(SmartCacheManager));
+            }
+        }
+
+        private void EnsureActiveDownload()
+        {
+            if (_strategy == DownloadStrategy.SequentialFull)
+            {
+                bool shouldStartFullDownload = false;
+
+                lock (_downloadLock)
+                {
+                    if (_isPreloadMode)
+                    {
+                        bool noActiveDownload = _mainDownloadTask == null ||
+                                                _mainDownloadTask.IsCompleted ||
+                                                _mainDownloadTask.IsCanceled ||
+                                                _mainDownloadTask.IsFaulted;
+
+                        if (noActiveDownload)
+                        {
+                            _isPreloadMode = false;
+                            shouldStartFullDownload = true;
+                        }
+                    }
+                }
+
+                if (shouldStartFullDownload)
+                {
+                    DebugLogger.Log(
+                        DebugLogger.LogLevel.Info,
+                        "SmartCache",
+                        "🎬 播放开始，启动完整顺序下载");
+
+                    StartSequentialDownload(CancellationToken.None, preloadOnly: false);
+                }
+            }
+            else if (_strategy == DownloadStrategy.Range)
+            {
+                bool startPreloader = false;
+
+                lock (_downloadLock)
+                {
+                    if (!_rangePreloaderStarted)
+                    {
+                        _rangePreloaderStarted = true;
+                        startPreloader = true;
+                    }
+                }
+
+                if (startPreloader)
+                {
+                    DebugLogger.Log(
+                        DebugLogger.LogLevel.Info,
+                        "SmartCache",
+                        "🎬 播放开始，启动区间调度下载");
+
+                    StartRangePreloader(CancellationToken.None);
+                }
             }
         }
     }

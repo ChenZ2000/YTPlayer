@@ -4580,6 +4580,111 @@ namespace YTPlayer.Core
             }
         }
 
+        /// <summary>
+        /// 从歌单中移除歌曲
+        /// API: POST /api/playlist/manipulate/tracks
+        /// 参考: NeteaseCloudMusicApi/module/playlist_tracks.js
+        /// </summary>
+        /// <param name="playlistId">歌单ID</param>
+        /// <param name="songIds">歌曲ID数组</param>
+        public async Task<bool> RemoveTracksFromPlaylistAsync(string playlistId, string[] songIds)
+        {
+            try
+            {
+                var payload = new Dictionary<string, object>
+                {
+                    { "op", "del" },
+                    { "pid", playlistId },
+                    { "trackIds", $"[{string.Join(",", songIds)}]" }
+                };
+                var response = await PostWeApiAsync<JObject>("/playlist/manipulate/tracks", payload);
+                int code = response["code"]?.Value<int>() ?? -1;
+                return code == 200;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[API] 从歌单中移除歌曲失败: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 创建歌单
+        /// API: POST /api/playlist/create
+        /// 参考: NeteaseCloudMusicApi/module/playlist_create.js
+        /// </summary>
+        /// <param name="name">歌单名称</param>
+        /// <param name="privacy">隐私设置：0=公开，10=隐私</param>
+        /// <param name="type">歌单类型：NORMAL(默认) | VIDEO | SHARED</param>
+        public async Task<PlaylistInfo?> CreatePlaylistAsync(string name, int privacy = 0, string type = "NORMAL")
+        {
+            try
+            {
+                var payload = new Dictionary<string, object>
+                {
+                    { "name", name },
+                    { "privacy", privacy },
+                    { "type", type }
+                };
+
+                var response = await PostWeApiAsync<JObject>("/playlist/create", payload);
+                int code = response["code"]?.Value<int>() ?? -1;
+
+                if (code == 200 && response["playlist"] != null)
+                {
+                    var playlist = response["playlist"];
+                    return new PlaylistInfo
+                    {
+                        Id = playlist["id"]?.ToString() ?? "",
+                        Name = playlist["name"]?.ToString() ?? "",
+                        Creator = playlist["creator"]?["nickname"]?.ToString() ?? "",
+                        TrackCount = playlist["trackCount"]?.Value<int>() ?? 0,
+                        Description = playlist["description"]?.ToString() ?? "",
+                        CoverUrl = playlist["coverImgUrl"]?.ToString() ?? ""
+                    };
+                }
+
+                return null;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[API] 创建歌单失败: {ex.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// 喜欢/取消喜欢歌曲（红心）
+        /// API: POST /api/radio/like
+        /// 参考: NeteaseCloudMusicApi/module/like.js
+        /// </summary>
+        /// <param name="songId">歌曲ID</param>
+        /// <param name="like">true=喜欢，false=取消喜欢</param>
+        public async Task<bool> LikeSongAsync(string songId, bool like)
+        {
+            try
+            {
+                var payload = new Dictionary<string, object>
+                {
+                    { "alg", "itembased" },
+                    { "trackId", songId },
+                    { "like", like },
+                    { "time", "3" }
+                };
+
+                var response = await PostWeApiAsync<JObject>("/radio/like", payload);
+                int code = response["code"]?.Value<int>() ?? -1;
+
+                System.Diagnostics.Debug.WriteLine($"[API] {(like ? "喜欢" : "取消喜欢")}歌曲 {songId}: code={code}");
+                return code == 200;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[API] {(like ? "喜欢" : "取消喜欢")}歌曲失败: {ex.Message}");
+                return false;
+            }
+        }
+
         #endregion
 
         #region 歌词相关
@@ -5133,6 +5238,84 @@ namespace YTPlayer.Core
             }
 
             return ids.Select(id => id.Value<string>()).Where(id => !string.IsNullOrEmpty(id)).ToList();
+        }
+
+        /// <summary>
+        /// 获取最近播放的歌曲
+        /// 参考: NeteaseCloudMusicApi/module/record_recent_song.js
+        /// </summary>
+        /// <param name="limit">返回数量，默认100</param>
+        /// <returns>最近播放的歌曲列表</returns>
+        public async Task<List<SongInfo>> GetRecentPlayedSongsAsync(int limit = 100)
+        {
+            System.Diagnostics.Debug.WriteLine($"[GetRecentPlayedSongs] 开始获取最近播放歌曲, limit={limit}");
+
+            var payload = new Dictionary<string, object>
+            {
+                { "limit", limit }
+            };
+
+            try
+            {
+                // 注意：这个API路径特殊，需要使用 /api 而不是 /weapi
+                // PostWeApiAsync 会自动添加 /weapi 前缀，所以我们用 /../api 来抵消它
+                // 最终URL: https://music.163.com/weapi/../api/play-record/song/list → https://music.163.com/api/play-record/song/list
+                var response = await PostWeApiAsync<JObject>("/../api/play-record/song/list", payload);
+
+                if (response["code"]?.Value<int>() != 200)
+                {
+                    int code = response["code"]?.Value<int>() ?? -1;
+                    string message = response["message"]?.Value<string>() ?? response["msg"]?.Value<string>() ?? "未知错误";
+                    System.Diagnostics.Debug.WriteLine($"[API] 获取最近播放歌曲失败: code={code}, message={message}");
+                    return new List<SongInfo>();
+                }
+
+                var data = response["data"]?["list"] as JArray;
+                if (data == null)
+                {
+                    // 尝试直接从 data 字段获取
+                    data = response["data"] as JArray;
+                }
+
+                if (data == null)
+                {
+                    System.Diagnostics.Debug.WriteLine("[API] 最近播放歌曲数据为空");
+                    return new List<SongInfo>();
+                }
+
+                var songs = new List<SongInfo>();
+                foreach (var item in data)
+                {
+                    // 提取歌曲数据（可能在 data 或 song 字段中）
+                    var songData = item["data"] ?? item["song"] ?? item;
+
+                    if (songData == null) continue;
+
+                    var song = new SongInfo
+                    {
+                        Id = songData["id"]?.Value<string>() ?? songData["id"]?.Value<long>().ToString(),
+                        Name = songData["name"]?.Value<string>() ?? "未知歌曲",
+                        Artist = string.Join(", ",
+                            (songData["artists"] ?? songData["ar"])?.Select(a => a["name"]?.Value<string>())
+                            ?? new[] { "未知艺术家" }),
+                        Album = (songData["album"] ?? songData["al"])?["name"]?.Value<string>() ?? "未知专辑",
+                        AlbumId = (songData["album"] ?? songData["al"])?["id"]?.Value<string>()
+                            ?? (songData["album"] ?? songData["al"])?["id"]?.Value<long>().ToString(),
+                        Duration = (int)(songData["duration"]?.Value<long>() ?? songData["dt"]?.Value<long>() ?? 0),
+                        PicUrl = (songData["album"] ?? songData["al"])?["picUrl"]?.Value<string>() ?? ""
+                    };
+
+                    songs.Add(song);
+                }
+
+                System.Diagnostics.Debug.WriteLine($"[API] 成功获取 {songs.Count} 首最近播放歌曲");
+                return songs;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[API] 获取最近播放歌曲异常: {ex.Message}");
+                return new List<SongInfo>();
+            }
         }
 
         /// <summary>

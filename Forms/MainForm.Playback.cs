@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -224,7 +224,7 @@ namespace YTPlayer
             _nextSongPreloader?.CleanupStaleData(currentSongId, nextSongId);
 
             // ⭐ 尝试获取预加载数据（含完整流对象）
-            var preloadedData = _nextSongPreloader?.TryGetPreloadedData(song.Id);
+            var preloadedData = _audioEngine?.ConsumeGaplessPreload(song.Id) ?? _nextSongPreloader?.TryGetPreloadedData(song.Id);
 
             if (preloadedData != null)
             {

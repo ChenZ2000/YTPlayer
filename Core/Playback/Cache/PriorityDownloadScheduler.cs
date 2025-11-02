@@ -138,6 +138,45 @@ namespace YTPlayer.Core.Playback.Cache
         }
 
         /// <summary>
+        /// 将指定块以及其附近的块提升为最高优先级，以应对快速 Seek。
+        /// </summary>
+        public void BoostChunkPriority(int centerChunk, int radius = 2)
+        {
+            lock (_syncRoot)
+            {
+                if (_disposed)
+                {
+                    return;
+                }
+
+                for (int offset = -radius; offset <= radius; offset++)
+                {
+                    int idx = ClampChunkIndex(centerChunk + offset);
+
+                    if (_cache.ContainsKey(idx) || _inProgress.Contains(idx))
+                    {
+                        continue;
+                    }
+
+                    if (_queuedLookup.TryGetValue(idx, out var existing))
+                    {
+                        _queue.Remove(existing);
+                        _queuedLookup.Remove(idx);
+                    }
+
+                    int priority = -200 + Math.Abs(offset);
+                    var request = new ChunkRequest(
+                        idx,
+                        priority,
+                        Interlocked.Increment(ref _sequence));
+
+                    _queue.Add(request);
+                    _queuedLookup[idx] = request;
+                }
+            }
+        }
+
+        /// <summary>
         /// 清空队列和状态。
         /// </summary>
         public void Reset()

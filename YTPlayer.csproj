@@ -45,6 +45,7 @@
     <Reference Include="Microsoft.Build" />
     <Reference Include="Microsoft.Build.Conversion.v4.0" />
     <Reference Include="Microsoft.Build.Engine" />
+    <Reference Include="Microsoft.VisualBasic" />
     <Reference Include="System" />
     <Reference Include="System.Core" />
     <Reference Include="System.IO.Log" />
@@ -88,6 +89,9 @@
       <DependentUpon>MainForm.cs</DependentUpon>
     </Compile>
     <Compile Include="Forms\MainForm.CommandQueue.cs">
+      <DependentUpon>MainForm.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Forms\MainForm.Collection.cs">
       <DependentUpon>MainForm.cs</DependentUpon>
     </Compile>
     <Compile Include="Forms\MainForm.Download.cs">
@@ -159,6 +163,12 @@
     </Compile>
     <Compile Include="Forms\LoginForm.Designer.cs">
       <DependentUpon>LoginForm.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Forms\AddToPlaylistDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Forms\AddToPlaylistDialog.Designer.cs">
+      <DependentUpon>AddToPlaylistDialog.cs</DependentUpon>
     </Compile>
     <Compile Include="Forms\UserInfoForm.cs">
       <SubType>Form</SubType>

@@ -77,6 +77,11 @@
             this.lyricsLabel = new System.Windows.Forms.Label();
             this.songContextMenu = new System.Windows.Forms.ContextMenuStrip();
             this.insertPlayMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.likeSongMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.unlikeSongMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.addToPlaylistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.removeFromPlaylistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.toolStripSeparatorCollection = new System.Windows.Forms.ToolStripSeparator();
             this.subscribePlaylistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.unsubscribePlaylistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.deletePlaylistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
@@ -634,6 +639,11 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             this.songContextMenu.ImageScalingSize = new System.Drawing.Size(20, 20);
             this.songContextMenu.Items.AddRange(new System.Windows.Forms.ToolStripItem[] {
             this.insertPlayMenuItem,
+            this.likeSongMenuItem,
+            this.unlikeSongMenuItem,
+            this.addToPlaylistMenuItem,
+            this.removeFromPlaylistMenuItem,
+            this.toolStripSeparatorCollection,
             this.subscribePlaylistMenuItem,
             this.unsubscribePlaylistMenuItem,
             this.deletePlaylistMenuItem,
@@ -647,7 +657,7 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             this.downloadCategoryMenuItem,
             this.batchDownloadPlaylistsMenuItem});
             this.songContextMenu.Name = "songContextMenu";
-            this.songContextMenu.Size = new System.Drawing.Size(211, 250);
+            this.songContextMenu.Size = new System.Drawing.Size(211, 320);
             this.songContextMenu.Opening += new System.ComponentModel.CancelEventHandler(this.songContextMenu_Opening);
             //
             // insertPlayMenuItem
@@ -656,6 +666,39 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             this.insertPlayMenuItem.Size = new System.Drawing.Size(210, 24);
             this.insertPlayMenuItem.Text = "插播(&I)";
             this.insertPlayMenuItem.Click += new System.EventHandler(this.insertPlayMenuItem_Click);
+            //
+            // likeSongMenuItem
+            //
+            this.likeSongMenuItem.Name = "likeSongMenuItem";
+            this.likeSongMenuItem.Size = new System.Drawing.Size(210, 24);
+            this.likeSongMenuItem.Text = "收藏歌曲(&L)";
+            this.likeSongMenuItem.Click += new System.EventHandler(this.likeSongMenuItem_Click);
+            //
+            // unlikeSongMenuItem
+            //
+            this.unlikeSongMenuItem.Name = "unlikeSongMenuItem";
+            this.unlikeSongMenuItem.Size = new System.Drawing.Size(210, 24);
+            this.unlikeSongMenuItem.Text = "取消收藏歌曲(&U)";
+            this.unlikeSongMenuItem.Click += new System.EventHandler(this.unlikeSongMenuItem_Click);
+            //
+            // addToPlaylistMenuItem
+            //
+            this.addToPlaylistMenuItem.Name = "addToPlaylistMenuItem";
+            this.addToPlaylistMenuItem.Size = new System.Drawing.Size(210, 24);
+            this.addToPlaylistMenuItem.Text = "添加到歌单(&A)...";
+            this.addToPlaylistMenuItem.Click += new System.EventHandler(this.addToPlaylistMenuItem_Click);
+            //
+            // removeFromPlaylistMenuItem
+            //
+            this.removeFromPlaylistMenuItem.Name = "removeFromPlaylistMenuItem";
+            this.removeFromPlaylistMenuItem.Size = new System.Drawing.Size(210, 24);
+            this.removeFromPlaylistMenuItem.Text = "从歌单中移除(&R)";
+            this.removeFromPlaylistMenuItem.Click += new System.EventHandler(this.removeFromPlaylistMenuItem_Click);
+            //
+            // toolStripSeparatorCollection
+            //
+            this.toolStripSeparatorCollection.Name = "toolStripSeparatorCollection";
+            this.toolStripSeparatorCollection.Size = new System.Drawing.Size(207, 6);
             //
             // subscribePlaylistMenuItem
             //
@@ -884,6 +927,11 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
         private System.Windows.Forms.ToolStripStatusLabel toolStripStatusLabel1;
         private System.Windows.Forms.ContextMenuStrip songContextMenu;
         private System.Windows.Forms.ToolStripMenuItem insertPlayMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem likeSongMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem unlikeSongMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem addToPlaylistMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem removeFromPlaylistMenuItem;
+        private System.Windows.Forms.ToolStripSeparator toolStripSeparatorCollection;
         private System.Windows.Forms.ToolStripMenuItem subscribePlaylistMenuItem;
         private System.Windows.Forms.ToolStripMenuItem unsubscribePlaylistMenuItem;
         private System.Windows.Forms.ToolStripMenuItem deletePlaylistMenuItem;

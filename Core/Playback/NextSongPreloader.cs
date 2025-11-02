@@ -270,26 +270,7 @@ namespace YTPlayer.Core.Playback
 
                 System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] URL 已获取: {nextSong.Url}");
 
-                // 🎯🎯🎯 步骤 2a: 预下载最后块到缓存（后台任务，不阻塞）
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        await Cache.LastChunkCacheManager.Instance
-                            .PreDownloadLastChunksAsync(
-                                nextSong.Id,
-                                nextSong.Url,
-                                nextSong.Size,
-                                _httpClient,
-                                cancellationToken).ConfigureAwait(false);
-                    }
-                    catch (Exception ex)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] 预下载最后块失败: {ex.Message}");
-                    }
-                }, cancellationToken);
-
-                // 步骤 2b: 创建 SmartCacheManager 并预下载 Chunk 0
+                // 步骤 2: 创建 SmartCacheManager 并预下载首段
                 var cacheManager = new SmartCacheManager(
                     nextSong.Id,
                     nextSong.Url,
