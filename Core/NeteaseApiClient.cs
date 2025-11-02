@@ -5404,6 +5404,412 @@ namespace YTPlayer.Core
             return ParseSongList(songs);
         }
 
+        /// <summary>
+        /// 获取用户听歌排行
+        /// 参考: NeteaseCloudMusicApi/module/user_record.js
+        /// </summary>
+        /// <param name="uid">用户ID</param>
+        /// <param name="type">0=全部时间, 1=最近一周</param>
+        public async Task<List<(SongInfo song, int playCount)>> GetUserPlayRecordAsync(long uid, int type = 0)
+        {
+            try
+            {
+                System.Diagnostics.Debug.WriteLine($"[GetUserPlayRecord] uid={uid}, type={type}");
+
+                var payload = new Dictionary<string, object>
+                {
+                    { "uid", uid },
+                    { "type", type }
+                };
+
+                var response = await PostWeApiAsync<JObject>("/v1/play/record", payload);
+
+                if (response["code"]?.Value<int>() != 200)
+                {
+                    int code = response["code"]?.Value<int>() ?? -1;
+                    string message = response["message"]?.Value<string>() ?? response["msg"]?.Value<string>() ?? "未知错误";
+                    System.Diagnostics.Debug.WriteLine($"[API] 获取用户听歌排行失败: code={code}, message={message}");
+                    return new List<(SongInfo, int)>();
+                }
+
+                // 根据type选择weekData或allData
+                JArray data = type == 1
+                    ? response["weekData"] as JArray
+                    : response["allData"] as JArray;
+
+                if (data == null)
+                {
+                    System.Diagnostics.Debug.WriteLine("[API] 听歌排行数据为空");
+                    return new List<(SongInfo, int)>();
+                }
+
+                var result = new List<(SongInfo, int)>();
+                foreach (var item in data)
+                {
+                    var songData = item["song"];
+                    if (songData == null) continue;
+
+                    var song = new SongInfo
+                    {
+                        Id = songData["id"]?.Value<string>() ?? songData["id"]?.Value<long>().ToString(),
+                        Name = songData["name"]?.Value<string>() ?? "未知歌曲",
+                        Artist = string.Join(", ",
+                            (songData["ar"] ?? songData["artists"])?.Select(a => a["name"]?.Value<string>())
+                            ?? new[] { "未知艺术家" }),
+                        Album = (songData["al"] ?? songData["album"])?["name"]?.Value<string>() ?? "未知专辑",
+                        AlbumId = (songData["al"] ?? songData["album"])?["id"]?.Value<string>()
+                            ?? (songData["al"] ?? songData["album"])?["id"]?.Value<long>().ToString(),
+                        Duration = (int)(songData["dt"]?.Value<long>() ?? songData["duration"]?.Value<long>() ?? 0),
+                        PicUrl = (songData["al"] ?? songData["album"])?["picUrl"]?.Value<string>() ?? ""
+                    };
+
+                    var playCount = item["playCount"]?.Value<int>() ?? 0;
+                    result.Add((song, playCount));
+                }
+
+                System.Diagnostics.Debug.WriteLine($"[API] 成功获取 {result.Count} 首听歌排行");
+                return result;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[API] 获取听歌排行异常: {ex.Message}");
+                return new List<(SongInfo, int)>();
+            }
+        }
+
+        /// <summary>
+        /// 获取精品歌单
+        /// 参考: NeteaseCloudMusicApi/module/top_playlist_highquality.js
+        /// </summary>
+        /// <param name="cat">分类</param>
+        /// <param name="limit">返回数量</param>
+        /// <param name="before">游标(上一次返回的最后一个歌单的updateTime)</param>
+        public async Task<(List<PlaylistInfo>, long, bool)> GetHighQualityPlaylistsAsync(
+            string cat = "全部", int limit = 50, long before = 0)
+        {
+            try
+            {
+                System.Diagnostics.Debug.WriteLine($"[GetHighQualityPlaylists] cat={cat}, limit={limit}, before={before}");
+
+                var payload = new Dictionary<string, object>
+                {
+                    { "cat", cat },
+                    { "limit", limit },
+                    { "lasttime", before },
+                    { "total", true }
+                };
+
+                // 特殊路径处理：使用 /../api 绕过 /weapi 前缀
+                var response = await PostWeApiAsync<JObject>("/../api/playlist/highquality/list", payload);
+
+                if (response["code"]?.Value<int>() != 200)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[API] 获取精品歌单失败: {response["message"]}");
+                    return (new List<PlaylistInfo>(), 0, false);
+                }
+
+                var playlists = response["playlists"] as JArray;
+                var more = response["more"]?.Value<bool>() ?? false;
+                var lasttime = response["lasttime"]?.Value<long>() ?? 0;
+
+                var result = new List<PlaylistInfo>();
+                if (playlists != null)
+                {
+                    foreach (var item in playlists)
+                    {
+                        var playlist = ParsePlaylistDetail(item as JObject);
+                        if (playlist != null)
+                        {
+                            result.Add(playlist);
+                        }
+                    }
+                }
+
+                System.Diagnostics.Debug.WriteLine($"[API] 成功获取 {result.Count} 个精品歌单, more={more}");
+                return (result, lasttime, more);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[API] 获取精品歌单异常: {ex.Message}");
+                return (new List<PlaylistInfo>(), 0, false);
+            }
+        }
+
+        /// <summary>
+        /// 获取新歌速递
+        /// 参考: NeteaseCloudMusicApi/module/top_song.js
+        /// </summary>
+        /// <param name="areaType">地区: 0=全部, 7=华语, 96=欧美, 8=日本, 16=韩国</param>
+        public async Task<List<SongInfo>> GetNewSongsAsync(int areaType = 0)
+        {
+            try
+            {
+                System.Diagnostics.Debug.WriteLine($"[GetNewSongs] areaType={areaType}");
+
+                var payload = new Dictionary<string, object>
+                {
+                    { "areaId", areaType },
+                    { "total", true }
+                };
+
+                var response = await PostWeApiAsync<JObject>("/v1/discovery/new/songs", payload);
+
+                if (response["code"]?.Value<int>() != 200)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[API] 获取新歌速递失败: {response["message"]}");
+                    return new List<SongInfo>();
+                }
+
+                var data = response["data"] as JArray;
+                if (data == null)
+                {
+                    System.Diagnostics.Debug.WriteLine("[API] 新歌速递数据为空");
+                    return new List<SongInfo>();
+                }
+
+                var songs = ParseSongList(data);
+                System.Diagnostics.Debug.WriteLine($"[API] 成功获取 {songs.Count} 首新歌");
+                return songs;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[API] 获取新歌速递异常: {ex.Message}");
+                return new List<SongInfo>();
+            }
+        }
+
+        /// <summary>
+        /// 获取最近播放的歌单
+        /// 参考: NeteaseCloudMusicApi/module/record_recent_playlist.js
+        /// </summary>
+        public async Task<List<PlaylistInfo>> GetRecentPlaylistsAsync(int limit = 100)
+        {
+            try
+            {
+                System.Diagnostics.Debug.WriteLine($"[GetRecentPlaylists] limit={limit}");
+
+                var payload = new Dictionary<string, object>
+                {
+                    { "limit", limit }
+                };
+
+                // 特殊路径处理：使用 /../api 绕过 /weapi 前缀
+                var response = await PostWeApiAsync<JObject>("/../api/play-record/playlist/list", payload);
+
+                if (response["code"]?.Value<int>() != 200)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[API] 获取最近播放歌单失败: {response["message"]}");
+                    return new List<PlaylistInfo>();
+                }
+
+                var list = response["data"]?["list"] as JArray;
+                if (list == null)
+                {
+                    System.Diagnostics.Debug.WriteLine("[API] 最近播放歌单数据为空");
+                    return new List<PlaylistInfo>();
+                }
+
+                var result = new List<PlaylistInfo>();
+                foreach (var item in list)
+                {
+                    var playlistData = item["data"];
+                    if (playlistData == null) continue;
+
+                    var playlist = new PlaylistInfo
+                    {
+                        Id = playlistData["id"]?.Value<string>() ?? playlistData["id"]?.Value<long>().ToString(),
+                        Name = playlistData["name"]?.Value<string>() ?? "未知歌单",
+                        Creator = playlistData["creator"]?["nickname"]?.Value<string>() ?? "未知",
+                        CreatorId = playlistData["creator"]?["userId"]?.Value<long>() ?? 0,
+                        TrackCount = playlistData["trackCount"]?.Value<int>() ?? 0,
+                        CoverUrl = playlistData["coverImgUrl"]?.Value<string>() ?? "",
+                        Description = playlistData["description"]?.Value<string>() ?? ""
+                    };
+
+                    result.Add(playlist);
+                }
+
+                System.Diagnostics.Debug.WriteLine($"[API] 成功获取 {result.Count} 个最近播放歌单");
+                return result;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[API] 获取最近播放歌单异常: {ex.Message}");
+                return new List<PlaylistInfo>();
+            }
+        }
+
+        /// <summary>
+        /// 获取最近播放的专辑
+        /// 参考: NeteaseCloudMusicApi/module/record_recent_album.js
+        /// </summary>
+        public async Task<List<AlbumInfo>> GetRecentAlbumsAsync(int limit = 100)
+        {
+            try
+            {
+                System.Diagnostics.Debug.WriteLine($"[GetRecentAlbums] limit={limit}");
+
+                var payload = new Dictionary<string, object>
+                {
+                    { "limit", limit }
+                };
+
+                // 特殊路径处理：使用 /../api 绕过 /weapi 前缀
+                var response = await PostWeApiAsync<JObject>("/../api/play-record/album/list", payload);
+
+                if (response["code"]?.Value<int>() != 200)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[API] 获取最近播放专辑失败: {response["message"]}");
+                    return new List<AlbumInfo>();
+                }
+
+                var list = response["data"]?["list"] as JArray;
+                if (list == null)
+                {
+                    System.Diagnostics.Debug.WriteLine("[API] 最近播放专辑数据为空");
+                    return new List<AlbumInfo>();
+                }
+
+                var result = new List<AlbumInfo>();
+                foreach (var item in list)
+                {
+                    var albumData = item["data"];
+                    if (albumData == null) continue;
+
+                    var album = new AlbumInfo
+                    {
+                        Id = albumData["id"]?.Value<string>() ?? albumData["id"]?.Value<long>().ToString(),
+                        Name = albumData["name"]?.Value<string>() ?? "未知专辑",
+                        Artist = albumData["artist"]?["name"]?.Value<string>() ?? "未知艺术家",
+                        PicUrl = albumData["picUrl"]?.Value<string>() ?? "",
+                        PublishTime = albumData["publishTime"]?.Value<long>().ToString() ?? ""
+                    };
+
+                    result.Add(album);
+                }
+
+                System.Diagnostics.Debug.WriteLine($"[API] 成功获取 {result.Count} 个最近播放专辑");
+                return result;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[API] 获取最近播放专辑异常: {ex.Message}");
+                return new List<AlbumInfo>();
+            }
+        }
+
+        /// <summary>
+        /// 获取分类歌单
+        /// 参考: NeteaseCloudMusicApi/module/top_playlist.js
+        /// </summary>
+        /// <param name="cat">分类名称</param>
+        /// <param name="order">排序: hot=最热, new=最新</param>
+        /// <param name="limit">每页数量</param>
+        /// <param name="offset">偏移量</param>
+        public async Task<(List<PlaylistInfo>, long, bool)> GetPlaylistsByCategoryAsync(
+            string cat = "全部", string order = "hot", int limit = 50, int offset = 0)
+        {
+            try
+            {
+                System.Diagnostics.Debug.WriteLine($"[GetPlaylistsByCategory] cat={cat}, order={order}, limit={limit}, offset={offset}");
+
+                var payload = new Dictionary<string, object>
+                {
+                    { "cat", cat },
+                    { "order", order },
+                    { "limit", limit },
+                    { "offset", offset },
+                    { "total", true }
+                };
+
+                var response = await PostWeApiAsync<JObject>("/playlist/list", payload);
+
+                if (response["code"]?.Value<int>() != 200)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[API] 获取分类歌单失败: {response["message"]}");
+                    return (new List<PlaylistInfo>(), 0, false);
+                }
+
+                var playlists = response["playlists"] as JArray;
+                var total = response["total"]?.Value<long>() ?? 0;
+                var more = response["more"]?.Value<bool>() ?? false;
+
+                var result = new List<PlaylistInfo>();
+                if (playlists != null)
+                {
+                    foreach (var item in playlists)
+                    {
+                        var playlist = ParsePlaylistDetail(item as JObject);
+                        if (playlist != null)
+                        {
+                            result.Add(playlist);
+                        }
+                    }
+                }
+
+                System.Diagnostics.Debug.WriteLine($"[API] 成功获取 {result.Count} 个分类歌单, total={total}, more={more}");
+                return (result, total, more);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[API] 获取分类歌单异常: {ex.Message}");
+                return (new List<PlaylistInfo>(), 0, false);
+            }
+        }
+
+        /// <summary>
+        /// 获取新碟上架
+        /// 参考: NeteaseCloudMusicApi/module/album_newest.js
+        /// </summary>
+        public async Task<List<AlbumInfo>> GetNewAlbumsAsync()
+        {
+            try
+            {
+                System.Diagnostics.Debug.WriteLine("[GetNewAlbums] 获取新碟上架");
+
+                var payload = new Dictionary<string, object>();
+
+                // 特殊路径处理：使用 /../api 绕过 /weapi 前缀
+                var response = await PostWeApiAsync<JObject>("/../api/discovery/newAlbum", payload);
+
+                if (response["code"]?.Value<int>() != 200)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[API] 获取新碟上架失败: {response["message"]}");
+                    return new List<AlbumInfo>();
+                }
+
+                var albums = response["albums"] as JArray;
+                if (albums == null)
+                {
+                    System.Diagnostics.Debug.WriteLine("[API] 新碟上架数据为空");
+                    return new List<AlbumInfo>();
+                }
+
+                var result = new List<AlbumInfo>();
+                foreach (var album in albums)
+                {
+                    var albumInfo = new AlbumInfo
+                    {
+                        Id = album["id"]?.Value<string>() ?? album["id"]?.Value<long>().ToString(),
+                        Name = album["name"]?.Value<string>() ?? "未知专辑",
+                        Artist = album["artist"]?["name"]?.Value<string>() ?? "未知艺术家",
+                        PicUrl = album["picUrl"]?.Value<string>() ?? "",
+                        PublishTime = album["publishTime"]?.Value<long>().ToString() ?? ""
+                    };
+
+                    result.Add(albumInfo);
+                }
+
+                System.Diagnostics.Debug.WriteLine($"[API] 成功获取 {result.Count} 个新碟");
+                return result;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[API] 获取新碟上架异常: {ex.Message}");
+                return new List<AlbumInfo>();
+            }
+        }
+
         #endregion
 
         #region 评论相关

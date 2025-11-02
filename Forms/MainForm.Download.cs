@@ -650,7 +650,290 @@ namespace YTPlayer
                             }, quality);
                             return;
 
+                        // ========== 新增主页入口下载支持 ==========
+
+                        // 听歌排行（混合分类：周榜单/全部时间）
+                        case "user_play_record":
+                            await DownloadMixedCategory(categoryName, () =>
+                            {
+                                var items = new List<ListItemInfo>();
+
+                                items.Add(new ListItemInfo
+                                {
+                                    Type = ListItemType.Category,
+                                    CategoryId = "user_play_record_week",
+                                    CategoryName = "周榜单",
+                                    CategoryDescription = "最近一周的听歌排行"
+                                });
+
+                                items.Add(new ListItemInfo
+                                {
+                                    Type = ListItemType.Category,
+                                    CategoryId = "user_play_record_all",
+                                    CategoryName = "全部时间",
+                                    CategoryDescription = "所有时间的听歌排行"
+                                });
+
+                                return items;
+                            }, quality);
+                            return;
+
+                        // 周听歌排行
+                        case "user_play_record_week":
+                            totalTasks = await DownloadSongListCategory(categoryName, async () =>
+                            {
+                                var userInfo = await _apiClient.GetUserAccountAsync();
+                                if (userInfo == null || userInfo.UserId <= 0)
+                                {
+                                    throw new Exception("获取用户信息失败");
+                                }
+                                var playRecords = await _apiClient.GetUserPlayRecordAsync(userInfo.UserId, 1);
+                                if (playRecords == null || playRecords.Count == 0)
+                                {
+                                    throw new Exception("暂无周榜单听歌记录");
+                                }
+                                return playRecords.Select(r => r.song).ToList();
+                            }, quality);
+                            break;
+
+                        // 全部时间听歌排行
+                        case "user_play_record_all":
+                            totalTasks = await DownloadSongListCategory(categoryName, async () =>
+                            {
+                                var userInfo = await _apiClient.GetUserAccountAsync();
+                                if (userInfo == null || userInfo.UserId <= 0)
+                                {
+                                    throw new Exception("获取用户信息失败");
+                                }
+                                var playRecords = await _apiClient.GetUserPlayRecordAsync(userInfo.UserId, 0);
+                                if (playRecords == null || playRecords.Count == 0)
+                                {
+                                    throw new Exception("暂无全部时间听歌记录");
+                                }
+                                return playRecords.Select(r => r.song).ToList();
+                            }, quality);
+                            break;
+
+                        // 精品歌单
+                        case "highquality_playlists":
+                            totalTasks = await DownloadPlaylistListCategory(categoryName, async () =>
+                            {
+                                var result = await _apiClient.GetHighQualityPlaylistsAsync("全部", 50, 0);
+                                var playlists = result.Item1;
+                                if (playlists == null || playlists.Count == 0)
+                                {
+                                    throw new Exception("获取精品歌单失败");
+                                }
+                                return playlists;
+                            }, quality);
+                            break;
+
+                        // 新歌速递（混合分类：全部/华语/欧美/日本/韩国）
+                        case "new_songs":
+                            await DownloadMixedCategory(categoryName, () =>
+                            {
+                                var items = new List<ListItemInfo>();
+
+                                items.Add(new ListItemInfo
+                                {
+                                    Type = ListItemType.Category,
+                                    CategoryId = "new_songs_all",
+                                    CategoryName = "全部",
+                                    CategoryDescription = "全部地区新歌"
+                                });
+
+                                items.Add(new ListItemInfo
+                                {
+                                    Type = ListItemType.Category,
+                                    CategoryId = "new_songs_chinese",
+                                    CategoryName = "华语",
+                                    CategoryDescription = "华语新歌"
+                                });
+
+                                items.Add(new ListItemInfo
+                                {
+                                    Type = ListItemType.Category,
+                                    CategoryId = "new_songs_western",
+                                    CategoryName = "欧美",
+                                    CategoryDescription = "欧美新歌"
+                                });
+
+                                items.Add(new ListItemInfo
+                                {
+                                    Type = ListItemType.Category,
+                                    CategoryId = "new_songs_japan",
+                                    CategoryName = "日本",
+                                    CategoryDescription = "日本新歌"
+                                });
+
+                                items.Add(new ListItemInfo
+                                {
+                                    Type = ListItemType.Category,
+                                    CategoryId = "new_songs_korea",
+                                    CategoryName = "韩国",
+                                    CategoryDescription = "韩国新歌"
+                                });
+
+                                return items;
+                            }, quality);
+                            return;
+
+                        // 全部新歌
+                        case "new_songs_all":
+                            totalTasks = await DownloadSongListCategory(categoryName, async () =>
+                            {
+                                var songs = await _apiClient.GetNewSongsAsync(0);
+                                if (songs == null || songs.Count == 0)
+                                {
+                                    throw new Exception("获取全部新歌失败");
+                                }
+                                return songs;
+                            }, quality);
+                            break;
+
+                        // 华语新歌
+                        case "new_songs_chinese":
+                            totalTasks = await DownloadSongListCategory(categoryName, async () =>
+                            {
+                                var songs = await _apiClient.GetNewSongsAsync(7);
+                                if (songs == null || songs.Count == 0)
+                                {
+                                    throw new Exception("获取华语新歌失败");
+                                }
+                                return songs;
+                            }, quality);
+                            break;
+
+                        // 欧美新歌
+                        case "new_songs_western":
+                            totalTasks = await DownloadSongListCategory(categoryName, async () =>
+                            {
+                                var songs = await _apiClient.GetNewSongsAsync(96);
+                                if (songs == null || songs.Count == 0)
+                                {
+                                    throw new Exception("获取欧美新歌失败");
+                                }
+                                return songs;
+                            }, quality);
+                            break;
+
+                        // 日本新歌
+                        case "new_songs_japan":
+                            totalTasks = await DownloadSongListCategory(categoryName, async () =>
+                            {
+                                var songs = await _apiClient.GetNewSongsAsync(8);
+                                if (songs == null || songs.Count == 0)
+                                {
+                                    throw new Exception("获取日本新歌失败");
+                                }
+                                return songs;
+                            }, quality);
+                            break;
+
+                        // 韩国新歌
+                        case "new_songs_korea":
+                            totalTasks = await DownloadSongListCategory(categoryName, async () =>
+                            {
+                                var songs = await _apiClient.GetNewSongsAsync(16);
+                                if (songs == null || songs.Count == 0)
+                                {
+                                    throw new Exception("获取韩国新歌失败");
+                                }
+                                return songs;
+                            }, quality);
+                            break;
+
+                        // 最近播放的歌单
+                        case "recent_playlists":
+                            totalTasks = await DownloadPlaylistListCategory(categoryName, async () =>
+                            {
+                                var playlists = await _apiClient.GetRecentPlaylistsAsync(100);
+                                if (playlists == null || playlists.Count == 0)
+                                {
+                                    throw new Exception("暂无最近播放的歌单");
+                                }
+                                return playlists;
+                            }, quality);
+                            break;
+
+                        // 最近播放的专辑
+                        case "recent_albums":
+                            totalTasks = await DownloadAlbumListCategory(categoryName, async () =>
+                            {
+                                var albums = await _apiClient.GetRecentAlbumsAsync(100);
+                                if (albums == null || albums.Count == 0)
+                                {
+                                    throw new Exception("暂无最近播放的专辑");
+                                }
+                                return albums;
+                            }, quality);
+                            break;
+
+                        // 歌单分类（混合分类：10个常用分类）
+                        case "playlist_category":
+                            await DownloadMixedCategory(categoryName, () =>
+                            {
+                                var items = new List<ListItemInfo>();
+
+                                var categories = new[] { "华语", "流行", "摇滚", "民谣", "电子", "轻音乐", "影视原声", "ACG", "怀旧", "治愈" };
+                                foreach (var cat in categories)
+                                {
+                                    items.Add(new ListItemInfo
+                                    {
+                                        Type = ListItemType.Category,
+                                        CategoryId = $"playlist_cat_{cat}",
+                                        CategoryName = cat,
+                                        CategoryDescription = $"{cat}歌单"
+                                    });
+                                }
+
+                                return items;
+                            }, quality);
+                            return;
+
+                        // 新碟上架
+                        case "new_albums":
+                            totalTasks = await DownloadAlbumListCategory(categoryName, async () =>
+                            {
+                                var albums = await _apiClient.GetNewAlbumsAsync();
+                                if (albums == null || albums.Count == 0)
+                                {
+                                    throw new Exception("暂无新碟上架");
+                                }
+                                return albums;
+                            }, quality);
+                            break;
+
+                        // 最近听过
+                        case "recent_played":
+                            totalTasks = await DownloadSongListCategory(categoryName, async () =>
+                            {
+                                var songs = await _apiClient.GetRecentPlayedSongsAsync(100);
+                                if (songs == null || songs.Count == 0)
+                                {
+                                    throw new Exception("暂无最近播放记录");
+                                }
+                                return songs;
+                            }, quality);
+                            break;
+
                         default:
+                            // 处理歌单分类的动态子分类（playlist_cat_xxx）
+                            if (categoryId.StartsWith("playlist_cat_"))
+                            {
+                                string catName = categoryId.Substring("playlist_cat_".Length);
+                                totalTasks = await DownloadPlaylistListCategory(catName, async () =>
+                                {
+                                    var result = await _apiClient.GetPlaylistsByCategoryAsync(catName, "hot", 50, 0);
+                                    var playlists = result.Item1;
+                                    if (playlists == null || playlists.Count == 0)
+                                    {
+                                        throw new Exception($"获取{catName}歌单失败");
+                                    }
+                                    return playlists;
+                                }, quality);
+                                break;
+                            }
                             MessageBox.Show($"暂不支持下载该分类: {categoryName}", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
                             return;
                     }
@@ -1005,7 +1288,166 @@ namespace YTPlayer
                                     showDialog: false);
                                 break;
 
+                            // ========== 新增主页入口子分类 ==========
+
+                            // 周听歌排行
+                            case "user_play_record_week":
+                                taskCount = await DownloadSongListCategory(
+                                    subCategoryName,
+                                    async () =>
+                                    {
+                                        var userInfo = await _apiClient.GetUserAccountAsync();
+                                        if (userInfo == null || userInfo.UserId <= 0)
+                                        {
+                                            throw new Exception("获取用户信息失败");
+                                        }
+                                        var playRecords = await _apiClient.GetUserPlayRecordAsync(userInfo.UserId, 1);
+                                        if (playRecords == null || playRecords.Count == 0)
+                                        {
+                                            throw new Exception("暂无周榜单听歌记录");
+                                        }
+                                        return playRecords.Select(r => r.song).ToList();
+                                    },
+                                    quality,
+                                    parentDirectory: categoryName,
+                                    showDialog: false);
+                                break;
+
+                            // 全部时间听歌排行
+                            case "user_play_record_all":
+                                taskCount = await DownloadSongListCategory(
+                                    subCategoryName,
+                                    async () =>
+                                    {
+                                        var userInfo = await _apiClient.GetUserAccountAsync();
+                                        if (userInfo == null || userInfo.UserId <= 0)
+                                        {
+                                            throw new Exception("获取用户信息失败");
+                                        }
+                                        var playRecords = await _apiClient.GetUserPlayRecordAsync(userInfo.UserId, 0);
+                                        if (playRecords == null || playRecords.Count == 0)
+                                        {
+                                            throw new Exception("暂无全部时间听歌记录");
+                                        }
+                                        return playRecords.Select(r => r.song).ToList();
+                                    },
+                                    quality,
+                                    parentDirectory: categoryName,
+                                    showDialog: false);
+                                break;
+
+                            // 全部新歌
+                            case "new_songs_all":
+                                taskCount = await DownloadSongListCategory(
+                                    subCategoryName,
+                                    async () =>
+                                    {
+                                        var songs = await _apiClient.GetNewSongsAsync(0);
+                                        if (songs == null || songs.Count == 0)
+                                        {
+                                            throw new Exception("获取全部新歌失败");
+                                        }
+                                        return songs;
+                                    },
+                                    quality,
+                                    parentDirectory: categoryName,
+                                    showDialog: false);
+                                break;
+
+                            // 华语新歌
+                            case "new_songs_chinese":
+                                taskCount = await DownloadSongListCategory(
+                                    subCategoryName,
+                                    async () =>
+                                    {
+                                        var songs = await _apiClient.GetNewSongsAsync(7);
+                                        if (songs == null || songs.Count == 0)
+                                        {
+                                            throw new Exception("获取华语新歌失败");
+                                        }
+                                        return songs;
+                                    },
+                                    quality,
+                                    parentDirectory: categoryName,
+                                    showDialog: false);
+                                break;
+
+                            // 欧美新歌
+                            case "new_songs_western":
+                                taskCount = await DownloadSongListCategory(
+                                    subCategoryName,
+                                    async () =>
+                                    {
+                                        var songs = await _apiClient.GetNewSongsAsync(96);
+                                        if (songs == null || songs.Count == 0)
+                                        {
+                                            throw new Exception("获取欧美新歌失败");
+                                        }
+                                        return songs;
+                                    },
+                                    quality,
+                                    parentDirectory: categoryName,
+                                    showDialog: false);
+                                break;
+
+                            // 日本新歌
+                            case "new_songs_japan":
+                                taskCount = await DownloadSongListCategory(
+                                    subCategoryName,
+                                    async () =>
+                                    {
+                                        var songs = await _apiClient.GetNewSongsAsync(8);
+                                        if (songs == null || songs.Count == 0)
+                                        {
+                                            throw new Exception("获取日本新歌失败");
+                                        }
+                                        return songs;
+                                    },
+                                    quality,
+                                    parentDirectory: categoryName,
+                                    showDialog: false);
+                                break;
+
+                            // 韩国新歌
+                            case "new_songs_korea":
+                                taskCount = await DownloadSongListCategory(
+                                    subCategoryName,
+                                    async () =>
+                                    {
+                                        var songs = await _apiClient.GetNewSongsAsync(16);
+                                        if (songs == null || songs.Count == 0)
+                                        {
+                                            throw new Exception("获取韩国新歌失败");
+                                        }
+                                        return songs;
+                                    },
+                                    quality,
+                                    parentDirectory: categoryName,
+                                    showDialog: false);
+                                break;
+
                             default:
+                                // 处理歌单分类的动态子分类（playlist_cat_xxx）
+                                if (subCategoryId.StartsWith("playlist_cat_"))
+                                {
+                                    string catName = subCategoryId.Substring("playlist_cat_".Length);
+                                    taskCount = await DownloadPlaylistListCategory(
+                                        catName,
+                                        async () =>
+                                        {
+                                            var result = await _apiClient.GetPlaylistsByCategoryAsync(catName, "hot", 50, 0);
+                                            var playlists = result.Item1;
+                                            if (playlists == null || playlists.Count == 0)
+                                            {
+                                                throw new Exception($"获取{catName}歌单失败");
+                                            }
+                                            return playlists;
+                                        },
+                                        quality,
+                                        parentDirectory: categoryName,
+                                        showDialog: false);
+                                    break;
+                                }
                                 MessageBox.Show($"暂不支持下载该子分类: {subCategoryName}", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                                 continue;
                         }

@@ -1174,7 +1174,8 @@ namespace YTPlayer.Core.Playback.Cache
 
         private void EnsureActiveDownload()
         {
-            if (_strategy == DownloadStrategy.SequentialFull)
+            if (_strategy == DownloadStrategy.SequentialFull ||
+                _strategy == DownloadStrategy.ParallelFull)
             {
                 bool shouldStartFullDownload = false;
 
@@ -1200,7 +1201,7 @@ namespace YTPlayer.Core.Playback.Cache
                     DebugLogger.Log(
                         DebugLogger.LogLevel.Info,
                         "SmartCache",
-                        "🎬 播放开始，启动完整顺序下载");
+                        "🎬 播放开始，启动完整文件下载");
 
                     StartSequentialDownload(CancellationToken.None, preloadOnly: false);
                 }

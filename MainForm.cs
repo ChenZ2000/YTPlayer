@@ -1049,7 +1049,16 @@ namespace YTPlayer
                         CategoryDescription = "您最近播放的歌曲"
                     });
 
-                    // 2. 我的歌单
+                    // 2. 听歌排行（新增）
+                    homeItems.Add(new ListItemInfo
+                    {
+                        Type = ListItemType.Category,
+                        CategoryId = "user_play_record",
+                        CategoryName = "听歌排行",
+                        CategoryDescription = "您的听歌统计数据"
+                    });
+
+                    // 3. 我的歌单
                     homeItems.Add(new ListItemInfo
                     {
                         Type = ListItemType.Category,
@@ -1058,7 +1067,7 @@ namespace YTPlayer
                         CategoryDescription = "您创建和收藏的歌单"
                     });
 
-                    // 3. 收藏的专辑
+                    // 4. 收藏的专辑
                     homeItems.Add(new ListItemInfo
                     {
                         Type = ListItemType.Category,
@@ -1067,7 +1076,25 @@ namespace YTPlayer
                         CategoryDescription = "您收藏的专辑"
                     });
 
-                    // 4. 每日推荐
+                    // 5. 最近播放的歌单（新增）
+                    homeItems.Add(new ListItemInfo
+                    {
+                        Type = ListItemType.Category,
+                        CategoryId = "recent_playlists",
+                        CategoryName = "最近播放的歌单",
+                        CategoryDescription = "您最近听过的歌单"
+                    });
+
+                    // 6. 最近播放的专辑（新增）
+                    homeItems.Add(new ListItemInfo
+                    {
+                        Type = ListItemType.Category,
+                        CategoryId = "recent_albums",
+                        CategoryName = "最近播放的专辑",
+                        CategoryDescription = "您最近听过的专辑"
+                    });
+
+                    // 7. 每日推荐
                     homeItems.Add(new ListItemInfo
                     {
                         Type = ListItemType.Category,
@@ -1076,7 +1103,7 @@ namespace YTPlayer
                         CategoryDescription = "根据您的听歌习惯推荐的歌曲和歌单"
                     });
 
-                    // 5. 个性化推荐
+                    // 8. 为您推荐
                     homeItems.Add(new ListItemInfo
                     {
                         Type = ListItemType.Category,
@@ -1084,17 +1111,101 @@ namespace YTPlayer
                         CategoryName = "为您推荐",
                         CategoryDescription = "个性化推荐歌单和新歌"
                     });
-                }
 
-                // 添加公开资源分类（不需要登录）
-                // 6. 官方排行榜
-                homeItems.Add(new ListItemInfo
+                    // 9. 精品歌单（新增）
+                    homeItems.Add(new ListItemInfo
+                    {
+                        Type = ListItemType.Category,
+                        CategoryId = "highquality_playlists",
+                        CategoryName = "精品歌单",
+                        CategoryDescription = "网易云官方精选歌单"
+                    });
+
+                    // 10. 新歌速递（新增）
+                    homeItems.Add(new ListItemInfo
+                    {
+                        Type = ListItemType.Category,
+                        CategoryId = "new_songs",
+                        CategoryName = "新歌速递",
+                        CategoryDescription = "全网最新发布歌曲"
+                    });
+
+                    // 11. 歌单分类（新增）
+                    homeItems.Add(new ListItemInfo
+                    {
+                        Type = ListItemType.Category,
+                        CategoryId = "playlist_category",
+                        CategoryName = "歌单分类",
+                        CategoryDescription = "按分类浏览歌单"
+                    });
+
+                    // 12. 新碟上架（新增）
+                    homeItems.Add(new ListItemInfo
+                    {
+                        Type = ListItemType.Category,
+                        CategoryId = "new_albums",
+                        CategoryName = "新碟上架",
+                        CategoryDescription = "最新发布的专辑"
+                    });
+
+                    // 13. 官方排行榜
+                    homeItems.Add(new ListItemInfo
+                    {
+                        Type = ListItemType.Category,
+                        CategoryId = "toplist",
+                        CategoryName = "官方排行榜",
+                        CategoryDescription = "查看各类音乐排行榜"
+                    });
+                }
+                else
                 {
-                    Type = ListItemType.Category,
-                    CategoryId = "toplist",
-                    CategoryName = "官方排行榜",
-                    CategoryDescription = "查看各类音乐排行榜"
-                });
+                    // 未登录用户显示的分类（5个入口）
+
+                    // 1. 精品歌单（新增）
+                    homeItems.Add(new ListItemInfo
+                    {
+                        Type = ListItemType.Category,
+                        CategoryId = "highquality_playlists",
+                        CategoryName = "精品歌单",
+                        CategoryDescription = "网易云官方精选歌单"
+                    });
+
+                    // 2. 新歌速递（新增）
+                    homeItems.Add(new ListItemInfo
+                    {
+                        Type = ListItemType.Category,
+                        CategoryId = "new_songs",
+                        CategoryName = "新歌速递",
+                        CategoryDescription = "全网最新发布歌曲"
+                    });
+
+                    // 3. 歌单分类（新增）
+                    homeItems.Add(new ListItemInfo
+                    {
+                        Type = ListItemType.Category,
+                        CategoryId = "playlist_category",
+                        CategoryName = "歌单分类",
+                        CategoryDescription = "按分类浏览歌单"
+                    });
+
+                    // 4. 新碟上架（新增）
+                    homeItems.Add(new ListItemInfo
+                    {
+                        Type = ListItemType.Category,
+                        CategoryId = "new_albums",
+                        CategoryName = "新碟上架",
+                        CategoryDescription = "最新发布的专辑"
+                    });
+
+                    // 5. 官方排行榜
+                    homeItems.Add(new ListItemInfo
+                    {
+                        Type = ListItemType.Category,
+                        CategoryId = "toplist",
+                        CategoryName = "官方排行榜",
+                        CategoryDescription = "查看各类音乐排行榜"
+                    });
+                }
 
                 // 显示主页列表
                 DisplayListItems(homeItems);
@@ -1246,8 +1357,78 @@ namespace YTPlayer
                         await LoadPersonalizedNewSongs();
                         break;
 
+                    // 新增主页入口路由
+                    case "user_play_record":
+                        await LoadUserPlayRecord();
+                        break;
+
+                    case "user_play_record_week":
+                        await LoadUserPlayRecordWeek();
+                        break;
+
+                    case "user_play_record_all":
+                        await LoadUserPlayRecordAll();
+                        break;
+
+                    case "highquality_playlists":
+                        await LoadHighQualityPlaylists();
+                        break;
+
+                    case "new_songs":
+                        await LoadNewSongs();
+                        break;
+
+                    case "new_songs_all":
+                        await LoadNewSongsAll();
+                        break;
+
+                    case "new_songs_chinese":
+                        await LoadNewSongsChinese();
+                        break;
+
+                    case "new_songs_western":
+                        await LoadNewSongsWestern();
+                        break;
+
+                    case "new_songs_japan":
+                        await LoadNewSongsJapan();
+                        break;
+
+                    case "new_songs_korea":
+                        await LoadNewSongsKorea();
+                        break;
+
+                    case "personalized_newsong":
+                        await LoadPersonalizedNewSong();
+                        break;
+
+                    case "recent_playlists":
+                        await LoadRecentPlaylists();
+                        break;
+
+                    case "recent_albums":
+                        await LoadRecentAlbums();
+                        break;
+
+                    case "playlist_category":
+                        await LoadPlaylistCategory();
+                        break;
+
+                    case "new_albums":
+                        await LoadNewAlbums();
+                        break;
+
                     default:
-                        MessageBox.Show($"未知的分类: {categoryId}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        // 处理歌单分类的子分类（playlist_cat_xxx）
+                        if (categoryId.StartsWith("playlist_cat_"))
+                        {
+                            string catName = categoryId.Substring("playlist_cat_".Length);
+                            await LoadPlaylistsByCat(catName);
+                        }
+                        else
+                        {
+                            MessageBox.Show($"未知的分类: {categoryId}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        }
                         break;
                 }
             }
@@ -1293,6 +1474,551 @@ namespace YTPlayer
                 UpdateStatusBar("加载失败");
             }
         }
+
+        #region 新增主页入口Load方法
+
+        /// <summary>
+        /// 加载听歌排行（显示周榜单/全部时间子分类）
+        /// </summary>
+        private async Task LoadUserPlayRecord()
+        {
+            try
+            {
+                UpdateStatusBar("正在加载听歌排行...");
+
+                // 显示子分类选项
+                var subcategories = new List<ListItemInfo>
+                {
+                    new ListItemInfo
+                    {
+                        Type = ListItemType.Category,
+                        CategoryId = "user_play_record_week",
+                        CategoryName = "周榜单",
+                        CategoryDescription = "最近一周的听歌排行"
+                    },
+                    new ListItemInfo
+                    {
+                        Type = ListItemType.Category,
+                        CategoryId = "user_play_record_all",
+                        CategoryName = "全部时间",
+                        CategoryDescription = "所有时间的听歌排行"
+                    }
+                };
+
+                DisplayListItems(subcategories);
+                UpdateStatusBar("请选择榜单类型");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[LoadUserPlayRecord] 异常: {ex}");
+                MessageBox.Show($"加载听歌排行失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("加载失败");
+            }
+        }
+
+        /// <summary>
+        /// 加载周听歌排行
+        /// </summary>
+        private async Task LoadUserPlayRecordWeek()
+        {
+            await LoadUserPlayRecordByType(1, "周榜单");
+        }
+
+        /// <summary>
+        /// 加载全部时间听歌排行
+        /// </summary>
+        private async Task LoadUserPlayRecordAll()
+        {
+            await LoadUserPlayRecordByType(0, "全部时间");
+        }
+
+        /// <summary>
+        /// 加载听歌排行（通用方法）
+        /// </summary>
+        private async Task LoadUserPlayRecordByType(int type, string typeName)
+        {
+            try
+            {
+                UpdateStatusBar($"正在加载{typeName}听歌排行...");
+
+                var userInfo = await _apiClient.GetUserAccountAsync();
+                if (userInfo == null || userInfo.UserId <= 0)
+                {
+                    MessageBox.Show("获取用户信息失败", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    UpdateStatusBar("加载失败");
+                    return;
+                }
+
+                var playRecords = await _apiClient.GetUserPlayRecordAsync(userInfo.UserId, type);
+
+                if (playRecords == null || playRecords.Count == 0)
+                {
+                    MessageBox.Show($"暂无{typeName}听歌记录", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    UpdateStatusBar("就绪");
+                    return;
+                }
+
+                // 提取歌曲列表（暂时忽略播放次数，可以后续在UI上显示）
+                var songs = playRecords.Select(r => r.song).ToList();
+                DisplaySongs(songs);
+                _currentSongs = songs;
+                _currentViewSource = $"user_play_record_{(type == 1 ? "week" : "all")}";
+                _currentPlaylist = null;
+                resultListView.AccessibleName = $"{typeName}听歌排行";
+                UpdateStatusBar($"加载完成，共 {songs.Count} 首歌曲");
+
+                System.Diagnostics.Debug.WriteLine($"[LoadUserPlayRecord] 成功加载 {songs.Count} 首{typeName}歌曲");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[LoadUserPlayRecordByType] 异常: {ex}");
+                MessageBox.Show($"加载{typeName}听歌排行失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("加载失败");
+            }
+        }
+
+        /// <summary>
+        /// 加载精品歌单
+        /// </summary>
+        private async Task LoadHighQualityPlaylists()
+        {
+            try
+            {
+                UpdateStatusBar("正在加载精品歌单...");
+
+                var result = await _apiClient.GetHighQualityPlaylistsAsync("全部", 50, 0);
+                var playlists = result.Item1;
+                var lasttime = result.Item2;
+                var more = result.Item3;
+
+                if (playlists == null || playlists.Count == 0)
+                {
+                    MessageBox.Show("暂无精品歌单", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    UpdateStatusBar("就绪");
+                    return;
+                }
+
+                DisplayPlaylists(playlists);
+                _currentPlaylists = playlists;
+                _currentViewSource = "highquality_playlists";
+                resultListView.AccessibleName = "精品歌单";
+                UpdateStatusBar($"加载完成，共 {playlists.Count} 个精品歌单");
+
+                System.Diagnostics.Debug.WriteLine($"[LoadHighQualityPlaylists] 成功加载 {playlists.Count} 个精品歌单, lasttime={lasttime}, more={more}");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[LoadHighQualityPlaylists] 异常: {ex}");
+                MessageBox.Show($"加载精品歌单失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("加载失败");
+            }
+        }
+
+        /// <summary>
+        /// 加载新歌速递（显示地区子分类）
+        /// </summary>
+        private async Task LoadNewSongs()
+        {
+            try
+            {
+                UpdateStatusBar("正在加载新歌速递...");
+
+                // 显示地区子分类选项
+                var subcategories = new List<ListItemInfo>
+                {
+                    new ListItemInfo
+                    {
+                        Type = ListItemType.Category,
+                        CategoryId = "new_songs_all",
+                        CategoryName = "全部",
+                        CategoryDescription = "全部地区新歌"
+                    },
+                    new ListItemInfo
+                    {
+                        Type = ListItemType.Category,
+                        CategoryId = "new_songs_chinese",
+                        CategoryName = "华语",
+                        CategoryDescription = "华语新歌"
+                    },
+                    new ListItemInfo
+                    {
+                        Type = ListItemType.Category,
+                        CategoryId = "new_songs_western",
+                        CategoryName = "欧美",
+                        CategoryDescription = "欧美新歌"
+                    },
+                    new ListItemInfo
+                    {
+                        Type = ListItemType.Category,
+                        CategoryId = "new_songs_japan",
+                        CategoryName = "日本",
+                        CategoryDescription = "日本新歌"
+                    },
+                    new ListItemInfo
+                    {
+                        Type = ListItemType.Category,
+                        CategoryId = "new_songs_korea",
+                        CategoryName = "韩国",
+                        CategoryDescription = "韩国新歌"
+                    }
+                };
+
+                DisplayListItems(subcategories);
+                UpdateStatusBar("请选择地区");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[LoadNewSongs] 异常: {ex}");
+                MessageBox.Show($"加载新歌速递失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("加载失败");
+            }
+        }
+
+        /// <summary>
+        /// 加载全部新歌
+        /// </summary>
+        private async Task LoadNewSongsAll()
+        {
+            await LoadNewSongsByArea(0, "全部");
+        }
+
+        /// <summary>
+        /// 加载华语新歌
+        /// </summary>
+        private async Task LoadNewSongsChinese()
+        {
+            await LoadNewSongsByArea(7, "华语");
+        }
+
+        /// <summary>
+        /// 加载欧美新歌
+        /// </summary>
+        private async Task LoadNewSongsWestern()
+        {
+            await LoadNewSongsByArea(96, "欧美");
+        }
+
+        /// <summary>
+        /// 加载日本新歌
+        /// </summary>
+        private async Task LoadNewSongsJapan()
+        {
+            await LoadNewSongsByArea(8, "日本");
+        }
+
+        /// <summary>
+        /// 加载韩国新歌
+        /// </summary>
+        private async Task LoadNewSongsKorea()
+        {
+            await LoadNewSongsByArea(16, "韩国");
+        }
+
+        /// <summary>
+        /// 加载新歌（通用方法）
+        /// </summary>
+        private async Task LoadNewSongsByArea(int areaType, string areaName)
+        {
+            try
+            {
+                UpdateStatusBar($"正在加载{areaName}新歌...");
+
+                var songs = await _apiClient.GetNewSongsAsync(areaType);
+
+                if (songs == null || songs.Count == 0)
+                {
+                    MessageBox.Show($"暂无{areaName}新歌", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    UpdateStatusBar("就绪");
+                    return;
+                }
+
+                DisplaySongs(songs);
+                _currentSongs = songs;
+                _currentViewSource = $"new_songs_{areaName.ToLower()}";
+                _currentPlaylist = null;
+                resultListView.AccessibleName = $"{areaName}新歌速递";
+                UpdateStatusBar($"加载完成，共 {songs.Count} 首{areaName}新歌");
+
+                System.Diagnostics.Debug.WriteLine($"[LoadNewSongs] 成功加载 {songs.Count} 首{areaName}新歌");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[LoadNewSongsByArea] 异常: {ex}");
+                MessageBox.Show($"加载{areaName}新歌失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("加载失败");
+            }
+        }
+
+        /// <summary>
+        /// 加载推荐新歌（个性化）
+        /// </summary>
+        private async Task LoadPersonalizedNewSong()
+        {
+            try
+            {
+                UpdateStatusBar("正在加载推荐新歌...");
+
+                var songs = await _apiClient.GetPersonalizedNewSongsAsync();
+
+                if (songs == null || songs.Count == 0)
+                {
+                    MessageBox.Show("暂无推荐新歌", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    UpdateStatusBar("就绪");
+                    return;
+                }
+
+                DisplaySongs(songs);
+                _currentSongs = songs;
+                _currentViewSource = "personalized_newsong";
+                _currentPlaylist = null;
+                resultListView.AccessibleName = "推荐新歌";
+                UpdateStatusBar($"加载完成，共 {songs.Count} 首推荐新歌");
+
+                System.Diagnostics.Debug.WriteLine($"[LoadPersonalizedNewSong] 成功加载 {songs.Count} 首推荐新歌");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[LoadPersonalizedNewSong] 异常: {ex}");
+                MessageBox.Show($"加载推荐新歌失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("加载失败");
+            }
+        }
+
+        /// <summary>
+        /// 加载最近播放的歌单
+        /// </summary>
+        private async Task LoadRecentPlaylists()
+        {
+            try
+            {
+                UpdateStatusBar("正在加载最近播放的歌单...");
+
+                var playlists = await _apiClient.GetRecentPlaylistsAsync(100);
+
+                if (playlists == null || playlists.Count == 0)
+                {
+                    MessageBox.Show("暂无最近播放的歌单", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    UpdateStatusBar("就绪");
+                    return;
+                }
+
+                DisplayPlaylists(playlists);
+                _currentPlaylists = playlists;
+                _currentViewSource = "recent_playlists";
+                resultListView.AccessibleName = "最近播放的歌单";
+                UpdateStatusBar($"加载完成，共 {playlists.Count} 个歌单");
+
+                System.Diagnostics.Debug.WriteLine($"[LoadRecentPlaylists] 成功加载 {playlists.Count} 个最近播放的歌单");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[LoadRecentPlaylists] 异常: {ex}");
+                MessageBox.Show($"加载最近播放的歌单失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("加载失败");
+            }
+        }
+
+        /// <summary>
+        /// 加载最近播放的专辑
+        /// </summary>
+        private async Task LoadRecentAlbums()
+        {
+            try
+            {
+                UpdateStatusBar("正在加载最近播放的专辑...");
+
+                var albums = await _apiClient.GetRecentAlbumsAsync(100);
+
+                if (albums == null || albums.Count == 0)
+                {
+                    MessageBox.Show("暂无最近播放的专辑", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    UpdateStatusBar("就绪");
+                    return;
+                }
+
+                DisplayAlbums(albums);
+                _currentAlbums = albums;
+                _currentViewSource = "recent_albums";
+                resultListView.AccessibleName = "最近播放的专辑";
+                UpdateStatusBar($"加载完成，共 {albums.Count} 个专辑");
+
+                System.Diagnostics.Debug.WriteLine($"[LoadRecentAlbums] 成功加载 {albums.Count} 个最近播放的专辑");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[LoadRecentAlbums] 异常: {ex}");
+                MessageBox.Show($"加载最近播放的专辑失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("加载失败");
+            }
+        }
+
+        /// <summary>
+        /// 加载歌单分类（显示分类列表）
+        /// </summary>
+        private async Task LoadPlaylistCategory()
+        {
+            try
+            {
+                UpdateStatusBar("正在加载歌单分类...");
+
+                // 显示常用分类列表
+                var categories = new List<ListItemInfo>
+                {
+                    new ListItemInfo
+                    {
+                        Type = ListItemType.Category,
+                        CategoryId = "playlist_cat_华语",
+                        CategoryName = "华语",
+                        CategoryDescription = "华语歌单"
+                    },
+                    new ListItemInfo
+                    {
+                        Type = ListItemType.Category,
+                        CategoryId = "playlist_cat_流行",
+                        CategoryName = "流行",
+                        CategoryDescription = "流行歌单"
+                    },
+                    new ListItemInfo
+                    {
+                        Type = ListItemType.Category,
+                        CategoryId = "playlist_cat_摇滚",
+                        CategoryName = "摇滚",
+                        CategoryDescription = "摇滚歌单"
+                    },
+                    new ListItemInfo
+                    {
+                        Type = ListItemType.Category,
+                        CategoryId = "playlist_cat_民谣",
+                        CategoryName = "民谣",
+                        CategoryDescription = "民谣歌单"
+                    },
+                    new ListItemInfo
+                    {
+                        Type = ListItemType.Category,
+                        CategoryId = "playlist_cat_电子",
+                        CategoryName = "电子",
+                        CategoryDescription = "电子音乐歌单"
+                    },
+                    new ListItemInfo
+                    {
+                        Type = ListItemType.Category,
+                        CategoryId = "playlist_cat_轻音乐",
+                        CategoryName = "轻音乐",
+                        CategoryDescription = "轻音乐歌单"
+                    },
+                    new ListItemInfo
+                    {
+                        Type = ListItemType.Category,
+                        CategoryId = "playlist_cat_影视原声",
+                        CategoryName = "影视原声",
+                        CategoryDescription = "影视原声歌单"
+                    },
+                    new ListItemInfo
+                    {
+                        Type = ListItemType.Category,
+                        CategoryId = "playlist_cat_ACG",
+                        CategoryName = "ACG",
+                        CategoryDescription = "ACG歌单"
+                    },
+                    new ListItemInfo
+                    {
+                        Type = ListItemType.Category,
+                        CategoryId = "playlist_cat_怀旧",
+                        CategoryName = "怀旧",
+                        CategoryDescription = "怀旧歌单"
+                    },
+                    new ListItemInfo
+                    {
+                        Type = ListItemType.Category,
+                        CategoryId = "playlist_cat_治愈",
+                        CategoryName = "治愈",
+                        CategoryDescription = "治愈歌单"
+                    }
+                };
+
+                DisplayListItems(categories);
+                UpdateStatusBar("请选择歌单分类");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[LoadPlaylistCategory] 异常: {ex}");
+                MessageBox.Show($"加载歌单分类失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("加载失败");
+            }
+        }
+
+        /// <summary>
+        /// 加载指定分类的歌单
+        /// </summary>
+        private async Task LoadPlaylistsByCat(string cat)
+        {
+            try
+            {
+                UpdateStatusBar($"正在加载{cat}歌单...");
+
+                var result = await _apiClient.GetPlaylistsByCategoryAsync(cat, "hot", 50, 0);
+                var playlists = result.Item1;
+                var total = result.Item2;
+                var more = result.Item3;
+
+                if (playlists == null || playlists.Count == 0)
+                {
+                    MessageBox.Show($"暂无{cat}歌单", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    UpdateStatusBar("就绪");
+                    return;
+                }
+
+                DisplayPlaylists(playlists);
+                _currentPlaylists = playlists;
+                _currentViewSource = $"playlist_cat_{cat}";
+                resultListView.AccessibleName = $"{cat}歌单";
+                UpdateStatusBar($"加载完成，共 {playlists.Count} 个{cat}歌单");
+
+                System.Diagnostics.Debug.WriteLine($"[LoadPlaylistsByCat] 成功加载 {playlists.Count} 个{cat}歌单, total={total}, more={more}");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[LoadPlaylistsByCat] 异常: {ex}");
+                MessageBox.Show($"加载{cat}歌单失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("加载失败");
+            }
+        }
+
+        /// <summary>
+        /// 加载新碟上架
+        /// </summary>
+        private async Task LoadNewAlbums()
+        {
+            try
+            {
+                UpdateStatusBar("正在加载新碟上架...");
+
+                var albums = await _apiClient.GetNewAlbumsAsync();
+
+                if (albums == null || albums.Count == 0)
+                {
+                    MessageBox.Show("暂无新碟上架", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    UpdateStatusBar("就绪");
+                    return;
+                }
+
+                DisplayAlbums(albums);
+                _currentAlbums = albums;
+                _currentViewSource = "new_albums";
+                resultListView.AccessibleName = "新碟上架";
+                UpdateStatusBar($"加载完成，共 {albums.Count} 个新专辑");
+
+                System.Diagnostics.Debug.WriteLine($"[LoadNewAlbums] 成功加载 {albums.Count} 个新专辑");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[LoadNewAlbums] 异常: {ex}");
+                MessageBox.Show($"加载新碟上架失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("加载失败");
+            }
+        }
+
+        #endregion
 
         /// <summary>
         /// 加载用户喜欢的歌曲
