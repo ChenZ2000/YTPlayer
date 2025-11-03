@@ -11,6 +11,8 @@ using YTPlayer.Forms.Download;
 using YTPlayer.Models;
 using YTPlayer.Models.Download;
 
+#pragma warning disable CS8600, CS8601, CS8602, CS8603, CS8604
+
 namespace YTPlayer
 {
     /// <summary>
@@ -27,12 +29,16 @@ namespace YTPlayer
         #region 初始化 - 下载
 
         /// <summary>
-        /// 初始化下载功能
+        /// 初始化下载和上传功能
         /// </summary>
         private void InitializeDownload()
         {
             _downloadManager = DownloadManager.Instance;
             _downloadManager.Initialize(_apiClient);
+
+            // 初始化上传管理器
+            var uploadManager = YTPlayer.Core.Upload.UploadManager.Instance;
+            uploadManager.Initialize(_apiClient);
         }
 
         #endregion
@@ -537,7 +543,7 @@ namespace YTPlayer
                                     throw new Exception("请先登录");
                                 }
                                 long userId = long.Parse(_accountState.UserId);
-                                var playlists = await _apiClient.GetUserPlaylistsAsync(userId);
+                                var (playlists, _) = await _apiClient.GetUserPlaylistsAsync(userId);
                                 if (playlists == null || playlists.Count == 0)
                                 {
                                     throw new Exception("您还没有歌单");
@@ -586,7 +592,7 @@ namespace YTPlayer
                         case "user_albums":
                             totalTasks = await DownloadAlbumListCategory(categoryName, async () =>
                             {
-                                var albums = await _apiClient.GetUserAlbumsAsync();
+                                var (albums, totalCount) = await _apiClient.GetUserAlbumsAsync();
                                 if (albums == null || albums.Count == 0)
                                 {
                                     throw new Exception("您还没有收藏专辑");
@@ -1189,7 +1195,9 @@ namespace YTPlayer
             }
 
             // 显示子分类选择对话框
-            var displayNames = subCategories.Select(item => item.CategoryName ?? item.CategoryId).ToList();
+            var displayNames = subCategories
+                .Select(item => item.CategoryName ?? item.CategoryId ?? "未命名分类")
+                .ToList();
             var dialog = new BatchDownloadDialog(displayNames, $"下载分类 - {categoryName}");
 
             if (dialog.ShowDialog() != DialogResult.OK || dialog.SelectedIndices.Count == 0)
@@ -1608,3 +1616,5 @@ namespace YTPlayer
         #endregion
     }
 }
+
+#pragma warning restore CS8600, CS8601, CS8602, CS8603, CS8604, CS8625

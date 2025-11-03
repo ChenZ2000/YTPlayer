@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 
 namespace YTPlayer.Models
 {
@@ -10,27 +10,27 @@ namespace YTPlayer.Models
         /// <summary>
         /// 评论ID
         /// </summary>
-        public string CommentId { get; set; }
+        public string CommentId { get; set; } = string.Empty;
 
         /// <summary>
         /// 用户ID
         /// </summary>
-        public string UserId { get; set; }
+        public string UserId { get; set; } = string.Empty;
 
         /// <summary>
         /// 用户名
         /// </summary>
-        public string UserName { get; set; }
+        public string UserName { get; set; } = string.Empty;
 
         /// <summary>
         /// 用户头像URL
         /// </summary>
-        public string AvatarUrl { get; set; }
+        public string AvatarUrl { get; set; } = string.Empty;
 
         /// <summary>
         /// 评论内容
         /// </summary>
-        public string Content { get; set; }
+        public string Content { get; set; } = string.Empty;
 
         /// <summary>
         /// 点赞数
@@ -50,16 +50,17 @@ namespace YTPlayer.Models
         /// <summary>
         /// IP归属地
         /// </summary>
-        public string IpLocation { get; set; }
+        public string IpLocation { get; set; } = string.Empty;
 
         /// <summary>
         /// 被回复的评论ID（楼中楼）
         /// </summary>
-        public string BeRepliedId { get; set; }
+        public string? BeRepliedId { get; set; }
 
         /// <summary>
         /// 被回复的用户名
         /// </summary>
-        public string BeRepliedUserName { get; set; }
+        public string? BeRepliedUserName { get; set; }
     }
 }
+

@@ -204,9 +204,9 @@ namespace YTPlayer
             string configJson = File.ReadAllText(configPath);
             var config = JObject.Parse(configJson);
 
-            string musicU = config["MusicU"]?.Value<string>();
-            string csrfToken = config["CsrfToken"]?.Value<string>();
-            string deviceId = config["DeviceId"]?.Value<string>();
+            string musicU = config["MusicU"]?.Value<string>() ?? string.Empty;
+            string csrfToken = config["CsrfToken"]?.Value<string>() ?? string.Empty;
+            string deviceId = config["DeviceId"]?.Value<string>() ?? string.Empty;
 
             if (string.IsNullOrEmpty(musicU))
             {

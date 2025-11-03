@@ -4,20 +4,24 @@ using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
 using YTPlayer.Core.Download;
+using YTPlayer.Core.Upload;
 using YTPlayer.Models.Download;
+using YTPlayer.Models.Upload;
 
 namespace YTPlayer.Forms.Download
 {
     /// <summary>
-    /// 下载管理器窗体
+    /// 传输管理器窗体（下载+上传）
     /// </summary>
     public partial class DownloadManagerForm : Form
     {
         #region 私有字段
 
         private readonly DownloadManager _downloadManager;
+        private readonly UploadManager _uploadManager;
         private readonly System.Windows.Forms.Timer _refreshTimer;
-        private DownloadTask? _selectedTask;
+        private DownloadTask? _selectedDownloadTask;
+        private UploadTask? _selectedUploadTask;
 
         #endregion
 
@@ -31,6 +35,7 @@ namespace YTPlayer.Forms.Download
             InitializeComponent();
 
             _downloadManager = DownloadManager.Instance;
+            _uploadManager = UploadManager.Instance;
 
             // 创建刷新定时器
             _refreshTimer = new System.Windows.Forms.Timer
@@ -40,11 +45,18 @@ namespace YTPlayer.Forms.Download
             _refreshTimer.Tick += RefreshTimer_Tick;
 
             // 订阅下载管理器事件
-            _downloadManager.TaskProgressChanged += OnTaskProgressChanged;
-            _downloadManager.TaskCompleted += OnTaskCompleted;
-            _downloadManager.TaskFailed += OnTaskFailed;
-            _downloadManager.TaskCancelled += OnTaskCancelled;
-            _downloadManager.QueueStateChanged += OnQueueStateChanged;
+            _downloadManager.TaskProgressChanged += OnDownloadTaskProgressChanged;
+            _downloadManager.TaskCompleted += OnDownloadTaskCompleted;
+            _downloadManager.TaskFailed += OnDownloadTaskFailed;
+            _downloadManager.TaskCancelled += OnDownloadTaskCancelled;
+            _downloadManager.QueueStateChanged += OnDownloadQueueStateChanged;
+
+            // 订阅上传管理器事件
+            _uploadManager.TaskProgressChanged += OnUploadTaskProgressChanged;
+            _uploadManager.TaskCompleted += OnUploadTaskCompleted;
+            _uploadManager.TaskFailed += OnUploadTaskFailed;
+            _uploadManager.TaskCancelled += OnUploadTaskCancelled;
+            _uploadManager.QueueStateChanged += OnUploadQueueStateChanged;
 
             // 初始化列表
             InitializeListViews();
@@ -63,7 +75,7 @@ namespace YTPlayer.Forms.Download
         /// </summary>
         private void InitializeListViews()
         {
-            // 进行中列表
+            // 下载中列表
             lvActive.View = View.Details;
             lvActive.FullRowSelect = true;
             lvActive.GridLines = true;
@@ -75,12 +87,23 @@ namespace YTPlayer.Forms.Download
             lvActive.Columns.Add("状态", 80);
             lvActive.MouseClick += LvActive_MouseClick;
 
+            // 上传中列表
+            lvUpload.View = View.Details;
+            lvUpload.FullRowSelect = true;
+            lvUpload.GridLines = true;
+            lvUpload.Columns.Add("文件名", 250);
+            lvUpload.Columns.Add("来源", 150);
+            lvUpload.Columns.Add("进度", 100);
+            lvUpload.Columns.Add("阶段", 150);
+            lvUpload.Columns.Add("状态", 80);
+            lvUpload.MouseClick += LvUpload_MouseClick;
+
             // 已完成列表
             lvCompleted.View = View.Details;
             lvCompleted.FullRowSelect = true;
             lvCompleted.GridLines = true;
-            lvCompleted.Columns.Add("歌曲名", 200);
-            lvCompleted.Columns.Add("歌手", 120);
+            lvCompleted.Columns.Add("名称", 200);
+            lvCompleted.Columns.Add("类型", 80);
             lvCompleted.Columns.Add("来源列表", 150);
             lvCompleted.Columns.Add("状态", 80);
             lvCompleted.Columns.Add("完成时间", 150);
@@ -92,60 +115,107 @@ namespace YTPlayer.Forms.Download
 
         #region 事件处理 - 下载管理器
 
-        private void OnTaskProgressChanged(DownloadTask task)
+        private void OnDownloadTaskProgressChanged(DownloadTask task)
         {
-            // 在 UI 线程上更新
             if (InvokeRequired)
             {
-                BeginInvoke(new Action(() => OnTaskProgressChanged(task)));
+                BeginInvoke(new Action(() => OnDownloadTaskProgressChanged(task)));
                 return;
             }
-
-            // 更新列表项
-            UpdateTaskInList(task);
+            UpdateDownloadTaskInList(task);
         }
 
-        private void OnTaskCompleted(DownloadTask task)
+        private void OnDownloadTaskCompleted(DownloadTask task)
         {
             if (InvokeRequired)
             {
-                BeginInvoke(new Action(() => OnTaskCompleted(task)));
+                BeginInvoke(new Action(() => OnDownloadTaskCompleted(task)));
                 return;
             }
-
             RefreshLists();
         }
 
-        private void OnTaskFailed(DownloadTask task)
+        private void OnDownloadTaskFailed(DownloadTask task)
         {
             if (InvokeRequired)
             {
-                BeginInvoke(new Action(() => OnTaskFailed(task)));
+                BeginInvoke(new Action(() => OnDownloadTaskFailed(task)));
                 return;
             }
-
             RefreshLists();
         }
 
-        private void OnTaskCancelled(DownloadTask task)
+        private void OnDownloadTaskCancelled(DownloadTask task)
         {
             if (InvokeRequired)
             {
-                BeginInvoke(new Action(() => OnTaskCancelled(task)));
+                BeginInvoke(new Action(() => OnDownloadTaskCancelled(task)));
                 return;
             }
-
             RefreshLists();
         }
 
-        private void OnQueueStateChanged()
+        private void OnDownloadQueueStateChanged()
         {
             if (InvokeRequired)
             {
-                BeginInvoke(new Action(OnQueueStateChanged));
+                BeginInvoke(new Action(OnDownloadQueueStateChanged));
                 return;
             }
+            RefreshLists();
+        }
 
+        #endregion
+
+        #region 事件处理 - 上传管理器
+
+        private void OnUploadTaskProgressChanged(UploadTask task)
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(() => OnUploadTaskProgressChanged(task)));
+                return;
+            }
+            UpdateUploadTaskInList(task);
+        }
+
+        private void OnUploadTaskCompleted(UploadTask task)
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(() => OnUploadTaskCompleted(task)));
+                return;
+            }
+            RefreshLists();
+        }
+
+        private void OnUploadTaskFailed(UploadTask task)
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(() => OnUploadTaskFailed(task)));
+                return;
+            }
+            RefreshLists();
+        }
+
+        private void OnUploadTaskCancelled(UploadTask task)
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(() => OnUploadTaskCancelled(task)));
+                return;
+            }
+            RefreshLists();
+        }
+
+        private void OnUploadQueueStateChanged()
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(OnUploadQueueStateChanged));
+                return;
+            }
             RefreshLists();
         }
 
@@ -179,6 +249,21 @@ namespace YTPlayer.Forms.Download
             }
         }
 
+        private void BtnCancelAllUpload_Click(object? sender, EventArgs e)
+        {
+            var result = MessageBox.Show(
+                "确定要取消所有进行中的上传任务吗？",
+                "确认",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning);
+
+            if (result == DialogResult.Yes)
+            {
+                _uploadManager.CancelAllActiveTasks();
+                RefreshLists();
+            }
+        }
+
         private void BtnClearAll_Click(object? sender, EventArgs e)
         {
             var result = MessageBox.Show(
@@ -202,8 +287,21 @@ namespace YTPlayer.Forms.Download
                 var item = lvActive.GetItemAt(e.X, e.Y);
                 if (item != null && item.Tag is DownloadTask task)
                 {
-                    _selectedTask = task;
-                    ShowActiveContextMenu(e.Location);
+                    _selectedDownloadTask = task;
+                    ShowDownloadContextMenu(e.Location);
+                }
+            }
+        }
+
+        private void LvUpload_MouseClick(object? sender, MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Right)
+            {
+                var item = lvUpload.GetItemAt(e.X, e.Y);
+                if (item != null && item.Tag is UploadTask task)
+                {
+                    _selectedUploadTask = task;
+                    ShowUploadContextMenu(e.Location);
                 }
             }
         }
@@ -213,10 +311,18 @@ namespace YTPlayer.Forms.Download
             if (e.Button == MouseButtons.Right)
             {
                 var item = lvCompleted.GetItemAt(e.X, e.Y);
-                if (item != null && item.Tag is DownloadTask task)
+                if (item != null)
                 {
-                    _selectedTask = task;
-                    ShowCompletedContextMenu(e.Location);
+                    if (item.Tag is DownloadTask downloadTask)
+                    {
+                        _selectedDownloadTask = downloadTask;
+                        ShowCompletedContextMenu(e.Location, true);
+                    }
+                    else if (item.Tag is UploadTask uploadTask)
+                    {
+                        _selectedUploadTask = uploadTask;
+                        ShowCompletedContextMenu(e.Location, false);
+                    }
                 }
             }
         }
@@ -225,33 +331,33 @@ namespace YTPlayer.Forms.Download
 
         #region 上下文菜单
 
-        private void ShowActiveContextMenu(Point location)
+        private void ShowDownloadContextMenu(Point location)
         {
             var menu = new ContextMenuStrip();
 
-            if (_selectedTask != null)
+            if (_selectedDownloadTask != null)
             {
                 // 暂停/继续
-                if (_selectedTask.Status == DownloadStatus.Downloading)
+                if (_selectedDownloadTask.Status == DownloadStatus.Downloading)
                 {
                     var pauseItem = new ToolStripMenuItem("暂停");
                     pauseItem.Click += (s, e) =>
                     {
-                        if (_selectedTask != null)
+                        if (_selectedDownloadTask != null)
                         {
-                            _downloadManager.PauseTask(_selectedTask);
+                            _downloadManager.PauseTask(_selectedDownloadTask);
                         }
                     };
                     menu.Items.Add(pauseItem);
                 }
-                else if (_selectedTask.Status == DownloadStatus.Paused || _selectedTask.Status == DownloadStatus.Pending)
+                else if (_selectedDownloadTask.Status == DownloadStatus.Paused || _selectedDownloadTask.Status == DownloadStatus.Pending)
                 {
                     var resumeItem = new ToolStripMenuItem("继续");
                     resumeItem.Click += (s, e) =>
                     {
-                        if (_selectedTask != null)
+                        if (_selectedDownloadTask != null)
                         {
-                            _downloadManager.ResumeTask(_selectedTask);
+                            _downloadManager.ResumeTask(_selectedDownloadTask);
                         }
                     };
                     menu.Items.Add(resumeItem);
@@ -261,9 +367,9 @@ namespace YTPlayer.Forms.Download
                 var cancelItem = new ToolStripMenuItem("删除");
                 cancelItem.Click += (s, e) =>
                 {
-                    if (_selectedTask != null)
+                    if (_selectedDownloadTask != null)
                     {
-                        _downloadManager.CancelTask(_selectedTask);
+                        _downloadManager.CancelTask(_selectedDownloadTask);
                     }
                 };
                 menu.Items.Add(cancelItem);
@@ -274,11 +380,11 @@ namespace YTPlayer.Forms.Download
                 var copyUrlItem = new ToolStripMenuItem("复制下载链接");
                 copyUrlItem.Click += (s, e) =>
                 {
-                    if (_selectedTask != null && !string.IsNullOrEmpty(_selectedTask.DownloadUrl))
+                    if (_selectedDownloadTask != null && !string.IsNullOrEmpty(_selectedDownloadTask.DownloadUrl))
                     {
                         try
                         {
-                            Clipboard.SetText(_selectedTask.DownloadUrl);
+                            Clipboard.SetText(_selectedDownloadTask.DownloadUrl);
                             MessageBox.Show("下载链接已复制到剪贴板", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
                         }
                         catch
@@ -293,21 +399,19 @@ namespace YTPlayer.Forms.Download
             menu.Show(lvActive, location);
         }
 
-        private void ShowCompletedContextMenu(Point location)
+        private void ShowCompletedContextMenu(Point location, bool isDownload)
         {
             var menu = new ContextMenuStrip();
 
-            if (_selectedTask != null)
+            if (isDownload && _selectedDownloadTask != null)
             {
                 // 清除
                 var removeItem = new ToolStripMenuItem("清除");
                 removeItem.Click += (s, e) =>
                 {
-                    if (_selectedTask != null)
+                    if (_selectedDownloadTask != null)
                     {
-                        _downloadManager.RemoveCompletedTask(_selectedTask);
-                        // ✅ 优化：移除多余的 RefreshLists() 调用
-                        // RemoveCompletedTask 会触发 QueueStateChanged 事件，该事件已经会调用 RefreshLists()
+                        _downloadManager.RemoveCompletedTask(_selectedDownloadTask);
                     }
                 };
                 menu.Items.Add(removeItem);
@@ -318,11 +422,11 @@ namespace YTPlayer.Forms.Download
                 var copyUrlItem = new ToolStripMenuItem("复制下载链接");
                 copyUrlItem.Click += (s, e) =>
                 {
-                    if (_selectedTask != null && !string.IsNullOrEmpty(_selectedTask.DownloadUrl))
+                    if (_selectedDownloadTask != null && !string.IsNullOrEmpty(_selectedDownloadTask.DownloadUrl))
                     {
                         try
                         {
-                            Clipboard.SetText(_selectedTask.DownloadUrl);
+                            Clipboard.SetText(_selectedDownloadTask.DownloadUrl);
                             MessageBox.Show("下载链接已复制到剪贴板", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
                         }
                         catch
@@ -332,6 +436,19 @@ namespace YTPlayer.Forms.Download
                     }
                 };
                 menu.Items.Add(copyUrlItem);
+            }
+            else if (!isDownload && _selectedUploadTask != null)
+            {
+                // 清除
+                var removeItem = new ToolStripMenuItem("清除");
+                removeItem.Click += (s, e) =>
+                {
+                    if (_selectedUploadTask != null)
+                    {
+                        _uploadManager.RemoveCompletedTask(_selectedUploadTask);
+                    }
+                };
+                menu.Items.Add(removeItem);
             }
 
             menu.Show(lvCompleted, location);
@@ -349,6 +466,10 @@ namespace YTPlayer.Forms.Download
             if (tabControl.SelectedIndex == 0)
             {
                 RefreshActiveList();
+            }
+            else if (tabControl.SelectedIndex == 1)
+            {
+                RefreshUploadList();
             }
             else
             {
@@ -384,7 +505,7 @@ namespace YTPlayer.Forms.Download
                 // 更新或添加项
                 foreach (var task in allActiveTasks)
                 {
-                    UpdateTaskInList(task);
+                    UpdateDownloadTaskInList(task);
                 }
             }
             finally
@@ -432,9 +553,9 @@ namespace YTPlayer.Forms.Download
         }
 
         /// <summary>
-        /// 更新任务在进行中列表
+        /// 更新下载任务在进行中列表
         /// </summary>
-        private void UpdateTaskInList(DownloadTask task)
+        private void UpdateDownloadTaskInList(DownloadTask task)
         {
             // 查找现有项
             ListViewItem? existingItem = null;
@@ -620,14 +741,177 @@ namespace YTPlayer.Forms.Download
             // 停止定时器
             _refreshTimer?.Stop();
 
-            // 取消订阅事件
-            _downloadManager.TaskProgressChanged -= OnTaskProgressChanged;
-            _downloadManager.TaskCompleted -= OnTaskCompleted;
-            _downloadManager.TaskFailed -= OnTaskFailed;
-            _downloadManager.TaskCancelled -= OnTaskCancelled;
-            _downloadManager.QueueStateChanged -= OnQueueStateChanged;
+            // 取消订阅下载管理器事件
+            _downloadManager.TaskProgressChanged -= OnDownloadTaskProgressChanged;
+            _downloadManager.TaskCompleted -= OnDownloadTaskCompleted;
+            _downloadManager.TaskFailed -= OnDownloadTaskFailed;
+            _downloadManager.TaskCancelled -= OnDownloadTaskCancelled;
+            _downloadManager.QueueStateChanged -= OnDownloadQueueStateChanged;
+
+            // 取消订阅上传管理器事件
+            _uploadManager.TaskProgressChanged -= OnUploadTaskProgressChanged;
+            _uploadManager.TaskCompleted -= OnUploadTaskCompleted;
+            _uploadManager.TaskFailed -= OnUploadTaskFailed;
+            _uploadManager.TaskCancelled -= OnUploadTaskCancelled;
+            _uploadManager.QueueStateChanged -= OnUploadQueueStateChanged;
 
             base.OnFormClosing(e);
+        }
+
+        #endregion
+
+        #region 上传列表刷新和显示
+
+        /// <summary>
+        /// 刷新上传中列表
+        /// </summary>
+        private void RefreshUploadList()
+        {
+            lvUpload.BeginUpdate();
+
+            try
+            {
+                var allUploadTasks = _uploadManager.GetAllActiveTasks();
+
+                // 移除不存在的项
+                var itemsToRemove = new List<ListViewItem>();
+                foreach (ListViewItem item in lvUpload.Items)
+                {
+                    if (item.Tag is UploadTask task && !allUploadTasks.Contains(task))
+                    {
+                        itemsToRemove.Add(item);
+                    }
+                }
+                foreach (var item in itemsToRemove)
+                {
+                    lvUpload.Items.Remove(item);
+                }
+
+                // 更新或添加项
+                foreach (var task in allUploadTasks)
+                {
+                    UpdateUploadTaskInList(task);
+                }
+            }
+            finally
+            {
+                lvUpload.EndUpdate();
+            }
+        }
+
+        /// <summary>
+        /// 更新上传任务在列表中
+        /// </summary>
+        private void UpdateUploadTaskInList(UploadTask task)
+        {
+            ListViewItem? existingItem = null;
+            foreach (ListViewItem item in lvUpload.Items)
+            {
+                if (item.Tag == task)
+                {
+                    existingItem = item;
+                    break;
+                }
+            }
+
+            if (existingItem == null)
+            {
+                existingItem = new ListViewItem(new[]
+                {
+                    task.FileName,
+                    task.SourceList,
+                    $"{task.ProgressPercentage}%",
+                    task.StageMessage,
+                    GetUploadStatusText(task.Status)
+                })
+                {
+                    Tag = task
+                };
+                lvUpload.Items.Add(existingItem);
+            }
+            else
+            {
+                existingItem.SubItems[0].Text = task.FileName;
+                existingItem.SubItems[1].Text = task.SourceList;
+                existingItem.SubItems[2].Text = $"{task.ProgressPercentage}%";
+                existingItem.SubItems[3].Text = task.StageMessage;
+                existingItem.SubItems[4].Text = GetUploadStatusText(task.Status);
+            }
+        }
+
+        /// <summary>
+        /// 获取上传状态文本
+        /// </summary>
+        private string GetUploadStatusText(UploadStatus status)
+        {
+            switch (status)
+            {
+                case UploadStatus.Pending:
+                    return "等待中";
+                case UploadStatus.Uploading:
+                    return "上传中";
+                case UploadStatus.Paused:
+                    return "已暂停";
+                case UploadStatus.Completed:
+                    return "已完成";
+                case UploadStatus.Failed:
+                    return "失败";
+                case UploadStatus.Cancelled:
+                    return "已取消";
+                default:
+                    return "未知";
+            }
+        }
+
+        #endregion
+
+        #region 上传上下文菜单
+
+        private void ShowUploadContextMenu(Point location)
+        {
+            var menu = new ContextMenuStrip();
+
+            if (_selectedUploadTask != null)
+            {
+                // 暂停/继续
+                if (_selectedUploadTask.Status == UploadStatus.Uploading)
+                {
+                    var pauseItem = new ToolStripMenuItem("暂停");
+                    pauseItem.Click += (s, e) =>
+                    {
+                        if (_selectedUploadTask != null)
+                        {
+                            _uploadManager.PauseTask(_selectedUploadTask);
+                        }
+                    };
+                    menu.Items.Add(pauseItem);
+                }
+                else if (_selectedUploadTask.Status == UploadStatus.Paused || _selectedUploadTask.Status == UploadStatus.Pending)
+                {
+                    var resumeItem = new ToolStripMenuItem("继续");
+                    resumeItem.Click += (s, e) =>
+                    {
+                        if (_selectedUploadTask != null)
+                        {
+                            _uploadManager.ResumeTask(_selectedUploadTask);
+                        }
+                    };
+                    menu.Items.Add(resumeItem);
+                }
+
+                // 删除
+                var cancelItem = new ToolStripMenuItem("删除");
+                cancelItem.Click += (s, e) =>
+                {
+                    if (_selectedUploadTask != null)
+                    {
+                        _uploadManager.CancelTask(_selectedUploadTask);
+                    }
+                };
+                menu.Items.Add(cancelItem);
+            }
+
+            menu.Show(lvUpload, location);
         }
 
         #endregion

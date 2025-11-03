@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
@@ -13,33 +13,36 @@ using YTPlayer.Core.Lyrics;
 using YTPlayer.Models;
 using YTPlayer.Models.Auth;
 
+#pragma warning disable CS8600, CS8601, CS8602, CS8603, CS8604, CS8625
+
 namespace YTPlayer
 {
     public partial class MainForm : Form
     {
         #region 字段声明
 
-        protected NeteaseApiClient _apiClient;  // Changed to protected for partial class access
-        private BassAudioEngine _audioEngine;
-        private SeekManager _seekManager;  // ⭐ 新增：Seek 管理器
-        protected ConfigManager _configManager;  // Changed to protected for partial class access
-        private ConfigModel _config;
-        private AccountState _accountState;
+        protected NeteaseApiClient _apiClient = null!;  // Changed to protected for partial class access
+        private BassAudioEngine _audioEngine = null!;
+        private SeekManager _seekManager = null!;  // ⭐ 新增：Seek 管理器
+        protected ConfigManager _configManager = null!;  // Changed to protected for partial class access
+        private ConfigModel _config = null!;
+        private AccountState _accountState = null!;
         protected List<SongInfo> _currentSongs = new List<SongInfo>();  // Changed to protected for partial class access
         private List<PlaylistInfo> _currentPlaylists = new List<PlaylistInfo>();
         private PlaylistInfo? _currentPlaylist = null;  // 当前打开的歌单
+        private PlaylistInfo? _userLikedPlaylist = null;  // 缓存的"喜欢的音乐"歌单对象
         private List<AlbumInfo> _currentAlbums = new List<AlbumInfo>();
         private List<ListItemInfo> _currentListItems = new List<ListItemInfo>(); // 统一的列表项
         private List<LyricLine> _currentLyrics = new List<LyricLine>();  // 保留用于向后兼容
 
         // ⭐ 新的歌词系统
-        private LyricsCacheManager _lyricsCacheManager;
-        private LyricsDisplayManager _lyricsDisplayManager;
-        private LyricsLoader _lyricsLoader;
+        private LyricsCacheManager _lyricsCacheManager = null!;
+        private LyricsDisplayManager _lyricsDisplayManager = null!;
+        private LyricsLoader _lyricsLoader = null!;
         private bool _autoReadLyrics = false;  // 自动朗读歌词开关
 
-        private System.Windows.Forms.Timer _updateTimer;
-        private System.Windows.Forms.NotifyIcon _trayIcon;
+        private System.Windows.Forms.Timer? _updateTimer;
+        private System.Windows.Forms.NotifyIcon? _trayIcon;
         private Utils.ContextMenuHost? _contextMenuHost;  // ⭐ 自定义菜单宿主窗口
         private bool _isExitingFromTrayMenu = false;  // ⭐ 标志：是否正在从托盘菜单退出
         private DateTime _appStartTime = DateTime.Now;  // ⭐ 应用启动时间（用于冷启动风控检测）
@@ -65,8 +68,18 @@ namespace YTPlayer
         private const int MIN_BACK_INTERVAL_MS = 300;                 // 最小后退间隔（毫秒）
         private bool _isNavigating = false;                            // 是否正在执行导航操作
 
+        private CancellationTokenSource? _availabilityCheckCts;        // 列表可用性检查取消令牌
+
         // 播放请求取消和防抖控制
-        private System.Threading.CancellationTokenSource _playbackCancellation = null; // 当前播放请求的取消令牌
+        private const int CloudPageSize = 50;
+        private int _cloudPage = 1;
+        private bool _cloudHasMore = false;
+        private int _cloudTotalCount = 0;
+        private long _cloudUsedSize = 0;
+        private long _cloudMaxSize = 0;
+        private bool _cloudLoading = false;
+
+        private System.Threading.CancellationTokenSource? _playbackCancellation = null; // 当前播放请求的取消令牌
         private DateTime _lastPlayRequestTime = DateTime.MinValue;                     // 上次播放请求时间
         private const int MIN_PLAY_REQUEST_INTERVAL_MS = 200;                         // 最小播放请求间隔（毫秒）
 
@@ -80,15 +93,15 @@ namespace YTPlayer
         private double _cachedDuration = 0;                                            // 缓存的歌曲时长
         private PlaybackState _cachedPlaybackState = PlaybackState.Stopped;           // 缓存的播放状态
         private readonly object _stateCacheLock = new object();                        // 状态缓存锁
-        private System.Threading.CancellationTokenSource _stateUpdateCancellation = null; // 状态更新取消令牌
+        private System.Threading.CancellationTokenSource? _stateUpdateCancellation = null; // 状态更新取消令牌
         private bool _stateUpdateLoopRunning = false;                                  // 状态更新循环是否运行中
 
         private bool _isPlaybackLoading = false;
-        private string _playButtonTextBeforeLoading = null;
-        private string _statusTextBeforeLoading = null;
+        private string? _playButtonTextBeforeLoading = null;
+        private string? _statusTextBeforeLoading = null;
 
         // 下一首歌曲预加载器（新）
-        private NextSongPreloader _nextSongPreloader = null;
+        private NextSongPreloader? _nextSongPreloader = null;
 
         // 键盘 Scrub 控制
         private bool _leftKeyPressed = false;
@@ -97,7 +110,7 @@ namespace YTPlayer
         private bool _rightScrubActive = false;
         private DateTime _leftKeyDownTime = DateTime.MinValue;
         private DateTime _rightKeyDownTime = DateTime.MinValue;
-        private System.Windows.Forms.Timer _scrubKeyTimer;
+        private System.Windows.Forms.Timer? _scrubKeyTimer;
         private const int KEY_SCRUB_TRIGGER_MS = 350;
         private const int KEY_SCRUB_INTERVAL_MS = 200;
         private const double KEY_SCRUB_STEP_SECONDS = 1.0;
@@ -540,7 +553,7 @@ namespace YTPlayer
             return _accountState?.IsLoggedIn == true;
         }
 
-        private void SyncConfigFromApiClient(Forms.LoginSuccessEventArgs args = null, bool persist = false)
+        private void SyncConfigFromApiClient(Forms.LoginSuccessEventArgs? args = null, bool persist = false)
         {
             // Note: Account-related fields (MusicU, CsrfToken, LoginUserId, etc.) are now managed by AccountState
             // This method is no longer needed for account synchronization, but kept for potential future config updates
@@ -832,7 +845,7 @@ namespace YTPlayer
         /// <summary>
         /// 搜索文本框回车（保留用于其他用途，主要逻辑已移至 ProcessCmdKey）
         /// </summary>
-        private async void searchTextBox_KeyDown(object sender, KeyEventArgs e)
+        private void searchTextBox_KeyDown(object sender, KeyEventArgs e)
         {
             if (e.KeyCode == Keys.Enter)
             {
@@ -845,7 +858,7 @@ namespace YTPlayer
         /// <summary>
         /// 搜索类型下拉框回车（保留用于其他用途，主要逻辑已移至 ProcessCmdKey）
         /// </summary>
-        private async void searchTypeComboBox_KeyDown(object sender, KeyEventArgs e)
+        private void searchTypeComboBox_KeyDown(object sender, KeyEventArgs e)
         {
             if (e.KeyCode == Keys.Enter)
             {
@@ -917,13 +930,19 @@ namespace YTPlayer
                     _hasNextSearchPage = songResult?.HasMore ?? false;
 
                     // 更新当前浏览列表的来源标识
-                    _currentViewSource = $"search:{keyword}:page{_currentPage}";
-                    System.Diagnostics.Debug.WriteLine($"[MainForm] 更新浏览列表来源: {_currentViewSource}");
+                    string songsViewSource = $"search:{keyword}:page{_currentPage}";
+                    System.Diagnostics.Debug.WriteLine($"[MainForm] 更新浏览列表来源: {songsViewSource}");
 
                     if (_currentSongs == null || _currentSongs.Count == 0)
                     {
                         int startIndex = (_currentPage - 1) * _resultsPerPage + 1;
-                        DisplaySongs(new List<SongInfo>(), showPagination: true, hasNextPage: false, startIndex: startIndex);
+                        DisplaySongs(
+                            new List<SongInfo>(),
+                            showPagination: true,
+                            hasNextPage: false,
+                            startIndex: startIndex,
+                            viewSource: songsViewSource,
+                            accessibleName: $"搜索: {keyword}");
                         _hasNextSearchPage = false;
                         _maxPage = Math.Max(1, _currentPage);
 
@@ -937,7 +956,13 @@ namespace YTPlayer
                     else
                     {
                         int startIndex = (_currentPage - 1) * _resultsPerPage + 1;
-                        DisplaySongs(_currentSongs, showPagination: true, hasNextPage: _hasNextSearchPage, startIndex: startIndex);
+                        DisplaySongs(
+                            _currentSongs,
+                            showPagination: true,
+                            hasNextPage: _hasNextSearchPage,
+                            startIndex: startIndex,
+                            viewSource: songsViewSource,
+                            accessibleName: $"搜索: {keyword}");
                         int totalCount = songResult?.TotalCount ?? _currentSongs.Count;
                         UpdateStatusBar($"第 {_currentPage}/{_maxPage} 页，本页 {_currentSongs.Count} 首 / 总 {totalCount} 首");
 
@@ -958,8 +983,8 @@ namespace YTPlayer
                     _maxPage = 1;
 
                     // 更新当前浏览列表的来源标识（歌单列表）
-                    _currentViewSource = $"search:playlist:{keyword}";
-                    System.Diagnostics.Debug.WriteLine($"[MainForm] 更新浏览列表来源: {_currentViewSource}");
+                    string playlistViewSource = $"search:playlist:{keyword}";
+                    System.Diagnostics.Debug.WriteLine($"[MainForm] 更新浏览列表来源: {playlistViewSource}");
 
                     if (_currentPlaylists == null || _currentPlaylists.Count == 0)
                     {
@@ -969,7 +994,10 @@ namespace YTPlayer
                     }
                     else
                     {
-                        DisplayPlaylists(_currentPlaylists);
+                        DisplayPlaylists(
+                            _currentPlaylists,
+                            viewSource: playlistViewSource,
+                            accessibleName: $"搜索歌单: {keyword}");
                         int totalCount = playlistResult?.TotalCount ?? _currentPlaylists.Count;
                         UpdateStatusBar($"找到 {_currentPlaylists.Count} 个歌单（总计 {totalCount} 个）");
                     }
@@ -982,8 +1010,8 @@ namespace YTPlayer
                     _maxPage = 1;
 
                     // 更新当前浏览列表的来源标识（专辑列表）
-                    _currentViewSource = $"search:album:{keyword}";
-                    System.Diagnostics.Debug.WriteLine($"[MainForm] 更新浏览列表来源: {_currentViewSource}");
+                    string albumViewSource = $"search:album:{keyword}";
+                    System.Diagnostics.Debug.WriteLine($"[MainForm] 更新浏览列表来源: {albumViewSource}");
 
                     if (_currentAlbums == null || _currentAlbums.Count == 0)
                     {
@@ -993,7 +1021,10 @@ namespace YTPlayer
                     }
                     else
                     {
-                        DisplayAlbums(_currentAlbums);
+                        DisplayAlbums(
+                            _currentAlbums,
+                            viewSource: albumViewSource,
+                            accessibleName: $"搜索专辑: {keyword}");
                         int totalCount = albumResult?.TotalCount ?? _currentAlbums.Count;
                         UpdateStatusBar($"找到 {_currentAlbums.Count} 个专辑（总计 {totalCount} 个）");
                     }
@@ -1020,7 +1051,7 @@ namespace YTPlayer
         /// 使用分类结构，避免一次加载过多资源
         /// </summary>
         /// <param name="skipSave">是否跳过保存状态（用于后退时）</param>
-        private Task LoadHomePageAsync(bool skipSave = false)
+        private async Task LoadHomePageAsync(bool skipSave = false)
         {
             try
             {
@@ -1037,82 +1068,151 @@ namespace YTPlayer
                 var homeItems = new List<ListItemInfo>();
                 bool isLoggedIn = _accountState?.IsLoggedIn == true;
 
+                // 如果已登录，预先加载用户数据以获取数量信息
+                int userPlaylistCount = 0;
+                int userAlbumCount = 0;
+                PlaylistInfo? likedPlaylist = null;
+
+                if (isLoggedIn)
+                {
+                    try
+                    {
+                        var userInfo = await _apiClient.GetUserAccountAsync();
+                        if (userInfo != null && userInfo.UserId > 0)
+                        {
+                            _loggedInUserId = userInfo.UserId;
+
+                            // 获取用户歌单列表与总数
+                            var (playlists, totalCount) = await _apiClient.GetUserPlaylistsAsync(userInfo.UserId);
+                            if (playlists != null && playlists.Count > 0)
+                            {
+                                likedPlaylist = playlists.FirstOrDefault(p =>
+                                    !string.IsNullOrEmpty(p.Name) &&
+                                    p.Name.IndexOf("喜欢的音乐", StringComparison.OrdinalIgnoreCase) >= 0);
+
+                                userPlaylistCount = totalCount;
+                                if (likedPlaylist != null && userPlaylistCount > 0)
+                                {
+                                    userPlaylistCount = Math.Max(0, userPlaylistCount - 1);
+                                }
+
+                                System.Diagnostics.Debug.WriteLine($"[HomePage] 用户歌单总数: {totalCount}, 排除喜欢的音乐后: {userPlaylistCount}");
+                            }
+
+                            // 获取收藏专辑总数
+                            try
+                            {
+                                var (_, albumCount) = await _apiClient.GetUserAlbumsAsync(1, 0);
+                                userAlbumCount = albumCount;
+                                System.Diagnostics.Debug.WriteLine($"[HomePage] 收藏专辑数量: {userAlbumCount}");
+                            }
+                            catch (Exception albumEx)
+                            {
+                                System.Diagnostics.Debug.WriteLine($"[HomePage] 获取收藏专辑数量失败: {albumEx.Message}");
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[HomePage] 预加载用户数据失败: {ex.Message}");
+                    }
+                }
+                else
+                {
+                    _loggedInUserId = 0;
+                }
+
+                _userLikedPlaylist = likedPlaylist;
+
                 // 如果已登录，添加个人资源分类（在前面）
                 if (isLoggedIn)
                 {
-                    // 1. 最近听过
+                    CloudSongPageResult? cloudSummary = null;
+                    try
+                    {
+                        _cloudTotalCount = 0;
+                        _cloudUsedSize = 0;
+                        _cloudMaxSize = 0;
+
+                        cloudSummary = await _apiClient.GetCloudSongsAsync(limit: 1, offset: 0);
+                        _cloudTotalCount = cloudSummary.TotalCount;
+                        _cloudUsedSize = cloudSummary.UsedSize;
+                        _cloudMaxSize = cloudSummary.MaxSize;
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[Home] 获取云盘摘要失败: {ex.Message}");
+                    }
+
+                    // 1. 喜欢的音乐
                     homeItems.Add(new ListItemInfo
                     {
                         Type = ListItemType.Category,
-                        CategoryId = "recent_played",
-                        CategoryName = "最近听过",
-                        CategoryDescription = "您最近播放的歌曲"
+                        CategoryId = "user_liked_songs",
+                        CategoryName = "喜欢的音乐",
+                        CategoryDescription = "您收藏的所有歌曲",
+                        ItemCount = _userLikedPlaylist?.TrackCount ?? likedPlaylist?.TrackCount ?? 0,
+                        ItemUnit = "首"
                     });
 
-                    // 2. 听歌排行（新增）
-                    homeItems.Add(new ListItemInfo
-                    {
-                        Type = ListItemType.Category,
-                        CategoryId = "user_play_record",
-                        CategoryName = "听歌排行",
-                        CategoryDescription = "您的听歌统计数据"
-                    });
-
-                    // 3. 我的歌单
+                    // 2. 我的歌单
                     homeItems.Add(new ListItemInfo
                     {
                         Type = ListItemType.Category,
                         CategoryId = "user_playlists",
                         CategoryName = "我的歌单",
-                        CategoryDescription = "您创建和收藏的歌单"
+                        CategoryDescription = "您创建和收藏的歌单",
+                        ItemCount = userPlaylistCount,
+                        ItemUnit = "个"
                     });
 
-                    // 4. 收藏的专辑
+                    // 3. 收藏的专辑
                     homeItems.Add(new ListItemInfo
                     {
                         Type = ListItemType.Category,
                         CategoryId = "user_albums",
                         CategoryName = "收藏的专辑",
-                        CategoryDescription = "您收藏的专辑"
+                        CategoryDescription = "您收藏的专辑",
+                        ItemCount = userAlbumCount,
+                        ItemUnit = "个"
                     });
 
-                    // 5. 最近播放的歌单（新增）
+                    // 3.5 云盘
                     homeItems.Add(new ListItemInfo
                     {
                         Type = ListItemType.Category,
-                        CategoryId = "recent_playlists",
-                        CategoryName = "最近播放的歌单",
-                        CategoryDescription = "您最近听过的歌单"
+                        CategoryId = "user_cloud",
+                        CategoryName = "云盘",
+                        CategoryDescription = cloudSummary != null
+                            ? $"已用 {FormatSize(_cloudUsedSize)} / {FormatSize(_cloudMaxSize)}"
+                            : "上传和管理您的私人音乐",
+                        ItemCount = _cloudTotalCount,
+                        ItemUnit = "首"
                     });
 
-                    // 6. 最近播放的专辑（新增）
-                    homeItems.Add(new ListItemInfo
-                    {
-                        Type = ListItemType.Category,
-                        CategoryId = "recent_albums",
-                        CategoryName = "最近播放的专辑",
-                        CategoryDescription = "您最近听过的专辑"
-                    });
-
-                    // 7. 每日推荐
+                    // 4. 每日推荐
                     homeItems.Add(new ListItemInfo
                     {
                         Type = ListItemType.Category,
                         CategoryId = "daily_recommend",
                         CategoryName = "每日推荐",
-                        CategoryDescription = "根据您的听歌习惯推荐的歌曲和歌单"
+                        CategoryDescription = "根据您的听歌习惯推荐的歌曲和歌单",
+                        ItemCount = 2,
+                        ItemUnit = "个"
                     });
 
-                    // 8. 为您推荐
+                    // 5. 为您推荐
                     homeItems.Add(new ListItemInfo
                     {
                         Type = ListItemType.Category,
                         CategoryId = "personalized",
                         CategoryName = "为您推荐",
-                        CategoryDescription = "个性化推荐歌单和新歌"
+                        CategoryDescription = "个性化推荐歌单和新歌",
+                        ItemCount = 2,
+                        ItemUnit = "个"
                     });
 
-                    // 9. 精品歌单（新增）
+                    // 6. 精品歌单
                     homeItems.Add(new ListItemInfo
                     {
                         Type = ListItemType.Category,
@@ -1121,16 +1221,18 @@ namespace YTPlayer
                         CategoryDescription = "网易云官方精选歌单"
                     });
 
-                    // 10. 新歌速递（新增）
+                    // 7. 新歌速递
                     homeItems.Add(new ListItemInfo
                     {
                         Type = ListItemType.Category,
                         CategoryId = "new_songs",
                         CategoryName = "新歌速递",
-                        CategoryDescription = "全网最新发布歌曲"
+                        CategoryDescription = "全网最新发布歌曲",
+                        ItemCount = 5,
+                        ItemUnit = "个"
                     });
 
-                    // 11. 歌单分类（新增）
+                    // 8. 歌单分类
                     homeItems.Add(new ListItemInfo
                     {
                         Type = ListItemType.Category,
@@ -1159,9 +1261,13 @@ namespace YTPlayer
                 }
                 else
                 {
-                    // 未登录用户显示的分类（5个入口）
+                    _cloudTotalCount = 0;
+                    _cloudUsedSize = 0;
+                    _cloudMaxSize = 0;
 
-                    // 1. 精品歌单（新增）
+                    // 未登录用户显示的分类
+
+                    // 1. 精品歌单
                     homeItems.Add(new ListItemInfo
                     {
                         Type = ListItemType.Category,
@@ -1170,16 +1276,18 @@ namespace YTPlayer
                         CategoryDescription = "网易云官方精选歌单"
                     });
 
-                    // 2. 新歌速递（新增）
+                    // 2. 新歌速递
                     homeItems.Add(new ListItemInfo
                     {
                         Type = ListItemType.Category,
                         CategoryId = "new_songs",
                         CategoryName = "新歌速递",
-                        CategoryDescription = "全网最新发布歌曲"
+                        CategoryDescription = "全网最新发布歌曲",
+                        ItemCount = 5,
+                        ItemUnit = "个"
                     });
 
-                    // 3. 歌单分类（新增）
+                    // 3. 歌单分类
                     homeItems.Add(new ListItemInfo
                     {
                         Type = ListItemType.Category,
@@ -1188,7 +1296,7 @@ namespace YTPlayer
                         CategoryDescription = "按分类浏览歌单"
                     });
 
-                    // 4. 新碟上架（新增）
+                    // 4. 新碟上架
                     homeItems.Add(new ListItemInfo
                     {
                         Type = ListItemType.Category,
@@ -1208,19 +1316,16 @@ namespace YTPlayer
                 }
 
                 // 显示主页列表
-                DisplayListItems(homeItems);
-                _currentListItems = homeItems;
-                _isHomePage = true;
-                _currentViewSource = "homepage";
+                DisplayListItems(
+                    homeItems,
+                    viewSource: "homepage",
+                    accessibleName: "主页");
 
                 // 清空其他列表缓存
                 _currentSongs.Clear();
                 _currentPlaylists.Clear();
                 _currentAlbums.Clear();
                 _currentPlaylist = null;
-
-                // 设置列表 AccessibleName 为"主页"
-                resultListView.AccessibleName = "主页";
 
                 UpdateStatusBar($"主页加载完成");
 
@@ -1241,8 +1346,6 @@ namespace YTPlayer
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
                 UpdateStatusBar("加载主页失败");
             }
-
-            return Task.CompletedTask;
         }
 
         /// <summary>
@@ -1313,10 +1416,6 @@ namespace YTPlayer
 
                 switch (categoryId)
                 {
-                    case "recent_played":
-                        await LoadRecentPlayedSongs();
-                        break;
-
                     case "user_liked_songs":
                         await LoadUserLikedSongs();
                         break;
@@ -1327,6 +1426,11 @@ namespace YTPlayer
 
                     case "user_albums":
                         await LoadUserAlbums();
+                        break;
+
+                    case "user_cloud":
+                        _cloudPage = 1;
+                        await LoadCloudSongsAsync();
                         break;
 
                     case "daily_recommend":
@@ -1355,19 +1459,6 @@ namespace YTPlayer
 
                     case "personalized_newsongs":
                         await LoadPersonalizedNewSongs();
-                        break;
-
-                    // 新增主页入口路由
-                    case "user_play_record":
-                        await LoadUserPlayRecord();
-                        break;
-
-                    case "user_play_record_week":
-                        await LoadUserPlayRecordWeek();
-                        break;
-
-                    case "user_play_record_all":
-                        await LoadUserPlayRecordAll();
                         break;
 
                     case "highquality_playlists":
@@ -1400,14 +1491,6 @@ namespace YTPlayer
 
                     case "personalized_newsong":
                         await LoadPersonalizedNewSong();
-                        break;
-
-                    case "recent_playlists":
-                        await LoadRecentPlaylists();
-                        break;
-
-                    case "recent_albums":
-                        await LoadRecentAlbums();
                         break;
 
                     case "playlist_category":
@@ -1458,11 +1541,12 @@ namespace YTPlayer
                     return;
                 }
 
-                DisplaySongs(recentSongs, preserveSelection: preserveSelection);
-                _currentSongs = recentSongs;
-                _currentViewSource = "recent_played";
+                DisplaySongs(
+                    recentSongs,
+                    preserveSelection: preserveSelection,
+                    viewSource: "recent_played",
+                    accessibleName: "最近听过");
                 _currentPlaylist = null;  // 清空当前歌单
-                resultListView.AccessibleName = "最近听过";
                 UpdateStatusBar($"加载完成，共 {recentSongs.Count} 首歌曲");
 
                 System.Diagnostics.Debug.WriteLine($"[LoadRecentPlayedSongs] 成功加载 {recentSongs.Count} 首最近播放歌曲");
@@ -1476,106 +1560,6 @@ namespace YTPlayer
         }
 
         #region 新增主页入口Load方法
-
-        /// <summary>
-        /// 加载听歌排行（显示周榜单/全部时间子分类）
-        /// </summary>
-        private async Task LoadUserPlayRecord()
-        {
-            try
-            {
-                UpdateStatusBar("正在加载听歌排行...");
-
-                // 显示子分类选项
-                var subcategories = new List<ListItemInfo>
-                {
-                    new ListItemInfo
-                    {
-                        Type = ListItemType.Category,
-                        CategoryId = "user_play_record_week",
-                        CategoryName = "周榜单",
-                        CategoryDescription = "最近一周的听歌排行"
-                    },
-                    new ListItemInfo
-                    {
-                        Type = ListItemType.Category,
-                        CategoryId = "user_play_record_all",
-                        CategoryName = "全部时间",
-                        CategoryDescription = "所有时间的听歌排行"
-                    }
-                };
-
-                DisplayListItems(subcategories);
-                UpdateStatusBar("请选择榜单类型");
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[LoadUserPlayRecord] 异常: {ex}");
-                MessageBox.Show($"加载听歌排行失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                UpdateStatusBar("加载失败");
-            }
-        }
-
-        /// <summary>
-        /// 加载周听歌排行
-        /// </summary>
-        private async Task LoadUserPlayRecordWeek()
-        {
-            await LoadUserPlayRecordByType(1, "周榜单");
-        }
-
-        /// <summary>
-        /// 加载全部时间听歌排行
-        /// </summary>
-        private async Task LoadUserPlayRecordAll()
-        {
-            await LoadUserPlayRecordByType(0, "全部时间");
-        }
-
-        /// <summary>
-        /// 加载听歌排行（通用方法）
-        /// </summary>
-        private async Task LoadUserPlayRecordByType(int type, string typeName)
-        {
-            try
-            {
-                UpdateStatusBar($"正在加载{typeName}听歌排行...");
-
-                var userInfo = await _apiClient.GetUserAccountAsync();
-                if (userInfo == null || userInfo.UserId <= 0)
-                {
-                    MessageBox.Show("获取用户信息失败", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    UpdateStatusBar("加载失败");
-                    return;
-                }
-
-                var playRecords = await _apiClient.GetUserPlayRecordAsync(userInfo.UserId, type);
-
-                if (playRecords == null || playRecords.Count == 0)
-                {
-                    MessageBox.Show($"暂无{typeName}听歌记录", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    UpdateStatusBar("就绪");
-                    return;
-                }
-
-                // 提取歌曲列表（暂时忽略播放次数，可以后续在UI上显示）
-                var songs = playRecords.Select(r => r.song).ToList();
-                DisplaySongs(songs);
-                _currentSongs = songs;
-                _currentViewSource = $"user_play_record_{(type == 1 ? "week" : "all")}";
-                _currentPlaylist = null;
-                resultListView.AccessibleName = $"{typeName}听歌排行";
-                UpdateStatusBar($"加载完成，共 {songs.Count} 首歌曲");
-
-                System.Diagnostics.Debug.WriteLine($"[LoadUserPlayRecord] 成功加载 {songs.Count} 首{typeName}歌曲");
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[LoadUserPlayRecordByType] 异常: {ex}");
-                MessageBox.Show($"加载{typeName}听歌排行失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                UpdateStatusBar("加载失败");
-            }
-        }
 
         /// <summary>
         /// 加载精品歌单
@@ -1598,10 +1582,10 @@ namespace YTPlayer
                     return;
                 }
 
-                DisplayPlaylists(playlists);
-                _currentPlaylists = playlists;
-                _currentViewSource = "highquality_playlists";
-                resultListView.AccessibleName = "精品歌单";
+                DisplayPlaylists(
+                    playlists,
+                    viewSource: "highquality_playlists",
+                    accessibleName: "精品歌单");
                 UpdateStatusBar($"加载完成，共 {playlists.Count} 个精品歌单");
 
                 System.Diagnostics.Debug.WriteLine($"[LoadHighQualityPlaylists] 成功加载 {playlists.Count} 个精品歌单, lasttime={lasttime}, more={more}");
@@ -1617,7 +1601,7 @@ namespace YTPlayer
         /// <summary>
         /// 加载新歌速递（显示地区子分类）
         /// </summary>
-        private async Task LoadNewSongs()
+        private Task LoadNewSongs()
         {
             try
             {
@@ -1663,7 +1647,10 @@ namespace YTPlayer
                     }
                 };
 
-                DisplayListItems(subcategories);
+                DisplayListItems(
+                    subcategories,
+                    viewSource: "new_songs",
+                    accessibleName: "新歌速递");
                 UpdateStatusBar("请选择地区");
             }
             catch (Exception ex)
@@ -1672,6 +1659,8 @@ namespace YTPlayer
                 MessageBox.Show($"加载新歌速递失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 UpdateStatusBar("加载失败");
             }
+
+            return Task.CompletedTask;
         }
 
         /// <summary>
@@ -1732,11 +1721,12 @@ namespace YTPlayer
                     return;
                 }
 
-                DisplaySongs(songs);
-                _currentSongs = songs;
-                _currentViewSource = $"new_songs_{areaName.ToLower()}";
+                string areaViewSource = $"new_songs_{areaName.ToLower()}";
+                DisplaySongs(
+                    songs,
+                    viewSource: areaViewSource,
+                    accessibleName: $"{areaName}新歌速递");
                 _currentPlaylist = null;
-                resultListView.AccessibleName = $"{areaName}新歌速递";
                 UpdateStatusBar($"加载完成，共 {songs.Count} 首{areaName}新歌");
 
                 System.Diagnostics.Debug.WriteLine($"[LoadNewSongs] 成功加载 {songs.Count} 首{areaName}新歌");
@@ -1767,11 +1757,11 @@ namespace YTPlayer
                     return;
                 }
 
-                DisplaySongs(songs);
-                _currentSongs = songs;
-                _currentViewSource = "personalized_newsong";
+                DisplaySongs(
+                    songs,
+                    viewSource: "personalized_newsong",
+                    accessibleName: "推荐新歌");
                 _currentPlaylist = null;
-                resultListView.AccessibleName = "推荐新歌";
                 UpdateStatusBar($"加载完成，共 {songs.Count} 首推荐新歌");
 
                 System.Diagnostics.Debug.WriteLine($"[LoadPersonalizedNewSong] 成功加载 {songs.Count} 首推荐新歌");
@@ -1785,77 +1775,9 @@ namespace YTPlayer
         }
 
         /// <summary>
-        /// 加载最近播放的歌单
-        /// </summary>
-        private async Task LoadRecentPlaylists()
-        {
-            try
-            {
-                UpdateStatusBar("正在加载最近播放的歌单...");
-
-                var playlists = await _apiClient.GetRecentPlaylistsAsync(100);
-
-                if (playlists == null || playlists.Count == 0)
-                {
-                    MessageBox.Show("暂无最近播放的歌单", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    UpdateStatusBar("就绪");
-                    return;
-                }
-
-                DisplayPlaylists(playlists);
-                _currentPlaylists = playlists;
-                _currentViewSource = "recent_playlists";
-                resultListView.AccessibleName = "最近播放的歌单";
-                UpdateStatusBar($"加载完成，共 {playlists.Count} 个歌单");
-
-                System.Diagnostics.Debug.WriteLine($"[LoadRecentPlaylists] 成功加载 {playlists.Count} 个最近播放的歌单");
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[LoadRecentPlaylists] 异常: {ex}");
-                MessageBox.Show($"加载最近播放的歌单失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                UpdateStatusBar("加载失败");
-            }
-        }
-
-        /// <summary>
-        /// 加载最近播放的专辑
-        /// </summary>
-        private async Task LoadRecentAlbums()
-        {
-            try
-            {
-                UpdateStatusBar("正在加载最近播放的专辑...");
-
-                var albums = await _apiClient.GetRecentAlbumsAsync(100);
-
-                if (albums == null || albums.Count == 0)
-                {
-                    MessageBox.Show("暂无最近播放的专辑", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    UpdateStatusBar("就绪");
-                    return;
-                }
-
-                DisplayAlbums(albums);
-                _currentAlbums = albums;
-                _currentViewSource = "recent_albums";
-                resultListView.AccessibleName = "最近播放的专辑";
-                UpdateStatusBar($"加载完成，共 {albums.Count} 个专辑");
-
-                System.Diagnostics.Debug.WriteLine($"[LoadRecentAlbums] 成功加载 {albums.Count} 个最近播放的专辑");
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[LoadRecentAlbums] 异常: {ex}");
-                MessageBox.Show($"加载最近播放的专辑失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                UpdateStatusBar("加载失败");
-            }
-        }
-
-        /// <summary>
         /// 加载歌单分类（显示分类列表）
         /// </summary>
-        private async Task LoadPlaylistCategory()
+        private Task LoadPlaylistCategory()
         {
             try
             {
@@ -1936,7 +1858,10 @@ namespace YTPlayer
                     }
                 };
 
-                DisplayListItems(categories);
+                DisplayListItems(
+                    categories,
+                    viewSource: "playlist_category",
+                    accessibleName: "歌单分类");
                 UpdateStatusBar("请选择歌单分类");
             }
             catch (Exception ex)
@@ -1945,6 +1870,8 @@ namespace YTPlayer
                 MessageBox.Show($"加载歌单分类失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 UpdateStatusBar("加载失败");
             }
+
+            return Task.CompletedTask;
         }
 
         /// <summary>
@@ -1968,10 +1895,10 @@ namespace YTPlayer
                     return;
                 }
 
-                DisplayPlaylists(playlists);
-                _currentPlaylists = playlists;
-                _currentViewSource = $"playlist_cat_{cat}";
-                resultListView.AccessibleName = $"{cat}歌单";
+                DisplayPlaylists(
+                    playlists,
+                    viewSource: $"playlist_cat_{cat}",
+                    accessibleName: $"{cat}歌单");
                 UpdateStatusBar($"加载完成，共 {playlists.Count} 个{cat}歌单");
 
                 System.Diagnostics.Debug.WriteLine($"[LoadPlaylistsByCat] 成功加载 {playlists.Count} 个{cat}歌单, total={total}, more={more}");
@@ -2002,10 +1929,10 @@ namespace YTPlayer
                     return;
                 }
 
-                DisplayAlbums(albums);
-                _currentAlbums = albums;
-                _currentViewSource = "new_albums";
-                resultListView.AccessibleName = "新碟上架";
+                DisplayAlbums(
+                    albums,
+                    viewSource: "new_albums",
+                    accessibleName: "新碟上架");
                 UpdateStatusBar($"加载完成，共 {albums.Count} 个新专辑");
 
                 System.Diagnostics.Debug.WriteLine($"[LoadNewAlbums] 成功加载 {albums.Count} 个新专辑");
@@ -2027,6 +1954,16 @@ namespace YTPlayer
         {
             try
             {
+                // 优先使用缓存的歌单对象（主页加载时已获取）
+                if (_userLikedPlaylist != null)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[LoadUserLikedSongs] 使用缓存的歌单对象: {_userLikedPlaylist.Name}");
+                    await OpenPlaylist(_userLikedPlaylist, skipSave: false, preserveSelection: preserveSelection);
+                    return;
+                }
+
+                // 如果缓存为空，则重新获取（fallback逻辑）
+                System.Diagnostics.Debug.WriteLine("[LoadUserLikedSongs] 缓存为空，重新获取歌单列表");
                 var userInfo = await _apiClient.GetUserAccountAsync();
                 if (userInfo == null || userInfo.UserId <= 0)
                 {
@@ -2039,37 +1976,31 @@ namespace YTPlayer
                     _loggedInUserId = userInfo.UserId;
                 }
 
-                // 获取喜欢的歌曲ID列表
-                var likedIds = await _apiClient.GetUserLikedSongsAsync(userInfo.UserId);
-                if (likedIds == null || likedIds.Count == 0)
+                var (playlists, _) = await _apiClient.GetUserPlaylistsAsync(userInfo.UserId);
+                if (playlists == null || playlists.Count == 0)
                 {
-                    MessageBox.Show("您还没有喜欢的歌曲", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    MessageBox.Show("获取歌单列表失败", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return;
                 }
 
-                // 获取歌曲详情（分批获取，每次最多100首）
-                var allSongs = new List<SongInfo>();
-                for (int i = 0; i < likedIds.Count; i += 100)
+                var likedPlaylist = playlists.FirstOrDefault(p =>
+                    !string.IsNullOrEmpty(p.Name) &&
+                    p.Name.IndexOf("喜欢的音乐", StringComparison.OrdinalIgnoreCase) >= 0);
+
+                if (likedPlaylist == null)
                 {
-                    var batchIds = likedIds.Skip(i).Take(100).ToArray();
-                    var songs = await _apiClient.GetSongDetailAsync(batchIds);
-                    if (songs != null)
-                    {
-                        allSongs.AddRange(songs);
-                    }
+                    MessageBox.Show("未找到喜欢的音乐歌单", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
                 }
 
-                DisplaySongs(allSongs, preserveSelection: preserveSelection);
-                _currentSongs = allSongs;
-                _currentViewSource = "user_liked_songs";
-                _currentPlaylist = null;  // 清空当前歌单
-                resultListView.AccessibleName = "我喜欢的音乐";
-                UpdateStatusBar($"加载完成，共 {allSongs.Count} 首歌曲");
+                // 缓存歌单对象
+                _userLikedPlaylist = likedPlaylist;
+                await OpenPlaylist(likedPlaylist, skipSave: false, preserveSelection: preserveSelection);
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[LoadUserLikedSongs] 异常: {ex}");
-                throw;
+                MessageBox.Show($"加载喜欢的音乐失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -2092,19 +2023,29 @@ namespace YTPlayer
                     _loggedInUserId = userInfo.UserId;
                 }
 
-                var playlists = await _apiClient.GetUserPlaylistsAsync(userInfo.UserId);
+                var (playlists, _) = await _apiClient.GetUserPlaylistsAsync(userInfo.UserId);
                 if (playlists == null || playlists.Count == 0)
                 {
                     MessageBox.Show("您还没有歌单", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return;
                 }
 
-                DisplayPlaylists(playlists, preserveSelection);
-                _currentPlaylists = playlists;
-                _currentViewSource = "user_playlists";
+                // 过滤掉"喜欢的音乐"歌单（ID等于用户ID的歌单）
+                var filteredPlaylists = playlists.Where(p => p.Id != userInfo.UserId.ToString()).ToList();
+
+                if (filteredPlaylists.Count == 0)
+                {
+                    MessageBox.Show("您还没有创建或收藏歌单", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                DisplayPlaylists(
+                    filteredPlaylists,
+                    preserveSelection: preserveSelection,
+                    viewSource: "user_playlists",
+                    accessibleName: "我的歌单");
                 _currentPlaylist = null;  // 清空当前歌单
-                resultListView.AccessibleName = "我的歌单";
-                UpdateStatusBar($"加载完成，共 {playlists.Count} 个歌单");
+                UpdateStatusBar($"加载完成，共 {filteredPlaylists.Count} 个歌单");
             }
             catch (Exception ex)
             {
@@ -2120,18 +2061,19 @@ namespace YTPlayer
         {
             try
             {
-                var albums = await _apiClient.GetUserAlbumsAsync();
+                var (albums, totalCount) = await _apiClient.GetUserAlbumsAsync();
                 if (albums == null || albums.Count == 0)
                 {
                     MessageBox.Show("您还没有收藏专辑", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return;
                 }
 
-                DisplayAlbums(albums, preserveSelection);
-                _currentAlbums = albums;
-                _currentViewSource = "user_albums";
-                resultListView.AccessibleName = "收藏的专辑";
-                UpdateStatusBar($"加载完成，共 {albums.Count} 个专辑");
+                DisplayAlbums(
+                    albums,
+                    preserveSelection: preserveSelection,
+                    viewSource: "user_albums",
+                    accessibleName: "收藏的专辑");
+                UpdateStatusBar($"加载完成，共 {totalCount} 个专辑");
             }
             catch (Exception ex)
             {
@@ -2167,10 +2109,10 @@ namespace YTPlayer
                     CategoryDescription = "根据您的听歌习惯推荐的歌单"
                 });
 
-                DisplayListItems(items);
-                _currentListItems = items;
-                _currentViewSource = "daily_recommend";
-                resultListView.AccessibleName = "每日推荐";
+                DisplayListItems(
+                    items,
+                    viewSource: "daily_recommend",
+                    accessibleName: "每日推荐");
                 UpdateStatusBar("每日推荐");
             }
             catch (Exception ex)
@@ -2209,10 +2151,10 @@ namespace YTPlayer
                     CategoryDescription = "最新发行的歌曲推荐"
                 });
 
-                DisplayListItems(items);
-                _currentListItems = items;
-                _currentViewSource = "personalized";
-                resultListView.AccessibleName = "为您推荐";
+                DisplayListItems(
+                    items,
+                    viewSource: "personalized",
+                    accessibleName: "为您推荐");
                 UpdateStatusBar("为您推荐");
             }
             catch (Exception ex)
@@ -2238,10 +2180,10 @@ namespace YTPlayer
                     return;
                 }
 
-                DisplayPlaylists(toplists);
-                _currentPlaylists = toplists;
-                _currentViewSource = "toplist";
-                resultListView.AccessibleName = "官方排行榜";
+                DisplayPlaylists(
+                    toplists,
+                    viewSource: "toplist",
+                    accessibleName: "官方排行榜");
                 UpdateStatusBar($"加载完成，共 {toplists.Count} 个排行榜");
             }
             catch (Exception ex)
@@ -2265,10 +2207,10 @@ namespace YTPlayer
                     return;
                 }
 
-                DisplaySongs(songs);
-                _currentSongs = songs;
-                _currentViewSource = "daily_recommend_songs";
-                resultListView.AccessibleName = "每日推荐歌曲";
+                DisplaySongs(
+                    songs,
+                    viewSource: "daily_recommend_songs",
+                    accessibleName: "每日推荐歌曲");
                 UpdateStatusBar($"加载完成，共 {songs.Count} 首歌曲");
             }
             catch (Exception ex)
@@ -2292,10 +2234,10 @@ namespace YTPlayer
                     return;
                 }
 
-                DisplayPlaylists(playlists);
-                _currentPlaylists = playlists;
-                _currentViewSource = "daily_recommend_playlists";
-                resultListView.AccessibleName = "每日推荐歌单";
+                DisplayPlaylists(
+                    playlists,
+                    viewSource: "daily_recommend_playlists",
+                    accessibleName: "每日推荐歌单");
                 UpdateStatusBar($"加载完成，共 {playlists.Count} 个歌单");
             }
             catch (Exception ex)
@@ -2319,10 +2261,10 @@ namespace YTPlayer
                     return;
                 }
 
-                DisplayPlaylists(playlists);
-                _currentPlaylists = playlists;
-                _currentViewSource = "personalized_playlists";
-                resultListView.AccessibleName = "推荐歌单";
+                DisplayPlaylists(
+                    playlists,
+                    viewSource: "personalized_playlists",
+                    accessibleName: "推荐歌单");
                 UpdateStatusBar($"加载完成，共 {playlists.Count} 个歌单");
             }
             catch (Exception ex)
@@ -2346,10 +2288,10 @@ namespace YTPlayer
                     return;
                 }
 
-                DisplaySongs(songs);
-                _currentSongs = songs;
-                _currentViewSource = "personalized_newsongs";
-                resultListView.AccessibleName = "推荐新歌";
+                DisplaySongs(
+                    songs,
+                    viewSource: "personalized_newsongs",
+                    accessibleName: "推荐新歌");
                 UpdateStatusBar($"加载完成，共 {songs.Count} 首歌曲");
             }
             catch (Exception ex)
@@ -2363,7 +2305,15 @@ namespace YTPlayer
         /// 显示歌曲列表
         /// </summary>
         /// <param name="startIndex">起始序号（默认为1，分页时应传入正确的起始序号）</param>
-        private void DisplaySongs(List<SongInfo> songs, bool showPagination = false, bool hasNextPage = false, int startIndex = 1, bool preserveSelection = false)
+        private void DisplaySongs(
+            List<SongInfo> songs,
+            bool showPagination = false,
+            bool hasNextPage = false,
+            int startIndex = 1,
+            bool preserveSelection = false,
+            string? viewSource = null,
+            string? accessibleName = null,
+            bool skipAvailabilityCheck = false)
         {
             int previousSelectedIndex = -1;
             if (preserveSelection && resultListView.SelectedIndices.Count > 0)
@@ -2380,12 +2330,10 @@ namespace YTPlayer
             resultListView.BeginUpdate();
             resultListView.Items.Clear();
 
-            // 设置列表AccessibleName
-            resultListView.AccessibleName = "搜索结果";
-
             if (songs == null || songs.Count == 0)
             {
                 resultListView.EndUpdate();
+                SetViewContext(viewSource, accessibleName ?? "歌曲列表");
                 return;
             }
 
@@ -2425,6 +2373,16 @@ namespace YTPlayer
 
             resultListView.EndUpdate();
 
+            string defaultAccessibleName = accessibleName;
+            if (string.IsNullOrWhiteSpace(defaultAccessibleName))
+            {
+                bool isSearchView = !string.IsNullOrEmpty(viewSource) &&
+                                    viewSource.StartsWith("search:", StringComparison.OrdinalIgnoreCase);
+                defaultAccessibleName = isSearchView ? "搜索结果" : "歌曲列表";
+            }
+
+            SetViewContext(viewSource, defaultAccessibleName);
+
             if (resultListView.Items.Count > 0)
             {
                 int targetIndex = previousSelectedIndex >= 0
@@ -2434,17 +2392,77 @@ namespace YTPlayer
                 RestoreListViewFocus(targetIndex);
             }
 
-            // 批量检查歌曲资源可用性（异步非阻塞）
-            if (songs != null && songs.Count > 0)
+            if (!skipAvailabilityCheck)
             {
-                _ = BatchCheckSongsAvailabilityAsync(songs);
+                ScheduleAvailabilityCheck(songs);
             }
+        }
+
+        /// <summary>
+        /// 统一设置视图上下文（来源标识与无障碍名称）
+        /// </summary>
+        /// <param name="viewSource">视图来源标识（如 homepage、playlist:123）</param>
+        /// <param name="accessibleName">无障碍描述文本</param>
+        private void SetViewContext(string? viewSource, string? accessibleName)
+        {
+            if (!string.IsNullOrWhiteSpace(viewSource))
+            {
+                _currentViewSource = viewSource;
+                _isHomePage = string.Equals(viewSource, "homepage", StringComparison.OrdinalIgnoreCase);
+            }
+            else if (string.IsNullOrEmpty(_currentViewSource))
+            {
+                _isHomePage = false;
+            }
+
+            if (!string.IsNullOrWhiteSpace(accessibleName))
+            {
+                resultListView.AccessibleName = accessibleName;
+            }
+            else if (string.IsNullOrWhiteSpace(resultListView.AccessibleName))
+            {
+                resultListView.AccessibleName = "列表内容";
+            }
+        }
+
+        /// <summary>
+        /// 安排歌曲可用性检查任务（带取消与异常保护）
+        /// </summary>
+        private void ScheduleAvailabilityCheck(List<SongInfo> songs)
+        {
+            _availabilityCheckCts?.Cancel();
+            _availabilityCheckCts?.Dispose();
+            _availabilityCheckCts = null;
+
+            if (songs == null || songs.Count == 0)
+            {
+                return;
+            }
+
+            var availabilityCts = new CancellationTokenSource();
+            _availabilityCheckCts = availabilityCts;
+
+            _ = BatchCheckSongsAvailabilityAsync(songs, availabilityCts.Token)
+                .ContinueWith(task =>
+                {
+                    if (task.IsFaulted && task.Exception != null)
+                    {
+                        foreach (var ex in task.Exception.Flatten().InnerExceptions)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[StreamCheck] 可用性检查任务异常: {ex.Message}");
+                        }
+                    }
+                }, TaskScheduler.Default);
         }
 
         /// <summary>
         /// 显示歌单列表
         /// </summary>
-        private void DisplayPlaylists(List<PlaylistInfo> playlists, bool preserveSelection = false)
+        private void DisplayPlaylists(
+            List<PlaylistInfo> playlists,
+            bool preserveSelection = false,
+            string? viewSource = null,
+            string? accessibleName = null)
         {
             int previousSelectedIndex = -1;
             if (preserveSelection && resultListView.SelectedIndices.Count > 0)
@@ -2461,12 +2479,10 @@ namespace YTPlayer
             resultListView.BeginUpdate();
             resultListView.Items.Clear();
 
-            // 设置列表AccessibleName
-            resultListView.AccessibleName = "搜索结果";
-
             if (playlists == null || playlists.Count == 0)
             {
                 resultListView.EndUpdate();
+                SetViewContext(viewSource, accessibleName ?? "歌单列表");
                 return;
             }
 
@@ -2477,7 +2493,7 @@ namespace YTPlayer
                 {
                     "",  // 歌单列表不显示索引号
                     playlist.Name ?? "未知",
-                    playlist.Creator ?? "未知",
+                    "",  // 不显示创建者
                     playlist.TrackCount.ToString() + " 首",
                     playlist.Description ?? ""
                 });
@@ -2487,6 +2503,14 @@ namespace YTPlayer
             }
 
             resultListView.EndUpdate();
+
+            string defaultAccessibleName = accessibleName;
+            if (string.IsNullOrWhiteSpace(defaultAccessibleName))
+            {
+                defaultAccessibleName = "歌单列表";
+            }
+
+            SetViewContext(viewSource, defaultAccessibleName);
 
             if (resultListView.Items.Count > 0)
             {
@@ -2501,7 +2525,10 @@ namespace YTPlayer
         /// <summary>
         /// 显示统一的列表项（支持歌曲、歌单、专辑、分类混合显示）
         /// </summary>
-        private void DisplayListItems(List<ListItemInfo> items)
+        private void DisplayListItems(
+            List<ListItemInfo> items,
+            string? viewSource = null,
+            string? accessibleName = null)
         {
             // 清空所有列表（确保只有一种类型的数据）
             _currentSongs.Clear();
@@ -2515,6 +2542,7 @@ namespace YTPlayer
             if (items == null || items.Count == 0)
             {
                 resultListView.EndUpdate();
+                SetViewContext(viewSource, accessibleName ?? "分类列表");
                 return;
             }
 
@@ -2564,12 +2592,24 @@ namespace YTPlayer
                 resultListView.Items[0].Focused = true;
                 resultListView.Focus();
             }
+
+            string defaultAccessibleName = accessibleName;
+            if (string.IsNullOrWhiteSpace(defaultAccessibleName))
+            {
+                defaultAccessibleName = "分类列表";
+            }
+
+            SetViewContext(viewSource, defaultAccessibleName);
         }
 
         /// <summary>
         /// 显示专辑列表
         /// </summary>
-        private void DisplayAlbums(List<AlbumInfo> albums, bool preserveSelection = false)
+        private void DisplayAlbums(
+            List<AlbumInfo> albums,
+            bool preserveSelection = false,
+            string? viewSource = null,
+            string? accessibleName = null)
         {
             int previousSelectedIndex = -1;
             if (preserveSelection && resultListView.SelectedIndices.Count > 0)
@@ -2586,12 +2626,10 @@ namespace YTPlayer
             resultListView.BeginUpdate();
             resultListView.Items.Clear();
 
-            // 设置列表AccessibleName
-            resultListView.AccessibleName = "搜索结果";
-
             if (albums == null || albums.Count == 0)
             {
                 resultListView.EndUpdate();
+                SetViewContext(viewSource, accessibleName ?? "专辑列表");
                 return;
             }
 
@@ -2602,9 +2640,9 @@ namespace YTPlayer
                 {
                     "",  // 专辑列表不显示索引号
                     album.Name ?? "未知",
-                    album.Artist ?? "未知",
-                    album.PublishTime ?? "",
-                    ""
+                    "",  // 不显示艺术家
+                    album.TrackCount.ToString() + " 首",
+                    album.PublishTime ?? ""
                 });
                 item.Tag = album;
                 resultListView.Items.Add(item);
@@ -2612,6 +2650,14 @@ namespace YTPlayer
             }
 
             resultListView.EndUpdate();
+
+            string defaultAccessibleName = accessibleName;
+            if (string.IsNullOrWhiteSpace(defaultAccessibleName))
+            {
+                defaultAccessibleName = "专辑列表";
+            }
+
+            SetViewContext(viewSource, defaultAccessibleName);
 
             if (resultListView.Items.Count > 0)
             {
@@ -2726,11 +2772,35 @@ namespace YTPlayer
         /// </summary>
         private async void OnPrevPage()
         {
-            if (_currentPage > 1)
+            if (!string.IsNullOrEmpty(_currentViewSource) &&
+                _currentViewSource.StartsWith("search:", StringComparison.OrdinalIgnoreCase))
             {
-                _currentPage--;
-                await PerformSearch();
+                if (_currentPage > 1)
+                {
+                    _currentPage--;
+                    await PerformSearch();
+                }
+                else
+                {
+                    UpdateStatusBar("已经是第一页");
+                }
+                return;
             }
+
+            if (string.Equals(_currentViewSource, "user_cloud", StringComparison.OrdinalIgnoreCase))
+            {
+                if (_cloudPage <= 1)
+                {
+                    UpdateStatusBar("已经是第一页");
+                    return;
+                }
+
+                _cloudPage = Math.Max(1, _cloudPage - 1);
+                await LoadCloudSongsAsync(skipSave: true, preserveSelection: false);
+                return;
+            }
+
+            UpdateStatusBar("当前内容不支持翻页");
         }
 
         /// <summary>
@@ -2738,14 +2808,34 @@ namespace YTPlayer
         /// </summary>
         private async void OnNextPage()
         {
-            if (!_hasNextSearchPage && _currentPage >= _maxPage)
+            if (!string.IsNullOrEmpty(_currentViewSource) &&
+                _currentViewSource.StartsWith("search:", StringComparison.OrdinalIgnoreCase))
             {
-                UpdateStatusBar("已经是最后一页");
+                if (!_hasNextSearchPage && _currentPage >= _maxPage)
+                {
+                    UpdateStatusBar("已经是最后一页");
+                    return;
+                }
+
+                _currentPage++;
+                await PerformSearch();
                 return;
             }
 
-            _currentPage++;
-            await PerformSearch();
+            if (string.Equals(_currentViewSource, "user_cloud", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!_cloudHasMore)
+                {
+                    UpdateStatusBar("已经是最后一页");
+                    return;
+                }
+
+                _cloudPage++;
+                await LoadCloudSongsAsync(skipSave: true, preserveSelection: false);
+                return;
+            }
+
+            UpdateStatusBar("当前内容不支持翻页");
         }
 
         #endregion
@@ -2859,33 +2949,28 @@ private void SyncPlayPauseButtonText()
     }
 }
 
+#pragma warning restore CS8600, CS8601, CS8602, CS8603, CS8604, CS8625
 /// <summary>
 /// 播放/暂停切换（异步版本，避免UI阻塞）
 /// </summary>
-private async Task TogglePlayPauseAsync()
+private void TogglePlayPause()
 {
-    if (_audioEngine == null) return;
+    if (_audioEngine == null)
+    {
+        return;
+    }
 
     var state = _audioEngine.GetPlaybackState();
 
-    if (state == PlaybackState.Playing)
+    switch (state)
     {
-        // 直接调用音频引擎
-        _audioEngine.Pause();
+        case PlaybackState.Playing:
+            _audioEngine.Pause();
+            break;
+        case PlaybackState.Paused:
+            _audioEngine.Resume();
+            break;
     }
-    else if (state == PlaybackState.Paused)
-    {
-        // 直接调用音频引擎
-        _audioEngine.Resume();
-    }
-}
-
-/// <summary>
-/// 播放/暂停切换（同步包装，保持向后兼容）
-/// </summary>
-private async void TogglePlayPause()
-{
-    await TogglePlayPauseAsync();
 }
 
         /// <summary>
@@ -3011,12 +3096,12 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
         /// <summary>
         /// 更新播放按钮的 AccessibleDescription（参考 Python 版本 12988行）
         /// </summary>
-        private void UpdatePlayButtonDescription(SongInfo song)
+        private void UpdatePlayButtonDescription(SongInfo? song)
         {
             // ⭐ 线程安全检查：确保在 UI 线程上执行
             if (this.InvokeRequired)
             {
-                this.BeginInvoke(new Action<SongInfo>(UpdatePlayButtonDescription), song);
+                this.BeginInvoke(new Action<SongInfo?>(UpdatePlayButtonDescription), song);
                 return;
             }
 
@@ -3235,6 +3320,11 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
 
         private void ScrubKeyTimer_Tick(object sender, EventArgs e)
         {
+            if (_scrubKeyTimer == null)
+            {
+                return;
+            }
+
             if (!_leftKeyPressed && !_rightKeyPressed)
             {
                 _scrubKeyTimer.Stop();
@@ -3445,7 +3535,7 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
                 if (volumeTrackBar.Value < 100)
                 {
                     volumeTrackBar.Value = Math.Min(100, volumeTrackBar.Value + 2);
-                    volumeTrackBar_Scroll(null, null);
+                    volumeTrackBar_Scroll(volumeTrackBar, EventArgs.Empty);
                 }
             }
             else if (e.KeyCode == Keys.Down)
@@ -3456,7 +3546,7 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
                 if (volumeTrackBar.Value > 0)
                 {
                     volumeTrackBar.Value = Math.Max(0, volumeTrackBar.Value - 2);
-                    volumeTrackBar_Scroll(null, null);
+                    volumeTrackBar_Scroll(volumeTrackBar, EventArgs.Empty);
                 }
             }
         }
@@ -3593,7 +3683,7 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
         /// <summary>
         /// ⭐ 播放完成事件 - 只在无法无缝切换时触发
         /// </summary>
-        private void AudioEngine_PlaybackEnded(object sender, SongInfo e)
+        private void AudioEngine_PlaybackEnded(object sender, SongInfo? e)
         {
             System.Diagnostics.Debug.WriteLine($"[MainForm] AudioEngine_PlaybackEnded 被调用，歌曲: {e?.Name}");
 
@@ -3719,9 +3809,14 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
         /// </summary>
         private async void PlaySongDirectAsync(SongInfo song)
         {
+            if (song == null)
+            {
+                throw new ArgumentNullException(nameof(song));
+            }
+
             try
             {
-                System.Diagnostics.Debug.WriteLine($"[MainForm] PlaySongDirectAsync 开始播放: {song?.Name}");
+                System.Diagnostics.Debug.WriteLine($"[MainForm] PlaySongDirectAsync 开始播放: {song.Name}");
                 await PlaySongDirectWithCancellation(song);
             }
             catch (Exception ex)
@@ -3748,8 +3843,8 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
                     {
                         if (song != null && !string.IsNullOrEmpty(song.Url))
                         {
-                            song.Url = null;
-                            song.Level = null;
+                            song.Url = string.Empty;
+                            song.Level = string.Empty;
                             song.Size = 0;
                             song.IsAvailable = null; // 重置可用性状态，以便重新检查
                             clearedCount++;
@@ -3765,8 +3860,8 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
                     {
                         if (song != null && !string.IsNullOrEmpty(song.Url))
                         {
-                            song.Url = null;
-                            song.Level = null;
+                            song.Url = string.Empty;
+                            song.Level = string.Empty;
                             song.Size = 0;
                             song.IsAvailable = null;
                             clearedCount++;
@@ -3838,12 +3933,13 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
                         // 检查 URL 是否有效
                         if (urlResult != null &&
                             urlResult.TryGetValue(nextSong.Id, out var songUrl) &&
-                            !string.IsNullOrEmpty(songUrl?.Url))
+                            songUrl is { Url: { Length: > 0 } resolvedUrl })
                         {
                             // ⭐ 设置试听信息
-                            bool isTrial = songUrl.FreeTrialInfo != null;
-                            long trialStart = songUrl.FreeTrialInfo?.Start ?? 0;
-                            long trialEnd = songUrl.FreeTrialInfo?.End ?? 0;
+                            var trialInfo = songUrl.FreeTrialInfo;
+                            bool isTrial = trialInfo != null;
+                            long trialStart = trialInfo?.Start ?? 0;
+                            long trialEnd = trialInfo?.End ?? 0;
 
                             if (isTrial)
                             {
@@ -3852,17 +3948,17 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
 
                             // 歌曲可用，缓存 URL 信息
                             nextSong.IsAvailable = true;
-                            nextSong.Url = songUrl.Url;
-                            nextSong.Level = songUrl.Level;
+                            nextSong.Url = resolvedUrl;
+                            string resolvedLevel = songUrl.Level ?? quality.ToString().ToLowerInvariant();
+                            nextSong.Level = resolvedLevel;
                             nextSong.Size = songUrl.Size;
                             nextSong.IsTrial = isTrial;
                             nextSong.TrialStart = trialStart;
                             nextSong.TrialEnd = trialEnd;
 
                             // ⭐⭐ 将获取的URL缓存到多音质字典中（确保多音质缓存完整性，包含试听信息）
-                            string qualityLevel = quality.ToString().ToLower();
-                            string actualLevel = songUrl.Level?.ToLower() ?? qualityLevel;
-                            nextSong.SetQualityUrl(actualLevel, songUrl.Url, songUrl.Size, true, isTrial, trialStart, trialEnd);
+                            string actualLevel = resolvedLevel.ToLowerInvariant();
+                            nextSong.SetQualityUrl(actualLevel, resolvedUrl, songUrl.Size, true, isTrial, trialStart, trialEnd);
                             System.Diagnostics.Debug.WriteLine($"[MainForm] ✓ 歌曲可用并已缓存: {nextSong.Name}, 音质: {actualLevel}, 试听: {isTrial}");
                         }
                         else
@@ -3940,7 +4036,7 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
         /// <summary>
         /// 批量检查歌曲资源可用性（异步非阻塞）
         /// </summary>
-        private async Task BatchCheckSongsAvailabilityAsync(List<SongInfo> songs)
+        private async Task BatchCheckSongsAvailabilityAsync(List<SongInfo> songs, CancellationToken cancellationToken)
         {
             if (songs == null || songs.Count == 0)
             {
@@ -3954,6 +4050,11 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
                 if (uncheckedSongs.Count == 0)
                 {
                     System.Diagnostics.Debug.WriteLine("[StreamCheck] 所有歌曲都已检查过，跳过");
+                    return;
+                }
+
+                if (cancellationToken.IsCancellationRequested)
+                {
                     return;
                 }
 
@@ -3981,7 +4082,6 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
                 // 统计计数器（线程安全）
                 int available = 0;
                 int unavailable = 0;
-                object statsLock = new object();
 
                 // 🚀 调用流式API，每检查完一首就立即填入
                 await _apiClient.BatchCheckSongsAvailabilityStreamAsync(
@@ -3989,28 +4089,37 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
                     selectedQuality,
                     onSongChecked: (songId, isAvailable) =>
                     {
+                        if (cancellationToken.IsCancellationRequested)
+                        {
+                            return;
+                        }
+
                         // ⚡ 实时回调：立即填入 IsAvailable
                         if (songLookup.TryGetValue(songId, out var song))
                         {
                             song.IsAvailable = isAvailable;
 
-                            lock (statsLock)
+                            if (isAvailable)
                             {
-                                if (isAvailable)
-                                {
-                                    available++;
-                                    System.Diagnostics.Debug.WriteLine($"[StreamCheck] ⚡ 实时填入 ✓ 可用: {song.Name}");
-                                }
-                                else
-                                {
-                                    unavailable++;
-                                    System.Diagnostics.Debug.WriteLine($"[StreamCheck] ⚡ 实时填入 ✗ 不可用: {song.Name}");
-                                }
+                                Interlocked.Increment(ref available);
+                            }
+                            else
+                            {
+                                Interlocked.Increment(ref unavailable);
+                                System.Diagnostics.Debug.WriteLine($"[StreamCheck] ⚠️ 标记不可用: {song.Name}");
                             }
                         }
-                    }).ConfigureAwait(false);
+                    },
+                    cancellationToken).ConfigureAwait(false);
 
-                System.Diagnostics.Debug.WriteLine($"[StreamCheck] 🎉 流式检查全部完成：{available} 首可用，{unavailable} 首不可用");
+                if (!cancellationToken.IsCancellationRequested)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[StreamCheck] 🎉 流式检查全部完成：{available} 首可用，{unavailable} 首不可用");
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                System.Diagnostics.Debug.WriteLine("[StreamCheck] 可用性检查任务已取消");
             }
             catch (Exception ex)
             {
@@ -4019,11 +4128,16 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
             }
         }
 
-        private void UpdateStatusBar(string message)
+        private void UpdateStatusBar(string? message)
         {
+            if (message == null)
+            {
+                return;
+            }
+
             if (statusStrip1.InvokeRequired)
             {
-                statusStrip1.Invoke(new Action<string>(UpdateStatusBar), message);
+                statusStrip1.Invoke(new Action<string?>(UpdateStatusBar), message);
                 return;
             }
 
@@ -4033,11 +4147,51 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
             }
         }
 
-        private void SetPlaybackLoadingState(bool isLoading, string statusMessage = null)
+        /// <summary>
+        /// 获取当前播放的歌曲来源ID（用于播放上报）
+        /// 优先级：歌单ID > 歌曲的专辑ID
+        /// </summary>
+        /// <param name="song">要获取来源的歌曲</param>
+        /// <returns>歌单ID或专辑ID</returns>
+        private long? GetCurrentSourceId(SongInfo song)
+        {
+            try
+            {
+                // 优先级1：当前歌单ID（如果正在浏览歌单）
+                if (_currentPlaylist != null && !string.IsNullOrEmpty(_currentPlaylist.Id))
+                {
+                    if (long.TryParse(_currentPlaylist.Id, out long playlistId))
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[MainForm] GetCurrentSourceId: 使用歌单ID={playlistId}");
+                        return playlistId;
+                    }
+                }
+
+                // 优先级2：歌曲的专辑ID
+                if (song != null && !string.IsNullOrEmpty(song.AlbumId))
+                {
+                    if (long.TryParse(song.AlbumId, out long albumId))
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[MainForm] GetCurrentSourceId: 使用专辑ID={albumId} (歌曲: {song.Name})");
+                        return albumId;
+                    }
+                }
+
+                System.Diagnostics.Debug.WriteLine("[MainForm] GetCurrentSourceId: ⚠️ 无法获取有效的 sourceId（既无歌单也无专辑）");
+                return null;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[MainForm] GetCurrentSourceId 异常: {ex.Message}");
+                return null;
+            }
+        }
+
+        private void SetPlaybackLoadingState(bool isLoading, string? statusMessage = null)
         {
             if (InvokeRequired)
             {
-                BeginInvoke(new Action<bool, string>(SetPlaybackLoadingState), isLoading, statusMessage);
+                BeginInvoke(new Action<bool, string?>(SetPlaybackLoadingState), isLoading, statusMessage);
                 return;
             }
 
@@ -4277,28 +4431,28 @@ private void MainForm_KeyDown(object sender, KeyEventArgs e)
         // 直接调用下一曲
         PlayNext(isManual: true);
     }
-    else if (e.KeyCode == Keys.F7)
-    {
-        e.Handled = true;
-        e.SuppressKeyPress = true;
-        // 音量减
-        if (volumeTrackBar.Value > 0)
+        else if (e.KeyCode == Keys.F7)
         {
-            volumeTrackBar.Value = Math.Max(0, volumeTrackBar.Value - 2);
-            volumeTrackBar_Scroll(null, null);
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+        // 音量减
+            if (volumeTrackBar.Value > 0)
+            {
+                volumeTrackBar.Value = Math.Max(0, volumeTrackBar.Value - 2);
+                volumeTrackBar_Scroll(volumeTrackBar, EventArgs.Empty);
+            }
         }
-    }
-    else if (e.KeyCode == Keys.F8)
-    {
+        else if (e.KeyCode == Keys.F8)
+        {
         e.Handled = true;
         e.SuppressKeyPress = true;
         // 音量加
-        if (volumeTrackBar.Value < 100)
-        {
-            volumeTrackBar.Value = Math.Min(100, volumeTrackBar.Value + 2);
-            volumeTrackBar_Scroll(null, null);
+            if (volumeTrackBar.Value < 100)
+            {
+                volumeTrackBar.Value = Math.Min(100, volumeTrackBar.Value + 2);
+                volumeTrackBar_Scroll(volumeTrackBar, EventArgs.Empty);
+            }
         }
-    }
     else if (e.KeyCode == Keys.F11)
     {
         e.Handled = true;
@@ -4324,16 +4478,16 @@ private void MainForm_KeyDown(object sender, KeyEventArgs e)
 /// </summary>
 /// <param name="song">当前歌曲信息，null 表示未播放</param>
 /// <param name="isPaused">是否处于暂停状态</param>
-private void UpdateTrayIconTooltip(SongInfo song, bool isPaused = false)
-{
-    if (_trayIcon == null) return;
+        private void UpdateTrayIconTooltip(SongInfo? song, bool isPaused = false)
+        {
+            if (_trayIcon == null) return;
 
-    // ⭐ 线程安全检查：确保在 UI 线程上执行
-    if (this.InvokeRequired)
-    {
-        this.BeginInvoke(new Action<SongInfo, bool>(UpdateTrayIconTooltip), song, isPaused);
-        return;
-    }
+            // ⭐ 线程安全检查：确保在 UI 线程上执行
+            if (this.InvokeRequired)
+            {
+                this.BeginInvoke(new Action<SongInfo?, bool>(UpdateTrayIconTooltip), song, isPaused);
+                return;
+            }
 
     if (song == null)
     {
@@ -4439,9 +4593,9 @@ private void RestoreFromTray()
         SetForegroundWindow(this.Handle);
 
         // 3) 设置窗口内控件焦点并通知辅助技术
-        this.BeginInvoke(new System.Action(() =>
-        {
-            System.Windows.Forms.Control target = null;
+            this.BeginInvoke(new System.Action(() =>
+            {
+                System.Windows.Forms.Control? target = null;
 
             // 焦点优先级：结果列表 > 搜索框 > 播放/暂停按钮
             if (resultListView != null && resultListView.CanFocus)
@@ -4704,16 +4858,18 @@ private void TrayIcon_MouseClick(object sender, System.Windows.Forms.MouseEventA
 
             System.Diagnostics.Debug.WriteLine($"[UpdateLoginMenuItemText] UsePersonalCookie={_apiClient.UsePersonalCookie} (自动检测)");
             System.Diagnostics.Debug.WriteLine($"[UpdateLoginMenuItemText] IsLoggedIn={_accountState?.IsLoggedIn}");
-            System.Diagnostics.Debug.WriteLine($"[UpdateLoginMenuItemText] MusicU={(string.IsNullOrEmpty(_accountState?.MusicU) ? "未设置" : "已设置")}");
+            string? stateMusicU = _accountState?.MusicU;
+            System.Diagnostics.Debug.WriteLine($"[UpdateLoginMenuItemText] MusicU={(string.IsNullOrEmpty(stateMusicU) ? "未设置" : "已设置")}");
             System.Diagnostics.Debug.WriteLine($"[UpdateLoginMenuItemText] Nickname={_accountState?.Nickname ?? "null"}");
             System.Diagnostics.Debug.WriteLine($"[UpdateLoginMenuItemText] AvatarUrl={_accountState?.AvatarUrl ?? "null"}");
             System.Diagnostics.Debug.WriteLine($"[UpdateLoginMenuItemText] VipType={_accountState?.VipType ?? 0}");
 
             if (loggedIn)
             {
-                string displayName = string.IsNullOrEmpty(_accountState?.Nickname)
+                string? nickname = _accountState?.Nickname;
+                string displayName = string.IsNullOrEmpty(nickname)
                     ? "用户信息"
-                    : _accountState.Nickname;
+                    : nickname!;
 
                 System.Diagnostics.Debug.WriteLine($"[UpdateLoginMenuItemText] 设置菜单项为: {displayName}");
 
@@ -4780,7 +4936,11 @@ private void TrayIcon_MouseClick(object sender, System.Windows.Forms.MouseEventA
             }
 
             System.Diagnostics.Debug.WriteLine($"[LoginMenuItem] 从_apiClient读取Cookie:");
-            System.Diagnostics.Debug.WriteLine($"[LoginMenuItem]   _apiClient.MusicU={(string.IsNullOrEmpty(_apiClient.MusicU) ? "未设置⚠️" : $"已设置({_apiClient.MusicU.Length}字符)")}");
+            string? clientMusicU = _apiClient.MusicU;
+            string musicUSummary = string.IsNullOrEmpty(clientMusicU)
+                ? "未设置⚠️"
+                : $"已设置({clientMusicU!.Length}字符)";
+            System.Diagnostics.Debug.WriteLine($"[LoginMenuItem]   _apiClient.MusicU={musicUSummary}");
             System.Diagnostics.Debug.WriteLine($"[LoginMenuItem]   _apiClient.CsrfToken={_apiClient.CsrfToken ?? "未设置⚠️"}");
 
             SyncConfigFromApiClient(args, persist: true);
@@ -4805,7 +4965,11 @@ private void TrayIcon_MouseClick(object sender, System.Windows.Forms.MouseEventA
 
             System.Diagnostics.Debug.WriteLine($"[LoginMenuItem] 账户状态已更新:");
             System.Diagnostics.Debug.WriteLine($"[LoginMenuItem]   _accountState.IsLoggedIn={_accountState?.IsLoggedIn}");
-            System.Diagnostics.Debug.WriteLine($"[LoginMenuItem]   _accountState.MusicU={(string.IsNullOrEmpty(_accountState?.MusicU) ? "未设置⚠️" : $"已设置({_accountState.MusicU.Substring(0, Math.Min(20, _accountState.MusicU.Length))}...)")}");
+            string? accountMusicU = _accountState?.MusicU;
+            string stateMusicUSummary = string.IsNullOrEmpty(accountMusicU)
+                ? "未设置⚠️"
+                : $"已设置({accountMusicU!.Substring(0, Math.Min(20, accountMusicU.Length))}...)";
+            System.Diagnostics.Debug.WriteLine($"[LoginMenuItem]   _accountState.MusicU={stateMusicUSummary}");
             System.Diagnostics.Debug.WriteLine($"[LoginMenuItem]   _accountState.CsrfToken={_accountState?.CsrfToken ?? "未设置⚠️"}");
             System.Diagnostics.Debug.WriteLine($"[LoginMenuItem]   _accountState.Nickname={_accountState?.Nickname}");
             System.Diagnostics.Debug.WriteLine($"[LoginMenuItem]   _accountState.UserId={_accountState?.UserId}");
@@ -5503,7 +5667,7 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             var selectedItem = resultListView.SelectedItems[0];
             System.Diagnostics.Debug.WriteLine($"[MainForm] 插播菜单, Tag={selectedItem.Tag}");
 
-            SongInfo song = null;
+            SongInfo? song = null;
 
             // Tag 存储的是索引
             if (selectedItem.Tag is int index && index >= 0 && index < _currentSongs.Count)
@@ -5542,12 +5706,6 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
         {
             try
             {
-                int previousSelectedIndex = -1;
-                if (preserveSelection && resultListView.SelectedIndices.Count > 0)
-                {
-                    previousSelectedIndex = resultListView.SelectedIndices[0];
-                }
-
                 System.Diagnostics.Debug.WriteLine($"[MainForm] 打开歌单: {playlist.Name} (ID={playlist.Id})");
                 UpdateStatusBar($"正在加载歌单: {playlist.Name}...");
 
@@ -5571,42 +5729,13 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                     return;
                 }
 
-                // 更新当前歌曲列表
-                _currentSongs = songs;
-                _currentViewSource = $"playlist:{playlist.Id}";
                 _currentPlaylist = playlist;  // 保存当前歌单信息
 
-                // 显示歌曲列表并更新AccessibleName
-                resultListView.BeginUpdate();
-                resultListView.Items.Clear();
-                resultListView.AccessibleName = playlist.Name;  // 设置为歌单名称
-
-                int index = 0;
-                foreach (var song in songs)
-                {
-                    var item = new ListViewItem(new[]
-                    {
-                        (index + 1).ToString(),
-                        song.Name ?? "未知",
-                        song.Artist ?? "未知",
-                        song.Album ?? "未知",
-                        song.FormattedDuration
-                    });
-                    item.Tag = index;
-                    resultListView.Items.Add(item);
-                    index++;
-                }
-
-                resultListView.EndUpdate();
-
-                if (resultListView.Items.Count > 0)
-                {
-                    int targetIndex = previousSelectedIndex >= 0
-                        ? Math.Min(previousSelectedIndex, resultListView.Items.Count - 1)
-                        : 0;
-
-                    RestoreListViewFocus(targetIndex);
-                }
+                DisplaySongs(
+                    songs,
+                    preserveSelection: preserveSelection,
+                    viewSource: $"playlist:{playlist.Id}",
+                    accessibleName: playlist.Name);
 
                 UpdateStatusBar($"歌单: {playlist.Name}，共 {songs.Count} 首歌曲");
             }
@@ -5628,6 +5757,16 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             {
                 UpdateStatusBar($"正在加载专辑: {album.Name}...");
 
+                string? albumId = album.Id;
+                if (string.IsNullOrEmpty(albumId))
+                {
+                    MessageBox.Show("无法获取专辑标识，无法加载内容。", "错误",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    UpdateStatusBar("加载专辑失败");
+                    return;
+                }
+                string albumIdValue = albumId!;
+
                 // 保存当前状态到导航历史
                 if (!skipSave)
                 {
@@ -5635,7 +5774,7 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 }
 
                 // 获取专辑内的所有歌曲
-                var songs = await _apiClient.GetAlbumSongsAsync(album.Id);
+                var songs = await _apiClient.GetAlbumSongsAsync(albumIdValue);
 
                 if (songs == null || songs.Count == 0)
                 {
@@ -5644,40 +5783,12 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                     return;
                 }
 
-                // 更新当前歌曲列表
-                _currentSongs = songs;
-                _currentViewSource = $"album:{album.Id}";
                 _currentPlaylist = null;  // 清空当前歌单（当前是专辑视图）
 
-                // 显示歌曲列表并更新AccessibleName
-                resultListView.BeginUpdate();
-                resultListView.Items.Clear();
-                resultListView.AccessibleName = album.Name;  // 设置为专辑名称
-
-                int index = 0;
-                foreach (var song in songs)
-                {
-                    var item = new ListViewItem(new[]
-                    {
-                        (index + 1).ToString(),
-                        song.Name ?? "未知",
-                        song.Artist ?? "未知",
-                        song.Album ?? "未知",
-                        song.FormattedDuration
-                    });
-                    item.Tag = index;
-                    resultListView.Items.Add(item);
-                    index++;
-                }
-
-                resultListView.EndUpdate();
-
-                if (resultListView.Items.Count > 0)
-                {
-                    resultListView.Items[0].Selected = true;
-                    resultListView.Items[0].Focused = true;
-                    resultListView.Focus();
-                }
+                DisplaySongs(
+                    songs,
+                    viewSource: $"album:{albumIdValue}",
+                    accessibleName: album.Name);
 
                 UpdateStatusBar($"专辑: {album.Name}，共 {songs.Count} 首歌曲");
             }
@@ -5721,10 +5832,11 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                     return;
                 }
 
-                DisplaySongs(songs);
-                _currentViewSource = $"playlist:{playlistId}";
+                DisplaySongs(
+                    songs,
+                    viewSource: $"playlist:{playlistId}",
+                    accessibleName: $"歌单: {playlistDetail.Name}");
                 _isHomePage = false;
-                resultListView.AccessibleName = $"歌单: {playlistDetail.Name}";
                 UpdateStatusBar($"歌单 {playlistDetail.Name} 加载完成，共 {songs.Count} 首歌曲");
             }
             catch (Exception ex)
@@ -5759,10 +5871,11 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                     return;
                 }
 
-                DisplaySongs(songs);
-                _currentViewSource = $"album:{albumId}";
+                DisplaySongs(
+                    songs,
+                    viewSource: $"album:{albumId}",
+                    accessibleName: "专辑");
                 _isHomePage = false;
-                resultListView.AccessibleName = $"专辑";
                 UpdateStatusBar($"专辑加载完成，共 {songs.Count} 首歌曲");
             }
             catch (Exception ex)
@@ -5807,9 +5920,14 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                     _hasNextSearchPage = songResult?.HasMore ?? false;
 
                     int startIndex = (page - 1) * _resultsPerPage + 1;
-                    DisplaySongs(_currentSongs, showPagination: true, hasNextPage: _hasNextSearchPage, startIndex: startIndex);
-                    _currentViewSource = $"search:{keyword}";
-                    resultListView.AccessibleName = $"搜索: {keyword}";
+                    string songsViewSource = $"search:{keyword}:page{page}";
+                    DisplaySongs(
+                        _currentSongs,
+                        showPagination: true,
+                        hasNextPage: _hasNextSearchPage,
+                        startIndex: startIndex,
+                        viewSource: songsViewSource,
+                        accessibleName: $"搜索: {keyword}");
                     int totalCount = songResult?.TotalCount ?? _currentSongs.Count;
                     UpdateStatusBar($"第 {_currentPage}/{_maxPage} 页，本页 {_currentSongs.Count} 首 / 总 {totalCount} 首");
                 }
@@ -5819,9 +5937,11 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                     _currentPlaylists = playlistResult?.Items ?? new List<PlaylistInfo>();
                     _hasNextSearchPage = false;
 
-                    DisplayPlaylists(_currentPlaylists);
-                    _currentViewSource = $"search:{keyword}";
-                    resultListView.AccessibleName = $"搜索歌单: {keyword}";
+                    string playlistViewSource = $"search:playlist:{keyword}";
+                    DisplayPlaylists(
+                        _currentPlaylists,
+                        viewSource: playlistViewSource,
+                        accessibleName: $"搜索歌单: {keyword}");
                     int totalCount = playlistResult?.TotalCount ?? _currentPlaylists.Count;
                     UpdateStatusBar($"找到 {_currentPlaylists.Count} 个歌单（总计 {totalCount} 个）");
                 }
@@ -5831,9 +5951,11 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                     _currentAlbums = albumResult?.Items ?? new List<AlbumInfo>();
                     _hasNextSearchPage = false;
 
-                    DisplayAlbums(_currentAlbums);
-                    _currentViewSource = $"search:{keyword}";
-                    resultListView.AccessibleName = $"搜索专辑: {keyword}";
+                    string albumViewSource = $"search:album:{keyword}";
+                    DisplayAlbums(
+                        _currentAlbums,
+                        viewSource: albumViewSource,
+                        accessibleName: $"搜索专辑: {keyword}");
                     int totalCount = albumResult?.TotalCount ?? _currentAlbums.Count;
                     UpdateStatusBar($"找到 {_currentAlbums.Count} 个专辑（总计 {totalCount} 个）");
                 }
@@ -6063,6 +6185,9 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             batchDownloadMenuItem.Visible = false;
             downloadCategoryMenuItem.Visible = false;
             batchDownloadPlaylistsMenuItem.Visible = false;
+            cloudMenuSeparator.Visible = false;
+            uploadToCloudMenuItem.Visible = false;
+            deleteFromCloudMenuItem.Visible = false;
 
             // ⭐ 检查登录状态 - 未登录时收藏相关菜单项保持隐藏
             bool isLoggedIn = IsUserLoggedIn();
@@ -6071,8 +6196,18 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 System.Diagnostics.Debug.WriteLine("[ContextMenu] 用户未登录，所有收藏/取消收藏菜单项保持隐藏");
             }
 
+            bool isCloudView = string.Equals(_currentViewSource, "user_cloud", StringComparison.OrdinalIgnoreCase);
+            if (isCloudView)
+            {
+                uploadToCloudMenuItem.Visible = true;
+                cloudMenuSeparator.Visible = true;
+            }
+
             var selectedItem = resultListView.SelectedItems.Count > 0 ? resultListView.SelectedItems[0] : null;
-            if (selectedItem == null) return;
+            if (selectedItem == null)
+            {
+                return;
+            }
 
             bool isMyPlaylistsView = string.Equals(_currentViewSource, "user_playlists", StringComparison.OrdinalIgnoreCase);
             bool isUserAlbumsView = string.Equals(_currentViewSource, "user_albums", StringComparison.OrdinalIgnoreCase);
@@ -6121,38 +6256,57 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 // 歌曲：显示插播、收藏和下载功能
                 insertPlayMenuItem.Visible = true;
 
-                // ⭐ 显示歌曲收藏菜单项（仅在登录时）
-                if (isLoggedIn)
+                SongInfo? currentSong = null;
+                if (selectedItem.Tag is int songIndex && songIndex >= 0 && songIndex < _currentSongs.Count)
                 {
-                    // 检查当前是否在"我喜欢的音乐"视图中
-                    bool isLikedSongsView = string.Equals(_currentViewSource, "user_liked_songs", StringComparison.OrdinalIgnoreCase);
-
-                    if (isLikedSongsView)
-                    {
-                        // 在"我喜欢的音乐"中：只显示"取消收藏"
-                        likeSongMenuItem.Visible = false;
-                        unlikeSongMenuItem.Visible = true;
-                    }
-                    else
-                    {
-                        // 在其他列表中：显示"收藏歌曲"
-                        likeSongMenuItem.Visible = true;
-                        unlikeSongMenuItem.Visible = false;
-                    }
-
-                    // "添加到歌单"在所有情况下都显示（已登录时）
-                    addToPlaylistMenuItem.Visible = true;
-
-                    // ⭐ "从歌单中移除"只在用户创建的歌单中显示
-                    bool isInUserPlaylist = _currentViewSource.StartsWith("playlist:") &&
-                                           _currentPlaylist != null &&
-                                           IsPlaylistCreatedByCurrentUser(_currentPlaylist);
-                    removeFromPlaylistMenuItem.Visible = isInUserPlaylist;
+                    currentSong = _currentSongs[songIndex];
+                }
+                else if (selectedItem.Tag is SongInfo directSong)
+                {
+                    currentSong = directSong;
                 }
 
-                // 显示下载歌曲和批量下载（批量下载用于选择多首歌曲）
-                downloadSongMenuItem.Visible = true;
-                batchDownloadMenuItem.Visible = true;
+                bool isCloudSong = isCloudView && currentSong != null && currentSong.IsCloudSong;
+
+                if (isCloudSong)
+                {
+                    likeSongMenuItem.Visible = false;
+                    unlikeSongMenuItem.Visible = false;
+                    addToPlaylistMenuItem.Visible = false;
+                    removeFromPlaylistMenuItem.Visible = false;
+                    downloadSongMenuItem.Visible = false;
+                    batchDownloadMenuItem.Visible = false;
+                    deleteFromCloudMenuItem.Visible = true;
+                    cloudMenuSeparator.Visible = true;
+                }
+                else
+                {
+                    if (isLoggedIn)
+                    {
+                        bool isLikedSongsView = string.Equals(_currentViewSource, "user_liked_songs", StringComparison.OrdinalIgnoreCase);
+
+                        if (isLikedSongsView)
+                        {
+                            likeSongMenuItem.Visible = false;
+                            unlikeSongMenuItem.Visible = true;
+                        }
+                        else
+                        {
+                            likeSongMenuItem.Visible = true;
+                            unlikeSongMenuItem.Visible = false;
+                        }
+
+                        addToPlaylistMenuItem.Visible = true;
+
+                        bool isInUserPlaylist = _currentViewSource.StartsWith("playlist:") &&
+                                               _currentPlaylist != null &&
+                                               IsPlaylistCreatedByCurrentUser(_currentPlaylist);
+                        removeFromPlaylistMenuItem.Visible = isInUserPlaylist;
+                    }
+
+                    downloadSongMenuItem.Visible = true;
+                    batchDownloadMenuItem.Visible = true;
+                }
             }
         }
 
@@ -6292,7 +6446,16 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 try
                 {
                     UpdateStatusBar("正在收藏专辑...");
-                    bool success = await _apiClient.SubscribeAlbumAsync(album.Id);
+                    if (string.IsNullOrEmpty(album.Id))
+                    {
+                        MessageBox.Show("无法识别专辑信息，收藏操作已取消。", "提示",
+                            MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        UpdateStatusBar("专辑收藏失败");
+                        return;
+                    }
+
+                    string albumId = album.Id!;
+                    bool success = await _apiClient.SubscribeAlbumAsync(albumId);
                     if (success)
                     {
                         MessageBox.Show($"已收藏专辑：{album.Name}", "成功",
@@ -6326,7 +6489,16 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 try
                 {
                     UpdateStatusBar("正在取消收藏专辑...");
-                    bool success = await _apiClient.UnsubscribeAlbumAsync(album.Id);
+                    if (string.IsNullOrEmpty(album.Id))
+                    {
+                        MessageBox.Show("无法识别专辑信息，取消收藏操作已取消。", "提示",
+                            MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        UpdateStatusBar("取消收藏失败");
+                        return;
+                    }
+
+                    string albumId = album.Id!;
+                    bool success = await _apiClient.UnsubscribeAlbumAsync(albumId);
                     if (success)
                     {
                         MessageBox.Show($"已取消收藏专辑：{album.Name}", "成功",
@@ -6428,6 +6600,10 @@ protected override void OnFormClosing(FormClosingEventArgs e)
         _playbackCancellation?.Cancel();
         _playbackCancellation?.Dispose();
 
+        _availabilityCheckCts?.Cancel();
+        _availabilityCheckCts?.Dispose();
+        _availabilityCheckCts = null;
+
         // ⭐ 使用 SeekManager 取消
         _seekManager?.CancelPendingSeeks();
         _seekManager?.Dispose();
@@ -6445,6 +6621,7 @@ protected override void OnFormClosing(FormClosingEventArgs e)
         _updateTimer?.Stop();
         _nextSongPreloader?.Dispose();
         _audioEngine?.Dispose();
+
         _apiClient?.Dispose();
 
         // 🔧 修复：释放下载管理器，停止所有下载任务
@@ -6501,53 +6678,57 @@ protected override void OnFormClosing(FormClosingEventArgs e)
         /// <summary>
         /// 页面类型
         /// </summary>
-        public string PageType { get; set; }  // "homepage", "category", "playlist", "album", "search", "songs", "playlists", "albums"
+        public string PageType { get; set; } = string.Empty;  // "homepage", "category", "playlist", "album", "search", "songs", "playlists", "albums"
 
         /// <summary>
         /// 视图来源标识（如 "search", "playlist:123", "album:456"）
         /// </summary>
-        public string ViewSource { get; set; }
+        public string ViewSource { get; set; } = string.Empty;
 
         /// <summary>
         /// 视图显示名称（如搜索关键词、歌单名、专辑名）
         /// </summary>
-        public string ViewName { get; set; }
+        public string ViewName { get; set; } = string.Empty;
 
         /// <summary>
         /// 当前选中的索引（用于恢复焦点）
         /// </summary>
-        public int SelectedIndex { get; set; }
+        public int SelectedIndex { get; set; } = -1;
 
         // ===== 重新加载所需的参数 =====
 
         /// <summary>
         /// 分类ID（用于重新加载分类页面）
         /// </summary>
-        public string CategoryId { get; set; }
+        public string CategoryId { get; set; } = string.Empty;
 
         /// <summary>
         /// 歌单ID（用于重新加载歌单）
         /// </summary>
-        public string PlaylistId { get; set; }
+        public string PlaylistId { get; set; } = string.Empty;
 
         /// <summary>
         /// 专辑ID（用于重新加载专辑）
         /// </summary>
-        public string AlbumId { get; set; }
+        public string AlbumId { get; set; } = string.Empty;
 
         /// <summary>
         /// 搜索关键词（用于重新搜索）
         /// </summary>
-        public string SearchKeyword { get; set; }
+        public string SearchKeyword { get; set; } = string.Empty;
 
         /// <summary>
         /// 搜索类型（用于重新搜索）
         /// </summary>
-        public string SearchType { get; set; }
+        public string SearchType { get; set; } = string.Empty;
 
         /// <summary>
         /// 当前页码（用于重新搜索）
         /// </summary>
-        public int CurrentPage { get; set; }
+        public int CurrentPage { get; set; } = 1;
     }
 }
+
+
+
+

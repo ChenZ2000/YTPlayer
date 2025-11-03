@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using YTPlayer.Core;
 
 namespace YTPlayer.Models
@@ -32,37 +32,47 @@ namespace YTPlayer.Models
         /// <summary>
         /// 歌曲信息（当Type为Song时使用）
         /// </summary>
-        public SongInfo Song { get; set; }
+        public SongInfo? Song { get; set; }
 
         /// <summary>
         /// 歌单信息（当Type为Playlist时使用）
         /// </summary>
-        public PlaylistInfo Playlist { get; set; }
+        public PlaylistInfo? Playlist { get; set; }
 
         /// <summary>
         /// 专辑信息（当Type为Album时使用）
         /// </summary>
-        public AlbumInfo Album { get; set; }
+        public AlbumInfo? Album { get; set; }
 
         /// <summary>
         /// 分类ID（当Type为Category时使用）
         /// </summary>
-        public string CategoryId { get; set; }
+        public string? CategoryId { get; set; }
 
         /// <summary>
         /// 分类名称（当Type为Category时使用）
         /// </summary>
-        public string CategoryName { get; set; }
+        public string? CategoryName { get; set; }
 
         /// <summary>
         /// 分类描述（当Type为Category时使用）
         /// </summary>
-        public string CategoryDescription { get; set; }
+        public string? CategoryDescription { get; set; }
+
+        /// <summary>
+        /// 项目数量（用于主页分类显示）
+        /// </summary>
+        public int? ItemCount { get; set; }
+
+        /// <summary>
+        /// 项目单位（"首" 或 "个"）
+        /// </summary>
+        public string? ItemUnit { get; set; }
 
         /// <summary>
         /// 获取显示ID
         /// </summary>
-        public string Id
+        public string? Id
         {
             get
             {
@@ -92,13 +102,13 @@ namespace YTPlayer.Models
                 switch (Type)
                 {
                     case ListItemType.Song:
-                        return Song?.Name;
+                        return Song?.Name ?? string.Empty;
                     case ListItemType.Playlist:
-                        return Playlist?.Name;
+                        return Playlist?.Name ?? string.Empty;
                     case ListItemType.Album:
-                        return Album?.Name;
+                        return Album?.Name ?? string.Empty;
                     case ListItemType.Category:
-                        return CategoryName;
+                        return CategoryName ?? string.Empty;
                     default:
                         return "";
                 }
@@ -115,13 +125,13 @@ namespace YTPlayer.Models
                 switch (Type)
                 {
                     case ListItemType.Song:
-                        return Song?.Artist;
+                        return Song?.Artist ?? string.Empty;
                     case ListItemType.Playlist:
-                        return Playlist?.Creator;
+                        return Playlist?.Creator ?? string.Empty;
                     case ListItemType.Album:
-                        return Album?.Artist;
+                        return Album?.Artist ?? string.Empty;
                     case ListItemType.Category:
-                        return CategoryDescription ?? "";
+                        return ""; // 分类入口不显示创建者信息，避免与描述重复
                     default:
                         return "";
                 }
@@ -142,9 +152,14 @@ namespace YTPlayer.Models
                     case ListItemType.Playlist:
                         return $"{Playlist?.TrackCount ?? 0} 首";
                     case ListItemType.Album:
-                        return Album?.PublishTime ?? "";
+                        return $"{Album?.TrackCount ?? 0} 首";
                     case ListItemType.Category:
-                        return ""; // 分类入口不显示额外信息
+                        // 分类入口显示项目数量
+                        if (ItemCount.HasValue && !string.IsNullOrEmpty(ItemUnit))
+                        {
+                            return $"{ItemCount.Value} {ItemUnit}";
+                        }
+                        return "";
                     default:
                         return "";
                 }
@@ -152,3 +167,4 @@ namespace YTPlayer.Models
         }
     }
 }
+

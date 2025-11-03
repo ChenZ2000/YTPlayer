@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 
 namespace YTPlayer.Models
@@ -8,8 +8,8 @@ namespace YTPlayer.Models
     /// </summary>
     public class QualityUrlInfo
     {
-        public string Url { get; set; }
-        public string Level { get; set; }
+        public string Url { get; set; } = string.Empty;
+        public string Level { get; set; } = string.Empty;
         public long Size { get; set; }
         public bool IsAvailable { get; set; }
 
@@ -37,27 +37,27 @@ namespace YTPlayer.Models
         /// <summary>
         /// 歌曲ID
         /// </summary>
-        public string Id { get; set; }
+        public string Id { get; set; } = string.Empty;
 
         /// <summary>
         /// 歌曲名称
         /// </summary>
-        public string Name { get; set; }
+        public string Name { get; set; } = string.Empty;
 
         /// <summary>
         /// 艺术家
         /// </summary>
-        public string Artist { get; set; }
+        public string Artist { get; set; } = string.Empty;
 
         /// <summary>
         /// 专辑名称
         /// </summary>
-        public string Album { get; set; }
+        public string Album { get; set; } = string.Empty;
 
         /// <summary>
         /// 专辑ID
         /// </summary>
-        public string AlbumId { get; set; }
+        public string AlbumId { get; set; } = string.Empty;
 
         /// <summary>
         /// 时长（秒）
@@ -67,22 +67,22 @@ namespace YTPlayer.Models
         /// <summary>
         /// 播放URL（快捷访问当前选择的音质）
         /// </summary>
-        public string Url { get; set; }
+        public string Url { get; set; } = string.Empty;
 
         /// <summary>
         /// 封面URL
         /// </summary>
-        public string PicUrl { get; set; }
+        public string PicUrl { get; set; } = string.Empty;
 
         /// <summary>
         /// 歌词
         /// </summary>
-        public string Lyrics { get; set; }
+        public string Lyrics { get; set; } = string.Empty;
 
         /// <summary>
         /// 音质级别（快捷访问当前选择的音质）
         /// </summary>
-        public string Level { get; set; }
+        public string Level { get; set; } = string.Empty;
 
         /// <summary>
         /// 文件大小（快捷访问当前选择的音质）
@@ -90,9 +90,39 @@ namespace YTPlayer.Models
         public long Size { get; set; }
 
         /// <summary>
+        /// 是否来自云盘
+        /// </summary>
+        public bool IsCloudSong { get; set; }
+
+        /// <summary>
+        /// 云盘条目ID（用于删除等操作）
+        /// </summary>
+        public string CloudSongId { get; set; } = string.Empty;
+
+        /// <summary>
+        /// 云盘上传时的原始文件名
+        /// </summary>
+        public string CloudFileName { get; set; } = string.Empty;
+
+        /// <summary>
+        /// 云盘文件大小（字节）
+        /// </summary>
+        public long CloudFileSize { get; set; }
+
+        /// <summary>
+        /// 云盘匹配到的官方歌曲ID（若存在）
+        /// </summary>
+        public string CloudMatchedSongId { get; set; } = string.Empty;
+
+        /// <summary>
+        /// 云盘上传时间（Unix毫秒时间戳）
+        /// </summary>
+        public long? CloudUploadTime { get; set; }
+
+        /// <summary>
         /// 发布时间
         /// </summary>
-        public string PublishTime { get; set; }
+        public string PublishTime { get; set; } = string.Empty;
 
         /// <summary>
         /// 所有音质的URL缓存（按音质级别存储）
@@ -175,7 +205,7 @@ namespace YTPlayer.Models
         /// <summary>
         /// 获取特定音质的URL信息
         /// </summary>
-        public QualityUrlInfo GetQualityUrl(string level)
+        public QualityUrlInfo? GetQualityUrl(string level)
         {
             if (string.IsNullOrEmpty(level)) return null;
 
@@ -210,10 +240,12 @@ namespace YTPlayer.Models
         public void ClearAllQualityUrls()
         {
             _qualityUrls.Clear();
-            Url = null;
-            Level = null;
+            Url = string.Empty;
+            Level = string.Empty;
             Size = 0;
             IsAvailable = null;
         }
     }
 }
+
+

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Drawing;
 using System.Text;
 using System.Threading.Tasks;
@@ -14,11 +14,11 @@ namespace YTPlayer.Forms
     public partial class UserInfoForm : Form
     {
         private readonly NeteaseApiClient _apiClient;
-        private readonly ConfigManager _configManager;
-        private readonly Action _onLogout;
-        private UserAccountInfo _userInfo;
+        private readonly ConfigManager? _configManager;
+        private readonly Action? _onLogout;
+        private UserAccountInfo? _userInfo;
 
-        public UserInfoForm(NeteaseApiClient apiClient, ConfigManager configManager = null, Action onLogout = null)
+        public UserInfoForm(NeteaseApiClient apiClient, ConfigManager? configManager = null, Action? onLogout = null)
         {
             _apiClient = apiClient;
             _configManager = configManager;
@@ -217,3 +217,4 @@ namespace YTPlayer.Forms
         }
     }
 }
+

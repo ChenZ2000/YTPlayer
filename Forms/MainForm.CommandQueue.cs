@@ -280,9 +280,12 @@ namespace YTPlayer
         {
             switch (command.Type)
             {
+                case CommandType.Play when command.Payload is SongInfo playSong:
+                    UpdateStatusBar($"正在播放: {playSong.Name}");
+                    break;
+
                 case CommandType.Play:
-                    var song = (SongInfo)command.Payload;
-                    UpdateStatusBar($"正在播放: {song.Name}");
+                    UpdateStatusBar("正在播放...");
                     break;
 
                 case CommandType.Pause:
@@ -293,9 +296,12 @@ namespace YTPlayer
                     UpdateStatusBar("恢复播放...");
                     break;
 
-                case CommandType.Seek:
-                    var position = (double)command.Payload;
+                case CommandType.Seek when command.Payload is double position:
                     UpdateStatusBar($"跳转到 {FormatTimeFromSeconds(position)}");
+                    break;
+
+                case CommandType.Seek:
+                    UpdateStatusBar("跳转中...");
                     break;
 
                 case CommandType.Next:
@@ -315,9 +321,12 @@ namespace YTPlayer
         {
             switch (command.Type)
             {
+                case CommandType.Play when command.Payload is SongInfo playSong:
+                    UpdateStatusBar($"正在播放: {playSong.Name} - {playSong.Artist}");
+                    break;
+
                 case CommandType.Play:
-                    var song = (SongInfo)command.Payload;
-                    UpdateStatusBar($"正在播放: {song.Name} - {song.Artist}");
+                    UpdateStatusBar("正在播放");
                     break;
 
                 case CommandType.Pause:

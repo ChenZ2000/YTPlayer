@@ -97,6 +97,9 @@
     <Compile Include="Forms\MainForm.Download.cs">
       <DependentUpon>MainForm.cs</DependentUpon>
     </Compile>
+    <Compile Include="Forms\MainForm.Cloud.cs">
+      <DependentUpon>MainForm.cs</DependentUpon>
+    </Compile>
     <Compile Include="MainForm.Designer.cs">
       <DependentUpon>MainForm.cs</DependentUpon>
     </Compile>
@@ -139,6 +142,7 @@
     <Compile Include="Core\Download\DownloadBandwidthCoordinator.cs" />
     <Compile Include="Core\Download\DownloadFileHelper.cs" />
     <Compile Include="Core\Download\AudioMetadataWriter.cs" />
+    <Compile Include="Core\Upload\UploadManager.cs" />
     <Compile Include="Utils\EncryptionHelper.cs" />
     <Compile Include="Utils\DebugLogger.cs" />
     <Compile Include="Utils\PerformanceMonitor.cs" />
@@ -147,6 +151,9 @@
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="Models\SongInfo.cs" />
+    <Compile Include="Models\CloudSongPageResult.cs" />
+    <Compile Include="Models\CloudUploadProgress.cs" />
+    <Compile Include="Models\CloudUploadResult.cs" />
     <Compile Include="Models\PlaylistInfo.cs" />
     <Compile Include="Models\CommentInfo.cs" />
     <Compile Include="Models\ConfigModel.cs" />
@@ -158,6 +165,7 @@
     <Compile Include="Models\Download\DownloadStatus.cs" />
     <Compile Include="Models\Download\DownloadBatch.cs" />
     <Compile Include="Models\Download\ConflictResolution.cs" />
+    <Compile Include="Models\Upload\UploadTask.cs" />
     <Compile Include="Forms\LoginForm.cs">
       <SubType>Form</SubType>
     </Compile>

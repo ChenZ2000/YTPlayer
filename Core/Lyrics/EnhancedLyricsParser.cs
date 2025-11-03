@@ -79,7 +79,7 @@ namespace YTPlayer.Core.Lyrics
                 return result;
             }
 
-            var lines = lrcContent.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            var lines = lrcContent!.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
 
             foreach (var line in lines)
             {
@@ -148,7 +148,7 @@ namespace YTPlayer.Core.Lyrics
                 return result;
             }
 
-            var lines = lrcContent.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            var lines = lrcContent!.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
 
             foreach (var line in lines)
             {

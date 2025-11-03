@@ -47,7 +47,7 @@ namespace YTPlayer.Models
         /// 下载目录路径（便携式设计：默认保存在程序目录\downloads）
         /// Python: cfg.setdefault("download_path", None)
         /// </summary>
-        public string DownloadDirectory { get; set; }
+        public string DownloadDirectory { get; set; } = string.Empty;
 
         #endregion
 
@@ -72,7 +72,7 @@ namespace YTPlayer.Models
         /// <summary>
         /// 上次播放的歌曲 ID（用于恢复播放）
         /// </summary>
-        public string LastPlayingSongId { get; set; }
+        public string LastPlayingSongId { get; set; } = string.Empty;
 
         /// <summary>
         /// 上次播放位置（秒）
@@ -98,9 +98,9 @@ namespace YTPlayer.Models
     /// </summary>
     public class CookieItem
     {
-        public string Name { get; set; }
-        public string Value { get; set; }
-        public string Domain { get; set; }
-        public string Path { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public string Value { get; set; } = string.Empty;
+        public string Domain { get; set; } = string.Empty;
+        public string Path { get; set; } = string.Empty;
     }
 }

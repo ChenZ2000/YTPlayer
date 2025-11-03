@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Newtonsoft.Json.Linq;
 
@@ -26,7 +26,7 @@ namespace YTPlayer.Models
     /// <typeparam name="T">结果条目的类型。</typeparam>
     public class SearchResult<T>
     {
-        public SearchResult(List<T> items, int totalCount, int offset, int limit, JObject rawResult = null)
+        public SearchResult(List<T> items, int totalCount, int offset, int limit, JObject? rawResult = null)
         {
             Items = items ?? new List<T>();
             Offset = Math.Max(offset, 0);
@@ -59,7 +59,7 @@ namespace YTPlayer.Models
         /// <summary>
         /// 原始 result 节点，便于后续扩展或调试。
         /// </summary>
-        public JObject RawResult { get; }
+        public JObject? RawResult { get; }
 
         /// <summary>
         /// 是否还有更多结果可分页。
@@ -67,4 +67,5 @@ namespace YTPlayer.Models
         public bool HasMore => Offset + Items.Count < TotalCount;
     }
 }
+
 

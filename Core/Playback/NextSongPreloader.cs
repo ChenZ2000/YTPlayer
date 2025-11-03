@@ -9,6 +9,8 @@ using YTPlayer.Core.Playback.Cache;
 using YTPlayer.Core.Streaming;
 using YTPlayer.Models;
 
+#pragma warning disable CS8600, CS8601, CS8602, CS8603, CS8604, CS8625
+
 namespace YTPlayer.Core.Playback
 {
     /// <summary>
@@ -31,15 +33,15 @@ namespace YTPlayer.Core.Playback
         /// </summary>
         private class PreloadedSongData
         {
-            public string SongId { get; set; }
-            public string Url { get; set; }
-            public string Level { get; set; }
+            public string SongId { get; set; } = string.Empty;
+            public string Url { get; set; } = string.Empty;
+            public string Level { get; set; } = string.Empty;
             public long Size { get; set; }
-            public SmartCacheManager CacheManager { get; set; }
-            public BassStreamProvider StreamProvider { get; set; }  // ⭐ 新增：流提供者
+            public SmartCacheManager CacheManager { get; set; } = null!;
+            public BassStreamProvider StreamProvider { get; set; } = null!;  // ⭐ 新增：流提供者
             public int StreamHandle { get; set; }                    // ⭐ 新增：BASS 流句柄
             public bool IsReady { get; set; }                        // ⭐ 新增：流是否就绪
-            public DateTime CreateTime { get; set; }
+            public DateTime CreateTime { get; set; } = DateTime.UtcNow;
         }
 
         #endregion
@@ -50,7 +52,7 @@ namespace YTPlayer.Core.Playback
         private readonly NeteaseApiClient _apiClient;
         private readonly HttpClient _httpClient;
         private readonly Dictionary<string, PreloadedSongData> _preloadedData; // 按 SongId 存储
-        private CancellationTokenSource _preloadCts;
+        private CancellationTokenSource? _preloadCts;
 
         #endregion
 
@@ -488,17 +490,19 @@ namespace YTPlayer.Core.Playback
     /// </summary>
     public class PreloadedData
     {
-        public string Url { get; set; }
-        public string Level { get; set; }
+        public string Url { get; set; } = string.Empty;
+        public string Level { get; set; } = string.Empty;
         public long Size { get; set; }
-        public SmartCacheManager CacheManager { get; set; }
+        public SmartCacheManager CacheManager { get; set; } = null!;
 
         // ⭐ 新增：完整的流对象信息
-        public BassStreamProvider StreamProvider { get; set; }
+        public BassStreamProvider StreamProvider { get; set; } = null!;
         public int StreamHandle { get; set; }
         public bool IsReady { get; set; }
 
         // ⭐ 新增：歌词数据
-        public YTPlayer.Core.Lyrics.LyricsData LyricsData { get; set; }
+        public YTPlayer.Core.Lyrics.LyricsData LyricsData { get; set; } = null!;
     }
 }
+
+#pragma warning restore CS8600, CS8601, CS8602, CS8603, CS8604, CS8625

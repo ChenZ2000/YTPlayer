@@ -8,6 +8,8 @@ using YTPlayer.Core.Playback;
 using YTPlayer.Core.Playback.Cache;
 using YTPlayer.Models;
 
+#pragma warning disable CS8600, CS8601, CS8602, CS8603, CS8604, CS8625
+
 namespace YTPlayer
 {
     public partial class MainForm
@@ -487,7 +489,7 @@ namespace YTPlayer
                 // ⭐ 试听版本：始终通过 TTS 发送提示（不受歌词朗读开关控制）
                 if (song.IsTrial)
                 {
-                    System.Threading.Tasks.Task.Run(() =>
+                    _ = System.Threading.Tasks.Task.Run(() =>
                     {
                         bool success = Utils.TtsHelper.SpeakText("[试听片段 30 秒]");
                         System.Diagnostics.Debug.WriteLine($"[TTS] 试听提示: {(success ? "成功" : "失败")}");
@@ -973,7 +975,7 @@ namespace YTPlayer
             }
         }
 
-        private void UpdateFocusForQueue(int queueIndex, SongInfo expectedSong = null)
+        private void UpdateFocusForQueue(int queueIndex, SongInfo? expectedSong = null)
         {
             string queueSource = _playbackQueue.QueueSource;
             int resolvedIndex = queueIndex;
@@ -1060,3 +1062,5 @@ namespace YTPlayer
 
     }
 }
+
+#pragma warning restore CS8600, CS8601, CS8602, CS8603, CS8604, CS8625

@@ -790,13 +790,15 @@ namespace YTPlayer.Core.Download
                 }
 
                 var urlInfo = urlDict[task.Song.Id];
-                if (string.IsNullOrWhiteSpace(urlInfo.Url))
+                string? url = urlInfo.Url;
+                if (string.IsNullOrWhiteSpace(url))
                 {
                     task.ErrorMessage = "歌曲下载链接为空（可能无版权或 VIP 专属）";
                     return false;
                 }
 
-                task.DownloadUrl = urlInfo.Url;
+                string downloadUrl = url!;
+                task.DownloadUrl = downloadUrl;
                 task.TotalBytes = urlInfo.Size;
 
                 // ⭐ 关键修复：将试听信息填充到 SongInfo，确保文件名包含试听标记

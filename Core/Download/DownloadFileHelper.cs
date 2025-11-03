@@ -176,15 +176,17 @@ namespace YTPlayer.Core.Download
             string safeName = ReplaceInvalidChars(dirName, "_");
 
             // 限制长度，截断时添加省略号
-            if (safeName.Length > MAX_FILENAME_LENGTH)
+            int lengthLimitForDir = Math.Max(1, MAX_FILENAME_LENGTH);
+
+            if (safeName.Length > lengthLimitForDir)
             {
-                if (MAX_FILENAME_LENGTH >= 10)
+                if (lengthLimitForDir >= 10)
                 {
-                    safeName = safeName.Substring(0, MAX_FILENAME_LENGTH - 3) + "...";
+                    safeName = safeName.Substring(0, lengthLimitForDir - 3) + "...";
                 }
                 else
                 {
-                    safeName = safeName.Substring(0, MAX_FILENAME_LENGTH);
+                    safeName = safeName.Substring(0, lengthLimitForDir);
                 }
             }
 
@@ -264,7 +266,7 @@ namespace YTPlayer.Core.Download
             if (!string.IsNullOrWhiteSpace(subDirectory))
             {
                 // 将子目录按路径分隔符拆分（支持 \ 和 /）
-                string[] subDirParts = subDirectory.Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries);
+                string[] subDirParts = subDirectory!.Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries);
 
                 // 对每个部分分别进行安全化处理
                 safeSubDirParts = new string[subDirParts.Length];

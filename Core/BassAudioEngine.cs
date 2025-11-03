@@ -205,7 +205,7 @@ namespace YTPlayer.Core
 
         #region 公共 API
 
-        public async Task<bool> PlayAsync(SongInfo song, CancellationToken cancellationToken = default, Playback.PreloadedData preloadedData = null)
+        public async Task<bool> PlayAsync(SongInfo song, CancellationToken cancellationToken = default, Playback.PreloadedData? preloadedData = null)
         {
             if (song == null || string.IsNullOrEmpty(song.Url))
             {
@@ -892,7 +892,7 @@ namespace YTPlayer.Core
 
         private void CacheManagerOnBufferingStateChanged(object? sender, BufferingState state)
         {
-            BufferingStateChanged?.Invoke(this, state);
+            DispatchEvent(BufferingStateChanged, this, state);
         }
 
         private void SetupSyncs()
@@ -949,7 +949,7 @@ namespace YTPlayer.Core
                         double seconds = BASS_ChannelBytes2Seconds(_currentStream, positionBytes);
 
                         _currentCacheManager?.UpdatePlaybackPosition(positionBytes);
-                        PositionChanged?.Invoke(this, TimeSpan.FromSeconds(seconds));
+                PositionChanged?.Invoke(this, TimeSpan.FromSeconds(seconds));
 
                         // ⭐⭐⭐ 关键修复：播放到 90% 时，主动请求下载最后几个 chunks
                         // 避免播放到末尾时缓存还没准备好，导致 FileRead 超时 5 秒
@@ -1086,7 +1086,7 @@ namespace YTPlayer.Core
 
             if (raiseEvent)
             {
-                PlaybackStopped?.Invoke(this, EventArgs.Empty);
+                DispatchEvent(PlaybackStopped, this, EventArgs.Empty);
             }
 
             _currentSong = null;
@@ -1184,7 +1184,7 @@ namespace YTPlayer.Core
                 if (finishedSong != null)
                 {
                     Debug.WriteLine($"[BassAudioEngine] ✓ 触发 PlaybackEnded 事件: {finishedSong.Name}");
-                    PlaybackEnded?.Invoke(this, finishedSong);
+                    DispatchEvent(PlaybackEnded, this, finishedSong);
                 }
             }
 
@@ -1279,7 +1279,7 @@ namespace YTPlayer.Core
             _stateMachine.TransitionTo(PlaybackState.Playing);
             OnPlaybackStarted(entry.Song);
 
-            GaplessTransitionCompleted?.Invoke(this, new GaplessTransitionEventArgs(previousSong, entry.Song));
+            DispatchEvent(GaplessTransitionCompleted, this, new GaplessTransitionEventArgs(previousSong, entry.Song));
 
             return true;
         }
@@ -1372,17 +1372,17 @@ namespace YTPlayer.Core
 
         private void OnPlaybackStarted(SongInfo song)
         {
-            PlaybackStarted?.Invoke(this, song);
+            DispatchEvent(PlaybackStarted, this, song);
         }
 
         private void OnPlaybackError(string message)
         {
-            PlaybackError?.Invoke(this, message);
+            DispatchEvent(PlaybackError, this, message);
         }
 
         private void StateMachineOnStateChanged(object? sender, StateTransitionEventArgs e)
         {
-            StateChanged?.Invoke(this, e.NewState);
+            DispatchEvent(StateChanged, this, e.NewState);
         }
 
         private static string GetErrorMessage(int errorCode)
@@ -1400,6 +1400,48 @@ namespace YTPlayer.Core
                 18 => "未知错误",
                 _ => $"错误代码 {errorCode}"
             };
+        }
+
+        private static void DispatchEvent<TEventArgs>(EventHandler<TEventArgs>? handler, object sender, TEventArgs args)
+        {
+            var captured = handler;
+            if (captured == null)
+            {
+                return;
+            }
+
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    captured(sender, args);
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"[BassAudioEngine] 事件处理程序异常: {ex}");
+                }
+            });
+        }
+
+        private static void DispatchEvent(EventHandler? handler, object sender, EventArgs args)
+        {
+            var captured = handler;
+            if (captured == null)
+            {
+                return;
+            }
+
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    captured(sender, args);
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"[BassAudioEngine] 事件处理程序异常: {ex}");
+                }
+            });
         }
 
         #endregion
@@ -1428,3 +1470,4 @@ namespace YTPlayer.Core
         Random
     }
 }
+

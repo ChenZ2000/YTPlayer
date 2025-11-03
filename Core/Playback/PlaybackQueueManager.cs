@@ -1,7 +1,9 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using YTPlayer.Models;
+
+#pragma warning disable CS8600, CS8601, CS8602, CS8603, CS8604, CS8625
 
 namespace YTPlayer.Core.Playback
 {
@@ -181,7 +183,7 @@ namespace YTPlayer.Core.Playback
         private int _injectionIndex = -1;
         private readonly Dictionary<string, string> _injectionSources = new Dictionary<string, string>();
 
-        private PendingInjectionInfo _pendingInjection;
+        private PendingInjectionInfo? _pendingInjection;
         private readonly Random _random = new Random();
 
         public PlaybackSelectionResult ManualSelect(SongInfo song, IReadOnlyList<SongInfo> viewSongs, string viewSource)
@@ -948,6 +950,7 @@ namespace YTPlayer.Core.Playback
     }
 }
 
+#pragma warning restore CS8600, CS8601, CS8602, CS8603, CS8604, CS8625
 
 
 

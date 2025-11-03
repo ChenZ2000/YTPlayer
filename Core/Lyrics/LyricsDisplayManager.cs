@@ -15,7 +15,6 @@ namespace YTPlayer.Core.Lyrics
         private readonly object _lock = new object();
 
         private CancellationTokenSource? _updateLoopCts;
-        private Task? _updateLoopTask;
         private bool _disposed;
 
         // 上次推送的歌词行，用于检测变化
@@ -197,33 +196,38 @@ namespace YTPlayer.Core.Lyrics
             switch (DisplayMode)
             {
                 case LyricDisplayMode.OriginalOnly:
-                    return line.Text;
+                    return line.Text ?? string.Empty;
 
                 case LyricDisplayMode.OriginalWithTranslation:
-                    parts.Add(line.Text);
-                    if (!string.IsNullOrWhiteSpace(line.Translation))
+                    string originalText = line.Text ?? string.Empty;
+                    parts.Add(originalText);
+                    var translation = line.Translation;
+                    if (!string.IsNullOrWhiteSpace(translation))
                     {
-                        parts.Add(line.Translation);
+                        parts.Add(translation!);
                     }
                     break;
 
                 case LyricDisplayMode.OriginalWithRoma:
-                    if (!string.IsNullOrWhiteSpace(line.RomaLyric))
+                    var roma = line.RomaLyric;
+                    if (!string.IsNullOrWhiteSpace(roma))
                     {
-                        parts.Add(line.RomaLyric);
+                        parts.Add(roma!);
                     }
-                    parts.Add(line.Text);
+                    parts.Add(line.Text ?? string.Empty);
                     break;
 
                 case LyricDisplayMode.All:
-                    if (!string.IsNullOrWhiteSpace(line.RomaLyric))
+                    var romaLyric = line.RomaLyric;
+                    if (!string.IsNullOrWhiteSpace(romaLyric))
                     {
-                        parts.Add(line.RomaLyric);
+                        parts.Add(romaLyric!);
                     }
-                    parts.Add(line.Text);
-                    if (!string.IsNullOrWhiteSpace(line.Translation))
+                    parts.Add(line.Text ?? string.Empty);
+                    var translated = line.Translation;
+                    if (!string.IsNullOrWhiteSpace(translated))
                     {
-                        parts.Add(line.Translation);
+                        parts.Add(translated!);
                     }
                     break;
             }
@@ -245,7 +249,6 @@ namespace YTPlayer.Core.Lyrics
                 _updateLoopCts?.Cancel();
                 _updateLoopCts?.Dispose();
                 _updateLoopCts = null;
-                _updateLoopTask = null;
             }
         }
     }

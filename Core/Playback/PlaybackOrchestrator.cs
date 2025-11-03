@@ -34,7 +34,6 @@ namespace YTPlayer.Core.Playback
         public event EventHandler<int>? BufferingProgress;
         public event EventHandler<SongInfo>? PlaybackStarted;
         public event EventHandler<SongInfo>? PlaybackEnded;
-        public event EventHandler<SongInfo>? PlaybackNearEnd;
         public event EventHandler<double>? SeekCompleted;
         public event EventHandler<string>? ErrorOccurred;
 
@@ -181,11 +180,6 @@ namespace YTPlayer.Core.Playback
         private void AudioEngineOnPlaybackEnded(object? sender, SongInfo e)
         {
             PlaybackEnded?.Invoke(this, e);
-        }
-
-        private void AudioEngineOnPlaybackReachedHalfway(object? sender, SongInfo e)
-        {
-            // ⭐ 播放到50%时触发（可根据需要在此处添加逻辑）
         }
 
         private void AudioEngineOnPlaybackError(object? sender, string e)

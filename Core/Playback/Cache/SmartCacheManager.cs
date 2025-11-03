@@ -1061,6 +1061,11 @@ namespace YTPlayer.Core.Playback.Cache
         {
             if (_smartPreCache != null && _smartPreCache.IsPositionPreCached(position, _totalSize, ChunkSize, out var segment))
             {
+                if (segment == null)
+                {
+                    return;
+                }
+
                 // 将预缓存的块合并到主缓存
                 int mergedCount = 0;
                 foreach (var kvp in segment.Chunks)

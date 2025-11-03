@@ -12,13 +12,13 @@ namespace YTPlayer.Models
         public long UserId { get; set; }
 
         /// <summary>昵称</summary>
-        public string Nickname { get; set; }
+        public string Nickname { get; set; } = string.Empty;
 
         /// <summary>头像URL</summary>
-        public string AvatarUrl { get; set; }
+        public string AvatarUrl { get; set; } = string.Empty;
 
         /// <summary>个性签名</summary>
-        public string Signature { get; set; }
+        public string Signature { get; set; } = string.Empty;
 
         /// <summary>
         /// VIP类型
@@ -94,7 +94,7 @@ namespace YTPlayer.Models
         public DateTime? CreateTime { get; set; }
 
         /// <summary>艺人名称（如果是音乐人）</summary>
-        public string ArtistName { get; set; }
+        public string ArtistName { get; set; } = string.Empty;
 
         /// <summary>艺人ID（如果是音乐人）</summary>
         public long? ArtistId { get; set; }
@@ -131,7 +131,7 @@ namespace YTPlayer.Models
         public int CreateDays { get; set; }
 
         /// <summary>认证类型列表（JSON格式）</summary>
-        public string AuthTypeDesc { get; set; }
+        public string AuthTypeDesc { get; set; } = string.Empty;
 
         /// <summary>DJ节目数</summary>
         public int DjProgramCount { get; set; }

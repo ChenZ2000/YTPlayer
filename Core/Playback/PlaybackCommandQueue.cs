@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Threading;
 using System.Threading.Tasks;
 using YTPlayer.Models;
@@ -13,14 +13,14 @@ namespace YTPlayer.Core.Playback
         private readonly PlaybackOrchestrator _orchestrator;
         private readonly PlaybackQueueManager _queueManager;
         private readonly SemaphoreSlim _executionSemaphore;
-        private CancellationTokenSource _currentCts;
+        private CancellationTokenSource? _currentCts;
         private bool _disposed;
 
         // 命令执行回调（用于需要 MainForm 上下文的操作）
-        public Func<PlaybackCommand, CancellationToken, Task<CommandResult>> OnExecuteNext { get; set; }
-        public Func<PlaybackCommand, CancellationToken, Task<CommandResult>> OnExecutePrevious { get; set; }
+        public Func<PlaybackCommand, CancellationToken, Task<CommandResult>>? OnExecuteNext { get; set; }
+        public Func<PlaybackCommand, CancellationToken, Task<CommandResult>>? OnExecutePrevious { get; set; }
 
-        public event EventHandler<CommandStateChangedEventArgs> CommandStateChanged;
+        public event EventHandler<CommandStateChangedEventArgs>? CommandStateChanged;
 
         public PlaybackCommandQueue(PlaybackOrchestrator orchestrator, PlaybackQueueManager queueManager)
         {
@@ -86,7 +86,11 @@ namespace YTPlayer.Core.Playback
                 switch (command.Type)
                 {
                     case CommandType.Play:
-                        var song = (SongInfo)command.Payload;
+                        if (command.Payload is not SongInfo song)
+                        {
+                            return CommandResult.Error("播放命令缺少有效歌曲信息");
+                        }
+
                         bool playSuccess = await _orchestrator.PlayAsync(song, ct).ConfigureAwait(false);
                         return playSuccess ? CommandResult.Success : CommandResult.Error("播放失败");
 
@@ -99,7 +103,14 @@ namespace YTPlayer.Core.Playback
                         return resumeSuccess ? CommandResult.Success : CommandResult.Error("恢复失败");
 
                     case CommandType.Seek:
-                        double position = (double)command.Payload;
+                        double position = command.Payload is double value
+                            ? value
+                            : command.Payload is float f
+                                ? f
+                                : command.Payload is TimeSpan span
+                                    ? span.TotalSeconds
+                                    : throw new ArgumentException("跳转命令缺少有效位置参数", nameof(command));
+
                         bool seekSuccess = await _orchestrator.SeekAsync(position, 15, ct).ConfigureAwait(false);
                         return seekSuccess ? CommandResult.Success : CommandResult.Error("跳转失败");
 
@@ -138,7 +149,7 @@ namespace YTPlayer.Core.Playback
             }
         }
 
-        private void OnCommandStateChanged(PlaybackCommand command, CommandState state, string message = null)
+        private void OnCommandStateChanged(PlaybackCommand command, CommandState state, string? message = null)
         {
             CommandStateChanged?.Invoke(this, new CommandStateChangedEventArgs(command, state, message));
         }
@@ -196,9 +207,9 @@ namespace YTPlayer.Core.Playback
     public class PlaybackCommand
     {
         public CommandType Type { get; set; }
-        public object Payload { get; set; }  // 例如: SongInfo, double(Seek位置)
+        public object? Payload { get; set; }  // 例如: SongInfo, double(Seek位置)
         public int Priority { get; set; }     // 0 = 低, 100 = 高（预留，当前未使用）
-        public CancellationToken CancellationToken { get; set; }
+        public CancellationToken CancellationToken { get; set; } = CancellationToken.None;
 
         public override string ToString()
         {
@@ -212,24 +223,25 @@ namespace YTPlayer.Core.Playback
     public class CommandResult
     {
         public bool IsSuccess { get; private set; }
-        public string ErrorMessage { get; private set; }
+        public string? ErrorMessage { get; private set; }
 
         public static CommandResult Success { get; } = new CommandResult { IsSuccess = true };
         public static CommandResult Cancelled { get; } = new CommandResult { IsSuccess = false, ErrorMessage = "已取消" };
 
-        public static CommandResult Error(string message)
+        public static CommandResult Error(string? message)
         {
-            return new CommandResult { IsSuccess = false, ErrorMessage = message };
+            return new CommandResult
+            {
+                IsSuccess = false,
+                ErrorMessage = string.IsNullOrWhiteSpace(message) ? "发生未知错误" : message
+            };
         }
 
-        public static CommandResult Error(Exception ex)
-        {
-            return new CommandResult { IsSuccess = false, ErrorMessage = ex.Message };
-        }
+        public static CommandResult Error(Exception? ex) => Error(ex?.Message);
 
         public override string ToString()
         {
-            return IsSuccess ? "Success" : $"Failed: {ErrorMessage}";
+            return IsSuccess ? "Success" : $"Failed: {ErrorMessage ?? "未知错误"}";
         }
     }
 
@@ -240,9 +252,9 @@ namespace YTPlayer.Core.Playback
     {
         public PlaybackCommand Command { get; }
         public CommandState State { get; }
-        public string Message { get; }
+        public string? Message { get; }
 
-        public CommandStateChangedEventArgs(PlaybackCommand command, CommandState state, string message = null)
+        public CommandStateChangedEventArgs(PlaybackCommand command, CommandState state, string? message = null)
         {
             Command = command;
             State = state;
@@ -257,3 +269,7 @@ namespace YTPlayer.Core.Playback
 
     #endregion
 }
+
+
+
+

@@ -102,7 +102,7 @@ namespace YTPlayer.Core
         /// <param name="lyrics">歌词列表</param>
         /// <param name="position">当前播放位置</param>
         /// <returns>当前歌词行，如果没有则返回 null</returns>
-        public static LyricLine GetCurrentLyric(List<LyricLine> lyrics, TimeSpan position)
+        public static LyricLine? GetCurrentLyric(List<LyricLine> lyrics, TimeSpan position)
         {
             if (lyrics == null || lyrics.Count == 0)
             {
@@ -110,7 +110,7 @@ namespace YTPlayer.Core
             }
 
             // 找到最后一个时间小于或等于当前位置的歌词
-            LyricLine currentLyric = null;
+            LyricLine? currentLyric = null;
             foreach (var lyric in lyrics)
             {
                 if (lyric.Time <= position)

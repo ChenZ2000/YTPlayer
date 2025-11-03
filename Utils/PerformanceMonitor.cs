@@ -12,11 +12,11 @@ namespace YTPlayer.Utils
     public class PerformanceMonitor : IDisposable
     {
         private readonly string _category;
-        private Stopwatch _stopwatch;
-        private string _operationName;
+        private Stopwatch? _stopwatch;
+        private string _operationName = string.Empty;
         private long _warningThresholdMs;
-        private CancellationTokenSource _timeoutCts;
-        private Task _timeoutTask;
+        private CancellationTokenSource? _timeoutCts;
+        private Task? _timeoutTask;
 
         public PerformanceMonitor(string category)
         {

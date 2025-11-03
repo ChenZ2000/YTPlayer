@@ -11,6 +11,8 @@ using YTPlayer.Utils;
 using YTPlayer.Models.Auth;
 using YTPlayer.Core;
 
+#pragma warning disable CS8600, CS8601, CS8602, CS8603, CS8604, CS8625
+
 namespace YTPlayer.Core.Auth
 {
     /// <summary>
@@ -709,7 +711,6 @@ namespace YTPlayer.Core.Auth
                 return;
             }
 
-            bool configChanged = false;
             bool accountChanged = false;
 
             lock (_syncRoot)
@@ -1046,3 +1047,5 @@ namespace YTPlayer.Core.Auth
         }
     }
 }
+
+#pragma warning restore CS8600, CS8601, CS8602, CS8603, CS8604, CS8625

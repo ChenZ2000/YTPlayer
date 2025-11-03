@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -231,7 +231,7 @@ namespace YTPlayer.Core.Playback.Cache
         /// 检查指定位置是否已预缓存
         /// ⭐⭐⭐ 关键修复：即使segment还在活动，只要数据块已下载就返回
         /// </summary>
-        public bool IsPositionPreCached(long position, long totalSize, int chunkSize, out PreCacheSegment segment)
+        public bool IsPositionPreCached(long position, long totalSize, int chunkSize, out PreCacheSegment? segment)
         {
             double ratio = (double)position / totalSize;
             int targetChunkIndex = (int)(position / chunkSize);

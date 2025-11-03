@@ -13,8 +13,8 @@ namespace YTPlayer.Utils
     public static class DebugLogger
     {
         private static readonly object _fileLock = new object();
-        private static string _logDirectory;
-        private static string _currentLogFile;
+        private static string? _logDirectory;
+        private static string? _currentLogFile;
         private static bool _initialized = false;
 
         public enum LogLevel
@@ -76,7 +76,10 @@ namespace YTPlayer.Utils
                 // 写入文件（线程安全）
                 lock (_fileLock)
                 {
-                    File.AppendAllText(_currentLogFile, logLine + Environment.NewLine, Encoding.UTF8);
+                    if (!string.IsNullOrEmpty(_currentLogFile))
+                    {
+                        File.AppendAllText(_currentLogFile, logLine + Environment.NewLine, Encoding.UTF8);
+                    }
                 }
             }
             catch (Exception ex)
@@ -88,7 +91,7 @@ namespace YTPlayer.Utils
         /// <summary>
         /// 记录异常
         /// </summary>
-        public static void LogException(string category, Exception ex, string additionalInfo = null)
+        public static void LogException(string category, Exception ex, string? additionalInfo = null)
         {
             if (!_initialized) Initialize();
 
@@ -176,6 +179,8 @@ namespace YTPlayer.Utils
         {
             try
             {
+                if (string.IsNullOrEmpty(_logDirectory)) return;
+
                 if (!Directory.Exists(_logDirectory)) return;
 
                 DateTime threshold = DateTime.Now.AddDays(-keepDays);

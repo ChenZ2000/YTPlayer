@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
 
@@ -10,11 +10,11 @@ namespace YTPlayer.Forms
     /// </summary>
     public partial class JumpToPositionDialog : Form
     {
-        private TextBox txtPosition;
-        private Button btnJump;
-        private Button btnCancel;
-        private Label lblInstruction;
-        private Label lblCurrentPosition;
+        private TextBox txtPosition = null!;
+        private Button btnJump = null!;
+        private Button btnCancel = null!;
+        private Label lblInstruction = null!;
+        private Label lblCurrentPosition = null!;
 
         private double _currentPosition;
         private double _duration;
@@ -271,3 +271,4 @@ namespace YTPlayer.Forms
         }
     }
 }
+

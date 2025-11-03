@@ -55,7 +55,7 @@ namespace YTPlayer.Core.Playback
                 }
             };
 
-        public event EventHandler<StateTransitionEventArgs> StateChanged;
+        public event EventHandler<StateTransitionEventArgs>? StateChanged;
 
         /// <summary>
         /// 当前状态

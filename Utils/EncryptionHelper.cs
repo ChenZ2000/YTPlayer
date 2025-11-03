@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -194,7 +194,7 @@ namespace YTPlayer.Utils
 
         private static bool TryDecryptEapiBlock(byte[] data, out byte[] decrypted)
         {
-            decrypted = null;
+            decrypted = Array.Empty<byte>();
 
             if (data == null || data.Length == 0 || (data.Length % 16) != 0)
             {
@@ -438,11 +438,13 @@ namespace YTPlayer.Utils
         /// <summary>
         /// 加密后的参数
         /// </summary>
-        public string Params { get; set; }
+        public string Params { get; set; } = string.Empty;
 
         /// <summary>
         /// RSA加密后的密钥
         /// </summary>
-        public string EncSecKey { get; set; }
+        public string EncSecKey { get; set; } = string.Empty;
     }
 }
+
+

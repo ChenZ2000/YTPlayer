@@ -81,6 +81,9 @@
             this.unlikeSongMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.addToPlaylistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.removeFromPlaylistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.cloudMenuSeparator = new System.Windows.Forms.ToolStripSeparator();
+            this.uploadToCloudMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.deleteFromCloudMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.toolStripSeparatorCollection = new System.Windows.Forms.ToolStripSeparator();
             this.subscribePlaylistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.unsubscribePlaylistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
@@ -191,7 +194,7 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             //
             this.downloadManagerMenuItem.Name = "downloadManagerMenuItem";
             this.downloadManagerMenuItem.Size = new System.Drawing.Size(200, 26);
-            this.downloadManagerMenuItem.Text = "下载管理(&D)";
+            this.downloadManagerMenuItem.Text = "传输管理(&D)";
             this.downloadManagerMenuItem.Click += new System.EventHandler(this.OpenDownloadManager_Click);
             //
             // exitMenuItem
@@ -643,6 +646,9 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             this.unlikeSongMenuItem,
             this.addToPlaylistMenuItem,
             this.removeFromPlaylistMenuItem,
+            this.cloudMenuSeparator,
+            this.uploadToCloudMenuItem,
+            this.deleteFromCloudMenuItem,
             this.toolStripSeparatorCollection,
             this.subscribePlaylistMenuItem,
             this.unsubscribePlaylistMenuItem,
@@ -694,6 +700,19 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             this.removeFromPlaylistMenuItem.Size = new System.Drawing.Size(210, 24);
             this.removeFromPlaylistMenuItem.Text = "从歌单中移除(&R)";
             this.removeFromPlaylistMenuItem.Click += new System.EventHandler(this.removeFromPlaylistMenuItem_Click);
+            this.cloudMenuSeparator.Name = "cloudMenuSeparator";
+            this.cloudMenuSeparator.Size = new System.Drawing.Size(207, 6);
+            this.cloudMenuSeparator.Visible = false;
+            this.uploadToCloudMenuItem.Name = "uploadToCloudMenuItem";
+            this.uploadToCloudMenuItem.Size = new System.Drawing.Size(210, 24);
+            this.uploadToCloudMenuItem.Text = "上传到云盘(&U)...";
+            this.uploadToCloudMenuItem.Visible = false;
+            this.uploadToCloudMenuItem.Click += new System.EventHandler(this.uploadToCloudMenuItem_Click);
+            this.deleteFromCloudMenuItem.Name = "deleteFromCloudMenuItem";
+            this.deleteFromCloudMenuItem.Size = new System.Drawing.Size(210, 24);
+            this.deleteFromCloudMenuItem.Text = "从云盘删除(&D)";
+            this.deleteFromCloudMenuItem.Visible = false;
+            this.deleteFromCloudMenuItem.Click += new System.EventHandler(this.deleteFromCloudMenuItem_Click);
             //
             // toolStripSeparatorCollection
             //
@@ -944,6 +963,9 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
         private System.Windows.Forms.ToolStripMenuItem batchDownloadMenuItem;
         private System.Windows.Forms.ToolStripMenuItem downloadCategoryMenuItem;
         private System.Windows.Forms.ToolStripMenuItem batchDownloadPlaylistsMenuItem;
+        private System.Windows.Forms.ToolStripSeparator cloudMenuSeparator;
+        private System.Windows.Forms.ToolStripMenuItem uploadToCloudMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem deleteFromCloudMenuItem;
         private System.Windows.Forms.ContextMenuStrip trayContextMenu;
         private System.Windows.Forms.ToolStripMenuItem trayShowMenuItem;
         private System.Windows.Forms.ToolStripMenuItem trayPlayPauseMenuItem;

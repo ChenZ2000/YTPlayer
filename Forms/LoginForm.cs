@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Drawing;
 using System.Threading;
 using System.Threading.Tasks;
@@ -16,16 +16,16 @@ namespace YTPlayer.Forms
     public partial class LoginForm : Form
     {
         private readonly NeteaseApiClient _apiClient;
-        private CancellationTokenSource _qrCheckCancellation;
-        private QrLoginSession _qrSession;
+        private CancellationTokenSource? _qrCheckCancellation;
+        private QrLoginSession? _qrSession;
         private bool _riskLinkPromptShown;
         private int _smsCountdown;
-        private System.Windows.Forms.Timer _smsTimer;
+        private System.Windows.Forms.Timer? _smsTimer;
 
         /// <summary>
         /// 登录成功事件
         /// </summary>
-        public event EventHandler<LoginSuccessEventArgs> LoginSuccess;
+        public event EventHandler<LoginSuccessEventArgs> LoginSuccess = delegate { };
 
         public LoginForm(NeteaseApiClient apiClient)
         {
@@ -134,8 +134,8 @@ namespace YTPlayer.Forms
                     return;
                 }
 
-                string qrUrl = _qrSession.Url;
-                string qrKey = _qrSession.Key;
+                string qrUrl = _qrSession.Url ?? throw new InvalidOperationException("QR session URL is missing.");
+                string qrKey = _qrSession.Key ?? throw new InvalidOperationException("QR session key is missing.");
 
                 // 生成二维码图片
                 using (QRCodeGenerator qrGenerator = new QRCodeGenerator())
@@ -229,7 +229,7 @@ namespace YTPlayer.Forms
 
                             await _apiClient.RefreshLoginAsync();
 
-                            UserAccountInfo userInfo = null;
+                            UserAccountInfo? userInfo = null;
                             try
                             {
                                 userInfo = await _apiClient.GetUserAccountAsync();
@@ -274,7 +274,7 @@ namespace YTPlayer.Forms
                                 UserId = userInfo?.UserId.ToString() ?? "0",
                                 Nickname = userInfo?.Nickname ?? "网易云用户",
                                 VipType = userInfo?.VipType ?? 0,
-                                AvatarUrl = userInfo?.AvatarUrl
+                                AvatarUrl = userInfo?.AvatarUrl ?? string.Empty
                             };
 
                             await CompleteLoginAsync(eventArgs);
@@ -451,7 +451,7 @@ namespace YTPlayer.Forms
                     // 启动60秒倒计时（按钮保持禁用状态）
                     _smsCountdown = 60;
                     sendSmsButton.Text = $"重新发送({_smsCountdown}s)";
-                    _smsTimer.Start();
+                    _smsTimer?.Start();
                 }
                 else
                 {
@@ -483,7 +483,7 @@ namespace YTPlayer.Forms
 
             if (_smsCountdown <= 0)
             {
-                _smsTimer.Stop();
+                _smsTimer?.Stop();
                 sendSmsButton.Text = "发送验证码";
                 sendSmsButton.Enabled = true;
             }
@@ -545,7 +545,7 @@ namespace YTPlayer.Forms
                     }
 
                     // ⭐ 修复：获取用户账号信息，即使失败也继续登录流程
-                    UserAccountInfo userInfo = null;
+                    UserAccountInfo? userInfo = null;
                     try
                     {
                         userInfo = await _apiClient.GetUserAccountAsync();
@@ -579,11 +579,11 @@ namespace YTPlayer.Forms
 
                     var eventArgs = new LoginSuccessEventArgs
                     {
-                        Cookie = result.Cookie,
+                        Cookie = result.Cookie ?? _apiClient.GetCurrentCookieString(),
                         UserId = result.UserId ?? "0",
                         Nickname = userInfo?.Nickname ?? result.Nickname ?? "网易云用户",
                         VipType = userInfo?.VipType ?? result.VipType,
-                        AvatarUrl = userInfo?.AvatarUrl ?? result.AvatarUrl
+                        AvatarUrl = userInfo?.AvatarUrl ?? result.AvatarUrl ?? string.Empty
                     };
 
                     await CompleteLoginAsync(eventArgs);
@@ -697,10 +697,12 @@ namespace YTPlayer.Forms
     /// </summary>
     public class LoginSuccessEventArgs : EventArgs
     {
-        public string Cookie { get; set; }
-        public string UserId { get; set; }
-        public string Nickname { get; set; }
+        public string Cookie { get; set; } = string.Empty;
+        public string UserId { get; set; } = string.Empty;
+        public string Nickname { get; set; } = string.Empty;
         public int VipType { get; set; }
-        public string AvatarUrl { get; set; }
+        public string AvatarUrl { get; set; } = string.Empty;
     }
 }
+
+

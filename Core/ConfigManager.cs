@@ -15,7 +15,7 @@ namespace YTPlayer.Core
     public class ConfigManager
     {
         private static readonly object _lock = new object();
-        private static ConfigManager _instance;
+        private static ConfigManager? _instance;
 
         /// <summary>
         /// 获取程序所在目录
@@ -328,7 +328,7 @@ namespace YTPlayer.Core
                 SeekMinIntervalMs = 30,
 
                 // 其他设置
-                LastPlayingSongId = null,
+                LastPlayingSongId = string.Empty,
                 LastPlayingPosition = 0,
                 LyricsFontSize = 12
             };
