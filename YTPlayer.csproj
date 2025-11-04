@@ -97,6 +97,9 @@
     <Compile Include="Forms\MainForm.Download.cs">
       <DependentUpon>MainForm.cs</DependentUpon>
     </Compile>
+    <Compile Include="Forms\MainForm.Artist.cs">
+      <DependentUpon>MainForm.cs</DependentUpon>
+    </Compile>
     <Compile Include="Forms\MainForm.Cloud.cs">
       <DependentUpon>MainForm.cs</DependentUpon>
     </Compile>
@@ -147,6 +150,7 @@
     <Compile Include="Utils\DebugLogger.cs" />
     <Compile Include="Utils\PerformanceMonitor.cs" />
     <Compile Include="Utils\TtsHelper.cs" />
+    <Compile Include="Utils\ArtistMetadataHelper.cs" />
     <Compile Include="Utils\ContextMenuHost.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -154,6 +158,7 @@
     <Compile Include="Models\CloudSongPageResult.cs" />
     <Compile Include="Models\CloudUploadProgress.cs" />
     <Compile Include="Models\CloudUploadResult.cs" />
+    <Compile Include="Models\ArtistInfo.cs" />
     <Compile Include="Models\PlaylistInfo.cs" />
     <Compile Include="Models\CommentInfo.cs" />
     <Compile Include="Models\ConfigModel.cs" />

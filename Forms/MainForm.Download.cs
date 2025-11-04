@@ -39,6 +39,10 @@ namespace YTPlayer
             // 初始化上传管理器
             var uploadManager = YTPlayer.Core.Upload.UploadManager.Instance;
             uploadManager.Initialize(_apiClient);
+            uploadManager.TaskCompleted -= OnCloudUploadTaskCompleted;
+            uploadManager.TaskCompleted += OnCloudUploadTaskCompleted;
+            uploadManager.TaskFailed -= OnCloudUploadTaskFailed;
+            uploadManager.TaskFailed += OnCloudUploadTaskFailed;
         }
 
         #endregion

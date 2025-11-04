@@ -1195,11 +1195,18 @@ namespace YTPlayer.Core
                     normalizedPath = "/" + normalizedPath;
                 }
 
+                bool hasExplicitPrefix = normalizedPath.StartsWith("/weapi", StringComparison.OrdinalIgnoreCase)
+                    || normalizedPath.StartsWith("/api", StringComparison.OrdinalIgnoreCase)
+                    || normalizedPath.StartsWith("/eapi", StringComparison.OrdinalIgnoreCase)
+                    || normalizedPath.StartsWith("/openapi", StringComparison.OrdinalIgnoreCase);
+
                 if (autoConvertApiSegment)
                 {
                     normalizedPath = Regex.Replace(normalizedPath, @"\b\w*api\b", "weapi", RegexOptions.IgnoreCase);
+                    hasExplicitPrefix = normalizedPath.StartsWith("/weapi", StringComparison.OrdinalIgnoreCase);
                 }
-                else if (!normalizedPath.StartsWith("/weapi", StringComparison.OrdinalIgnoreCase))
+
+                if (!hasExplicitPrefix)
                 {
                     normalizedPath = "/weapi" + normalizedPath;
                 }
@@ -3081,6 +3088,20 @@ namespace YTPlayer.Core
         }
 
         /// <summary>
+        /// 搜索歌手。
+        /// </summary>
+        public async Task<SearchResult<ArtistInfo>> SearchArtistsAsync(string keyword, int limit = 30, int offset = 0)
+        {
+            System.Diagnostics.Debug.WriteLine($"[API] 搜索歌手: {keyword}, limit={limit}, offset={offset}");
+
+            var result = await ExecuteSearchRequestAsync(keyword, SearchResourceType.Artist, limit, offset);
+            var artists = ParseArtistList(result?["artists"] as JArray);
+            int totalCount = ResolveTotalCount(result, SearchResourceType.Artist, offset, artists.Count);
+
+            return new SearchResult<ArtistInfo>(artists, totalCount, offset, limit, result);
+        }
+
+        /// <summary>
         /// 调用搜索接口，自动处理简化API与官方API切换。
         /// </summary>
         private async Task<JObject> ExecuteSearchRequestAsync(string keyword, SearchResourceType resourceType, int limit, int offset)
@@ -4770,6 +4791,328 @@ namespace YTPlayer.Core
 
         #endregion
 
+        #region 歌手相关
+
+        /// <summary>
+        /// 获取歌手详情。
+        /// </summary>
+        public async Task<ArtistDetail?> GetArtistDetailAsync(long artistId, bool includeIntroduction = true)
+        {
+            if (artistId <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(artistId));
+            }
+
+            var payload = new Dictionary<string, object>
+            {
+                { "id", artistId }
+            };
+
+            JObject response;
+            try
+            {
+                response = await PostWeApiAsync<JObject>(
+                    "/api/artist/head/info/get",
+                    payload,
+                    autoConvertApiSegment: true);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[API] 获取歌手详情失败: {ex.Message}");
+                throw;
+            }
+
+            if (response == null)
+            {
+                return null;
+            }
+
+            var dataNode = response["data"] as JObject ?? response["artist"] as JObject ?? response;
+            var artistNode = dataNode?["artist"] as JObject ?? dataNode?["artistInfo"] as JObject ?? dataNode;
+
+            var baseInfo = ParseArtistObject(artistNode) ?? new ArtistInfo { Id = artistId };
+
+            if (baseInfo.Id <= 0)
+            {
+                baseInfo.Id = artistId;
+            }
+
+            var detail = new ArtistDetail
+            {
+                Id = baseInfo.Id,
+                Name = baseInfo.Name,
+                Alias = baseInfo.Alias,
+                PicUrl = baseInfo.PicUrl,
+                AreaCode = baseInfo.AreaCode,
+                AreaName = baseInfo.AreaName,
+                TypeCode = baseInfo.TypeCode,
+                TypeName = baseInfo.TypeName,
+                MusicCount = baseInfo.MusicCount,
+                AlbumCount = baseInfo.AlbumCount,
+                MvCount = baseInfo.MvCount,
+                BriefDesc = baseInfo.BriefDesc,
+                Description = baseInfo.Description,
+                IsSubscribed = baseInfo.IsSubscribed,
+                CoverImageUrl = artistNode?["cover"]?.Value<string>()
+                    ?? artistNode?["coverUrl"]?.Value<string>()
+                    ?? baseInfo.PicUrl,
+                FollowerCount = artistNode?["fansGroup"]?["followCount"]?.Value<long>()
+                    ?? artistNode?["fansCount"]?.Value<long>()
+                    ?? artistNode?["followedCount"]?.Value<long>()
+                    ?? dataNode?["fans"]?.Value<long>()
+                    ?? 0
+            };
+
+            if (string.IsNullOrWhiteSpace(detail.Name))
+            {
+                detail.Name = artistNode?["name"]?.Value<string>() ?? dataNode?["name"]?.Value<string>() ?? string.Empty;
+            }
+
+            if (string.IsNullOrWhiteSpace(detail.PicUrl))
+            {
+                detail.PicUrl = artistNode?["avatar"]?.Value<string>()
+                    ?? artistNode?["avatarUrl"]?.Value<string>()
+                    ?? detail.CoverImageUrl;
+            }
+
+            var identifyDesc = artistNode?["identifyDesc"]?.Value<string>();
+            if (!string.IsNullOrWhiteSpace(identifyDesc))
+            {
+                detail.ExtraMetadata["认证信息"] = identifyDesc;
+            }
+
+            var companies = artistNode?["company"]?.Value<string>() ?? artistNode?["briefDescCompany"]?.Value<string>();
+            if (!string.IsNullOrWhiteSpace(companies))
+            {
+                detail.ExtraMetadata["经纪公司"] = companies;
+            }
+
+            var birthTimestamp = artistNode?["birth"]?.Value<long?>() ?? dataNode?["birth"]?.Value<long?>();
+            if (birthTimestamp.HasValue && birthTimestamp.Value > 0)
+            {
+                detail.ExtraMetadata["出生日期"] = DateTimeOffset.FromUnixTimeMilliseconds(birthTimestamp.Value)
+                    .DateTime.ToString("yyyy-MM-dd");
+            }
+
+            if (includeIntroduction)
+            {
+                try
+                {
+                    var (briefDesc, fullDesc, sections) = await FetchArtistIntroductionAsync(artistId);
+
+                    if (!string.IsNullOrWhiteSpace(briefDesc))
+                    {
+                        detail.BriefDesc = NormalizeSummary(briefDesc);
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(fullDesc))
+                    {
+                        detail.Description = fullDesc;
+                    }
+
+                    if (sections != null && sections.Count > 0)
+                    {
+                        detail.Introductions = sections;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[API] 获取歌手介绍失败: {ex.Message}");
+                }
+            }
+
+            return detail;
+        }
+
+        /// <summary>
+        /// 获取歌手介绍信息。
+        /// </summary>
+        private async Task<(string BriefDesc, string Description, List<ArtistIntroductionSection> Sections)> FetchArtistIntroductionAsync(long artistId)
+        {
+            var payload = new Dictionary<string, object>
+            {
+                { "id", artistId }
+            };
+
+            var response = await PostWeApiAsync<JObject>("/artist/introduction", payload);
+
+            if (response == null)
+            {
+                return (string.Empty, string.Empty, new List<ArtistIntroductionSection>());
+            }
+
+            string briefDesc = response["briefDesc"]?.Value<string>() ?? string.Empty;
+            var sections = ParseArtistIntroductionSections(response["introduction"] as JArray);
+            string description = BuildIntroductionSummary(sections);
+
+            if (string.IsNullOrWhiteSpace(description))
+            {
+                description = NormalizeDescription(response["txt"]?.Value<string>(), briefDesc);
+            }
+
+            if (string.IsNullOrWhiteSpace(description))
+            {
+                description = NormalizeDescription(briefDesc);
+            }
+
+            return (briefDesc, description, sections);
+        }
+
+        /// <summary>
+        /// 获取歌手热门 50 首歌曲。
+        /// </summary>
+        public async Task<List<SongInfo>> GetArtistTopSongsAsync(long artistId)
+        {
+            if (artistId <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(artistId));
+            }
+
+            var payload = new Dictionary<string, object>
+            {
+                { "id", artistId }
+            };
+
+            var response = await PostWeApiAsync<JObject>(
+                "/api/artist/top/song",
+                payload,
+                autoConvertApiSegment: true);
+            return ParseSongList(response?["songs"] as JArray);
+        }
+
+        /// <summary>
+        /// 分页获取歌手歌曲列表。
+        /// </summary>
+        public async Task<(List<SongInfo> Songs, bool HasMore, int TotalCount)> GetArtistSongsAsync(long artistId, int limit = 50, int offset = 0, string order = "hot")
+        {
+            if (artistId <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(artistId));
+            }
+
+            var payload = new Dictionary<string, object>
+            {
+                { "id", artistId },
+                { "private_cloud", "true" },
+                { "work_type", 1 },
+                { "order", string.IsNullOrWhiteSpace(order) ? "hot" : order },
+                { "offset", offset },
+                { "limit", limit }
+            };
+
+            var response = await PostWeApiAsync<JObject>(
+                "/api/v1/artist/songs",
+                payload,
+                autoConvertApiSegment: true);
+
+            var songs = ParseSongList(response?["songs"] as JArray);
+            bool hasMore = response?["more"]?.Value<bool>() ?? response?["hasMore"]?.Value<bool>() ?? false;
+            int totalCount = response?["total"]?.Value<int>() ?? response?["songCount"]?.Value<int>() ?? (offset + songs.Count + (hasMore ? 1 : 0));
+
+            return (songs, hasMore, totalCount);
+        }
+
+        /// <summary>
+        /// 分页获取歌手专辑列表。
+        /// </summary>
+        public async Task<(List<AlbumInfo> Albums, bool HasMore, int TotalCount)> GetArtistAlbumsAsync(long artistId, int limit = 30, int offset = 0)
+        {
+            if (artistId <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(artistId));
+            }
+
+            var payload = new Dictionary<string, object>
+            {
+                { "limit", limit },
+                { "offset", offset },
+                { "total", true }
+            };
+
+            var response = await PostWeApiAsync<JObject>($"/artist/albums/{artistId}", payload);
+
+            var albums = ParseAlbumList(response?["hotAlbums"] as JArray ?? response?["albums"] as JArray);
+            bool hasMore = response?["more"]?.Value<bool>() ?? response?["hasMore"]?.Value<bool>() ?? ((offset + albums.Count) < (response?["albumCount"]?.Value<int>() ?? 0));
+            int totalCount = response?["albumCount"]?.Value<int>() ?? response?["total"]?.Value<int>() ?? (offset + albums.Count + (hasMore ? 1 : 0));
+
+            return (albums, hasMore, totalCount);
+        }
+
+        /// <summary>
+        /// 获取已收藏的歌手列表。
+        /// </summary>
+        public async Task<SearchResult<ArtistInfo>> GetArtistSubscriptionsAsync(int limit = 25, int offset = 0)
+        {
+            var payload = new Dictionary<string, object>
+            {
+                { "limit", limit },
+                { "offset", offset },
+                { "total", true }
+            };
+
+            var response = await PostWeApiAsync<JObject>("/artist/sublist", payload);
+
+            var dataNode = response?["data"] as JObject ?? response;
+            var artists = ParseArtistList(dataNode?["artists"] as JArray ?? dataNode?["list"] as JArray ?? dataNode?["data"] as JArray);
+            int totalCount = dataNode?["artistCount"]?.Value<int>() ?? response?["count"]?.Value<int>() ?? artists.Count;
+
+            return new SearchResult<ArtistInfo>(artists, totalCount, offset, limit, response);
+        }
+
+        /// <summary>
+        /// 收藏或取消收藏歌手。
+        /// </summary>
+        public async Task<bool> SetArtistSubscriptionAsync(long artistId, bool subscribe)
+        {
+            if (artistId <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(artistId));
+            }
+
+            var payload = new Dictionary<string, object>
+            {
+                { "artistId", artistId.ToString() },
+                { "artistIds", $"[{artistId}]" }
+            };
+
+            string endpoint = subscribe ? "/artist/sub" : "/artist/unsub";
+            var response = await PostWeApiAsync<JObject>(endpoint, payload);
+            int code = response?["code"]?.Value<int>() ?? -1;
+            return code == 200;
+        }
+
+        /// <summary>
+        /// 根据分类获取歌手列表。
+        /// </summary>
+        public async Task<SearchResult<ArtistInfo>> GetArtistsByCategoryAsync(int typeCode, int areaCode, int limit = 30, int offset = 0, int? initial = null)
+        {
+            var payload = new Dictionary<string, object>
+            {
+                { "type", typeCode },
+                { "area", areaCode },
+                { "limit", limit },
+                { "offset", offset },
+                { "total", true }
+            };
+
+            if (initial.HasValue)
+            {
+                payload["initial"] = initial.Value;
+            }
+
+            var response = await PostWeApiAsync<JObject>(
+                "/api/v1/artist/list",
+                payload,
+                autoConvertApiSegment: true);
+
+            var artists = ParseArtistList(response?["artists"] as JArray ?? response?["list"] as JArray);
+            int totalCount = response?["total"]?.Value<int>() ?? response?["count"]?.Value<int>() ?? artists.Count;
+
+            return new SearchResult<ArtistInfo>(artists, totalCount, offset, limit, response);
+        }
+
+        #endregion
+
         #region 歌词相关
 
         /// <summary>
@@ -5364,10 +5707,11 @@ namespace YTPlayer.Core
 
             try
             {
-                // 注意：这个API路径特殊，需要使用 /api 而不是 /weapi
-                // PostWeApiAsync 会自动添加 /weapi 前缀，所以我们用 /../api 来抵消它
-                // 最终URL: https://music.163.com/weapi/../api/play-record/song/list → https://music.163.com/api/play-record/song/list
-                var response = await PostWeApiAsync<JObject>("/../api/play-record/song/list", payload);
+                // 注意：该接口位于 /api 前缀，需保持原始路径
+                var response = await PostWeApiAsync<JObject>(
+                    "/api/play-record/song/list",
+                    payload,
+                    autoConvertApiSegment: true);
 
                 if (response["code"]?.Value<int>() != 200)
                 {
@@ -5402,8 +5746,8 @@ namespace YTPlayer.Core
                     {
                         Id = songData["id"]?.Value<string>() ?? songData["id"]?.Value<long>().ToString(),
                         Name = songData["name"]?.Value<string>() ?? "未知歌曲",
-                        Artist = string.Join(", ",
-                            (songData["artists"] ?? songData["ar"])?.Select(a => a["name"]?.Value<string>())
+                        Artist = string.Join("/",
+                            (songData["artists"] ?? songData["ar"])?.Select(a => a["name"]?.Value<string>()).Where(n => !string.IsNullOrWhiteSpace(n))
                             ?? new[] { "未知艺术家" }),
                         Album = (songData["album"] ?? songData["al"])?["name"]?.Value<string>() ?? "未知专辑",
                         AlbumId = (songData["album"] ?? songData["al"])?["id"]?.Value<string>()
@@ -5411,6 +5755,38 @@ namespace YTPlayer.Core
                         Duration = (int)(songData["duration"]?.Value<long>() ?? songData["dt"]?.Value<long>() ?? 0),
                         PicUrl = (songData["album"] ?? songData["al"])?["picUrl"]?.Value<string>() ?? ""
                     };
+
+                    var recentArtists = songData["artists"] as JArray ?? songData["ar"] as JArray;
+                    if (recentArtists != null && recentArtists.Count > 0)
+                    {
+                        var artistNames = new List<string>();
+                        foreach (var artistToken in recentArtists)
+                        {
+                            if (artistToken == null || artistToken.Type != JTokenType.Object)
+                            {
+                                continue;
+                            }
+
+                            var artistObj = (JObject)artistToken;
+                            var artistName = artistObj["name"]?.Value<string>();
+                            if (!string.IsNullOrWhiteSpace(artistName))
+                            {
+                                artistNames.Add(artistName);
+                            }
+
+                            var artistIdValue = artistObj["id"]?.Value<long>() ?? 0;
+                            if (artistIdValue > 0)
+                            {
+                                song.ArtistIds.Add(artistIdValue);
+                            }
+                        }
+
+                        if (artistNames.Count > 0)
+                        {
+                            song.ArtistNames = new List<string>(artistNames);
+                            song.Artist = string.Join("/", artistNames);
+                        }
+                    }
 
                     songs.Add(song);
                 }
@@ -5653,111 +6029,6 @@ namespace YTPlayer.Core
         }
 
         /// <summary>
-        /// 重命名云盘歌曲（通过更新云盘信息）
-        /// </summary>
-        /// <param name="cloudSongId">云盘歌曲 ID</param>
-        /// <param name="newSongName">新歌曲名</param>
-        /// <param name="newArtist">新歌手名</param>
-        /// <param name="newAlbum">新专辑名（可选）</param>
-        /// <param name="cancellationToken">取消令牌</param>
-        /// <returns>是否成功</returns>
-        public async Task<bool> RenameCloudSongAsync(
-            string cloudSongId,
-            string newSongName,
-            string newArtist,
-            string? newAlbum = null,
-            CancellationToken cancellationToken = default)
-        {
-            if (string.IsNullOrWhiteSpace(cloudSongId) ||
-                string.IsNullOrWhiteSpace(newSongName) ||
-                string.IsNullOrWhiteSpace(newArtist))
-            {
-                return false;
-            }
-
-            try
-            {
-                // 网易云音乐云盘重命名通过匹配接口实现
-                // 先获取当前歌曲详情
-                var detailPayload = new Dictionary<string, object>
-                {
-                    { "songIds", new[] { cloudSongId } }
-                };
-
-                var detailResp = await PostWeApiAsync<JObject>(
-                    "/v1/cloud/get/byids",
-                    detailPayload,
-                    cancellationToken: cancellationToken);
-
-                if (detailResp == null || detailResp["data"] == null)
-                {
-                    return false;
-                }
-
-                var dataArray = detailResp["data"] as JArray;
-                if (dataArray == null || dataArray.Count == 0)
-                {
-                    return false;
-                }
-
-                var songData = dataArray[0] as JObject;
-                if (songData == null)
-                {
-                    return false;
-                }
-
-                // 获取必要的信息
-                string songId = songData["songId"]?.Value<string>() ?? "0";
-                long userId = songData["userId"]?.Value<long>() ?? 0;
-
-                // 方法1：尝试使用 cloud info update API（如果存在）
-                var updatePayload = new Dictionary<string, object>
-                {
-                    { "songId", cloudSongId },
-                    { "songName", newSongName },
-                    { "artist", newArtist }
-                };
-
-                if (!string.IsNullOrWhiteSpace(newAlbum))
-                {
-                    updatePayload["album"] = newAlbum;
-                }
-
-                // 尝试更新云盘信息（这个 API 可能需要验证）
-                var updateResp = await PostWeApiAsync<JObject>(
-                    "/api/cloud/song/update",
-                    updatePayload,
-                    cancellationToken: cancellationToken);
-
-                // 如果上面的 API 不工作，尝试使用 match API
-                if (updateResp == null || updateResp["code"]?.Value<int>() != 200)
-                {
-                    // 使用匹配接口来"重命名"（通过匹配到用户指定的歌曲信息）
-                    var matchPayload = new Dictionary<string, object>
-                    {
-                        { "userId", userId },
-                        { "songId", cloudSongId },
-                        { "adjustSongId", songId }
-                    };
-
-                    var matchResp = await PostWeApiAsync<JObject>(
-                        "/api/cloud/user/song/match",
-                        matchPayload,
-                        cancellationToken: cancellationToken);
-
-                    return matchResp?["code"]?.Value<int>() == 200;
-                }
-
-                return true;
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[Cloud] 重命名失败: {ex.Message}");
-                return false;
-            }
-        }
-
-        /// <summary>
         /// 上传单个文件到云盘
         /// </summary>
         public async Task<CloudUploadResult> UploadCloudSongAsync(
@@ -5797,11 +6068,11 @@ namespace YTPlayer.Core
                 long fileSize = new System.IO.FileInfo(filePath).Length;
                 const int bitrate = 999000;
 
-                ReportUploadProgress(progress, filePath, fileIndex, totalFiles, 5, "计算文件校验");
+                ReportUploadProgress(progress, filePath, fileIndex, totalFiles, 5, "计算文件校验", 0, fileSize);
                 string md5 = await ComputeFileMd5Async(filePath, cancellationToken).ConfigureAwait(false);
                 cancellationToken.ThrowIfCancellationRequested();
 
-                ReportUploadProgress(progress, filePath, fileIndex, totalFiles, 15, "检查云盘状态");
+                ReportUploadProgress(progress, filePath, fileIndex, totalFiles, 15, "检查云盘状态", 0, fileSize);
                 var checkPayload = new Dictionary<string, object>
                 {
                     { "bitrate", bitrate.ToString() },
@@ -5817,10 +6088,12 @@ namespace YTPlayer.Core
                     checkPayload,
                     cancellationToken: cancellationToken);
 
+                ValidateCloudResponse(checkResp, "检查云盘状态");
+
                 bool needUpload = checkResp?["needUpload"]?.Value<bool>() ?? true;
                 string checkSongId = checkResp?["songId"]?.Value<string>() ?? "0";
 
-                ReportUploadProgress(progress, filePath, fileIndex, totalFiles, 30, "请求上传令牌");
+                ReportUploadProgress(progress, filePath, fileIndex, totalFiles, 30, "请求上传令牌", 0, fileSize);
 
                 const string bucket = "jd-musicrep-privatecloud-audio-public";
                 var tokenPayload = new Dictionary<string, object>
@@ -5839,10 +6112,19 @@ namespace YTPlayer.Core
                     tokenPayload,
                     cancellationToken: cancellationToken);
 
+                ValidateCloudResponse(tokenResp, "获取上传令牌");
+
                 var tokenResult = tokenResp?["result"] as JObject;
                 string resourceId = tokenResult?["resourceId"]?.Value<string>() ?? string.Empty;
                 string objectKey = tokenResult?["objectKey"]?.Value<string>() ?? string.Empty;
                 string token = tokenResult?["token"]?.Value<string>() ?? string.Empty;
+
+                if (string.IsNullOrWhiteSpace(resourceId) ||
+                    string.IsNullOrWhiteSpace(objectKey) ||
+                    string.IsNullOrWhiteSpace(token))
+                {
+                    throw new Exception("上传令牌响应缺少必要字段");
+                }
 
                 if (string.IsNullOrEmpty(objectKey) || string.IsNullOrEmpty(token))
                 {
@@ -5851,7 +6133,7 @@ namespace YTPlayer.Core
 
                 if (needUpload)
                 {
-                    ReportUploadProgress(progress, filePath, fileIndex, totalFiles, 45, "上传音频文件");
+                    ReportUploadProgress(progress, filePath, fileIndex, totalFiles, 45, "上传音频文件", 0, fileSize);
                     await UploadToNosAsync(
                         filePath,
                         bucket,
@@ -5867,7 +6149,7 @@ namespace YTPlayer.Core
                 }
                 else
                 {
-                    ReportUploadProgress(progress, filePath, fileIndex, totalFiles, 55, "文件已存在，跳过上传");
+                    ReportUploadProgress(progress, filePath, fileIndex, totalFiles, 55, "文件已存在，跳过上传", fileSize, fileSize);
                 }
 
                 var metadata = ExtractAudioMetadata(filePath);
@@ -5877,7 +6159,7 @@ namespace YTPlayer.Core
                 string artist = string.IsNullOrWhiteSpace(metadata.Artist) ? "未知艺术家" : metadata.Artist;
                 string album = string.IsNullOrWhiteSpace(metadata.Album) ? "未知专辑" : metadata.Album;
 
-                ReportUploadProgress(progress, filePath, fileIndex, totalFiles, 70, "提交云盘信息");
+                ReportUploadProgress(progress, filePath, fileIndex, totalFiles, 70, "提交云盘信息", fileSize, fileSize);
                 var infoPayload = new Dictionary<string, object>
                 {
                     { "md5", md5 },
@@ -5895,9 +6177,11 @@ namespace YTPlayer.Core
                     infoPayload,
                     cancellationToken: cancellationToken);
 
+                ValidateCloudResponse(infoResp, "提交云盘信息");
+
                 string cloudSongId = infoResp?["songId"]?.Value<string>() ?? infoResp?["id"]?.Value<string>() ?? checkSongId;
 
-                ReportUploadProgress(progress, filePath, fileIndex, totalFiles, 85, "发布到云盘");
+                ReportUploadProgress(progress, filePath, fileIndex, totalFiles, 85, "发布到云盘", fileSize, fileSize);
                 var publishPayload = new Dictionary<string, object>
                 {
                     { "songid", cloudSongId }
@@ -5919,7 +6203,7 @@ namespace YTPlayer.Core
                 result.CloudSongId = cloudSongId ?? string.Empty;
                 result.MatchedSongId = checkSongId ?? string.Empty;
 
-                ReportUploadProgress(progress, filePath, fileIndex, totalFiles, 100, "上传完成");
+                ReportUploadProgress(progress, filePath, fileIndex, totalFiles, 100, "上传完成", fileSize, fileSize);
             }
             catch (OperationCanceledException)
             {
@@ -5929,9 +6213,9 @@ namespace YTPlayer.Core
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[Cloud] 上传失败: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[Cloud] 上传失败: {ex}");
                 result.Success = false;
-                result.ErrorMessage = ex.Message;
+                result.ErrorMessage = GetInnermostExceptionMessage(ex);
             }
 
             return result;
@@ -6021,30 +6305,161 @@ namespace YTPlayer.Core
 
             string lbsBody = await lbsResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
             var lbsJson = JObject.Parse(lbsBody);
-            string uploadServer = lbsJson["upload"]?.First?.Value<string>() ?? "45.127.129.8";
+            var uploadUri = BuildNosUploadUri(lbsJson, bucket, objectKey);
 
-            string encodedObjectKey = objectKey.Replace("/", "%2F");
-            string uploadUrl = $"http://{uploadServer}/{bucket}/{encodedObjectKey}?offset=0&complete=true&version=1.0";
-
-            using var request = new HttpRequestMessage(HttpMethod.Post, uploadUrl);
+            using var request = new HttpRequestMessage(HttpMethod.Post, uploadUri);
             request.Headers.TryAddWithoutValidation("x-nos-token", token);
             request.Headers.TryAddWithoutValidation("Content-MD5", md5);
+            request.Headers.TryAddWithoutValidation("Accept", "*/*");
+            request.Headers.TryAddWithoutValidation("Connection", "keep-alive");
+            request.Headers.Referrer = MUSIC_URI;
+            request.Headers.ExpectContinue = false;
+            var userAgent = _desktopUserAgent ?? USER_AGENT;
+            if (!string.IsNullOrEmpty(userAgent))
+            {
+                request.Headers.TryAddWithoutValidation("User-Agent", userAgent);
+            }
 
             using var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
-            var content = new StreamContent(fileStream);
-            content.Headers.ContentLength = fileSize;
-            content.Headers.ContentType = new MediaTypeHeaderValue(MapMimeType(extension));
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            int lastPercent = -1;
+            double lastSpeed = 0;
+            var content = new ProgressStreamContent(
+                fileStream,
+                64 * 1024,
+                uploadedBytes =>
+                {
+                    if (fileSize <= 0)
+                    {
+                        return;
+                    }
+
+                    int percent = (int)Math.Min(100, Math.Round(uploadedBytes * 100.0 / fileSize));
+                    if (percent == lastPercent && uploadedBytes < fileSize)
+                    {
+                        return;
+                    }
+
+                    double speed = 0;
+                    if (stopwatch.Elapsed.TotalSeconds > 0.01)
+                    {
+                        speed = uploadedBytes / stopwatch.Elapsed.TotalSeconds;
+                        lastSpeed = speed;
+                    }
+                    else
+                    {
+                        speed = lastSpeed;
+                    }
+
+                    ReportUploadProgress(
+                        progress,
+                        filePath,
+                        fileIndex,
+                        totalFiles,
+                        percent,
+                        "上传音频文件",
+                        uploadedBytes,
+                        fileSize,
+                        speed);
+
+                    lastPercent = percent;
+                },
+                fileSize,
+                MapMimeType(extension),
+                cancellationToken);
 
             request.Content = content;
 
-            var response = await _uploadHttpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode)
+            HttpResponseMessage response;
+            try
             {
-                string error = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-                throw new Exception($"NOS上传失败: {response.StatusCode} {error}");
+                response = await _uploadHttpClient
+                    .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (HttpRequestException ex)
+            {
+                throw new Exception($"NOS上传请求失败（{uploadUri.Host}）：{ex.Message}", ex);
             }
 
-            ReportUploadProgress(progress, filePath, fileIndex, totalFiles, 60, "文件上传完成");
+            using (response)
+            {
+                if (!response.IsSuccessStatusCode)
+                {
+                    string error = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                    throw new Exception($"NOS上传失败: {response.StatusCode} {error}");
+                }
+            }
+
+            stopwatch.Stop();
+
+            if (lastSpeed <= 0 && fileSize > 0 && stopwatch.Elapsed.TotalSeconds > 0.01)
+            {
+                lastSpeed = fileSize / stopwatch.Elapsed.TotalSeconds;
+            }
+
+            ReportUploadProgress(
+                progress,
+                filePath,
+                fileIndex,
+                totalFiles,
+                60,
+                "文件上传完成",
+                fileSize,
+                fileSize,
+                lastSpeed);
+        }
+
+        private static Uri BuildNosUploadUri(JObject lbsJson, string bucket, string objectKey)
+        {
+            var uploadArray = lbsJson["upload"] as JArray;
+            string? endpointCandidate = uploadArray?.FirstOrDefault()?.Value<string>()?.Trim();
+
+            Uri baseUri;
+            if (!string.IsNullOrEmpty(endpointCandidate))
+            {
+                if (!Uri.TryCreate(endpointCandidate, UriKind.Absolute, out baseUri))
+                {
+                    string normalized = endpointCandidate.IndexOf("://", StringComparison.OrdinalIgnoreCase) >= 0
+                        ? endpointCandidate
+                        : $"http://{endpointCandidate}";
+                    baseUri = Uri.TryCreate(normalized, UriKind.Absolute, out var parsed)
+                        ? parsed
+                        : new Uri("http://45.127.129.8");
+                }
+            }
+            else
+            {
+                baseUri = new Uri("http://45.127.129.8");
+            }
+
+            var pathSegments = new List<string>();
+            AppendPathSegments(pathSegments, baseUri.AbsolutePath);
+            AppendPathSegments(pathSegments, bucket);
+            AppendPathSegments(pathSegments, objectKey);
+
+            var builder = new UriBuilder(baseUri.Scheme, baseUri.Host, baseUri.IsDefaultPort ? -1 : baseUri.Port)
+            {
+                Path = string.Join("/", pathSegments),
+                Query = "offset=0&complete=true&version=1.0"
+            };
+
+            return builder.Uri;
+        }
+
+        private static void AppendPathSegments(List<string> segments, string path)
+        {
+            if (segments == null || string.IsNullOrWhiteSpace(path))
+            {
+                return;
+            }
+
+            string decodedPath = Uri.UnescapeDataString(path);
+            var parts = decodedPath.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (var part in parts)
+            {
+                segments.Add(Uri.EscapeDataString(part));
+            }
         }
 
         private static string MapMimeType(string extension)
@@ -6068,7 +6483,10 @@ namespace YTPlayer.Core
             int fileIndex,
             int totalFiles,
             int percent,
-            string stage)
+            string stage,
+            long bytesTransferred = 0,
+            long totalBytes = 0,
+            double speedBytesPerSecond = 0)
         {
             progress?.Report(new CloudUploadProgress
             {
@@ -6076,8 +6494,116 @@ namespace YTPlayer.Core
                 FileIndex = fileIndex,
                 TotalFiles = totalFiles,
                 FileProgressPercent = percent,
-                StageMessage = stage
+                StageMessage = stage,
+                BytesTransferred = bytesTransferred,
+                TotalBytes = totalBytes,
+                TransferSpeedBytesPerSecond = speedBytesPerSecond
             });
+        }
+
+        private static string GetInnermostExceptionMessage(Exception ex)
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var ordered = new List<string>();
+            Exception? current = ex;
+            while (current != null)
+            {
+                if (!string.IsNullOrWhiteSpace(current.Message))
+                {
+                    string trimmed = current.Message.Trim();
+                    if (seen.Add(trimmed))
+                    {
+                        ordered.Add(trimmed);
+                    }
+                }
+
+                current = current.InnerException;
+            }
+
+            return ordered.Count > 0 ? string.Join(" -> ", ordered) : "未知错误";
+        }
+
+        private static void ValidateCloudResponse(JObject? response, string stage)
+        {
+            if (response == null)
+            {
+                throw new Exception($"{stage}：服务器未返回数据");
+            }
+
+            int code = response["code"]?.Value<int>() ?? 200;
+            if (code != 200)
+            {
+                string message = response["message"]?.Value<string>() ??
+                                 response["msg"]?.Value<string>() ??
+                                 $"code={code}";
+                throw new Exception($"{stage}失败：{message}");
+            }
+        }
+
+        /// <summary>
+        /// 支持进度回调的 HttpContent 包装
+        /// </summary>
+        private sealed class ProgressStreamContent : HttpContent
+        {
+            private readonly Stream _sourceStream;
+            private readonly int _bufferSize;
+            private readonly Action<long> _progressCallback;
+            private readonly long _totalLength;
+            private readonly CancellationToken _cancellationToken;
+
+            public ProgressStreamContent(
+                Stream sourceStream,
+                int bufferSize,
+                Action<long> progressCallback,
+                long totalLength,
+                string mediaType,
+                CancellationToken cancellationToken)
+            {
+                _sourceStream = sourceStream ?? throw new ArgumentNullException(nameof(sourceStream));
+                _bufferSize = bufferSize <= 0 ? 64 * 1024 : bufferSize;
+                _progressCallback = progressCallback ?? (_ => { });
+                _totalLength = totalLength;
+                _cancellationToken = cancellationToken;
+
+                Headers.ContentType = new MediaTypeHeaderValue(mediaType);
+                if (totalLength > 0)
+                {
+                    Headers.ContentLength = totalLength;
+                }
+            }
+
+            protected override async Task SerializeToStreamAsync(Stream stream, TransportContext? context)
+            {
+                var buffer = new byte[_bufferSize];
+                long uploaded = 0;
+                int bytesRead;
+
+                while ((bytesRead = await _sourceStream
+                           .ReadAsync(buffer, 0, buffer.Length, _cancellationToken)
+                           .ConfigureAwait(false)) > 0)
+                {
+                    await stream.WriteAsync(buffer, 0, bytesRead, _cancellationToken).ConfigureAwait(false);
+                    uploaded += bytesRead;
+                    _progressCallback(uploaded);
+
+                    if (_cancellationToken.IsCancellationRequested)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            protected override bool TryComputeLength(out long length)
+            {
+                if (_totalLength > 0)
+                {
+                    length = _totalLength;
+                    return true;
+                }
+
+                length = 0;
+                return false;
+            }
         }
 
         private SongInfo? BuildFallbackCloudSong(JObject entry)
@@ -6203,8 +6729,8 @@ namespace YTPlayer.Core
                     {
                         Id = songData["id"]?.Value<string>() ?? songData["id"]?.Value<long>().ToString(),
                         Name = songData["name"]?.Value<string>() ?? "未知歌曲",
-                        Artist = string.Join(", ",
-                            (songData["ar"] ?? songData["artists"])?.Select(a => a["name"]?.Value<string>())
+                        Artist = string.Join("/",
+                            (songData["ar"] ?? songData["artists"])?.Select(a => a["name"]?.Value<string>()).Where(n => !string.IsNullOrWhiteSpace(n))
                             ?? new[] { "未知艺术家" }),
                         Album = (songData["al"] ?? songData["album"])?["name"]?.Value<string>() ?? "未知专辑",
                         AlbumId = (songData["al"] ?? songData["album"])?["id"]?.Value<string>()
@@ -6212,6 +6738,38 @@ namespace YTPlayer.Core
                         Duration = (int)(songData["dt"]?.Value<long>() ?? songData["duration"]?.Value<long>() ?? 0),
                         PicUrl = (songData["al"] ?? songData["album"])?["picUrl"]?.Value<string>() ?? ""
                     };
+
+                    var recordArtists = songData["ar"] as JArray ?? songData["artists"] as JArray;
+                    if (recordArtists != null && recordArtists.Count > 0)
+                    {
+                        var artistNames = new List<string>();
+                        foreach (var artistToken in recordArtists)
+                        {
+                            if (artistToken == null || artistToken.Type != JTokenType.Object)
+                            {
+                                continue;
+                            }
+
+                            var artistObj = (JObject)artistToken;
+                            var artistName = artistObj["name"]?.Value<string>();
+                            if (!string.IsNullOrWhiteSpace(artistName))
+                            {
+                                artistNames.Add(artistName);
+                            }
+
+                            var artistIdValue = artistObj["id"]?.Value<long>() ?? 0;
+                            if (artistIdValue > 0)
+                            {
+                                song.ArtistIds.Add(artistIdValue);
+                            }
+                        }
+
+                        if (artistNames.Count > 0)
+                        {
+                            song.ArtistNames = new List<string>(artistNames);
+                            song.Artist = string.Join("/", artistNames);
+                        }
+                    }
 
                     var playCount = item["playCount"]?.Value<int>() ?? 0;
                     result.Add((song, playCount));
@@ -6249,8 +6807,10 @@ namespace YTPlayer.Core
                     { "total", true }
                 };
 
-                // 特殊路径处理：使用 /../api 绕过 /weapi 前缀
-                var response = await PostWeApiAsync<JObject>("/../api/playlist/highquality/list", payload);
+                var response = await PostWeApiAsync<JObject>(
+                    "/api/playlist/highquality/list",
+                    payload,
+                    autoConvertApiSegment: true);
 
                 if (response["code"]?.Value<int>() != 200)
                 {
@@ -6343,8 +6903,10 @@ namespace YTPlayer.Core
                     { "limit", limit }
                 };
 
-                // 特殊路径处理：使用 /../api 绕过 /weapi 前缀
-                var response = await PostWeApiAsync<JObject>("/../api/play-record/playlist/list", payload);
+                var response = await PostWeApiAsync<JObject>(
+                    "/api/play-record/playlist/list",
+                    payload,
+                    autoConvertApiSegment: true);
 
                 if (response["code"]?.Value<int>() != 200)
                 {
@@ -6404,8 +6966,10 @@ namespace YTPlayer.Core
                     { "limit", limit }
                 };
 
-                // 特殊路径处理：使用 /../api 绕过 /weapi 前缀
-                var response = await PostWeApiAsync<JObject>("/../api/play-record/album/list", payload);
+                var response = await PostWeApiAsync<JObject>(
+                    "/api/play-record/album/list",
+                    payload,
+                    autoConvertApiSegment: true);
 
                 if (response["code"]?.Value<int>() != 200)
                 {
@@ -6519,8 +7083,10 @@ namespace YTPlayer.Core
 
                 var payload = new Dictionary<string, object>();
 
-                // 特殊路径处理：使用 /../api 绕过 /weapi 前缀
-                var response = await PostWeApiAsync<JObject>("/../api/discovery/newAlbum", payload);
+                var response = await PostWeApiAsync<JObject>(
+                    "/api/discovery/newAlbum",
+                    payload,
+                    autoConvertApiSegment: true);
 
                 if (response["code"]?.Value<int>() != 200)
                 {
@@ -6590,6 +7156,124 @@ namespace YTPlayer.Core
         #endregion
 
         #region 数据解析方法
+
+        /// <summary>
+        /// 解析歌手列表。
+        /// </summary>
+        private List<ArtistInfo> ParseArtistList(JArray artists)
+        {
+            var result = new List<ArtistInfo>();
+            if (artists == null) return result;
+
+            foreach (var artistToken in artists)
+            {
+                if (artistToken == null || artistToken.Type != JTokenType.Object)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    var artistInfo = ParseArtistObject((JObject)artistToken);
+                    if (artistInfo != null && artistInfo.Id > 0)
+                    {
+                        result.Add(artistInfo);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[API] 解析歌手失败: {ex.Message}");
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// 解析歌手对象。
+        /// </summary>
+        private ArtistInfo? ParseArtistObject(JObject artistObject)
+        {
+            if (artistObject == null)
+            {
+                return null;
+            }
+
+            var artistInfo = new ArtistInfo
+            {
+                Id = artistObject["id"]?.Value<long>()
+                     ?? artistObject["artistId"]?.Value<long>()
+                     ?? artistObject["userId"]?.Value<long>()
+                     ?? 0,
+                Name = artistObject["name"]?.Value<string>()
+                    ?? artistObject["artistName"]?.Value<string>()
+                    ?? string.Empty,
+                PicUrl = artistObject["picUrl"]?.Value<string>()
+                    ?? artistObject["img1v1Url"]?.Value<string>()
+                    ?? artistObject["avatar"]?.Value<string>()
+                    ?? artistObject["cover"]?.Value<string>()
+                    ?? string.Empty,
+                AreaCode = artistObject["area"]?.Value<int?>()
+                    ?? artistObject["areaCode"]?.Value<int?>()
+                    ?? 0,
+                TypeCode = artistObject["type"]?.Value<int?>()
+                    ?? artistObject["artistType"]?.Value<int?>()
+                    ?? 0,
+                MusicCount = artistObject["musicSize"]?.Value<int?>()
+                    ?? artistObject["musicCount"]?.Value<int?>()
+                    ?? artistObject["songCount"]?.Value<int?>()
+                    ?? 0,
+                AlbumCount = artistObject["albumSize"]?.Value<int?>()
+                    ?? artistObject["albumCount"]?.Value<int?>()
+                    ?? 0,
+                MvCount = artistObject["mvSize"]?.Value<int?>()
+                    ?? artistObject["mvCount"]?.Value<int?>()
+                    ?? 0,
+                BriefDesc = artistObject["briefDesc"]?.Value<string>() ?? string.Empty,
+                Description = artistObject["desc"]?.Value<string>() ?? string.Empty,
+                IsSubscribed = artistObject["followed"]?.Value<bool?>()
+                    ?? artistObject["follow"]?.Value<bool?>()
+                    ?? false
+            };
+
+            if (string.IsNullOrWhiteSpace(artistInfo.PicUrl))
+            {
+                artistInfo.PicUrl = artistObject["avatarUrl"]?.Value<string>()
+                    ?? artistObject["img1v1"]?.Value<string>()
+                    ?? string.Empty;
+            }
+
+            var aliasArray = artistObject["alias"] as JArray;
+            if (aliasArray != null && aliasArray.Count > 0)
+            {
+                var aliasList = aliasArray
+                    .Select(a => a?.Value<string>())
+                    .Where(s => !string.IsNullOrWhiteSpace(s))
+                    .ToList();
+
+                if (aliasList.Count > 0)
+                {
+                    artistInfo.Alias = string.Join("/", aliasList);
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(artistInfo.Alias))
+            {
+                var translated = artistObject["trans"]?.Value<string>()
+                    ?? artistObject["tns"]?.FirstOrDefault()?.Value<string>();
+                if (!string.IsNullOrWhiteSpace(translated))
+                {
+                    artistInfo.Alias = translated;
+                }
+            }
+
+            artistInfo.AreaName = ArtistMetadataHelper.ResolveAreaName(artistInfo.AreaCode);
+            artistInfo.TypeName = ArtistMetadataHelper.ResolveTypeName(artistInfo.TypeCode);
+            artistInfo.BriefDesc = NormalizeSummary(artistInfo.BriefDesc);
+            artistInfo.Description = NormalizeDescription(artistInfo.Description, artistInfo.BriefDesc);
+
+            return artistInfo;
+        }
 
         /// <summary>
         /// 解析歌曲列表
@@ -6667,15 +7351,40 @@ namespace YTPlayer.Core
                     var artists = song["ar"] as JArray ?? song["artists"] as JArray;
                     if (artists != null && artists.Count > 0)
                     {
-                        var artistNames = artists
-                            .Where(a => a != null && a.Type == JTokenType.Object)
-                            .Select(a => a["name"]?.Value<string>())
-                            .Where(n => !string.IsNullOrEmpty(n))
-                            .ToList();
+                        var artistNames = new List<string>();
+                        var artistIds = new List<long>();
+
+                        foreach (var artistToken in artists)
+                        {
+                            if (artistToken == null || artistToken.Type != JTokenType.Object)
+                            {
+                                continue;
+                            }
+
+                            var artistObj = (JObject)artistToken;
+
+                            var artistName = artistObj["name"]?.Value<string>();
+                            if (!string.IsNullOrWhiteSpace(artistName))
+                            {
+                                artistNames.Add(artistName);
+                            }
+
+                            var artistIdValue = artistObj["id"]?.Value<long>() ?? 0;
+                            if (artistIdValue > 0)
+                            {
+                                artistIds.Add(artistIdValue);
+                            }
+                        }
 
                         if (artistNames.Count > 0)
                         {
+                            songInfo.ArtistNames = new List<string>(artistNames);
                             songInfo.Artist = string.Join("/", artistNames);
+                        }
+
+                        if (artistIds.Count > 0)
+                        {
+                            songInfo.ArtistIds = new List<long>(artistIds);
                         }
                     }
 
@@ -6774,6 +7483,115 @@ namespace YTPlayer.Core
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// 解析歌手介绍段落。
+        /// </summary>
+        private List<ArtistIntroductionSection> ParseArtistIntroductionSections(JArray introductionArray)
+        {
+            var sections = new List<ArtistIntroductionSection>();
+            if (introductionArray == null)
+            {
+                return sections;
+            }
+
+            foreach (var item in introductionArray)
+            {
+                if (item is not JObject section)
+                {
+                    continue;
+                }
+
+                var title = section["ti"]?.Value<string>() ?? string.Empty;
+                var content = section["txt"]?.Value<string>() ?? string.Empty;
+
+                if (string.IsNullOrWhiteSpace(title) && string.IsNullOrWhiteSpace(content))
+                {
+                    continue;
+                }
+
+                sections.Add(new ArtistIntroductionSection
+                {
+                    Title = title,
+                    Content = content.Replace("\r\n", "\n").Trim()
+                });
+            }
+
+            return sections;
+        }
+
+        private static string BuildIntroductionSummary(IEnumerable<ArtistIntroductionSection> sections, int maxLength = 320)
+        {
+            if (sections == null)
+            {
+                return string.Empty;
+            }
+
+            var printable = sections
+                .Select(section =>
+                {
+                    if (string.IsNullOrWhiteSpace(section.Content))
+                    {
+                        return string.Empty;
+                    }
+
+                    if (string.IsNullOrWhiteSpace(section.Title))
+                    {
+                        return section.Content;
+                    }
+
+                    return $"{section.Title}\n{section.Content}";
+                })
+                .Where(s => !string.IsNullOrWhiteSpace(s));
+
+            string combined = string.Join("\n\n", printable);
+            if (string.IsNullOrWhiteSpace(combined))
+            {
+                return string.Empty;
+            }
+
+            combined = Regex.Replace(combined.Trim(), "\\s+", " ");
+            return TrimToLength(combined, maxLength);
+        }
+
+        private static string NormalizeSummary(string? source, int maxLength = 140)
+        {
+            if (string.IsNullOrWhiteSpace(source))
+            {
+                return string.Empty;
+            }
+
+            string condensed = Regex.Replace(source.Trim(), "\\s+", " ");
+            return TrimToLength(condensed, maxLength);
+        }
+
+        private static string NormalizeDescription(string? description, string? fallback = null, int maxLength = 240)
+        {
+            string baseText = !string.IsNullOrWhiteSpace(description) ? description : fallback ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(baseText))
+            {
+                return string.Empty;
+            }
+
+            string condensed = Regex.Replace(baseText.Trim(), "\\s+", " ");
+            return TrimToLength(condensed, maxLength);
+        }
+
+        private static string TrimToLength(string value, int maxLength)
+        {
+            if (string.IsNullOrEmpty(value) || maxLength <= 0)
+            {
+                return string.Empty;
+            }
+
+            if (value.Length <= maxLength)
+            {
+                return value;
+            }
+
+            string truncated = value.Substring(0, Math.Min(maxLength, value.Length)).TrimEnd();
+            return truncated.Length < value.Length ? truncated + "…" : truncated;
         }
 
         /// <summary>

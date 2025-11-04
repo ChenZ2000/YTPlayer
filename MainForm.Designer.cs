@@ -90,6 +90,23 @@
             this.deletePlaylistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.subscribeAlbumMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.unsubscribeAlbumMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.toolStripSeparatorView = new System.Windows.Forms.ToolStripSeparator();
+            this.viewSongArtistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.viewSongAlbumMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.shareSongMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.shareSongWebMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.shareSongDirectMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.sharePlaylistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.sharePlaylistWebMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.sharePlaylistDirectMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.shareAlbumMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.shareAlbumWebMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.shareAlbumDirectMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.toolStripSeparatorArtist = new System.Windows.Forms.ToolStripSeparator();
+            this.viewArtistDetailMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.shareArtistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.subscribeArtistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.unsubscribeArtistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.toolStripSeparatorDownload3 = new System.Windows.Forms.ToolStripSeparator();
             this.downloadSongMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.downloadPlaylistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
@@ -407,7 +424,8 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             this.searchTypeComboBox.Items.AddRange(new object[] {
             "歌曲",
             "歌单",
-            "专辑"});
+            "专辑",
+            "歌手"});
             this.searchTypeComboBox.Location = new System.Drawing.Point(620, 40);
             this.searchTypeComboBox.Name = "searchTypeComboBox";
             this.searchTypeComboBox.Size = new System.Drawing.Size(240, 31);
@@ -655,6 +673,17 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             this.deletePlaylistMenuItem,
             this.subscribeAlbumMenuItem,
             this.unsubscribeAlbumMenuItem,
+            this.toolStripSeparatorView,
+            this.viewSongArtistMenuItem,
+            this.viewSongAlbumMenuItem,
+            this.shareSongMenuItem,
+            this.sharePlaylistMenuItem,
+            this.shareAlbumMenuItem,
+            this.toolStripSeparatorArtist,
+            this.viewArtistDetailMenuItem,
+            this.shareArtistMenuItem,
+            this.subscribeArtistMenuItem,
+            this.unsubscribeArtistMenuItem,
             this.toolStripSeparatorDownload3,
             this.downloadSongMenuItem,
             this.downloadPlaylistMenuItem,
@@ -753,6 +782,138 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             this.unsubscribeAlbumMenuItem.Size = new System.Drawing.Size(210, 24);
             this.unsubscribeAlbumMenuItem.Text = "取消收藏专辑(&R)";
             this.unsubscribeAlbumMenuItem.Click += new System.EventHandler(this.unsubscribeAlbumMenuItem_Click);
+            //
+            // toolStripSeparatorView
+            //
+            this.toolStripSeparatorView.Name = "toolStripSeparatorView";
+            this.toolStripSeparatorView.Size = new System.Drawing.Size(207, 6);
+            this.toolStripSeparatorView.Visible = false;
+            //
+            // viewSongArtistMenuItem
+            //
+            this.viewSongArtistMenuItem.Name = "viewSongArtistMenuItem";
+            this.viewSongArtistMenuItem.Size = new System.Drawing.Size(210, 24);
+            this.viewSongArtistMenuItem.Text = "查看歌手(&A)";
+            this.viewSongArtistMenuItem.Visible = false;
+            this.viewSongArtistMenuItem.Click += new System.EventHandler(this.viewSongArtistMenuItem_Click);
+            //
+            // viewSongAlbumMenuItem
+            //
+            this.viewSongAlbumMenuItem.Name = "viewSongAlbumMenuItem";
+            this.viewSongAlbumMenuItem.Size = new System.Drawing.Size(210, 24);
+            this.viewSongAlbumMenuItem.Text = "查看专辑(&B)";
+            this.viewSongAlbumMenuItem.Visible = false;
+            this.viewSongAlbumMenuItem.Click += new System.EventHandler(this.viewSongAlbumMenuItem_Click);
+            //
+            // toolStripSeparatorArtist
+            //
+            this.toolStripSeparatorArtist.Name = "toolStripSeparatorArtist";
+            this.toolStripSeparatorArtist.Size = new System.Drawing.Size(207, 6);
+            this.toolStripSeparatorArtist.Visible = false;
+            //
+            // viewArtistDetailMenuItem
+            //
+            this.viewArtistDetailMenuItem.Name = "viewArtistDetailMenuItem";
+            this.viewArtistDetailMenuItem.Size = new System.Drawing.Size(210, 24);
+            this.viewArtistDetailMenuItem.Text = "查看歌手(&V)";
+            this.viewArtistDetailMenuItem.Visible = false;
+            this.viewArtistDetailMenuItem.Click += new System.EventHandler(this.viewArtistDetailMenuItem_Click);
+            //
+            // shareSongMenuItem
+            //
+            this.shareSongMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
+            this.shareSongWebMenuItem,
+            this.shareSongDirectMenuItem});
+            this.shareSongMenuItem.Name = "shareSongMenuItem";
+            this.shareSongMenuItem.Size = new System.Drawing.Size(210, 24);
+            this.shareSongMenuItem.Text = "分享歌曲(&H)";
+            this.shareSongMenuItem.Visible = false;
+            //
+            // shareSongWebMenuItem
+            //
+            this.shareSongWebMenuItem.Name = "shareSongWebMenuItem";
+            this.shareSongWebMenuItem.Size = new System.Drawing.Size(210, 26);
+            this.shareSongWebMenuItem.Text = "分享网页(&W)";
+            this.shareSongWebMenuItem.Click += new System.EventHandler(this.shareSongWebMenuItem_Click);
+            //
+            // shareSongDirectMenuItem
+            //
+            this.shareSongDirectMenuItem.Name = "shareSongDirectMenuItem";
+            this.shareSongDirectMenuItem.Size = new System.Drawing.Size(210, 26);
+            this.shareSongDirectMenuItem.Text = "分享直链(&L)";
+            this.shareSongDirectMenuItem.Click += new System.EventHandler(this.shareSongDirectMenuItem_Click);
+            //
+            // sharePlaylistMenuItem
+            //
+            this.sharePlaylistMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
+            this.sharePlaylistWebMenuItem,
+            this.sharePlaylistDirectMenuItem});
+            this.sharePlaylistMenuItem.Name = "sharePlaylistMenuItem";
+            this.sharePlaylistMenuItem.Size = new System.Drawing.Size(210, 24);
+            this.sharePlaylistMenuItem.Text = "分享歌单(&J)";
+            this.sharePlaylistMenuItem.Visible = false;
+            //
+            // sharePlaylistWebMenuItem
+            //
+            this.sharePlaylistWebMenuItem.Name = "sharePlaylistWebMenuItem";
+            this.sharePlaylistWebMenuItem.Size = new System.Drawing.Size(210, 26);
+            this.sharePlaylistWebMenuItem.Text = "分享网页(&W)";
+            this.sharePlaylistWebMenuItem.Click += new System.EventHandler(this.sharePlaylistWebMenuItem_Click);
+            //
+            // sharePlaylistDirectMenuItem
+            //
+            this.sharePlaylistDirectMenuItem.Name = "sharePlaylistDirectMenuItem";
+            this.sharePlaylistDirectMenuItem.Size = new System.Drawing.Size(210, 26);
+            this.sharePlaylistDirectMenuItem.Text = "分享直链(&L)";
+            this.sharePlaylistDirectMenuItem.Click += new System.EventHandler(this.sharePlaylistDirectMenuItem_Click);
+            //
+            // shareAlbumMenuItem
+            //
+            this.shareAlbumMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
+            this.shareAlbumWebMenuItem,
+            this.shareAlbumDirectMenuItem});
+            this.shareAlbumMenuItem.Name = "shareAlbumMenuItem";
+            this.shareAlbumMenuItem.Size = new System.Drawing.Size(210, 24);
+            this.shareAlbumMenuItem.Text = "分享专辑(&K)";
+            this.shareAlbumMenuItem.Visible = false;
+            //
+            // shareAlbumWebMenuItem
+            //
+            this.shareAlbumWebMenuItem.Name = "shareAlbumWebMenuItem";
+            this.shareAlbumWebMenuItem.Size = new System.Drawing.Size(210, 26);
+            this.shareAlbumWebMenuItem.Text = "分享网页(&W)";
+            this.shareAlbumWebMenuItem.Click += new System.EventHandler(this.shareAlbumWebMenuItem_Click);
+            //
+            // shareAlbumDirectMenuItem
+            //
+            this.shareAlbumDirectMenuItem.Name = "shareAlbumDirectMenuItem";
+            this.shareAlbumDirectMenuItem.Size = new System.Drawing.Size(210, 26);
+            this.shareAlbumDirectMenuItem.Text = "分享直链(&L)";
+            this.shareAlbumDirectMenuItem.Click += new System.EventHandler(this.shareAlbumDirectMenuItem_Click);
+            //
+            // shareArtistMenuItem
+            //
+            this.shareArtistMenuItem.Name = "shareArtistMenuItem";
+            this.shareArtistMenuItem.Size = new System.Drawing.Size(210, 24);
+            this.shareArtistMenuItem.Text = "分享歌手(&H)";
+            this.shareArtistMenuItem.Visible = false;
+            this.shareArtistMenuItem.Click += new System.EventHandler(this.shareArtistMenuItem_Click);
+            //
+            // subscribeArtistMenuItem
+            //
+            this.subscribeArtistMenuItem.Name = "subscribeArtistMenuItem";
+            this.subscribeArtistMenuItem.Size = new System.Drawing.Size(210, 24);
+            this.subscribeArtistMenuItem.Text = "收藏歌手(&C)";
+            this.subscribeArtistMenuItem.Visible = false;
+            this.subscribeArtistMenuItem.Click += new System.EventHandler(this.subscribeArtistMenuItem_Click);
+            //
+            // unsubscribeArtistMenuItem
+            //
+            this.unsubscribeArtistMenuItem.Name = "unsubscribeArtistMenuItem";
+            this.unsubscribeArtistMenuItem.Size = new System.Drawing.Size(210, 24);
+            this.unsubscribeArtistMenuItem.Text = "取消收藏歌手(&Z)";
+            this.unsubscribeArtistMenuItem.Visible = false;
+            this.unsubscribeArtistMenuItem.Click += new System.EventHandler(this.unsubscribeArtistMenuItem_Click);
             //
             // toolStripSeparatorDownload3
             //
@@ -956,6 +1117,23 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
         private System.Windows.Forms.ToolStripMenuItem deletePlaylistMenuItem;
         private System.Windows.Forms.ToolStripMenuItem subscribeAlbumMenuItem;
         private System.Windows.Forms.ToolStripMenuItem unsubscribeAlbumMenuItem;
+        private System.Windows.Forms.ToolStripSeparator toolStripSeparatorView;
+        private System.Windows.Forms.ToolStripMenuItem viewSongArtistMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem viewSongAlbumMenuItem;
+        private System.Windows.Forms.ToolStripSeparator toolStripSeparatorArtist;
+        private System.Windows.Forms.ToolStripMenuItem viewArtistDetailMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem shareSongMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem shareSongWebMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem shareSongDirectMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem sharePlaylistMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem sharePlaylistWebMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem sharePlaylistDirectMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem shareAlbumMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem shareAlbumWebMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem shareAlbumDirectMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem shareArtistMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem subscribeArtistMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem unsubscribeArtistMenuItem;
         private System.Windows.Forms.ToolStripSeparator toolStripSeparatorDownload3;
         private System.Windows.Forms.ToolStripMenuItem downloadSongMenuItem;
         private System.Windows.Forms.ToolStripMenuItem downloadPlaylistMenuItem;

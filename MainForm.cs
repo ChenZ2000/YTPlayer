@@ -78,6 +78,9 @@ namespace YTPlayer
         private long _cloudUsedSize = 0;
         private long _cloudMaxSize = 0;
         private bool _cloudLoading = false;
+        private string? _pendingCloudFocusId = null;
+        private string? _lastSelectedCloudSongId = null;
+        private Guid? _lastNotifiedUploadFailureTaskId = null;
 
         private System.Threading.CancellationTokenSource? _playbackCancellation = null; // 当前播放请求的取消令牌
         private DateTime _lastPlayRequestTime = DateTime.MinValue;                     // 上次播放请求时间
@@ -1029,6 +1032,55 @@ namespace YTPlayer
                         UpdateStatusBar($"找到 {_currentAlbums.Count} 个专辑（总计 {totalCount} 个）");
                     }
                 }
+                else if (searchType == "歌手")
+                {
+                    int offset = (_currentPage - 1) * _resultsPerPage;
+                    var artistResult = await _apiClient.SearchArtistsAsync(keyword, _resultsPerPage, offset);
+                    _currentArtists = artistResult?.Items ?? new List<ArtistInfo>();
+
+                    int totalPages = 1;
+                    if (artistResult != null)
+                    {
+                        totalPages = Math.Max(1, (int)Math.Ceiling(artistResult.TotalCount / (double)Math.Max(1, _resultsPerPage)));
+                    }
+                    _maxPage = totalPages;
+                    _hasNextSearchPage = artistResult?.HasMore ?? false;
+
+                    string artistViewSource = $"search:artist:{keyword}:page{_currentPage}";
+                    System.Diagnostics.Debug.WriteLine($"[MainForm] 更新浏览列表来源: {artistViewSource}");
+
+                    if (_currentArtists.Count == 0)
+                    {
+                        DisplayArtists(
+                            new List<ArtistInfo>(),
+                            showPagination: true,
+                            hasNextPage: false,
+                            startIndex: offset + 1,
+                            viewSource: artistViewSource,
+                            accessibleName: $"搜索歌手: {keyword}");
+
+                        if (_currentPage == 1)
+                        {
+                            MessageBox.Show($"未找到相关歌手: {keyword}", "搜索结果",
+                                MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        }
+
+                        UpdateStatusBar("未找到结果");
+                    }
+                    else
+                    {
+                        DisplayArtists(
+                            _currentArtists,
+                            showPagination: true,
+                            hasNextPage: _hasNextSearchPage,
+                            startIndex: offset + 1,
+                            viewSource: artistViewSource,
+                            accessibleName: $"搜索歌手: {keyword}");
+
+                        int totalCount = artistResult?.TotalCount ?? _currentArtists.Count;
+                        UpdateStatusBar($"第 {_currentPage}/{_maxPage} 页，本页 {_currentArtists.Count} 位 / 总 {totalCount} 位");
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -1190,6 +1242,16 @@ namespace YTPlayer
                         ItemUnit = "首"
                     });
 
+                    // 3.6 收藏的歌手
+                    homeItems.Add(new ListItemInfo
+                    {
+                        Type = ListItemType.Category,
+                        CategoryId = "artist_favorites",
+                        CategoryName = "收藏的歌手",
+                        CategoryDescription = "管理您收藏的歌手",
+                        ItemUnit = "位"
+                    });
+
                     // 4. 每日推荐
                     homeItems.Add(new ListItemInfo
                     {
@@ -1239,6 +1301,15 @@ namespace YTPlayer
                         CategoryId = "playlist_category",
                         CategoryName = "歌单分类",
                         CategoryDescription = "按分类浏览歌单"
+                    });
+
+                    // 9. 歌手分类
+                    homeItems.Add(new ListItemInfo
+                    {
+                        Type = ListItemType.Category,
+                        CategoryId = "artist_categories",
+                        CategoryName = "歌手分类",
+                        CategoryDescription = "按类型和地区浏览歌手"
                     });
 
                     // 12. 新碟上架（新增）
@@ -1296,7 +1367,16 @@ namespace YTPlayer
                         CategoryDescription = "按分类浏览歌单"
                     });
 
-                    // 4. 新碟上架
+                    // 4. 歌手分类
+                    homeItems.Add(new ListItemInfo
+                    {
+                        Type = ListItemType.Category,
+                        CategoryId = "artist_categories",
+                        CategoryName = "歌手分类",
+                        CategoryDescription = "按类型和地区浏览歌手"
+                    });
+
+                    // 5. 新碟上架
                     homeItems.Add(new ListItemInfo
                     {
                         Type = ListItemType.Category,
@@ -1305,7 +1385,7 @@ namespace YTPlayer
                         CategoryDescription = "最新发布的专辑"
                     });
 
-                    // 5. 官方排行榜
+                    // 6. 官方排行榜
                     homeItems.Add(new ListItemInfo
                     {
                         Type = ListItemType.Category,
@@ -1379,6 +1459,13 @@ namespace YTPlayer
                     }
                     break;
 
+                case ListItemType.Artist:
+                    if (listItem.Artist != null)
+                    {
+                        await OpenArtistAsync(listItem.Artist);
+                    }
+                    break;
+
                 case ListItemType.Category:
                     // 加载分类内容
                     await LoadCategoryContent(listItem.CategoryId);
@@ -1414,106 +1501,154 @@ namespace YTPlayer
 
                 _isHomePage = false;
 
-                switch (categoryId)
-                {
-                    case "user_liked_songs":
-                        await LoadUserLikedSongs();
-                        break;
+            switch (categoryId)
+            {
+                case "user_liked_songs":
+                    await LoadUserLikedSongs();
+                    break;
 
-                    case "user_playlists":
-                        await LoadUserPlaylists();
-                        break;
+                case "user_playlists":
+                    await LoadUserPlaylists();
+                    break;
 
-                    case "user_albums":
-                        await LoadUserAlbums();
-                        break;
+                case "user_albums":
+                    await LoadUserAlbums();
+                    break;
 
-                    case "user_cloud":
-                        _cloudPage = 1;
-                        await LoadCloudSongsAsync();
-                        break;
+                case "user_cloud":
+                    _cloudPage = 1;
+                    await LoadCloudSongsAsync();
+                    break;
 
-                    case "daily_recommend":
-                        await LoadDailyRecommend();
-                        break;
+                case "daily_recommend":
+                    await LoadDailyRecommend();
+                    break;
 
-                    case "personalized":
-                        await LoadPersonalized();
-                        break;
+                case "personalized":
+                    await LoadPersonalized();
+                    break;
 
-                    case "toplist":
-                        await LoadToplist();
-                        break;
+                case "toplist":
+                    await LoadToplist();
+                    break;
 
-                    case "daily_recommend_songs":
-                        await LoadDailyRecommendSongs();
-                        break;
+                case "daily_recommend_songs":
+                    await LoadDailyRecommendSongs();
+                    break;
 
-                    case "daily_recommend_playlists":
-                        await LoadDailyRecommendPlaylists();
-                        break;
+                case "daily_recommend_playlists":
+                    await LoadDailyRecommendPlaylists();
+                    break;
 
-                    case "personalized_playlists":
-                        await LoadPersonalizedPlaylists();
-                        break;
+                case "personalized_playlists":
+                    await LoadPersonalizedPlaylists();
+                    break;
 
-                    case "personalized_newsongs":
-                        await LoadPersonalizedNewSongs();
-                        break;
+                case "personalized_newsongs":
+                    await LoadPersonalizedNewSongs();
+                    break;
 
-                    case "highquality_playlists":
-                        await LoadHighQualityPlaylists();
-                        break;
+                case "highquality_playlists":
+                    await LoadHighQualityPlaylists();
+                    break;
 
-                    case "new_songs":
-                        await LoadNewSongs();
-                        break;
+                case "new_songs":
+                    await LoadNewSongs();
+                    break;
 
-                    case "new_songs_all":
-                        await LoadNewSongsAll();
-                        break;
+                case "new_songs_all":
+                    await LoadNewSongsAll();
+                    break;
 
-                    case "new_songs_chinese":
-                        await LoadNewSongsChinese();
-                        break;
+                case "new_songs_chinese":
+                    await LoadNewSongsChinese();
+                    break;
 
-                    case "new_songs_western":
-                        await LoadNewSongsWestern();
-                        break;
+                case "new_songs_western":
+                    await LoadNewSongsWestern();
+                    break;
 
-                    case "new_songs_japan":
-                        await LoadNewSongsJapan();
-                        break;
+                case "new_songs_japan":
+                    await LoadNewSongsJapan();
+                    break;
 
-                    case "new_songs_korea":
-                        await LoadNewSongsKorea();
-                        break;
+                case "new_songs_korea":
+                    await LoadNewSongsKorea();
+                    break;
 
-                    case "personalized_newsong":
-                        await LoadPersonalizedNewSong();
-                        break;
+                case "personalized_newsong":
+                    await LoadPersonalizedNewSong();
+                    break;
 
-                    case "playlist_category":
-                        await LoadPlaylistCategory();
-                        break;
+                case "playlist_category":
+                    await LoadPlaylistCategory();
+                    break;
 
-                    case "new_albums":
-                        await LoadNewAlbums();
-                        break;
+                case "new_albums":
+                    await LoadNewAlbums();
+                    break;
 
-                    default:
-                        // 处理歌单分类的子分类（playlist_cat_xxx）
-                        if (categoryId.StartsWith("playlist_cat_"))
+                case "artist_favorites":
+                    await LoadArtistFavoritesAsync(skipSave: true);
+                    break;
+
+                case "artist_categories":
+                    await LoadArtistCategoryTypesAsync(skipSave: true);
+                    break;
+
+                default:
+                    if (categoryId.StartsWith("playlist_cat_", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string catName = categoryId.Substring("playlist_cat_".Length);
+                        if (!string.IsNullOrWhiteSpace(catName))
                         {
-                            string catName = categoryId.Substring("playlist_cat_".Length);
                             await LoadPlaylistsByCat(catName);
                         }
                         else
                         {
                             MessageBox.Show($"未知的分类: {categoryId}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
                         }
-                        break;
-                }
+                    }
+                    else if (categoryId.StartsWith("artist_top_", StringComparison.OrdinalIgnoreCase) &&
+                             long.TryParse(categoryId.Substring("artist_top_".Length), out var artistTopId))
+                    {
+                        await LoadArtistTopSongsAsync(artistTopId, skipSave: true);
+                    }
+                    else if (categoryId.StartsWith("artist_songs_", StringComparison.OrdinalIgnoreCase) &&
+                             long.TryParse(categoryId.Substring("artist_songs_".Length), out var artistSongsId))
+                    {
+                        await LoadArtistSongsAsync(artistSongsId, skipSave: true);
+                    }
+                    else if (categoryId.StartsWith("artist_albums_", StringComparison.OrdinalIgnoreCase) &&
+                             long.TryParse(categoryId.Substring("artist_albums_".Length), out var artistAlbumsId))
+                    {
+                        await LoadArtistAlbumsAsync(artistAlbumsId, skipSave: true);
+                    }
+                    else if (categoryId.StartsWith("artist_type_", StringComparison.OrdinalIgnoreCase) &&
+                             int.TryParse(categoryId.Substring("artist_type_".Length), out var typeCode))
+                    {
+                        await LoadArtistCategoryAreasAsync(typeCode, skipSave: true);
+                    }
+                    else if (categoryId.StartsWith("artist_area_", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var parts = categoryId.Split('_');
+                        if (parts.Length == 4 &&
+                            int.TryParse(parts[2], out var typeFilter) &&
+                            int.TryParse(parts[3], out var areaFilter))
+                        {
+                            await LoadArtistsByCategoryAsync(typeFilter, areaFilter, skipSave: true);
+                        }
+                        else
+                        {
+                            MessageBox.Show($"未知的歌手分类: {categoryId}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        }
+                    }
+                    else
+                    {
+                        MessageBox.Show($"未知的分类: {categoryId}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+                    break;
+            }
             }
             catch (Exception ex)
             {
@@ -2315,6 +2450,8 @@ namespace YTPlayer
             string? accessibleName = null,
             bool skipAvailabilityCheck = false)
         {
+            ConfigureListViewDefault();
+
             int previousSelectedIndex = -1;
             if (preserveSelection && resultListView.SelectedIndices.Count > 0)
             {
@@ -2325,6 +2462,7 @@ namespace YTPlayer
             _currentSongs = songs ?? new List<SongInfo>();
             _currentPlaylists.Clear();
             _currentAlbums.Clear();
+            _currentArtists.Clear();
             _currentListItems.Clear();
 
             resultListView.BeginUpdate();
@@ -2464,6 +2602,8 @@ namespace YTPlayer
             string? viewSource = null,
             string? accessibleName = null)
         {
+            ConfigureListViewDefault();
+
             int previousSelectedIndex = -1;
             if (preserveSelection && resultListView.SelectedIndices.Count > 0)
             {
@@ -2474,6 +2614,7 @@ namespace YTPlayer
             _currentSongs.Clear();
             _currentPlaylists = playlists ?? new List<PlaylistInfo>();
             _currentAlbums.Clear();
+            _currentArtists.Clear();
             _currentListItems.Clear();
 
             resultListView.BeginUpdate();
@@ -2530,10 +2671,13 @@ namespace YTPlayer
             string? viewSource = null,
             string? accessibleName = null)
         {
+            ConfigureListViewDefault();
+
             // 清空所有列表（确保只有一种类型的数据）
             _currentSongs.Clear();
             _currentPlaylists.Clear();
             _currentAlbums.Clear();
+            _currentArtists.Clear();
             _currentListItems = items ?? new List<ListItemInfo>();
 
             resultListView.BeginUpdate();
@@ -2552,7 +2696,7 @@ namespace YTPlayer
                 string title = listItem.Name ?? "未知";
                 string creator = listItem.Creator ?? "";
                 string extra = listItem.ExtraInfo ?? "";
-                string description = "";
+                string description = listItem.Description ?? string.Empty;
 
                 // 根据类型设置描述
                 switch (listItem.Type)
@@ -2564,10 +2708,21 @@ namespace YTPlayer
                         description = listItem.Playlist?.Description ?? "";
                         break;
                     case ListItemType.Album:
-                        description = extra;
+                        if (string.IsNullOrWhiteSpace(description))
+                        {
+                            description = extra;
+                        }
                         break;
                     case ListItemType.Song:
-                        description = listItem.Song?.FormattedDuration ?? "";
+                        description = string.IsNullOrWhiteSpace(description)
+                            ? listItem.Song?.FormattedDuration ?? ""
+                            : description;
+                        break;
+                    case ListItemType.Artist:
+                        if (string.IsNullOrWhiteSpace(description) && listItem.Artist != null)
+                        {
+                            description = listItem.Artist.Description ?? listItem.Artist.BriefDesc;
+                        }
                         break;
                 }
 
@@ -2609,8 +2764,13 @@ namespace YTPlayer
             List<AlbumInfo> albums,
             bool preserveSelection = false,
             string? viewSource = null,
-            string? accessibleName = null)
+            string? accessibleName = null,
+            int startIndex = 1,
+            bool showPagination = false,
+            bool hasNextPage = false)
         {
+            ConfigureListViewDefault();
+
             int previousSelectedIndex = -1;
             if (preserveSelection && resultListView.SelectedIndices.Count > 0)
             {
@@ -2621,6 +2781,7 @@ namespace YTPlayer
             _currentSongs.Clear();
             _currentPlaylists.Clear();
             _currentAlbums = albums ?? new List<AlbumInfo>();
+            _currentArtists.Clear();
             _currentListItems.Clear();
 
             resultListView.BeginUpdate();
@@ -2633,12 +2794,12 @@ namespace YTPlayer
                 return;
             }
 
-            int index = 1;
+            int displayNumber = startIndex;
             foreach (var album in albums)
             {
                 var item = new ListViewItem(new[]
                 {
-                    "",  // 专辑列表不显示索引号
+                    displayNumber.ToString(),
                     album.Name ?? "未知",
                     "",  // 不显示艺术家
                     album.TrackCount.ToString() + " 首",
@@ -2646,7 +2807,22 @@ namespace YTPlayer
                 });
                 item.Tag = album;
                 resultListView.Items.Add(item);
-                index++;
+                displayNumber++;
+            }
+
+            if (showPagination)
+            {
+                if (startIndex > 1)
+                {
+                    var prevItem = resultListView.Items.Add("上一页");
+                    prevItem.Tag = -2;
+                }
+
+                if (hasNextPage)
+                {
+                    var nextItem = resultListView.Items.Add("下一页");
+                    nextItem.Tag = -3;
+                }
             }
 
             resultListView.EndUpdate();
@@ -2696,6 +2872,11 @@ namespace YTPlayer
             {
                 // 打开专辑
                 await OpenAlbum(album);
+                return;
+            }
+            else if (item.Tag is ArtistInfo artist)
+            {
+                await OpenArtistAsync(artist);
                 return;
             }
 
@@ -2751,6 +2932,12 @@ namespace YTPlayer
                 await OpenAlbum(album);
                 return;
             }
+            else if (item.Tag is ArtistInfo artist)
+            {
+                System.Diagnostics.Debug.WriteLine($"[MainForm] 双击打开歌手: {artist.Name}");
+                await OpenArtistAsync(artist);
+                return;
+            }
 
             // Tag 存储的是索引
             if (item.Tag is int index && index >= 0 && index < _currentSongs.Count)
@@ -2787,6 +2974,51 @@ namespace YTPlayer
                 return;
             }
 
+            if (!string.IsNullOrEmpty(_currentViewSource) &&
+                _currentViewSource.StartsWith("artist_songs:", StringComparison.OrdinalIgnoreCase))
+            {
+                ParseArtistListViewSource(_currentViewSource, out var artistId, out var offset);
+                if (offset <= 0)
+                {
+                    UpdateStatusBar("已经是第一页");
+                    return;
+                }
+
+                int newOffset = Math.Max(0, offset - ArtistSongsPageSize);
+                await LoadArtistSongsAsync(artistId, newOffset, skipSave: true);
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(_currentViewSource) &&
+                _currentViewSource.StartsWith("artist_albums:", StringComparison.OrdinalIgnoreCase))
+            {
+                ParseArtistListViewSource(_currentViewSource, out var artistId, out var offset);
+                if (offset <= 0)
+                {
+                    UpdateStatusBar("已经是第一页");
+                    return;
+                }
+
+                int newOffset = Math.Max(0, offset - ArtistAlbumsPageSize);
+                await LoadArtistAlbumsAsync(artistId, newOffset, skipSave: true);
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(_currentViewSource) &&
+                _currentViewSource.StartsWith("artist_category_list:", StringComparison.OrdinalIgnoreCase))
+            {
+                ParseArtistCategoryListViewSource(_currentViewSource, out var typeCode, out var areaCode, out var offset);
+                if (offset <= 0)
+                {
+                    UpdateStatusBar("已经是第一页");
+                    return;
+                }
+
+                int newOffset = Math.Max(0, offset - ArtistSongsPageSize);
+                await LoadArtistsByCategoryAsync(typeCode, areaCode, newOffset, skipSave: true);
+                return;
+            }
+
             if (string.Equals(_currentViewSource, "user_cloud", StringComparison.OrdinalIgnoreCase))
             {
                 if (_cloudPage <= 1)
@@ -2819,6 +3051,51 @@ namespace YTPlayer
 
                 _currentPage++;
                 await PerformSearch();
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(_currentViewSource) &&
+                _currentViewSource.StartsWith("artist_songs:", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!_currentArtistSongsHasMore)
+                {
+                    UpdateStatusBar("已经是最后一页");
+                    return;
+                }
+
+                ParseArtistListViewSource(_currentViewSource, out var artistId, out var offset);
+                int newOffset = offset + ArtistSongsPageSize;
+                await LoadArtistSongsAsync(artistId, newOffset, skipSave: true);
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(_currentViewSource) &&
+                _currentViewSource.StartsWith("artist_albums:", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!_currentArtistAlbumsHasMore)
+                {
+                    UpdateStatusBar("已经是最后一页");
+                    return;
+                }
+
+                ParseArtistListViewSource(_currentViewSource, out var artistId, out var offset);
+                int newOffset = offset + ArtistAlbumsPageSize;
+                await LoadArtistAlbumsAsync(artistId, newOffset, skipSave: true);
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(_currentViewSource) &&
+                _currentViewSource.StartsWith("artist_category_list:", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!_currentArtistCategoryHasMore)
+                {
+                    UpdateStatusBar("已经是最后一页");
+                    return;
+                }
+
+                ParseArtistCategoryListViewSource(_currentViewSource, out var typeCode, out var areaCode, out var offset);
+                int newOffset = offset + ArtistSongsPageSize;
+                await LoadArtistsByCategoryAsync(typeCode, areaCode, newOffset, skipSave: true);
                 return;
             }
 
@@ -3054,6 +3331,15 @@ private void resultListView_SelectedIndexChanged(object sender, EventArgs e)
         {
             _lastListViewFocusedIndex = newIndex;
             System.Diagnostics.Debug.WriteLine($"[MainForm] 用户选择变化，保存索引={newIndex}");
+        }
+
+        if (string.Equals(_currentViewSource, "user_cloud", StringComparison.OrdinalIgnoreCase))
+        {
+            var song = GetSongFromListViewItem(resultListView.SelectedItems[0]);
+            if (song != null && song.IsCloudSong && !string.IsNullOrEmpty(song.CloudSongId))
+            {
+                _lastSelectedCloudSongId = song.CloudSongId;
+            }
         }
     }
 }
@@ -5903,6 +6189,15 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 _currentPage = page;
                 _isHomePage = false;
 
+                if (!string.IsNullOrEmpty(searchType))
+                {
+                    int index = searchTypeComboBox.Items.IndexOf(searchType);
+                    if (index >= 0 && searchTypeComboBox.SelectedIndex != index)
+                    {
+                        searchTypeComboBox.SelectedIndex = index;
+                    }
+                }
+
                 UpdateStatusBar($"正在加载搜索结果: {keyword}...");
 
                 if (searchType == "歌曲" || string.IsNullOrEmpty(searchType))
@@ -5959,6 +6254,27 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                     int totalCount = albumResult?.TotalCount ?? _currentAlbums.Count;
                     UpdateStatusBar($"找到 {_currentAlbums.Count} 个专辑（总计 {totalCount} 个）");
                 }
+                else if (searchType == "歌手")
+                {
+                    int offset = (page - 1) * _resultsPerPage;
+                    var artistResult = await _apiClient.SearchArtistsAsync(keyword, _resultsPerPage, offset);
+                    _currentArtists = artistResult?.Items ?? new List<ArtistInfo>();
+                    _hasNextSearchPage = artistResult?.HasMore ?? false;
+                    int totalCount = artistResult?.TotalCount ?? _currentArtists.Count;
+
+                    string artistViewSource = $"search:artist:{keyword}:page{page}";
+                    DisplayArtists(
+                        _currentArtists,
+                        showPagination: true,
+                        hasNextPage: _hasNextSearchPage,
+                        startIndex: offset + 1,
+                        viewSource: artistViewSource,
+                        accessibleName: $"搜索歌手: {keyword}");
+
+                    int totalPages = Math.Max(1, (int)Math.Ceiling(totalCount / (double)Math.Max(1, _resultsPerPage)));
+                    _maxPage = totalPages;
+                    UpdateStatusBar($"第 {page}/{totalPages} 页，本页 {_currentArtists.Count} 位 / 总 {totalCount} 位");
+                }
             }
             catch (Exception ex)
             {
@@ -5976,12 +6292,25 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
         {
             // 只有当当前有内容时才保存
             if (_currentSongs.Count == 0 && _currentPlaylists.Count == 0 &&
-                _currentAlbums.Count == 0 && _currentListItems.Count == 0)
+                _currentAlbums.Count == 0 && _currentListItems.Count == 0 &&
+                _currentArtists.Count == 0)
             {
                 return;
             }
 
             var state = CreateCurrentState();
+            if (_navigationHistory.Count > 0)
+            {
+                var lastState = _navigationHistory.Peek();
+                if (IsSameNavigationState(lastState, state))
+                {
+                    _navigationHistory.Pop();
+                    _navigationHistory.Push(state);
+                    System.Diagnostics.Debug.WriteLine($"[Navigation] 合并重复状态: {state.ViewName}, 类型={state.PageType}, 历史栈深度={_navigationHistory.Count}");
+                    return;
+                }
+            }
+
             _navigationHistory.Push(state);
             System.Diagnostics.Debug.WriteLine($"[Navigation] 保存状态: {state.ViewName}, 类型={state.PageType}, 历史栈深度={_navigationHistory.Count}");
         }
@@ -5998,36 +6327,128 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 SelectedIndex = resultListView.SelectedItems.Count > 0 ? resultListView.SelectedItems[0].Index : -1,
             };
 
-            // 根据 _currentViewSource 判断页面类型并设置参数
-            if (_isHomePage || _currentViewSource == "homepage")
+            if (_isHomePage || string.Equals(_currentViewSource, "homepage", StringComparison.OrdinalIgnoreCase))
             {
                 state.PageType = "homepage";
             }
-            else if (_currentViewSource.StartsWith("playlist:"))
+            else if (_currentViewSource.StartsWith("playlist:", StringComparison.OrdinalIgnoreCase))
             {
                 state.PageType = "playlist";
                 state.PlaylistId = _currentViewSource.Substring("playlist:".Length);
             }
-            else if (_currentViewSource.StartsWith("album:"))
+            else if (_currentViewSource.StartsWith("album:", StringComparison.OrdinalIgnoreCase))
             {
                 state.PageType = "album";
                 state.AlbumId = _currentViewSource.Substring("album:".Length);
             }
-            else if (_currentViewSource.StartsWith("search:"))
+            else if (_currentViewSource.StartsWith("search:", StringComparison.OrdinalIgnoreCase))
             {
                 state.PageType = "search";
                 state.SearchKeyword = _lastKeyword;
                 state.SearchType = GetSelectedSearchType();
                 state.CurrentPage = _currentPage;
             }
+            else if (_currentViewSource.StartsWith("artist_entries:", StringComparison.OrdinalIgnoreCase))
+            {
+                state.PageType = "artist_entries";
+                state.ArtistId = ParseArtistIdFromViewSource(_currentViewSource, "artist_entries:");
+                state.ArtistName = _currentArtist?.Name ?? _currentArtistDetail?.Name ?? string.Empty;
+            }
+            else if (_currentViewSource.StartsWith("artist_songs_top:", StringComparison.OrdinalIgnoreCase))
+            {
+                state.PageType = "artist_top";
+                state.ArtistId = ParseArtistIdFromViewSource(_currentViewSource, "artist_songs_top:");
+                state.ArtistName = _currentArtist?.Name ?? _currentArtistDetail?.Name ?? string.Empty;
+            }
+            else if (_currentViewSource.StartsWith("artist_songs:", StringComparison.OrdinalIgnoreCase))
+            {
+                state.PageType = "artist_songs";
+                ParseArtistListViewSource(_currentViewSource, out var artistId, out var offset);
+                state.ArtistId = artistId;
+                state.ArtistOffset = offset;
+                state.ArtistName = _currentArtist?.Name ?? _currentArtistDetail?.Name ?? string.Empty;
+            }
+            else if (_currentViewSource.StartsWith("artist_albums:", StringComparison.OrdinalIgnoreCase))
+            {
+                state.PageType = "artist_albums";
+                ParseArtistListViewSource(_currentViewSource, out var artistId, out var offset);
+                state.ArtistId = artistId;
+                state.ArtistOffset = offset;
+                state.ArtistName = _currentArtist?.Name ?? _currentArtistDetail?.Name ?? string.Empty;
+            }
+            else if (string.Equals(_currentViewSource, "artist_favorites", StringComparison.OrdinalIgnoreCase))
+            {
+                state.PageType = "artist_favorites";
+            }
+            else if (string.Equals(_currentViewSource, "artist_category_types", StringComparison.OrdinalIgnoreCase))
+            {
+                state.PageType = "artist_category_types";
+            }
+            else if (_currentViewSource.StartsWith("artist_category_type:", StringComparison.OrdinalIgnoreCase))
+            {
+                state.PageType = "artist_category_type";
+                state.ArtistType = (int)ParseArtistIdFromViewSource(_currentViewSource, "artist_category_type:");
+            }
+            else if (_currentViewSource.StartsWith("artist_category_list:", StringComparison.OrdinalIgnoreCase))
+            {
+                state.PageType = "artist_category_list";
+                ParseArtistCategoryListViewSource(_currentViewSource, out var typeCode, out var areaCode, out var offset);
+                state.ArtistType = typeCode;
+                state.ArtistArea = areaCode;
+                state.ArtistOffset = offset;
+            }
             else
             {
-                // 分类页面（如 user_liked_songs, daily_recommend, etc.）
                 state.PageType = "category";
                 state.CategoryId = _currentViewSource;
             }
 
             return state;
+
+        }
+
+        private static bool IsSameNavigationState(NavigationHistoryItem a, NavigationHistoryItem b)
+        {
+            if (a == null || b == null)
+            {
+                return false;
+            }
+
+            if (!string.Equals(a.PageType, b.PageType, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            switch (a.PageType)
+            {
+                case "homepage":
+                    return true;
+                case "category":
+                    return string.Equals(a.CategoryId, b.CategoryId, StringComparison.OrdinalIgnoreCase);
+                case "playlist":
+                    return string.Equals(a.PlaylistId, b.PlaylistId, StringComparison.OrdinalIgnoreCase);
+                case "album":
+                    return string.Equals(a.AlbumId, b.AlbumId, StringComparison.OrdinalIgnoreCase);
+                case "search":
+                    return string.Equals(a.SearchKeyword, b.SearchKeyword, StringComparison.OrdinalIgnoreCase)
+                           && string.Equals(a.SearchType, b.SearchType, StringComparison.OrdinalIgnoreCase)
+                           && a.CurrentPage == b.CurrentPage;
+                case "artist_entries":
+                case "artist_top":
+                    return a.ArtistId == b.ArtistId;
+                case "artist_songs":
+                case "artist_albums":
+                    return a.ArtistId == b.ArtistId && a.ArtistOffset == b.ArtistOffset;
+                case "artist_favorites":
+                case "artist_category_types":
+                    return true;
+                case "artist_category_type":
+                    return a.ArtistType == b.ArtistType;
+                case "artist_category_list":
+                    return a.ArtistType == b.ArtistType && a.ArtistArea == b.ArtistArea && a.ArtistOffset == b.ArtistOffset;
+                default:
+                    return string.Equals(a.ViewSource, b.ViewSource, StringComparison.OrdinalIgnoreCase);
+            }
         }
 
         /// <summary>
@@ -6109,14 +6530,67 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                         await LoadAlbumById(state.AlbumId, skipSave: true);
                         break;
 
-                    case "search":
-                        await LoadSearchResults(state.SearchKeyword, state.SearchType, state.CurrentPage, skipSave: true);
-                        break;
+                case "search":
+                    await LoadSearchResults(state.SearchKeyword, state.SearchType, state.CurrentPage, skipSave: true);
+                    break;
 
-                    default:
-                        System.Diagnostics.Debug.WriteLine($"[Navigation] 未知的页面类型: {state.PageType}");
-                        UpdateStatusBar("无法恢复页面");
-                        return;
+                case "artist_entries":
+                    if (state.ArtistId > 0)
+                    {
+                        var artistInfo = new ArtistInfo
+                        {
+                            Id = state.ArtistId,
+                            Name = state.ArtistName
+                        };
+                        await OpenArtistAsync(artistInfo, skipSave: true);
+                    }
+                    else
+                    {
+                        await LoadArtistCategoryTypesAsync(skipSave: true);
+                    }
+                    break;
+
+                case "artist_top":
+                    if (state.ArtistId > 0)
+                    {
+                        await LoadArtistTopSongsAsync(state.ArtistId, skipSave: true);
+                    }
+                    break;
+
+                case "artist_songs":
+                    if (state.ArtistId > 0)
+                    {
+                        await LoadArtistSongsAsync(state.ArtistId, state.ArtistOffset, skipSave: true);
+                    }
+                    break;
+
+                case "artist_albums":
+                    if (state.ArtistId > 0)
+                    {
+                        await LoadArtistAlbumsAsync(state.ArtistId, state.ArtistOffset, skipSave: true);
+                    }
+                    break;
+
+                case "artist_favorites":
+                    await LoadArtistFavoritesAsync(skipSave: true);
+                    break;
+
+                case "artist_category_types":
+                    await LoadArtistCategoryTypesAsync(skipSave: true);
+                    break;
+
+                case "artist_category_type":
+                    await LoadArtistCategoryAreasAsync(state.ArtistType, skipSave: true);
+                    break;
+
+                case "artist_category_list":
+                    await LoadArtistsByCategoryAsync(state.ArtistType, state.ArtistArea, state.ArtistOffset, skipSave: true);
+                    break;
+
+                default:
+                    System.Diagnostics.Debug.WriteLine($"[Navigation] 未知的页面类型: {state.PageType}");
+                    UpdateStatusBar("无法恢复页面");
+                    return;
                 }
 
                 // 恢复焦点
@@ -6188,6 +6662,28 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             cloudMenuSeparator.Visible = false;
             uploadToCloudMenuItem.Visible = false;
             deleteFromCloudMenuItem.Visible = false;
+            toolStripSeparatorArtist.Visible = false;
+            viewArtistDetailMenuItem.Visible = false;
+            shareArtistMenuItem.Visible = false;
+            subscribeArtistMenuItem.Visible = false;
+            unsubscribeArtistMenuItem.Visible = false;
+            toolStripSeparatorView.Visible = false;
+            viewSongArtistMenuItem.Visible = false;
+            viewSongArtistMenuItem.Tag = null;
+            viewSongAlbumMenuItem.Visible = false;
+            viewSongAlbumMenuItem.Tag = null;
+            shareSongMenuItem.Visible = false;
+            shareSongMenuItem.Tag = null;
+            shareSongWebMenuItem.Tag = null;
+            shareSongDirectMenuItem.Tag = null;
+            sharePlaylistMenuItem.Visible = false;
+            sharePlaylistMenuItem.Tag = null;
+            sharePlaylistWebMenuItem.Tag = null;
+            sharePlaylistDirectMenuItem.Tag = null;
+            shareAlbumMenuItem.Visible = false;
+            shareAlbumMenuItem.Tag = null;
+            shareAlbumWebMenuItem.Tag = null;
+            shareAlbumDirectMenuItem.Tag = null;
 
             // ⭐ 检查登录状态 - 未登录时收藏相关菜单项保持隐藏
             bool isLoggedIn = IsUserLoggedIn();
@@ -6211,18 +6707,54 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
 
             bool isMyPlaylistsView = string.Equals(_currentViewSource, "user_playlists", StringComparison.OrdinalIgnoreCase);
             bool isUserAlbumsView = string.Equals(_currentViewSource, "user_albums", StringComparison.OrdinalIgnoreCase);
+            bool showViewSection = false;
+            PlaylistInfo? playlistFromListItem = null;
+            AlbumInfo? albumFromListItem = null;
+            SongInfo? songFromListItem = null;
 
             // 根据Tag类型决定显示哪些菜单项
-            if (selectedItem.Tag is ListItemInfo listItem && listItem.Type == ListItemType.Category)
+            if (selectedItem.Tag is ArtistInfo directArtist)
             {
-                // 分类：不支持插播，只显示下载分类
-                insertPlayMenuItem.Visible = false;
-                downloadCategoryMenuItem.Visible = true;
+                ConfigureArtistContextMenu(directArtist);
+                return;
             }
-            else if (selectedItem.Tag is PlaylistInfo)
+
+            if (selectedItem.Tag is ListItemInfo listItem)
+            {
+                if (listItem.Type == ListItemType.Artist && listItem.Artist != null)
+                {
+                    ConfigureArtistContextMenu(listItem.Artist);
+                    return;
+                }
+
+                if (listItem.Type == ListItemType.Category)
+                {
+                    // 分类：不支持插播，只显示下载分类
+                    insertPlayMenuItem.Visible = false;
+                    downloadCategoryMenuItem.Visible = true;
+                    return;
+                }
+
+                if (listItem.Type == ListItemType.Playlist && listItem.Playlist != null)
+                {
+                    playlistFromListItem = listItem.Playlist;
+                }
+                else if (listItem.Type == ListItemType.Album && listItem.Album != null)
+                {
+                    albumFromListItem = listItem.Album;
+                }
+                else if (listItem.Type == ListItemType.Song && listItem.Song != null)
+                {
+                    songFromListItem = listItem.Song;
+                }
+            }
+            var playlist = selectedItem.Tag as PlaylistInfo ?? playlistFromListItem;
+            var album = selectedItem.Tag as AlbumInfo ?? albumFromListItem;
+            var resolvedSongFromListItem = songFromListItem;
+
+            if (playlist != null)
             {
                 // 歌单：显示收藏/取消收藏歌单（仅在登录时）
-                var playlist = (PlaylistInfo)selectedItem.Tag;
                 bool isCreatedByCurrentUser = isMyPlaylistsView && IsPlaylistCreatedByCurrentUser(playlist);
 
                 if (isLoggedIn)
@@ -6236,8 +6768,14 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 // 显示下载歌单和批量下载（当视图包含多个歌单时）
                 downloadPlaylistMenuItem.Visible = true;
                 batchDownloadPlaylistsMenuItem.Visible = true;
+
+                sharePlaylistMenuItem.Visible = true;
+                sharePlaylistMenuItem.Tag = playlist;
+                sharePlaylistWebMenuItem.Tag = playlist;
+                sharePlaylistDirectMenuItem.Tag = playlist;
+                showViewSection = true;
             }
-            else if (selectedItem.Tag is AlbumInfo)
+            else if (album != null)
             {
                 // 专辑：显示收藏/取消收藏专辑（仅在登录时）
                 if (isLoggedIn)
@@ -6250,6 +6788,12 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 // 显示下载专辑和批量下载（当视图包含多个专辑时）
                 downloadAlbumMenuItem.Visible = true;
                 batchDownloadPlaylistsMenuItem.Visible = true;
+
+                shareAlbumMenuItem.Visible = true;
+                shareAlbumMenuItem.Tag = album;
+                shareAlbumWebMenuItem.Tag = album;
+                shareAlbumDirectMenuItem.Tag = album;
+                showViewSection = true;
             }
             else
             {
@@ -6265,6 +6809,10 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 {
                     currentSong = directSong;
                 }
+                else if (resolvedSongFromListItem != null)
+                {
+                    currentSong = resolvedSongFromListItem;
+                }
 
                 bool isCloudSong = isCloudView && currentSong != null && currentSong.IsCloudSong;
 
@@ -6278,6 +6826,9 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                     batchDownloadMenuItem.Visible = false;
                     deleteFromCloudMenuItem.Visible = true;
                     cloudMenuSeparator.Visible = true;
+
+                    viewSongArtistMenuItem.Visible = false;
+                    viewSongAlbumMenuItem.Visible = false;
                 }
                 else
                 {
@@ -6306,7 +6857,760 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
 
                     downloadSongMenuItem.Visible = true;
                     batchDownloadMenuItem.Visible = true;
+
+                    if (currentSong != null)
+                    {
+                        viewSongArtistMenuItem.Visible = true;
+                        viewSongAlbumMenuItem.Visible = true;
+                        shareSongMenuItem.Visible = true;
+                        viewSongArtistMenuItem.Tag = currentSong;
+                        viewSongAlbumMenuItem.Tag = currentSong;
+                        shareSongMenuItem.Tag = currentSong;
+                        shareSongWebMenuItem.Tag = currentSong;
+                        shareSongDirectMenuItem.Tag = currentSong;
+                        showViewSection = true;
+                    }
                 }
+            }
+
+            toolStripSeparatorView.Visible = showViewSection;
+        }
+
+        /// <summary>
+        /// 获取当前上下文选中的歌曲
+        /// </summary>
+        private SongInfo? GetSelectedSongFromContextMenu(object? sender = null)
+        {
+            if (sender is ToolStripItem menuItem && menuItem.Tag is SongInfo taggedSong)
+            {
+                return taggedSong;
+            }
+
+            if (resultListView.SelectedItems.Count == 0)
+            {
+                return null;
+            }
+
+            var selectedItem = resultListView.SelectedItems[0];
+
+            if (selectedItem.Tag is int index && index >= 0 && index < _currentSongs.Count)
+            {
+                return _currentSongs[index];
+            }
+
+            if (selectedItem.Tag is SongInfo directSong)
+            {
+                return directSong;
+            }
+
+            if (selectedItem.Tag is ListItemInfo listItem && listItem.Type == ListItemType.Song)
+            {
+                return listItem.Song;
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 获取当前上下文选中的歌单
+        /// </summary>
+        private PlaylistInfo? GetSelectedPlaylistFromContextMenu(object? sender = null)
+        {
+            if (sender is ToolStripItem menuItem && menuItem.Tag is PlaylistInfo taggedPlaylist)
+            {
+                return taggedPlaylist;
+            }
+
+            if (resultListView.SelectedItems.Count == 0)
+            {
+                return null;
+            }
+
+            var selectedItem = resultListView.SelectedItems[0];
+
+            if (selectedItem.Tag is PlaylistInfo playlist)
+            {
+                return playlist;
+            }
+
+            if (selectedItem.Tag is ListItemInfo listItem && listItem.Type == ListItemType.Playlist)
+            {
+                return listItem.Playlist;
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 获取当前上下文选中的专辑
+        /// </summary>
+        private AlbumInfo? GetSelectedAlbumFromContextMenu(object? sender = null)
+        {
+            if (sender is ToolStripItem menuItem && menuItem.Tag is AlbumInfo taggedAlbum)
+            {
+                return taggedAlbum;
+            }
+
+            if (resultListView.SelectedItems.Count == 0)
+            {
+                return null;
+            }
+
+            var selectedItem = resultListView.SelectedItems[0];
+
+            if (selectedItem.Tag is AlbumInfo album)
+            {
+                return album;
+            }
+
+            if (selectedItem.Tag is ListItemInfo listItem && listItem.Type == ListItemType.Album)
+            {
+                return listItem.Album;
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 解析歌曲主唱信息（若当前数据缺失则自动补全）
+        /// </summary>
+        private async Task<(long ArtistId, string ArtistName)> ResolvePrimaryArtistAsync(SongInfo song)
+        {
+            if (song == null)
+            {
+                return (0, string.Empty);
+            }
+
+            if (song.ArtistIds != null && song.ArtistIds.Count > 0)
+            {
+                string artistName = song.ArtistNames != null && song.ArtistNames.Count > 0
+                    ? song.ArtistNames[0]
+                    : song.Artist;
+                return (song.ArtistIds[0], artistName ?? string.Empty);
+            }
+
+            if (string.IsNullOrWhiteSpace(song.Id))
+            {
+                return (0, string.Empty);
+            }
+
+            var details = await _apiClient.GetSongDetailAsync(new[] { song.Id });
+            var detail = details?.FirstOrDefault();
+            if (detail != null)
+            {
+                song.ArtistIds = new List<long>(detail.ArtistIds ?? new List<long>());
+                song.ArtistNames = new List<string>(detail.ArtistNames ?? new List<string>());
+
+                if (string.IsNullOrWhiteSpace(song.Artist) && song.ArtistNames.Count > 0)
+                {
+                    song.Artist = string.Join("/", song.ArtistNames);
+                }
+
+                if (string.IsNullOrWhiteSpace(song.Album))
+                {
+                    song.Album = detail.Album;
+                }
+
+                if (string.IsNullOrWhiteSpace(song.AlbumId))
+                {
+                    song.AlbumId = detail.AlbumId;
+                }
+
+                if (!string.IsNullOrWhiteSpace(detail.PicUrl))
+                {
+                    song.PicUrl = detail.PicUrl;
+                }
+
+                if (detail.ArtistIds != null && detail.ArtistIds.Count > 0)
+                {
+                    string artistName = detail.ArtistNames != null && detail.ArtistNames.Count > 0
+                        ? detail.ArtistNames[0]
+                        : detail.Artist;
+                    return (detail.ArtistIds[0], artistName ?? string.Empty);
+                }
+            }
+
+            return (0, string.Empty);
+        }
+
+        /// <summary>
+        /// 确保歌曲包含专辑信息
+        /// </summary>
+        private async Task<string?> ResolveSongAlbumIdAsync(SongInfo song)
+        {
+            if (song == null)
+            {
+                return null;
+            }
+
+            if (!string.IsNullOrWhiteSpace(song.AlbumId))
+            {
+                return song.AlbumId;
+            }
+
+            if (string.IsNullOrWhiteSpace(song.Id))
+            {
+                return null;
+            }
+
+            var details = await _apiClient.GetSongDetailAsync(new[] { song.Id });
+            var detail = details?.FirstOrDefault();
+            if (detail != null)
+            {
+                song.AlbumId = detail.AlbumId;
+                if (string.IsNullOrWhiteSpace(song.Album))
+                {
+                    song.Album = detail.Album;
+                }
+
+                if (detail.ArtistIds != null && detail.ArtistIds.Count > 0 && (song.ArtistIds == null || song.ArtistIds.Count == 0))
+                {
+                    song.ArtistIds = new List<long>(detail.ArtistIds);
+                }
+
+                if (detail.ArtistNames != null && detail.ArtistNames.Count > 0 && (song.ArtistNames == null || song.ArtistNames.Count == 0))
+                {
+                    song.ArtistNames = new List<string>(detail.ArtistNames);
+                    song.Artist = string.Join("/", song.ArtistNames);
+                }
+
+                if (!string.IsNullOrWhiteSpace(detail.PicUrl))
+                {
+                    song.PicUrl = detail.PicUrl;
+                }
+            }
+
+            return song.AlbumId;
+        }
+
+        /// <summary>
+        /// 检查单首歌曲资源是否可用
+        /// </summary>
+        private async Task<bool> EnsureSongAvailabilityAsync(SongInfo song)
+        {
+            if (song == null || string.IsNullOrWhiteSpace(song.Id))
+            {
+                return false;
+            }
+
+            if (song.IsAvailable == true)
+            {
+                return true;
+            }
+
+            var quality = GetCurrentQuality();
+            var availability = await _apiClient.BatchCheckSongsAvailabilityAsync(new[] { song.Id }, quality);
+            if (availability != null && availability.TryGetValue(song.Id, out var available))
+            {
+                song.IsAvailable = available;
+                return available;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// 批量获取歌曲可用性映射
+        /// </summary>
+        private async Task<Dictionary<string, bool>> FetchSongsAvailabilityAsync(IEnumerable<SongInfo> songs)
+        {
+            var idList = songs
+                .Where(s => s != null && !string.IsNullOrWhiteSpace(s.Id))
+                .Select(s => s.Id)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+
+            if (idList.Length == 0)
+            {
+                return new Dictionary<string, bool>(StringComparer.Ordinal);
+            }
+
+            var quality = GetCurrentQuality();
+            var availability = await _apiClient.BatchCheckSongsAvailabilityAsync(idList, quality);
+
+            foreach (var song in songs)
+            {
+                if (song == null || string.IsNullOrWhiteSpace(song.Id))
+                {
+                    continue;
+                }
+
+                if (availability.TryGetValue(song.Id, out var available))
+                {
+                    song.IsAvailable = available;
+                }
+            }
+
+            return availability;
+        }
+
+        /// <summary>
+        /// 分批获取歌曲直链信息
+        /// </summary>
+        private async Task<Dictionary<string, SongUrlInfo>> FetchSongUrlsInBatchesAsync(IEnumerable<string> songIds, bool skipAvailabilityCheck = true)
+        {
+            var ids = songIds
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+
+            var result = new Dictionary<string, SongUrlInfo>(StringComparer.Ordinal);
+            if (ids.Count == 0)
+            {
+                return result;
+            }
+
+            var quality = GetCurrentQuality();
+            const int batchSize = 50;
+
+            for (int i = 0; i < ids.Count; i += batchSize)
+            {
+                var batch = ids.Skip(i).Take(batchSize).ToArray();
+                var batchResult = await _apiClient.GetSongUrlAsync(batch, quality, skipAvailabilityCheck);
+                if (batchResult == null)
+                {
+                    continue;
+                }
+
+                foreach (var kvp in batchResult)
+                {
+                    if (kvp.Value != null && !string.IsNullOrWhiteSpace(kvp.Value.Url))
+                    {
+                        result[kvp.Key] = kvp.Value;
+                    }
+                }
+            }
+
+            return result;
+        }
+
+        private async void viewSongArtistMenuItem_Click(object sender, EventArgs e)
+        {
+            var song = GetSelectedSongFromContextMenu(sender);
+            if (song == null || string.IsNullOrWhiteSpace(song.Id))
+            {
+                MessageBox.Show("无法获取当前歌曲信息。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            try
+            {
+                UpdateStatusBar("正在加载歌手信息...");
+                var (artistId, artistName) = await ResolvePrimaryArtistAsync(song);
+                if (artistId <= 0)
+                {
+                    MessageBox.Show("未找到该歌曲的歌手信息。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    UpdateStatusBar("无法打开歌手");
+                    return;
+                }
+
+                if (string.IsNullOrWhiteSpace(artistName))
+                {
+                    artistName = song.ArtistNames.FirstOrDefault() ?? song.Artist ?? "歌手";
+                }
+
+                var artist = new ArtistInfo
+                {
+                    Id = artistId,
+                    Name = artistName
+                };
+
+                await OpenArtistAsync(artist);
+                UpdateStatusBar($"已打开歌手：{artistName}");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"打开歌手失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("打开歌手失败");
+            }
+        }
+
+        private async void viewSongAlbumMenuItem_Click(object sender, EventArgs e)
+        {
+            var song = GetSelectedSongFromContextMenu(sender);
+            if (song == null || string.IsNullOrWhiteSpace(song.Id))
+            {
+                MessageBox.Show("无法获取当前歌曲信息。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            try
+            {
+                UpdateStatusBar("正在加载专辑...");
+                var albumId = await ResolveSongAlbumIdAsync(song);
+                if (string.IsNullOrWhiteSpace(albumId))
+                {
+                    MessageBox.Show("未找到该歌曲的专辑信息。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    UpdateStatusBar("无法打开专辑");
+                    return;
+                }
+
+                var album = new AlbumInfo
+                {
+                    Id = albumId,
+                    Name = string.IsNullOrWhiteSpace(song.Album) ? $"专辑 {albumId}" : song.Album,
+                    Artist = song.Artist,
+                    PicUrl = song.PicUrl
+                };
+
+                await OpenAlbum(album);
+                UpdateStatusBar($"已打开专辑：{album.Name}");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"打开专辑失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("打开专辑失败");
+            }
+        }
+
+        private async void shareSongWebMenuItem_Click(object sender, EventArgs e)
+        {
+            var song = GetSelectedSongFromContextMenu(sender);
+            if (song == null || string.IsNullOrWhiteSpace(song.Id))
+            {
+                MessageBox.Show("无法获取当前歌曲信息，无法分享。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            try
+            {
+                UpdateStatusBar("正在检查歌曲资源...");
+                if (!await EnsureSongAvailabilityAsync(song))
+                {
+                    MessageBox.Show("该歌曲资源不可用，无法分享网页链接。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    UpdateStatusBar("歌曲资源不可用");
+                    return;
+                }
+
+                string url = $"https://music.163.com/#/song?id={song.Id}";
+                try
+                {
+                    Clipboard.SetText(url);
+                }
+                catch (ExternalException ex)
+                {
+                    MessageBox.Show($"复制链接失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    UpdateStatusBar("复制链接失败");
+                    return;
+                }
+
+                UpdateStatusBar("歌曲网页链接已复制到剪贴板");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"分享歌曲失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("歌曲分享失败");
+            }
+        }
+
+        private async void shareSongDirectMenuItem_Click(object sender, EventArgs e)
+        {
+            var song = GetSelectedSongFromContextMenu(sender);
+            if (song == null || string.IsNullOrWhiteSpace(song.Id))
+            {
+                MessageBox.Show("无法获取当前歌曲信息，无法分享。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            try
+            {
+                UpdateStatusBar("正在生成歌曲直链...");
+                if (!await EnsureSongAvailabilityAsync(song))
+                {
+                    MessageBox.Show("该歌曲资源不可用，无法分享直链。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    UpdateStatusBar("歌曲资源不可用");
+                    return;
+                }
+
+                var urlMap = await FetchSongUrlsInBatchesAsync(new[] { song.Id });
+                if (!urlMap.TryGetValue(song.Id, out var urlInfo) || string.IsNullOrWhiteSpace(urlInfo.Url))
+                {
+                    MessageBox.Show("未能获取歌曲直链，可能需要登录或切换音质。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    UpdateStatusBar("获取直链失败");
+                    return;
+                }
+
+                try
+                {
+                    Clipboard.SetText(urlInfo.Url);
+                }
+                catch (ExternalException ex)
+                {
+                    MessageBox.Show($"复制链接失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    UpdateStatusBar("复制链接失败");
+                    return;
+                }
+
+                UpdateStatusBar("歌曲直链已复制到剪贴板");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"分享歌曲直链失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("歌曲分享失败");
+            }
+        }
+
+        private async void sharePlaylistWebMenuItem_Click(object sender, EventArgs e)
+        {
+            var playlist = GetSelectedPlaylistFromContextMenu(sender);
+            if (playlist == null || string.IsNullOrWhiteSpace(playlist.Id))
+            {
+                MessageBox.Show("无法获取歌单信息，无法分享。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            try
+            {
+                UpdateStatusBar($"正在准备歌单「{playlist.Name}」分享...");
+                var songs = await _apiClient.GetPlaylistSongsAsync(playlist.Id);
+                if (songs == null || songs.Count == 0)
+                {
+                    MessageBox.Show("歌单中没有歌曲。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    UpdateStatusBar("歌单为空");
+                    return;
+                }
+
+                var availability = await FetchSongsAvailabilityAsync(songs);
+                var availableSongs = songs
+                    .Where(s => !string.IsNullOrWhiteSpace(s.Id) && availability.TryGetValue(s.Id, out var ok) && ok)
+                    .ToList();
+
+                if (availableSongs.Count == 0)
+                {
+                    MessageBox.Show("歌单中没有可用的歌曲资源。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    UpdateStatusBar("无可用歌曲可分享");
+                    return;
+                }
+
+                string content = string.Join(Environment.NewLine,
+                    songs.Where(s => !string.IsNullOrWhiteSpace(s.Id) && availability.TryGetValue(s.Id, out var ok) && ok)
+                         .Select(s => $"https://music.163.com/#/song?id={s.Id}"));
+
+                try
+                {
+                    Clipboard.SetText(content);
+                }
+                catch (ExternalException ex)
+                {
+                    MessageBox.Show($"复制链接失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    UpdateStatusBar("复制链接失败");
+                    return;
+                }
+
+                MessageBox.Show($"已复制 {availableSongs.Count}/{songs.Count} 首歌曲的网页链接到剪贴板。", "分享成功",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                UpdateStatusBar("歌单网页链接已复制");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"分享歌单失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("歌单分享失败");
+            }
+        }
+
+        private async void sharePlaylistDirectMenuItem_Click(object sender, EventArgs e)
+        {
+            var playlist = GetSelectedPlaylistFromContextMenu(sender);
+            if (playlist == null || string.IsNullOrWhiteSpace(playlist.Id))
+            {
+                MessageBox.Show("无法获取歌单信息，无法分享。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            try
+            {
+                UpdateStatusBar($"正在生成歌单「{playlist.Name}」的歌曲直链...");
+                var songs = await _apiClient.GetPlaylistSongsAsync(playlist.Id);
+                if (songs == null || songs.Count == 0)
+                {
+                    MessageBox.Show("歌单中没有歌曲。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    UpdateStatusBar("歌单为空");
+                    return;
+                }
+
+                var availability = await FetchSongsAvailabilityAsync(songs);
+                var availableSongs = songs
+                    .Where(s => !string.IsNullOrWhiteSpace(s.Id) && availability.TryGetValue(s.Id, out var ok) && ok)
+                    .ToList();
+
+                if (availableSongs.Count == 0)
+                {
+                    MessageBox.Show("歌单中没有可用的歌曲资源。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    UpdateStatusBar("无可用歌曲可分享");
+                    return;
+                }
+
+                var urlMap = await FetchSongUrlsInBatchesAsync(availableSongs.Select(s => s.Id));
+                var directLinks = new List<string>();
+                foreach (var song in availableSongs)
+                {
+                    if (!string.IsNullOrWhiteSpace(song.Id) &&
+                        urlMap.TryGetValue(song.Id, out var urlInfo) &&
+                        !string.IsNullOrWhiteSpace(urlInfo.Url))
+                    {
+                        directLinks.Add(urlInfo.Url);
+                    }
+                }
+
+                if (directLinks.Count == 0)
+                {
+                    MessageBox.Show("未能获取任何歌曲直链，请稍后再试。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    UpdateStatusBar("未获取到直链");
+                    return;
+                }
+
+                string content = string.Join(Environment.NewLine, directLinks);
+                try
+                {
+                    Clipboard.SetText(content);
+                }
+                catch (ExternalException ex)
+                {
+                    MessageBox.Show($"复制链接失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    UpdateStatusBar("复制链接失败");
+                    return;
+                }
+
+                MessageBox.Show($"已复制 {directLinks.Count}/{availableSongs.Count} 首歌曲的直链到剪贴板。", "分享成功",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                UpdateStatusBar("歌单直链已复制");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"分享歌单直链失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("歌单分享失败");
+            }
+        }
+
+        private async void shareAlbumWebMenuItem_Click(object sender, EventArgs e)
+        {
+            var album = GetSelectedAlbumFromContextMenu(sender);
+            if (album == null || string.IsNullOrWhiteSpace(album.Id))
+            {
+                MessageBox.Show("无法获取专辑信息，无法分享。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            try
+            {
+                UpdateStatusBar($"正在准备专辑「{album.Name}」分享...");
+                var songs = await _apiClient.GetAlbumSongsAsync(album.Id ?? string.Empty);
+                if (songs == null || songs.Count == 0)
+                {
+                    MessageBox.Show("专辑中没有歌曲。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    UpdateStatusBar("专辑为空");
+                    return;
+                }
+
+                var availability = await FetchSongsAvailabilityAsync(songs);
+                var availableSongs = songs
+                    .Where(s => !string.IsNullOrWhiteSpace(s.Id) && availability.TryGetValue(s.Id, out var ok) && ok)
+                    .ToList();
+
+                if (availableSongs.Count == 0)
+                {
+                    MessageBox.Show("专辑中没有可用的歌曲资源。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    UpdateStatusBar("无可用歌曲可分享");
+                    return;
+                }
+
+                string content = string.Join(Environment.NewLine,
+                    songs.Where(s => !string.IsNullOrWhiteSpace(s.Id) && availability.TryGetValue(s.Id, out var ok) && ok)
+                         .Select(s => $"https://music.163.com/#/song?id={s.Id}"));
+
+                try
+                {
+                    Clipboard.SetText(content);
+                }
+                catch (ExternalException ex)
+                {
+                    MessageBox.Show($"复制链接失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    UpdateStatusBar("复制链接失败");
+                    return;
+                }
+
+                MessageBox.Show($"已复制 {availableSongs.Count}/{songs.Count} 首歌曲的网页链接到剪贴板。", "分享成功",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                UpdateStatusBar("专辑网页链接已复制");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"分享专辑失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("专辑分享失败");
+            }
+        }
+
+        private async void shareAlbumDirectMenuItem_Click(object sender, EventArgs e)
+        {
+            var album = GetSelectedAlbumFromContextMenu(sender);
+            if (album == null || string.IsNullOrWhiteSpace(album.Id))
+            {
+                MessageBox.Show("无法获取专辑信息，无法分享。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            try
+            {
+                UpdateStatusBar($"正在生成专辑「{album.Name}」的歌曲直链...");
+                var songs = await _apiClient.GetAlbumSongsAsync(album.Id ?? string.Empty);
+                if (songs == null || songs.Count == 0)
+                {
+                    MessageBox.Show("专辑中没有歌曲。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    UpdateStatusBar("专辑为空");
+                    return;
+                }
+
+                var availability = await FetchSongsAvailabilityAsync(songs);
+                var availableSongs = songs
+                    .Where(s => !string.IsNullOrWhiteSpace(s.Id) && availability.TryGetValue(s.Id, out var ok) && ok)
+                    .ToList();
+
+                if (availableSongs.Count == 0)
+                {
+                    MessageBox.Show("专辑中没有可用的歌曲资源。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    UpdateStatusBar("无可用歌曲可分享");
+                    return;
+                }
+
+                var urlMap = await FetchSongUrlsInBatchesAsync(availableSongs.Select(s => s.Id));
+                var directLinks = new List<string>();
+                foreach (var song in availableSongs)
+                {
+                    if (!string.IsNullOrWhiteSpace(song.Id) &&
+                        urlMap.TryGetValue(song.Id, out var urlInfo) &&
+                        !string.IsNullOrWhiteSpace(urlInfo.Url))
+                    {
+                        directLinks.Add(urlInfo.Url);
+                    }
+                }
+
+                if (directLinks.Count == 0)
+                {
+                    MessageBox.Show("未能获取任何歌曲直链，请稍后再试。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    UpdateStatusBar("未获取到直链");
+                    return;
+                }
+
+                string content = string.Join(Environment.NewLine, directLinks);
+                try
+                {
+                    Clipboard.SetText(content);
+                }
+                catch (ExternalException ex)
+                {
+                    MessageBox.Show($"复制链接失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    UpdateStatusBar("复制链接失败");
+                    return;
+                }
+
+                MessageBox.Show($"已复制 {directLinks.Count}/{availableSongs.Count} 首歌曲的直链到剪贴板。", "分享成功",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                UpdateStatusBar("专辑直链已复制");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"分享专辑直链失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("专辑分享失败");
             }
         }
 
@@ -6634,6 +7938,21 @@ protected override void OnFormClosing(FormClosingEventArgs e)
             System.Diagnostics.Debug.WriteLine($"[OnFormClosing] DownloadManager释放异常: {ex.Message}");
         }
 
+        try
+        {
+            var uploadManager = YTPlayer.Core.Upload.UploadManager.Instance;
+            if (uploadManager != null)
+            {
+                uploadManager.TaskCompleted -= OnCloudUploadTaskCompleted;
+                uploadManager.TaskFailed -= OnCloudUploadTaskFailed;
+                uploadManager.Dispose();
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[OnFormClosing] UploadManager释放异常: {ex.Message}");
+        }
+
         // ⭐ 释放托盘图标和宿主窗口
         if (_trayIcon != null)
         {
@@ -6726,6 +8045,31 @@ protected override void OnFormClosing(FormClosingEventArgs e)
         /// 当前页码（用于重新搜索）
         /// </summary>
         public int CurrentPage { get; set; } = 1;
+
+        /// <summary>
+        /// 歌手ID（用于重新加载歌手相关视图）
+        /// </summary>
+        public long ArtistId { get; set; }
+
+        /// <summary>
+        /// 歌手名称（用于恢复标题显示）
+        /// </summary>
+        public string ArtistName { get; set; } = string.Empty;
+
+        /// <summary>
+        /// 歌手列表偏移量（用于分页恢复）
+        /// </summary>
+        public int ArtistOffset { get; set; }
+
+        /// <summary>
+        /// 歌手类型筛选（分类视图使用）
+        /// </summary>
+        public int ArtistType { get; set; } = -1;
+
+        /// <summary>
+        /// 歌手地区筛选（分类视图使用）
+        /// </summary>
+        public int ArtistArea { get; set; } = -1;
     }
 }
 

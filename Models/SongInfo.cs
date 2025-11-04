@@ -50,6 +50,26 @@ namespace YTPlayer.Models
         public string Artist { get; set; } = string.Empty;
 
         /// <summary>
+        /// 艺术家ID集合（主唱/id列表，按接口返回顺序）。
+        /// </summary>
+        public List<long> ArtistIds { get; set; } = new List<long>();
+
+        /// <summary>
+        /// 艺术家名称集合（按接口返回顺序）。
+        /// </summary>
+        public List<string> ArtistNames { get; set; } = new List<string>();
+
+        /// <summary>
+        /// 主唱ID（ArtistIds的首个元素，若不存在则为0）。
+        /// </summary>
+        public long PrimaryArtistId => ArtistIds.Count > 0 ? ArtistIds[0] : 0;
+
+        /// <summary>
+        /// 主唱名称（ArtistNames首个元素，若不存在则退回 Artist 字段）。
+        /// </summary>
+        public string PrimaryArtistName => ArtistNames.Count > 0 ? ArtistNames[0] : Artist;
+
+        /// <summary>
         /// 专辑名称
         /// </summary>
         public string Album { get; set; } = string.Empty;

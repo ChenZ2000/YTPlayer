@@ -40,19 +40,19 @@ namespace YTPlayer.Core.Download
         #region 常量 - 带宽分配策略
 
         /// <summary>
-        /// 播放中 + 预加载 → 下载分配比例
+        /// 播放中 + 预加载 → 下载/上传分配比例
         /// </summary>
-        private const double DOWNLOAD_ALLOCATION_WITH_PLAYBACK_AND_PRECACHE = 0.10;
+        private const double TRANSFER_ALLOCATION_WITH_PLAYBACK_AND_PRECACHE = 0.10;
 
         /// <summary>
-        /// 播放中 + 无预加载 → 下载分配比例
+        /// 播放中 + 无预加载 → 下载/上传分配比例
         /// </summary>
-        private const double DOWNLOAD_ALLOCATION_WITH_PLAYBACK_ONLY = 0.20;
+        private const double TRANSFER_ALLOCATION_WITH_PLAYBACK_ONLY = 0.20;
 
         /// <summary>
-        /// 无播放 → 下载分配比例
+        /// 无播放 → 下载/上传分配比例
         /// </summary>
-        private const double DOWNLOAD_ALLOCATION_NO_PLAYBACK = 1.0;
+        private const double TRANSFER_ALLOCATION_NO_PLAYBACK = 1.0;
 
         #endregion
 
@@ -119,19 +119,28 @@ namespace YTPlayer.Core.Download
                 if (!_isPlaybackActive)
                 {
                     // 无播放：下载使用 100% 带宽
-                    return DOWNLOAD_ALLOCATION_NO_PLAYBACK;
+                    return TRANSFER_ALLOCATION_NO_PLAYBACK;
                 }
                 else if (_isPrecacheActive)
                 {
                     // 播放中 + 预加载：下载使用 10% 带宽
-                    return DOWNLOAD_ALLOCATION_WITH_PLAYBACK_AND_PRECACHE;
+                    return TRANSFER_ALLOCATION_WITH_PLAYBACK_AND_PRECACHE;
                 }
                 else
                 {
                     // 播放中 + 无预加载：下载使用 20% 带宽
-                    return DOWNLOAD_ALLOCATION_WITH_PLAYBACK_ONLY;
+                    return TRANSFER_ALLOCATION_WITH_PLAYBACK_ONLY;
                 }
             }
+        }
+
+        /// <summary>
+        /// 获取当前上传可用的带宽分配比例
+        /// </summary>
+        public double GetUploadBandwidthAllocation()
+        {
+            // 目前上传遵循与下载相同的带宽策略
+            return GetDownloadBandwidthAllocation();
         }
 
         /// <summary>
@@ -168,6 +177,36 @@ namespace YTPlayer.Core.Download
         }
 
         /// <summary>
+        /// 判断当前是否适合启动新的上传任务
+        /// </summary>
+        /// <param name="activeUploadCount">当前活跃的上传任务数</param>
+        /// <param name="maxConcurrentUploads">配置的最大并发上传数</param>
+        /// <returns>是否可以启动新的上传任务</returns>
+        public bool CanStartNewUpload(int activeUploadCount, int maxConcurrentUploads)
+        {
+            lock (_lock)
+            {
+                if (activeUploadCount >= maxConcurrentUploads)
+                {
+                    return false;
+                }
+
+                if (_isPlaybackActive && _isPrecacheActive)
+                {
+                    return activeUploadCount < 1;
+                }
+
+                if (_isPlaybackActive && !_isPrecacheActive)
+                {
+                    int ceiling = Math.Min(2, maxConcurrentUploads);
+                    return activeUploadCount < ceiling;
+                }
+
+                return true;
+            }
+        }
+
+        /// <summary>
         /// 获取当前推荐的最大并发下载数
         /// </summary>
         /// <param name="configuredMaxConcurrent">配置的最大并发数</param>
@@ -191,6 +230,28 @@ namespace YTPlayer.Core.Download
                     // 无播放：使用配置的最大值
                     return configuredMaxConcurrent;
                 }
+            }
+        }
+
+        /// <summary>
+        /// 获取当前推荐的最大并发上传数
+        /// </summary>
+        /// <param name="configuredMaxConcurrent">配置的最大并发上传数</param>
+        public int GetRecommendedMaxConcurrentUploads(int configuredMaxConcurrent)
+        {
+            lock (_lock)
+            {
+                if (_isPlaybackActive && _isPrecacheActive)
+                {
+                    return Math.Min(1, configuredMaxConcurrent);
+                }
+
+                if (_isPlaybackActive)
+                {
+                    return Math.Min(2, configuredMaxConcurrent);
+                }
+
+                return configuredMaxConcurrent;
             }
         }
 

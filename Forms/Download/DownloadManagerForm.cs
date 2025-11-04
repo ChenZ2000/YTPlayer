@@ -523,14 +523,18 @@ namespace YTPlayer.Forms.Download
 
             try
             {
-                var completedTasks = _downloadManager.GetCompletedTasks();
+                var completedDownloadTasks = _downloadManager.GetCompletedTasks();
+                var completedUploadTasks = _uploadManager.GetCompletedTasks();
+                var allTasks = completedDownloadTasks.Cast<object>()
+                    .Concat(completedUploadTasks.Cast<object>())
+                    .ToList();
 
                 // ✅ 修复：使用增量更新策略，不再全部清空
                 // 移除不存在的项
                 var itemsToRemove = new List<ListViewItem>();
                 foreach (ListViewItem item in lvCompleted.Items)
                 {
-                    if (item.Tag is DownloadTask task && !completedTasks.Contains(task))
+                    if (item.Tag == null || !allTasks.Contains(item.Tag))
                     {
                         itemsToRemove.Add(item);
                     }
@@ -541,9 +545,14 @@ namespace YTPlayer.Forms.Download
                 }
 
                 // 更新或添加项
-                foreach (var task in completedTasks)
+                foreach (var task in completedDownloadTasks)
                 {
-                    UpdateCompletedTaskInList(task);
+                    UpdateCompletedItem(task);
+                }
+
+                foreach (var task in completedUploadTasks)
+                {
+                    UpdateCompletedItem(task);
                 }
             }
             finally
@@ -597,48 +606,13 @@ namespace YTPlayer.Forms.Download
             }
         }
 
-        /// <summary>
-        /// 添加已完成任务到列表
-        /// </summary>
-        private void AddCompletedTaskToList(DownloadTask task)
+        private void UpdateCompletedItem(object task)
         {
-            string completedTime = task.CompletedTime?.ToString("yyyy-MM-dd HH:mm:ss") ?? "";
-            string fileSize = task.TotalBytes > 0
-                ? DownloadFileHelper.FormatFileSize(task.TotalBytes)
-                : "";
-
-            var item = new ListViewItem(new[]
+            if (task == null)
             {
-                task.Song.Name,
-                task.Song.Artist,
-                task.SourceList,
-                GetStatusText(task.Status),
-                completedTime,
-                fileSize
-            })
-            {
-                Tag = task
-            };
-
-            // 根据状态设置颜色
-            if (task.Status == DownloadStatus.Failed)
-            {
-                item.ForeColor = Color.Red;
-            }
-            else if (task.Status == DownloadStatus.Completed)
-            {
-                item.ForeColor = Color.Green;
+                return;
             }
 
-            lvCompleted.Items.Add(item);
-        }
-
-        /// <summary>
-        /// 更新已完成任务在列表中（增量更新，保护焦点）
-        /// </summary>
-        private void UpdateCompletedTaskInList(DownloadTask task)
-        {
-            // 查找现有项
             ListViewItem? existingItem = null;
             foreach (ListViewItem item in lvCompleted.Items)
             {
@@ -649,57 +623,75 @@ namespace YTPlayer.Forms.Download
                 }
             }
 
-            string completedTime = task.CompletedTime?.ToString("yyyy-MM-dd HH:mm:ss") ?? "";
-            string fileSize = task.TotalBytes > 0
-                ? DownloadFileHelper.FormatFileSize(task.TotalBytes)
-                : "";
-
-            // 如果不存在，创建新项
             if (existingItem == null)
             {
                 existingItem = new ListViewItem(new[]
                 {
-                    task.Song.Name,
-                    task.Song.Artist,
-                    task.SourceList,
-                    GetStatusText(task.Status),
-                    completedTime,
-                    fileSize
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    string.Empty
                 })
                 {
                     Tag = task
                 };
-
-                // 根据状态设置颜色
-                if (task.Status == DownloadStatus.Failed)
-                {
-                    existingItem.ForeColor = Color.Red;
-                }
-                else if (task.Status == DownloadStatus.Completed)
-                {
-                    existingItem.ForeColor = Color.Green;
-                }
-
                 lvCompleted.Items.Add(existingItem);
             }
-            else
+
+            if (task is DownloadTask downloadTask)
             {
-                // 更新现有项（保留 ListViewItem 对象，只更新内容）
-                existingItem.SubItems[0].Text = task.Song.Name;
-                existingItem.SubItems[1].Text = task.Song.Artist;
-                existingItem.SubItems[2].Text = task.SourceList;
-                existingItem.SubItems[3].Text = GetStatusText(task.Status);
+                string completedTime = downloadTask.CompletedTime?.ToString("yyyy-MM-dd HH:mm:ss") ?? "";
+                string fileSize = downloadTask.TotalBytes > 0
+                    ? DownloadFileHelper.FormatFileSize(downloadTask.TotalBytes)
+                    : "";
+
+                existingItem.SubItems[0].Text = downloadTask.Song.Name;
+                existingItem.SubItems[1].Text = "下载";
+                existingItem.SubItems[2].Text = downloadTask.SourceList;
+                existingItem.SubItems[3].Text = GetStatusText(downloadTask.Status);
                 existingItem.SubItems[4].Text = completedTime;
                 existingItem.SubItems[5].Text = fileSize;
 
-                // 根据状态更新颜色
-                if (task.Status == DownloadStatus.Failed)
+                if (downloadTask.Status == DownloadStatus.Failed)
                 {
                     existingItem.ForeColor = Color.Red;
                 }
-                else if (task.Status == DownloadStatus.Completed)
+                else if (downloadTask.Status == DownloadStatus.Completed)
                 {
                     existingItem.ForeColor = Color.Green;
+                }
+                else
+                {
+                    existingItem.ForeColor = SystemColors.ControlText;
+                }
+            }
+            else if (task is UploadTask uploadTask)
+            {
+                string completedTime = uploadTask.CompletedTime?.ToString("yyyy-MM-dd HH:mm:ss") ?? "";
+                string fileSize = uploadTask.TotalBytes > 0
+                    ? uploadTask.FormattedFileSize
+                    : "";
+
+                existingItem.SubItems[0].Text = uploadTask.FileName;
+                existingItem.SubItems[1].Text = "上传";
+                existingItem.SubItems[2].Text = uploadTask.SourceList;
+                existingItem.SubItems[3].Text = GetUploadStatusText(uploadTask.Status);
+                existingItem.SubItems[4].Text = completedTime;
+                existingItem.SubItems[5].Text = fileSize;
+
+                if (uploadTask.Status == UploadStatus.Failed)
+                {
+                    existingItem.ForeColor = Color.Red;
+                }
+                else if (uploadTask.Status == UploadStatus.Completed)
+                {
+                    existingItem.ForeColor = Color.Green;
+                }
+                else
+                {
+                    existingItem.ForeColor = SystemColors.ControlText;
                 }
             }
         }
@@ -821,7 +813,7 @@ namespace YTPlayer.Forms.Download
                     task.FileName,
                     task.SourceList,
                     $"{task.ProgressPercentage}%",
-                    task.StageMessage,
+                    GetUploadStageText(task),
                     GetUploadStatusText(task.Status)
                 })
                 {
@@ -834,7 +826,7 @@ namespace YTPlayer.Forms.Download
                 existingItem.SubItems[0].Text = task.FileName;
                 existingItem.SubItems[1].Text = task.SourceList;
                 existingItem.SubItems[2].Text = $"{task.ProgressPercentage}%";
-                existingItem.SubItems[3].Text = task.StageMessage;
+                existingItem.SubItems[3].Text = GetUploadStageText(task);
                 existingItem.SubItems[4].Text = GetUploadStatusText(task.Status);
             }
         }
@@ -861,6 +853,19 @@ namespace YTPlayer.Forms.Download
                 default:
                     return "未知";
             }
+        }
+
+        /// <summary>
+        /// 构建上传阶段文本，附带实时速度
+        /// </summary>
+        private string GetUploadStageText(UploadTask task)
+        {
+            string stage = string.IsNullOrWhiteSpace(task.StageMessage) ? "等待中" : task.StageMessage;
+            if (task.CurrentSpeedBytesPerSecond > 0)
+            {
+                stage = $"{stage} ({task.FormattedSpeed})";
+            }
+            return stage;
         }
 
         #endregion

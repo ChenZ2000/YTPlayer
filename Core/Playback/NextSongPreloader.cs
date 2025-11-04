@@ -6,6 +6,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using YTPlayer.Core.Playback.Cache;
+using YTPlayer.Core.Download;
 using YTPlayer.Core.Streaming;
 using YTPlayer.Models;
 
@@ -175,9 +176,12 @@ namespace YTPlayer.Core.Playback
             }
 
             var cancellationToken = _preloadCts.Token;
+            bool notifiedPreload = false;
 
             try
             {
+                DownloadBandwidthCoordinator.Instance.NotifyPrecacheStateChanged(true);
+                notifiedPreload = true;
                 System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] 开始预加载: {nextSong.Name}");
 
                 // 步骤 1: 获取 URL（支持多音质缓存 + 音质一致性检查）
@@ -370,6 +374,13 @@ namespace YTPlayer.Core.Playback
                 System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] 预加载失败: {nextSong.Name}, 错误: {ex.Message}");
                 return false;
             }
+            finally
+            {
+                if (notifiedPreload)
+                {
+                    DownloadBandwidthCoordinator.Instance.NotifyPrecacheStateChanged(false);
+                }
+            }
         }
 
         /// <summary>
@@ -480,6 +491,8 @@ namespace YTPlayer.Core.Playback
                 _preloadCts?.Dispose();
                 _preloadCts = null;
             }
+
+            DownloadBandwidthCoordinator.Instance.NotifyPrecacheStateChanged(false);
         }
 
         #endregion

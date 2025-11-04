@@ -3,6 +3,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using YTPlayer.Core.Playback;
+using YTPlayer.Core.Download;
 using YTPlayer.Models;
 
 namespace YTPlayer
@@ -266,6 +267,10 @@ namespace YTPlayer
             SafeInvoke(() =>
             {
                 UpdateUIForPlaybackState(e.NewState);
+                bool playbackActive = e.NewState == PlaybackState.Playing ||
+                                      e.NewState == PlaybackState.Buffering ||
+                                      e.NewState == PlaybackState.Loading;
+                DownloadBandwidthCoordinator.Instance.NotifyPlaybackStateChanged(playbackActive);
             });
         }
 
