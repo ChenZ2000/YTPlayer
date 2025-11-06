@@ -53,7 +53,7 @@ namespace YTPlayer.Core
         private const string DEFAULT_APPVER = AuthConstants.DesktopAppVersion;
 
         // 重试设置（参考 netease-music-simple-player 的自适应延迟策略）
-        private const int MAX_RETRY_COUNT = 3;
+        private const int MAX_RETRY_COUNT = 4;
         private const int RETRY_DELAY_MS = 1000;  // 保留作为 fallback
         private const int MIN_RETRY_DELAY_MS = 50;   // 最小延迟
         private const int MAX_RETRY_DELAY_MS = 500;  // 最大延迟
@@ -4731,23 +4731,62 @@ namespace YTPlayer.Core
                     { "type", type }
                 };
 
-                var response = await PostWeApiAsync<JObject>("/playlist/create", payload);
-                int code = response["code"]?.Value<int>() ?? -1;
+                var response = await PostWeApiAsync<JObject>("/playlist/create", payload, autoConvertApiSegment: true);
+                int code = response?["code"]?.Value<int>() ?? -1;
 
-                if (code == 200 && response["playlist"] != null)
+                if (code != 200)
                 {
-                    var playlist = response["playlist"];
-                    return new PlaylistInfo
-                    {
-                        Id = playlist["id"]?.ToString() ?? "",
-                        Name = playlist["name"]?.ToString() ?? "",
-                        Creator = playlist["creator"]?["nickname"]?.ToString() ?? "",
-                        TrackCount = playlist["trackCount"]?.Value<int>() ?? 0,
-                        Description = playlist["description"]?.ToString() ?? "",
-                        CoverUrl = playlist["coverImgUrl"]?.ToString() ?? ""
-                    };
+                    System.Diagnostics.Debug.WriteLine($"[API] 创建歌单失败: code={code}, message={response?["message"] ?? response?["msg"]}");
+                    return null;
                 }
 
+                var playlistToken = response?["playlist"] as JObject;
+                if (playlistToken != null)
+                {
+                    var created = CreatePlaylistInfo(playlistToken);
+                    if (string.IsNullOrWhiteSpace(created.Name))
+                    {
+                        created.Name = name;
+                    }
+
+                    PopulatePlaylistOwnershipDefaults(created, playlistToken);
+                    return created;
+                }
+
+                string? playlistId = ExtractPlaylistId(response);
+                if (!string.IsNullOrWhiteSpace(playlistId))
+                {
+                    try
+                    {
+                        var detailed = await GetPlaylistDetailAsync(playlistId);
+                        if (detailed != null)
+                        {
+                            if (string.IsNullOrWhiteSpace(detailed.Name))
+                            {
+                                detailed.Name = name;
+                            }
+
+                            PopulatePlaylistOwnershipDefaults(detailed, null);
+                            return detailed;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[API] 获取新建歌单详情失败: {ex.Message}");
+                    }
+
+                    var fallback = new PlaylistInfo
+                    {
+                        Id = playlistId,
+                        Name = string.IsNullOrWhiteSpace(name) ? "新建歌单" : name.Trim(),
+                        TrackCount = 0
+                    };
+
+                    PopulatePlaylistOwnershipDefaults(fallback, null);
+                    return fallback;
+                }
+
+                System.Diagnostics.Debug.WriteLine("[API] 创建歌单响应缺少 playlist/id 字段，无法构建返回对象。");
                 return null;
             }
             catch (Exception ex)
@@ -7420,33 +7459,235 @@ namespace YTPlayer.Core
         private List<PlaylistInfo> ParsePlaylistList(JArray playlists)
         {
             var result = new List<PlaylistInfo>();
-            if (playlists == null) return result;
-
-            foreach (var playlist in playlists)
+            if (playlists == null)
             {
+                return result;
+            }
+
+            foreach (var playlistToken in playlists)
+            {
+                if (playlistToken is not JObject playlistObject)
+                {
+                    continue;
+                }
+
                 try
                 {
-                    long creatorId = playlist["creator"]?["userId"]?.Value<long>() ?? 0;
-                    long ownerUserId = playlist["userId"]?.Value<long>() ?? 0;
-
-                    var playlistInfo = new PlaylistInfo
-                    {
-                        Id = playlist["id"]?.Value<string>(),
-                        Name = playlist["name"]?.Value<string>(),
-                        CoverUrl = playlist["coverImgUrl"]?.Value<string>(),
-                        Description = playlist["description"]?.Value<string>(),
-                        TrackCount = playlist["trackCount"]?.Value<int>() ?? 0,
-                        Creator = playlist["creator"]?["nickname"]?.Value<string>(),
-                        CreatorId = creatorId,
-                        OwnerUserId = ownerUserId > 0 ? ownerUserId : creatorId
-                    };
-
+                    var playlistInfo = CreatePlaylistInfo(playlistObject);
+                    PopulatePlaylistOwnershipDefaults(playlistInfo, playlistObject);
                     result.Add(playlistInfo);
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[API] 解析歌单失败: {ex.Message}");
+                }
             }
 
             return result;
+        }
+
+        private PlaylistInfo CreatePlaylistInfo(JObject playlistToken)
+        {
+            if (playlistToken == null)
+            {
+                return new PlaylistInfo();
+            }
+
+            var playlistInfo = new PlaylistInfo
+            {
+                Id = playlistToken["id"]?.Value<string>()
+                    ?? playlistToken["playlistId"]?.Value<string>()
+                    ?? playlistToken["resourceId"]?.Value<string>()
+                    ?? string.Empty,
+                Name = playlistToken["name"]?.Value<string>()
+                    ?? playlistToken["title"]?.Value<string>()
+                    ?? string.Empty,
+                CoverUrl = playlistToken["coverImgUrl"]?.Value<string>()
+                    ?? playlistToken["coverUrl"]?.Value<string>()
+                    ?? playlistToken["picUrl"]?.Value<string>()
+                    ?? string.Empty,
+                Description = playlistToken["description"]?.Value<string>()
+                    ?? playlistToken["desc"]?.Value<string>()
+                    ?? string.Empty,
+                TrackCount = ResolveTrackCount(playlistToken),
+                Creator = playlistToken["creator"]?["nickname"]?.Value<string>()
+                    ?? playlistToken["creatorName"]?.Value<string>()
+                    ?? string.Empty,
+                CreatorId = playlistToken["creator"]?["userId"]?.Value<long?>() ?? 0,
+                OwnerUserId = playlistToken["userId"]?.Value<long?>()
+                    ?? playlistToken["ownerId"]?.Value<long?>()
+                    ?? 0
+            };
+
+            return playlistInfo;
+        }
+
+        private static int ResolveTrackCount(JObject playlistToken)
+        {
+            if (playlistToken == null)
+            {
+                return 0;
+            }
+
+            int count =
+                SafeToInt(playlistToken["trackCount"]) ??
+                SafeToInt(playlistToken["songCount"]) ??
+                SafeToInt(playlistToken["size"]) ??
+                SafeToInt(playlistToken["trackNumber"]) ??
+                0;
+
+            if (count > 0)
+            {
+                return count;
+            }
+
+            var trackIds = playlistToken["trackIds"] as JArray;
+            if (trackIds != null && trackIds.Count > 0)
+            {
+                return trackIds.Count;
+            }
+
+            var tracks = playlistToken["tracks"] as JArray;
+            if (tracks != null && tracks.Count > 0)
+            {
+                return tracks.Count;
+            }
+
+            return 0;
+        }
+
+        private static int? SafeToInt(JToken token)
+        {
+            if (token == null || token.Type == JTokenType.Null)
+            {
+                return null;
+            }
+
+            try
+            {
+                switch (token.Type)
+                {
+                    case JTokenType.Integer:
+                        var integerValue = token.Value<long>();
+                        if (integerValue < 0)
+                        {
+                            return 0;
+                        }
+                        if (integerValue > int.MaxValue)
+                        {
+                            return int.MaxValue;
+                        }
+                        return (int)integerValue;
+
+                    case JTokenType.Float:
+                        var floatValue = token.Value<double>();
+                        if (double.IsNaN(floatValue))
+                        {
+                            return null;
+                        }
+                        if (floatValue < 0)
+                        {
+                            return 0;
+                        }
+                        if (floatValue > int.MaxValue)
+                        {
+                            return int.MaxValue;
+                        }
+                        return (int)Math.Round(floatValue);
+
+                    case JTokenType.String:
+                        var stringValue = token.Value<string>();
+                        if (string.IsNullOrWhiteSpace(stringValue))
+                        {
+                            return null;
+                        }
+
+                        if (int.TryParse(stringValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedInt))
+                        {
+                            return Math.Max(0, parsedInt);
+                        }
+
+                        if (long.TryParse(stringValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedLong))
+                        {
+                            if (parsedLong < 0)
+                            {
+                                return 0;
+                            }
+
+                            return parsedLong > int.MaxValue ? int.MaxValue : (int)parsedLong;
+                        }
+
+                        break;
+                }
+            }
+            catch
+            {
+                // ignore parsing exceptions, fall back to null
+            }
+
+            return null;
+        }
+
+        private void PopulatePlaylistOwnershipDefaults(PlaylistInfo playlistInfo, JObject? playlistToken)
+        {
+            if (playlistInfo == null)
+            {
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(playlistInfo.Id))
+            {
+                var idToken = playlistToken?["id"] ?? playlistToken?["playlistId"] ?? playlistToken?["resourceId"];
+                if (idToken != null)
+                {
+                    playlistInfo.Id = idToken.ToString();
+                }
+            }
+
+            long tokenCreatorId = playlistToken?["creator"]?["userId"]?.Value<long?>() ?? 0;
+            long tokenOwnerId = playlistToken?["userId"]?.Value<long?>()
+                ?? playlistToken?["ownerId"]?.Value<long?>()
+                ?? 0;
+
+            long currentUserId = GetCurrentUserId();
+
+            if (playlistInfo.CreatorId == 0)
+            {
+                playlistInfo.CreatorId = tokenCreatorId != 0 ? tokenCreatorId : currentUserId;
+            }
+
+            if (playlistInfo.OwnerUserId == 0)
+            {
+                playlistInfo.OwnerUserId = tokenOwnerId != 0 ? tokenOwnerId : playlistInfo.CreatorId;
+            }
+
+            if (string.IsNullOrWhiteSpace(playlistInfo.Creator))
+            {
+                var creatorName = playlistToken?["creator"]?["nickname"]?.Value<string>()
+                    ?? playlistToken?["creatorName"]?.Value<string>();
+
+                if (!string.IsNullOrWhiteSpace(creatorName))
+                {
+                    playlistInfo.Creator = creatorName;
+                }
+                else
+                {
+                    var accountState = _authContext?.CurrentAccountState;
+                    if (accountState != null &&
+                        playlistInfo.CreatorId != 0 &&
+                        long.TryParse(accountState.UserId, out var userId) &&
+                        userId == playlistInfo.CreatorId &&
+                        !string.IsNullOrWhiteSpace(accountState.Nickname))
+                    {
+                        playlistInfo.Creator = accountState.Nickname;
+                    }
+                }
+            }
+
+            if (playlistInfo.TrackCount < 0)
+            {
+                playlistInfo.TrackCount = 0;
+            }
         }
 
         /// <summary>
@@ -7599,31 +7840,71 @@ namespace YTPlayer.Core
         /// </summary>
         private PlaylistInfo ParsePlaylistDetail(JObject playlist)
         {
-            if (playlist == null) return null;
-
-            long creatorId = playlist["creator"]?["userId"]?.Value<long>() ?? 0;
-            long ownerUserId = playlist["userId"]?.Value<long>() ?? 0;
-
-            var playlistInfo = new PlaylistInfo
+            if (playlist == null)
             {
-                Id = playlist["id"]?.Value<string>(),
-                Name = playlist["name"]?.Value<string>(),
-                CoverUrl = playlist["coverImgUrl"]?.Value<string>(),
-                Description = playlist["description"]?.Value<string>(),
-                TrackCount = playlist["trackCount"]?.Value<int>() ?? 0,
-                Creator = playlist["creator"]?["nickname"]?.Value<string>(),
-                CreatorId = creatorId,
-                OwnerUserId = ownerUserId > 0 ? ownerUserId : creatorId
-            };
+                return new PlaylistInfo();
+            }
 
-            // 解析歌曲列表
-            var tracks = playlist["tracks"] as JArray ?? playlist["trackIds"] as JArray;
-            if (tracks != null)
+            var playlistInfo = CreatePlaylistInfo(playlist);
+            PopulatePlaylistOwnershipDefaults(playlistInfo, playlist);
+
+            var tracks = playlist["tracks"] as JArray;
+            if (tracks != null && tracks.Count > 0)
             {
-                playlistInfo.Songs = ParseSongList(tracks);
+                var songs = ParseSongList(tracks);
+                playlistInfo.Songs = songs;
+                playlistInfo.TrackCount = Math.Max(playlistInfo.TrackCount, songs?.Count ?? 0);
+            }
+            else
+            {
+                var trackIds = playlist["trackIds"] as JArray;
+                if (trackIds != null && trackIds.Count > 0 && playlistInfo.TrackCount <= 0)
+                {
+                    playlistInfo.TrackCount = Math.Max(playlistInfo.TrackCount, trackIds.Count);
+                }
             }
 
             return playlistInfo;
+        }
+
+        private long GetCurrentUserId()
+        {
+            var accountState = _authContext?.CurrentAccountState;
+            if (accountState == null)
+            {
+                return 0;
+            }
+
+            if (!string.IsNullOrWhiteSpace(accountState.UserId) &&
+                long.TryParse(accountState.UserId, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
+            {
+                return parsed;
+            }
+
+            if (accountState.AccountDetail?.UserId > 0)
+            {
+                return accountState.AccountDetail.UserId;
+            }
+
+            return 0;
+        }
+
+        private static string? ExtractPlaylistId(JObject? response)
+        {
+            if (response == null)
+            {
+                return null;
+            }
+
+            string? id =
+                response["id"]?.ToString() ??
+                response["playlistId"]?.ToString() ??
+                response["resourceId"]?.ToString() ??
+                response["data"]?["id"]?.ToString() ??
+                response["result"]?["playlistId"]?.ToString() ??
+                response["playlist"]?["id"]?.ToString();
+
+            return string.IsNullOrWhiteSpace(id) ? null : id;
         }
 
         /// <summary>

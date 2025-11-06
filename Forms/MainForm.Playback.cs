@@ -177,6 +177,7 @@ namespace YTPlayer
 
             _playbackCancellation = new CancellationTokenSource();
             var cancellationToken = _playbackCancellation.Token;
+            long requestVersion = System.Threading.Interlocked.Increment(ref _playRequestVersion);
 
             var timeSinceLastRequest = DateTime.Now - _lastPlayRequestTime;
             if (timeSinceLastRequest.TotalMilliseconds < MIN_PLAY_REQUEST_INTERVAL_MS)
@@ -197,13 +198,30 @@ namespace YTPlayer
 
             _lastPlayRequestTime = DateTime.Now;
 
-            await PlaySongDirect(song, cancellationToken, isAutoPlayback).ConfigureAwait(false);
+            await PlaySongDirect(song, cancellationToken, isAutoPlayback, requestVersion).ConfigureAwait(false);
+        }
+
+        private bool IsCurrentPlayRequest(long requestVersion)
+        {
+            return System.Threading.Interlocked.Read(ref _playRequestVersion) == requestVersion;
+        }
+
+        private void UpdateLoadingState(bool isLoading, string? statusMessage = null, long playRequestVersion = 0)
+        {
+            if (playRequestVersion != 0 && !IsCurrentPlayRequest(playRequestVersion))
+            {
+                System.Diagnostics.Debug.WriteLine($"[MainForm] 忽略过期播放请求的加载状态更新: version={playRequestVersion}");
+                return;
+            }
+
+            SetPlaybackLoadingState(isLoading, statusMessage);
         }
 
         private async Task PlaySongDirect(
             SongInfo song,
             CancellationToken cancellationToken,
-            bool isAutoPlayback = false)
+            bool isAutoPlayback = false,
+            long playRequestVersion = 0)
         {
             System.Diagnostics.Debug.WriteLine($"[MainForm] PlaySongDirect 被调用: song={song?.Name}, isAutoPlayback={isAutoPlayback}");
 
@@ -240,14 +258,14 @@ namespace YTPlayer
 
             try
             {
-                SetPlaybackLoadingState(true, $"正在获取歌曲数据: {song.Name}");
+                UpdateLoadingState(true, $"正在获取歌曲数据: {song.Name}", playRequestVersion);
                 loadingStateActive = true;
 
                 // ⭐ 检查缓存的资源可用性（如果已预检过）
                 if (song.IsAvailable == false)
                 {
                     System.Diagnostics.Debug.WriteLine($"[MainForm] 歌曲资源不可用（预检缓存）: {song.Name}");
-                    SetPlaybackLoadingState(false, "歌曲不存在，已跳过");
+                    UpdateLoadingState(false, "歌曲不存在，已跳过", playRequestVersion);
                     loadingStateActive = false;
                     HandleSongResourceNotFoundDuringPlayback(song, isAutoPlayback);
                     return;
@@ -303,7 +321,7 @@ namespace YTPlayer
 
                         if (cancellationToken.IsCancellationRequested)
                         {
-                            SetPlaybackLoadingState(false, "播放已取消");
+                            UpdateLoadingState(false, "播放已取消", playRequestVersion);
                             loadingStateActive = false;
                             return;
                         }
@@ -327,7 +345,7 @@ namespace YTPlayer
                         catch (SongResourceNotFoundException missingEx)
                         {
                             System.Diagnostics.Debug.WriteLine($"[MainForm] 获取播放链接时检测到歌曲缺失: {missingEx.Message}");
-                            SetPlaybackLoadingState(false, "歌曲不存在，已跳过");
+                            UpdateLoadingState(false, "歌曲不存在，已跳过", playRequestVersion);
                             loadingStateActive = false;
                             HandleSongResourceNotFoundDuringPlayback(song, isAutoPlayback);
                             return;
@@ -335,14 +353,14 @@ namespace YTPlayer
                         catch (OperationCanceledException)
                         {
                             System.Diagnostics.Debug.WriteLine("[MainForm] 播放链接获取被取消");
-                            SetPlaybackLoadingState(false, "播放已取消");
+                            UpdateLoadingState(false, "播放已取消", playRequestVersion);
                             loadingStateActive = false;
                             return;
                         }
                         catch (Exception ex)
                         {
                             System.Diagnostics.Debug.WriteLine($"[MainForm] 获取播放链接失败: {ex.Message}");
-                            SetPlaybackLoadingState(false, "获取播放链接失败");
+                            UpdateLoadingState(false, "获取播放链接失败", playRequestVersion);
                             loadingStateActive = false;
                             MessageBox.Show(
                                 "无法获取播放链接，请尝试播放其他歌曲",
@@ -355,7 +373,7 @@ namespace YTPlayer
 
                         if (cancellationToken.IsCancellationRequested)
                         {
-                            SetPlaybackLoadingState(false, "播放已取消");
+                        UpdateLoadingState(false, "播放已取消", playRequestVersion);
                             loadingStateActive = false;
                             return;
                         }
@@ -364,7 +382,7 @@ namespace YTPlayer
                             string.IsNullOrEmpty(songUrl?.Url))
                         {
                             System.Diagnostics.Debug.WriteLine("[MainForm ERROR] 无法获取播放链接");
-                            SetPlaybackLoadingState(false, "获取播放链接失败");
+                        UpdateLoadingState(false, "获取播放链接失败", playRequestVersion);
                             loadingStateActive = false;
                             MessageBox.Show(
                                 "无法获取播放链接，请尝试播放其他歌曲",
@@ -404,7 +422,7 @@ namespace YTPlayer
 
                 if (cancellationToken.IsCancellationRequested)
                 {
-                    SetPlaybackLoadingState(false, "播放已取消");
+                    UpdateLoadingState(false, "播放已取消", playRequestVersion);
                     loadingStateActive = false;
                     System.Diagnostics.Debug.WriteLine("[MainForm] 播放请求已取消（播放前）");
                     return;
@@ -422,7 +440,7 @@ namespace YTPlayer
 
                 if (!playResult)
                 {
-                    SetPlaybackLoadingState(false, "播放失败");
+                    UpdateLoadingState(false, "播放失败", playRequestVersion);
                     loadingStateActive = false;
                     System.Diagnostics.Debug.WriteLine("[MainForm ERROR] 播放失败");
                     return;
@@ -451,7 +469,7 @@ namespace YTPlayer
                 if (loadingStateActive)
                 {
                     string statusText = song.IsTrial ? $"正在播放: {song.Name} [试听版]" : $"正在播放: {song.Name}";
-                    SetPlaybackLoadingState(false, statusText);
+                    UpdateLoadingState(false, statusText, playRequestVersion);
                     loadingStateActive = false;
                 }
                 else
@@ -505,7 +523,7 @@ namespace YTPlayer
             catch (OperationCanceledException)
             {
                 System.Diagnostics.Debug.WriteLine("[MainForm] 播放请求被取消");
-                SetPlaybackLoadingState(false, "播放已取消");
+                UpdateLoadingState(false, "播放已取消", playRequestVersion);
             }
             catch (Exception ex)
             {
@@ -513,7 +531,7 @@ namespace YTPlayer
                 {
                     System.Diagnostics.Debug.WriteLine($"[MainForm ERROR] PlaySongDirect 异常: {ex.Message}");
                     System.Diagnostics.Debug.WriteLine($"[MainForm ERROR] 堆栈: {ex.StackTrace}");
-                    SetPlaybackLoadingState(false, "播放失败");
+                    UpdateLoadingState(false, "播放失败", playRequestVersion);
                     MessageBox.Show(
                         $"播放失败: {ex.Message}",
                         "错误",
@@ -526,7 +544,7 @@ namespace YTPlayer
             {
                 if (loadingStateActive)
                 {
-                    SetPlaybackLoadingState(false);
+                    UpdateLoadingState(false, null, playRequestVersion);
                 }
             }
         }

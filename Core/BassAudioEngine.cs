@@ -1133,7 +1133,13 @@ namespace YTPlayer.Core
         {
             Debug.WriteLine("[BassAudioEngine] ⚡ BASS SYNC_END 回调触发（流播放结束）");
 
+            bool loopOneMode = _playMode == PlayMode.LoopOne;
             var gaplessEntry = TakeGaplessPreload();
+            if (loopOneMode && gaplessEntry != null)
+            {
+                ReleasePreloadedResources(gaplessEntry);
+                gaplessEntry = null;
+            }
 
             int oldStream;
             BassStreamProvider? oldStreamProvider;
@@ -1336,6 +1342,13 @@ namespace YTPlayer.Core
         {
             if (song == null || data == null)
             {
+                return;
+            }
+
+            if (_playMode == PlayMode.LoopOne)
+            {
+                // 单曲循环不需要预加载下一首，立即释放预加载资源
+                ReleasePreloadedResources(new GaplessPreloadEntry(song, data));
                 return;
             }
 

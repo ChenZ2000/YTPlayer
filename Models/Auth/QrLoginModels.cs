@@ -82,6 +82,12 @@ namespace YTPlayer.Models.Auth
         /// <summary>VIP类型（0=普通，1=VIP，11=黑胶VIP）</summary>
         public int VipType { get; set; }
 
+        /// <summary>
+        /// 最近一次同步的完整账号详情。
+        /// 如果可用，可用于获取用户 ID、昵称等冗余信息。
+        /// </summary>
+        public UserAccountInfo? AccountDetail { get; set; }
+
         #endregion
 
         #region Cookie 和认证凭证

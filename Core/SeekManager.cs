@@ -38,6 +38,10 @@ namespace YTPlayer.Core
         private int _consecutiveFailures = 0;
         private const int MAX_CONSECUTIVE_FAILURES = 3;
 
+        private int _disposed = 0;
+
+        private bool IsDisposed => System.Threading.Volatile.Read(ref _disposed) == 1;
+
         #endregion
 
         #region 事件
@@ -68,6 +72,11 @@ namespace YTPlayer.Core
         /// </summary>
         public void SetCacheStream(SmartCacheManager cacheManager)
         {
+            if (IsDisposed)
+            {
+                return;
+            }
+
             lock (_seekLock)
             {
                 _cacheManager = cacheManager ?? throw new ArgumentNullException(nameof(cacheManager));
@@ -81,6 +90,11 @@ namespace YTPlayer.Core
         /// </summary>
         public void SetDirectStream()
         {
+            if (IsDisposed)
+            {
+                return;
+            }
+
             lock (_seekLock)
             {
                 _cacheManager = null;
@@ -94,6 +108,11 @@ namespace YTPlayer.Core
         /// </summary>
         public void ClearStream()
         {
+            if (IsDisposed)
+            {
+                return;
+            }
+
             lock (_seekLock)
             {
                 _cacheManager = null;
@@ -112,6 +131,11 @@ namespace YTPlayer.Core
         /// <param name="targetSeconds">目标位置（秒）</param>
         public void RequestSeek(double targetSeconds)
         {
+            if (IsDisposed)
+            {
+                return;
+            }
+
             if (_audioEngine == null || !_audioEngine.IsInitialized)
             {
                 Debug.WriteLine("[SeekManager] 音频引擎未初始化，忽略 Seek 请求");
@@ -139,6 +163,11 @@ namespace YTPlayer.Core
         /// </summary>
         public void FinishSeek()
         {
+            if (IsDisposed)
+            {
+                return;
+            }
+
             lock (_seekLock)
             {
                 // 停止定时器
@@ -160,6 +189,11 @@ namespace YTPlayer.Core
         /// </summary>
         public void CancelPendingSeeks()
         {
+            if (IsDisposed)
+            {
+                return;
+            }
+
             lock (_seekLock)
             {
                 // 停止定时器
@@ -332,9 +366,17 @@ namespace YTPlayer.Core
 
         public void Dispose()
         {
+            if (System.Threading.Interlocked.Exchange(ref _disposed, 1) == 1)
+            {
+                return;
+            }
+
             _seekTimer?.Dispose();
+            _seekTimer = null;
+
             _currentSeekCts?.Cancel();
             _currentSeekCts?.Dispose();
+            _currentSeekCts = null;
         }
 
         #endregion

@@ -12,6 +12,7 @@ using YTPlayer.Core.Playback.Cache;
 using YTPlayer.Core.Lyrics;
 using YTPlayer.Models;
 using YTPlayer.Models.Auth;
+using YTPlayer.Utils;
 
 #pragma warning disable CS8600, CS8601, CS8602, CS8603, CS8604, CS8625
 
@@ -45,6 +46,7 @@ namespace YTPlayer
         private System.Windows.Forms.NotifyIcon? _trayIcon;
         private Utils.ContextMenuHost? _contextMenuHost;  // ⭐ 自定义菜单宿主窗口
         private bool _isExitingFromTrayMenu = false;  // ⭐ 标志：是否正在从托盘菜单退出
+        private bool _isFormClosing = false;
         private DateTime _appStartTime = DateTime.Now;  // ⭐ 应用启动时间（用于冷启动风控检测）
         private bool _isUserDragging = false;
         private int _currentPage = 1;
@@ -82,9 +84,24 @@ namespace YTPlayer
         private string? _lastSelectedCloudSongId = null;
         private Guid? _lastNotifiedUploadFailureTaskId = null;
 
+        private static readonly (string Cat, string DisplayName, string Description)[] _homePlaylistCategoryPresets = new[]
+        {
+            ("华语", "华语", "华语歌单"),
+            ("流行", "流行", "流行歌单"),
+            ("摇滚", "摇滚", "摇滚歌单"),
+            ("民谣", "民谣", "民谣歌单"),
+            ("电子", "电子", "电子音乐歌单"),
+            ("轻音乐", "轻音乐", "轻音乐歌单"),
+            ("影视原声", "影视原声", "影视原声歌单"),
+            ("ACG", "ACG", "ACG歌单"),
+            ("怀旧", "怀旧", "怀旧歌单"),
+            ("治愈", "治愈", "治愈歌单")
+        };
+
         private System.Threading.CancellationTokenSource? _playbackCancellation = null; // 当前播放请求的取消令牌
         private DateTime _lastPlayRequestTime = DateTime.MinValue;                     // 上次播放请求时间
         private const int MIN_PLAY_REQUEST_INTERVAL_MS = 200;                         // 最小播放请求间隔（毫秒）
+        private long _playRequestVersion = 0;                                         // 播放请求版本控制
 
         // ⭐ 旧的 Seek 控制已移除，现在由 SeekManager 统一管理
 
@@ -439,6 +456,7 @@ namespace YTPlayer
             this.KeyPreview = true;
             this.KeyDown += MainForm_KeyDown;
             this.KeyUp += MainForm_KeyUp; // ⭐ 新增：监听按键松开（用于Scrubbing模式）
+            this.Deactivate += MainForm_Deactivate;
         }
 
         private ConfigModel EnsureConfigInitialized()
@@ -811,6 +829,22 @@ namespace YTPlayer
             // Scrubbing 机制已移除（基于缓存层的新架构不需要）
         }
 
+        private void MainForm_Deactivate(object? sender, EventArgs e)
+        {
+            _leftKeyPressed = false;
+            _rightKeyPressed = false;
+            _leftScrubActive = false;
+            _rightScrubActive = false;
+            _leftKeyDownTime = DateTime.MinValue;
+            _rightKeyDownTime = DateTime.MinValue;
+            StopScrubKeyTimerIfIdle();
+            if (_isFormClosing)
+            {
+                return;
+            }
+            _seekManager?.FinishSeek();
+        }
+
         #endregion
 
         #region 搜索功能
@@ -1123,7 +1157,16 @@ namespace YTPlayer
                 // 如果已登录，预先加载用户数据以获取数量信息
                 int userPlaylistCount = 0;
                 int userAlbumCount = 0;
+                int artistFavoritesCount = 0;
                 PlaylistInfo? likedPlaylist = null;
+                const int highQualityDisplayCount = 50;
+                const int newSongSubCategoryCount = 5;
+                int playlistCategoryCount = _homePlaylistCategoryPresets.Length;
+                int artistCategoryTypeCount = ArtistMetadataHelper.GetTypeOptions(includeAll: true).Count;
+                var toplistTask = _apiClient.GetToplistAsync();
+                var newAlbumsTask = _apiClient.GetNewAlbumsAsync();
+                int toplistCount = 0;
+                int newAlbumCount = 0;
 
                 if (isLoggedIn)
                 {
@@ -1162,6 +1205,18 @@ namespace YTPlayer
                             {
                                 System.Diagnostics.Debug.WriteLine($"[HomePage] 获取收藏专辑数量失败: {albumEx.Message}");
                             }
+
+                            // 获取收藏歌手数量
+                            try
+                            {
+                                var favoriteArtists = await _apiClient.GetArtistSubscriptionsAsync(limit: 1, offset: 0);
+                                artistFavoritesCount = favoriteArtists?.TotalCount ?? favoriteArtists?.Items.Count ?? 0;
+                                System.Diagnostics.Debug.WriteLine($"[HomePage] 收藏歌手数量: {artistFavoritesCount}");
+                            }
+                            catch (Exception artistEx)
+                            {
+                                System.Diagnostics.Debug.WriteLine($"[HomePage] 获取收藏歌手数量失败: {artistEx.Message}");
+                            }
                         }
                     }
                     catch (Exception ex)
@@ -1172,6 +1227,26 @@ namespace YTPlayer
                 else
                 {
                     _loggedInUserId = 0;
+                }
+
+                try
+                {
+                    var toplist = await toplistTask;
+                    toplistCount = toplist?.Count ?? 0;
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[HomePage] 获取排行榜数量失败: {ex.Message}");
+                }
+
+                try
+                {
+                    var newAlbums = await newAlbumsTask;
+                    newAlbumCount = newAlbums?.Count ?? 0;
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[HomePage] 获取新碟数量失败: {ex.Message}");
                 }
 
                 _userLikedPlaylist = likedPlaylist;
@@ -1226,10 +1301,21 @@ namespace YTPlayer
                         CategoryName = "收藏的专辑",
                         CategoryDescription = "您收藏的专辑",
                         ItemCount = userAlbumCount,
-                        ItemUnit = "个"
+                        ItemUnit = "张"
                     });
 
-                    // 3.5 云盘
+                    // 3.5 收藏的歌手
+                    homeItems.Add(new ListItemInfo
+                    {
+                        Type = ListItemType.Category,
+                        CategoryId = "artist_favorites",
+                        CategoryName = "收藏的歌手",
+                        CategoryDescription = "管理您收藏的歌手",
+                        ItemCount = artistFavoritesCount,
+                        ItemUnit = "位"
+                    });
+
+                    // 3.6 云盘
                     homeItems.Add(new ListItemInfo
                     {
                         Type = ListItemType.Category,
@@ -1242,25 +1328,13 @@ namespace YTPlayer
                         ItemUnit = "首"
                     });
 
-                    // 3.6 收藏的歌手
-                    homeItems.Add(new ListItemInfo
-                    {
-                        Type = ListItemType.Category,
-                        CategoryId = "artist_favorites",
-                        CategoryName = "收藏的歌手",
-                        CategoryDescription = "管理您收藏的歌手",
-                        ItemUnit = "位"
-                    });
-
                     // 4. 每日推荐
                     homeItems.Add(new ListItemInfo
                     {
                         Type = ListItemType.Category,
                         CategoryId = "daily_recommend",
                         CategoryName = "每日推荐",
-                        CategoryDescription = "根据您的听歌习惯推荐的歌曲和歌单",
-                        ItemCount = 2,
-                        ItemUnit = "个"
+                        CategoryDescription = "根据您的听歌习惯推荐的歌曲和歌单"
                     });
 
                     // 5. 为您推荐
@@ -1269,9 +1343,7 @@ namespace YTPlayer
                         Type = ListItemType.Category,
                         CategoryId = "personalized",
                         CategoryName = "为您推荐",
-                        CategoryDescription = "个性化推荐歌单和新歌",
-                        ItemCount = 2,
-                        ItemUnit = "个"
+                        CategoryDescription = "个性化推荐歌单和新歌"
                     });
 
                     // 6. 精品歌单
@@ -1280,7 +1352,9 @@ namespace YTPlayer
                         Type = ListItemType.Category,
                         CategoryId = "highquality_playlists",
                         CategoryName = "精品歌单",
-                        CategoryDescription = "网易云官方精选歌单"
+                        CategoryDescription = "网易云官方精选歌单",
+                        ItemCount = highQualityDisplayCount,
+                        ItemUnit = "个"
                     });
 
                     // 7. 新歌速递
@@ -1288,9 +1362,9 @@ namespace YTPlayer
                     {
                         Type = ListItemType.Category,
                         CategoryId = "new_songs",
-                        CategoryName = "新歌速递",
-                        CategoryDescription = "全网最新发布歌曲",
-                        ItemCount = 5,
+                        CategoryName = "新歌速递分类",
+                        CategoryDescription = "分类浏览全网最新发布歌曲",
+                        ItemCount = newSongSubCategoryCount,
                         ItemUnit = "个"
                     });
 
@@ -1300,7 +1374,9 @@ namespace YTPlayer
                         Type = ListItemType.Category,
                         CategoryId = "playlist_category",
                         CategoryName = "歌单分类",
-                        CategoryDescription = "按分类浏览歌单"
+                        CategoryDescription = "按分类浏览歌单",
+                        ItemCount = playlistCategoryCount,
+                        ItemUnit = "个"
                     });
 
                     // 9. 歌手分类
@@ -1309,7 +1385,9 @@ namespace YTPlayer
                         Type = ListItemType.Category,
                         CategoryId = "artist_categories",
                         CategoryName = "歌手分类",
-                        CategoryDescription = "按类型和地区浏览歌手"
+                        CategoryDescription = "按类型和地区浏览歌手",
+                        ItemCount = artistCategoryTypeCount,
+                        ItemUnit = "个"
                     });
 
                     // 12. 新碟上架（新增）
@@ -1318,7 +1396,9 @@ namespace YTPlayer
                         Type = ListItemType.Category,
                         CategoryId = "new_albums",
                         CategoryName = "新碟上架",
-                        CategoryDescription = "最新发布的专辑"
+                        CategoryDescription = "最新发布的专辑",
+                        ItemCount = newAlbumCount,
+                        ItemUnit = "张"
                     });
 
                     // 13. 官方排行榜
@@ -1327,7 +1407,9 @@ namespace YTPlayer
                         Type = ListItemType.Category,
                         CategoryId = "toplist",
                         CategoryName = "官方排行榜",
-                        CategoryDescription = "查看各类音乐排行榜"
+                        CategoryDescription = "查看各类音乐排行榜",
+                        ItemCount = toplistCount,
+                        ItemUnit = "个"
                     });
                 }
                 else
@@ -1344,7 +1426,9 @@ namespace YTPlayer
                         Type = ListItemType.Category,
                         CategoryId = "highquality_playlists",
                         CategoryName = "精品歌单",
-                        CategoryDescription = "网易云官方精选歌单"
+                        CategoryDescription = "网易云官方精选歌单",
+                        ItemCount = highQualityDisplayCount,
+                        ItemUnit = "个"
                     });
 
                     // 2. 新歌速递
@@ -1352,9 +1436,9 @@ namespace YTPlayer
                     {
                         Type = ListItemType.Category,
                         CategoryId = "new_songs",
-                        CategoryName = "新歌速递",
-                        CategoryDescription = "全网最新发布歌曲",
-                        ItemCount = 5,
+                        CategoryName = "新歌速递分类",
+                        CategoryDescription = "按类别浏览全网最新发布歌曲",
+                        ItemCount = newSongSubCategoryCount,
                         ItemUnit = "个"
                     });
 
@@ -1364,7 +1448,9 @@ namespace YTPlayer
                         Type = ListItemType.Category,
                         CategoryId = "playlist_category",
                         CategoryName = "歌单分类",
-                        CategoryDescription = "按分类浏览歌单"
+                        CategoryDescription = "按分类浏览歌单",
+                        ItemCount = playlistCategoryCount,
+                        ItemUnit = "类"
                     });
 
                     // 4. 歌手分类
@@ -1373,7 +1459,9 @@ namespace YTPlayer
                         Type = ListItemType.Category,
                         CategoryId = "artist_categories",
                         CategoryName = "歌手分类",
-                        CategoryDescription = "按类型和地区浏览歌手"
+                        CategoryDescription = "按类型和地区浏览歌手",
+                        ItemCount = artistCategoryTypeCount,
+                        ItemUnit = "类型"
                     });
 
                     // 5. 新碟上架
@@ -1382,7 +1470,9 @@ namespace YTPlayer
                         Type = ListItemType.Category,
                         CategoryId = "new_albums",
                         CategoryName = "新碟上架",
-                        CategoryDescription = "最新发布的专辑"
+                        CategoryDescription = "最新发布的专辑",
+                        ItemCount = newAlbumCount,
+                        ItemUnit = "张"
                     });
 
                     // 6. 官方排行榜
@@ -1391,7 +1481,9 @@ namespace YTPlayer
                         Type = ListItemType.Category,
                         CategoryId = "toplist",
                         CategoryName = "官方排行榜",
-                        CategoryDescription = "查看各类音乐排行榜"
+                        CategoryDescription = "查看各类音乐排行榜",
+                        ItemCount = toplistCount,
+                        ItemUnit = "个"
                     });
                 }
 
@@ -1785,7 +1877,7 @@ namespace YTPlayer
                 DisplayListItems(
                     subcategories,
                     viewSource: "new_songs",
-                    accessibleName: "新歌速递");
+                    accessibleName: "新歌速递分类");
                 UpdateStatusBar("请选择地区");
             }
             catch (Exception ex)
@@ -1918,80 +2010,15 @@ namespace YTPlayer
             {
                 UpdateStatusBar("正在加载歌单分类...");
 
-                // 显示常用分类列表
-                var categories = new List<ListItemInfo>
-                {
-                    new ListItemInfo
+                var categories = _homePlaylistCategoryPresets
+                    .Select(preset => new ListItemInfo
                     {
                         Type = ListItemType.Category,
-                        CategoryId = "playlist_cat_华语",
-                        CategoryName = "华语",
-                        CategoryDescription = "华语歌单"
-                    },
-                    new ListItemInfo
-                    {
-                        Type = ListItemType.Category,
-                        CategoryId = "playlist_cat_流行",
-                        CategoryName = "流行",
-                        CategoryDescription = "流行歌单"
-                    },
-                    new ListItemInfo
-                    {
-                        Type = ListItemType.Category,
-                        CategoryId = "playlist_cat_摇滚",
-                        CategoryName = "摇滚",
-                        CategoryDescription = "摇滚歌单"
-                    },
-                    new ListItemInfo
-                    {
-                        Type = ListItemType.Category,
-                        CategoryId = "playlist_cat_民谣",
-                        CategoryName = "民谣",
-                        CategoryDescription = "民谣歌单"
-                    },
-                    new ListItemInfo
-                    {
-                        Type = ListItemType.Category,
-                        CategoryId = "playlist_cat_电子",
-                        CategoryName = "电子",
-                        CategoryDescription = "电子音乐歌单"
-                    },
-                    new ListItemInfo
-                    {
-                        Type = ListItemType.Category,
-                        CategoryId = "playlist_cat_轻音乐",
-                        CategoryName = "轻音乐",
-                        CategoryDescription = "轻音乐歌单"
-                    },
-                    new ListItemInfo
-                    {
-                        Type = ListItemType.Category,
-                        CategoryId = "playlist_cat_影视原声",
-                        CategoryName = "影视原声",
-                        CategoryDescription = "影视原声歌单"
-                    },
-                    new ListItemInfo
-                    {
-                        Type = ListItemType.Category,
-                        CategoryId = "playlist_cat_ACG",
-                        CategoryName = "ACG",
-                        CategoryDescription = "ACG歌单"
-                    },
-                    new ListItemInfo
-                    {
-                        Type = ListItemType.Category,
-                        CategoryId = "playlist_cat_怀旧",
-                        CategoryName = "怀旧",
-                        CategoryDescription = "怀旧歌单"
-                    },
-                    new ListItemInfo
-                    {
-                        Type = ListItemType.Category,
-                        CategoryId = "playlist_cat_治愈",
-                        CategoryName = "治愈",
-                        CategoryDescription = "治愈歌单"
-                    }
-                };
+                        CategoryId = $"playlist_cat_{preset.Cat}",
+                        CategoryName = preset.DisplayName,
+                        CategoryDescription = preset.Description
+                    })
+                    .ToList();
 
                 DisplayListItems(
                     categories,
@@ -2483,9 +2510,9 @@ namespace YTPlayer
                 var item = new ListViewItem(new[]
                 {
                     displayNumber.ToString(),  // 使用连续的显示序号
-                    song.Name ?? "未知",
-                    song.Artist ?? "未知",
-                    song.Album ?? "未知",
+                    string.IsNullOrWhiteSpace(song.Name) ? "未知" : song.Name,
+                    string.IsNullOrWhiteSpace(song.Artist) ? string.Empty : song.Artist,
+                    string.IsNullOrWhiteSpace(song.Album) ? string.Empty : song.Album,
                     song.FormattedDuration
                 });
                 item.Tag = index;  // 使用索引作为 Tag
@@ -2494,9 +2521,11 @@ namespace YTPlayer
                 index++;  // 内部索引递增
             }
 
+            bool hasPreviousPage = _currentPage > 1 || startIndex > 1;
+
             if (showPagination)
             {
-                if (_currentPage > 1)
+                if (hasPreviousPage)
                 {
                     var prevItem = resultListView.Items.Add("上一页");
                     prevItem.Tag = -2;  // 特殊标记：上一页
@@ -2802,7 +2831,7 @@ namespace YTPlayer
                     displayNumber.ToString(),
                     album.Name ?? "未知",
                     "",  // 不显示艺术家
-                    album.TrackCount.ToString() + " 首",
+                    album.TrackCount > 0 ? $"{album.TrackCount} 首" : string.Empty,
                     album.PublishTime ?? ""
                 });
                 item.Tag = album;
@@ -7896,6 +7925,7 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
         /// </summary>
 protected override void OnFormClosing(FormClosingEventArgs e)
 {
+    _isFormClosing = true;
     base.OnFormClosing(e);
 
     try
@@ -7911,6 +7941,11 @@ protected override void OnFormClosing(FormClosingEventArgs e)
         // ⭐ 使用 SeekManager 取消
         _seekManager?.CancelPendingSeeks();
         _seekManager?.Dispose();
+        _seekManager = null;
+
+        _artistStatsRefreshCts?.Cancel();
+        _artistStatsRefreshCts?.Dispose();
+        _artistStatsRefreshCts = null;
 
         if (_scrubKeyTimer != null)
         {

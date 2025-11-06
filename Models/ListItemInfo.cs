@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using YTPlayer.Core;
 
 namespace YTPlayer.Models
@@ -122,8 +123,8 @@ namespace YTPlayer.Models
                 return Type switch
                 {
                     ListItemType.Song => Song?.Album ?? string.Empty,
-                    ListItemType.Playlist => $"{Playlist?.TrackCount ?? 0} 首",
-                    ListItemType.Album => $"{Album?.TrackCount ?? 0} 首",
+                    ListItemType.Playlist => FormatCount(Playlist?.TrackCount),
+                    ListItemType.Album => FormatCount(Album?.TrackCount),
                     ListItemType.Artist => BuildArtistExtraInfo(),
                     ListItemType.Category => BuildCategoryExtraInfo(),
                     _ => string.Empty
@@ -142,7 +143,7 @@ namespace YTPlayer.Models
                 {
                     ListItemType.Category => CategoryDescription ?? string.Empty,
                     ListItemType.Playlist => Playlist?.Description ?? string.Empty,
-                    ListItemType.Album => $"{Album?.TrackCount ?? 0} 首",
+                    ListItemType.Album => FormatCount(Album?.TrackCount),
                     ListItemType.Artist => !string.IsNullOrWhiteSpace(Artist?.Description)
                         ? Artist!.Description
                         : Artist?.BriefDesc ?? string.Empty,
@@ -164,17 +165,44 @@ namespace YTPlayer.Models
                 return Artist.Alias;
             }
 
-            return $"歌曲 {Artist.MusicCount} | 专辑 {Artist.AlbumCount}";
+            var parts = new List<string>();
+
+            if (Artist.MusicCount > 0)
+            {
+                parts.Add($"歌曲 {Artist.MusicCount}");
+            }
+
+            if (Artist.AlbumCount > 0)
+            {
+                parts.Add($"专辑 {Artist.AlbumCount}");
+            }
+
+            if (parts.Count > 0)
+            {
+                return string.Join(" | ", parts);
+            }
+
+            return string.Empty;
         }
 
         private string BuildCategoryExtraInfo()
         {
-            if (ItemCount.HasValue && !string.IsNullOrEmpty(ItemUnit))
+            if (ItemCount.HasValue && ItemCount.Value > 0 && !string.IsNullOrEmpty(ItemUnit))
             {
                 return $"{ItemCount.Value} {ItemUnit}";
             }
 
             return string.Empty;
+        }
+
+        private static string FormatCount(int? count)
+        {
+            if (!count.HasValue || count.Value <= 0)
+            {
+                return string.Empty;
+            }
+
+            return $"{count.Value} 首";
         }
     }
 }
