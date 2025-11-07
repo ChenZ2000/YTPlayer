@@ -61,6 +61,7 @@
             this.jumpToPositionMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.autoReadLyricsMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.helpMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.donateMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.shortcutsMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.aboutMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.searchPanel = new System.Windows.Forms.Panel();
@@ -396,11 +397,19 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             // helpMenuItem
             //
             this.helpMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
+            this.donateMenuItem,
             this.shortcutsMenuItem,
             this.aboutMenuItem});
             this.helpMenuItem.Name = "helpMenuItem";
             this.helpMenuItem.Size = new System.Drawing.Size(73, 24);
             this.helpMenuItem.Text = "帮助(&H)";
+            //
+            // donateMenuItem
+            //
+            this.donateMenuItem.Name = "donateMenuItem";
+            this.donateMenuItem.Size = new System.Drawing.Size(224, 26);
+            this.donateMenuItem.Text = "捐赠(&D)...";
+            this.donateMenuItem.Click += new System.EventHandler(this.donateMenuItem_Click);
             //
             // shortcutsMenuItem
             //
@@ -1065,8 +1074,9 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
         private System.Windows.Forms.ToolStripMenuItem jumpToPositionMenuItem;
         private System.Windows.Forms.ToolStripMenuItem autoReadLyricsMenuItem;
         private System.Windows.Forms.ToolStripMenuItem helpMenuItem;
-        private System.Windows.Forms.ToolStripMenuItem aboutMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem donateMenuItem;
         private System.Windows.Forms.ToolStripMenuItem shortcutsMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem aboutMenuItem;
         private System.Windows.Forms.Panel searchPanel;
         private System.Windows.Forms.ComboBox searchTypeComboBox;
         private System.Windows.Forms.Label searchTypeLabel;

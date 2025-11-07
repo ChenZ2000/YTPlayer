@@ -6161,6 +6161,14 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
         /// <summary>
         /// 关于
         /// </summary>
+        private void donateMenuItem_Click(object sender, EventArgs e)
+        {
+            using (var dialog = new DonateDialog())
+            {
+                dialog.ShowDialog(this);
+            }
+        }
+
         private void shortcutsMenuItem_Click(object sender, EventArgs e)
         {
             using (var dialog = new KeyboardShortcutsDialog())
