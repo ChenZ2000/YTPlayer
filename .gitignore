@@ -99,6 +99,7 @@ _TeamCity*
 project.lock.json
 project.fragment.lock.json
 artifacts/
+release-local/
 
 # ASP.NET Scaffolding
 ScaffoldingReadMe.txt

@@ -1,0 +1,85 @@
+name: Release Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. 1.0.0)"
+        required: true
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup NuGet
+        uses: nuget/setup-nuget@v1
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Restore packages
+        run: nuget restore YTPlayer.sln
+
+      - name: Build Release
+        run: msbuild YTPlayer.sln /t:Rebuild /p:Configuration=Release /p:Platform=x64
+
+      - name: Archive binaries
+        run: |
+          New-Item -ItemType Directory -Path release -Force | Out-Null
+          Compress-Archive -Path "bin\Release\*" -DestinationPath "release\YTPlayer.zip" -Force
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: YTPlayer-release
+          path: release/YTPlayer.zip
+
+  release:
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: YTPlayer-release
+          path: release
+
+      - name: Prepare version
+        id: prep
+        shell: pwsh
+        run: |
+          $event = '${{ github.event_name }}'
+          $inputVersion = '${{ github.event.inputs.version }}'
+          $refName = '${{ github.ref_name }}'
+          if ($event -eq 'workflow_dispatch') {
+            $version = $inputVersion
+          } else {
+            $version = $refName
+          }
+          if ($version -notmatch '^v') {
+            $tag = "v$version"
+            $display = $version
+          } else {
+            $tag = $version
+            $display = $version.TrimStart('v')
+          }
+          Rename-Item -Path "release\YTPlayer.zip" -NewName "release\YTPlayer-$display.zip" -Force
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "version=$display" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.prep.outputs.tag }}
+          name: YTPlayer v${{ steps.prep.outputs.version }}
+          files: release/YTPlayer-${{ steps.prep.outputs.version }}.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
