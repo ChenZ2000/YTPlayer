@@ -318,6 +318,7 @@ namespace YTPlayer.Core
 
                 // 下载设置
                 DownloadDirectory = GetDefaultDownloadPath(),
+                OutputDevice = AudioOutputDeviceInfo.WindowsDefaultId,
 
                 // Note: Account-related fields (Cookies, MusicU, CsrfToken, MusicA, etc.) are now managed by AccountState
                 // Note: Device fingerprint fields are now managed by AccountState
@@ -404,6 +405,12 @@ namespace YTPlayer.Core
             // Note: Cookies and LoginVipType are now managed by AccountState, not ConfigModel
             // Note: Device fingerprint fields (DeviceId, SDeviceId, etc.) are now managed by AccountState
             // Note: NmtId, NtesNuid, WnmCid, MusicA, AntiCheatToken are managed by AccountState
+
+            if (string.IsNullOrWhiteSpace(config.OutputDevice))
+            {
+                config.OutputDevice = AudioOutputDeviceInfo.WindowsDefaultId;
+                changed = true;
+            }
 
             // 验证跳转间隔
             if (config.SeekMinIntervalMs < 0 || config.SeekMinIntervalMs > 1000)

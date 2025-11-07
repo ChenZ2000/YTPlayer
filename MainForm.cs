@@ -352,7 +352,15 @@ namespace YTPlayer
                 ApplyAccountStateOnStartup();
 
                 // 初始化音频引擎
-                _audioEngine = new BassAudioEngine();
+                var preferredDeviceId = _config?.OutputDevice;
+                _audioEngine = new BassAudioEngine(preferredDeviceId);
+
+                if (_config != null &&
+                    !string.Equals(_config.OutputDevice, _audioEngine.ActiveOutputDeviceId, StringComparison.OrdinalIgnoreCase))
+                {
+                    _config.OutputDevice = _audioEngine.ActiveOutputDeviceId;
+                    _configManager?.Save(_config);
+                }
 
                 // ⭐⭐⭐ 订阅缓冲状态变化事件
                 _audioEngine.BufferingStateChanged += OnBufferingStateChanged;
@@ -4919,27 +4927,33 @@ private void MainForm_KeyDown(object sender, KeyEventArgs e)
         }
         else if (e.KeyCode == Keys.F8)
         {
-        e.Handled = true;
-        e.SuppressKeyPress = true;
-        // 音量加
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+            // 音量加
             if (volumeTrackBar.Value < 100)
             {
                 volumeTrackBar.Value = Math.Min(100, volumeTrackBar.Value + 2);
                 volumeTrackBar_Scroll(volumeTrackBar, EventArgs.Empty);
             }
         }
-    else if (e.KeyCode == Keys.F11)
-    {
-        e.Handled = true;
-        e.SuppressKeyPress = true;
-        // 切换自动朗读歌词
-        ToggleAutoReadLyrics();
-    }
-    else if (e.KeyCode == Keys.F12)
-    {
-        e.Handled = true;
-        e.SuppressKeyPress = true;
-        // 跳转到位置
+        else if (e.KeyCode == Keys.F9)
+        {
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+            _ = ShowOutputDeviceDialogAsync();
+        }
+        else if (e.KeyCode == Keys.F11)
+        {
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+            // 切换自动朗读歌词
+            ToggleAutoReadLyrics();
+        }
+        else if (e.KeyCode == Keys.F12)
+        {
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+            // 跳转到位置
         ShowJumpToPositionDialog();
     }
 }
@@ -5768,6 +5782,11 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             ShowJumpToPositionDialog();
         }
 
+        private async void outputDeviceMenuItem_Click(object sender, EventArgs e)
+        {
+            await ShowOutputDeviceDialogAsync();
+        }
+
         /// <summary>
         /// 显示跳转到位置对话框
         /// </summary>
@@ -5828,6 +5847,75 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                     "错误",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
+            }
+        }
+
+        private async Task ShowOutputDeviceDialogAsync()
+        {
+            if (_audioEngine == null)
+            {
+                MessageBox.Show(this, "音频引擎尚未初始化。", "输出设备", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            List<AudioOutputDeviceInfo> devices;
+            try
+            {
+                devices = _audioEngine.GetOutputDevices().ToList();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"无法获取输出设备列表: {ex.Message}", "输出设备", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            if (devices.Count == 0)
+            {
+                MessageBox.Show(this, "未检测到可用的声音输出设备。", "输出设备", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            using (var dialog = new Forms.OutputDeviceDialog(devices, _audioEngine.ActiveOutputDeviceId))
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK || dialog.SelectedDevice == null)
+                {
+                    return;
+                }
+
+                var selectedDevice = dialog.SelectedDevice;
+                AudioDeviceSwitchResult switchResult;
+
+                try
+                {
+                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                    switchResult = await _audioEngine.SwitchOutputDeviceAsync(selectedDevice, cts.Token).ConfigureAwait(true);
+                }
+                catch (OperationCanceledException)
+                {
+                    MessageBox.Show(this, "切换输出设备超时。", "输出设备", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(this, $"切换输出设备失败: {ex.Message}", "输出设备", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                if (!switchResult.IsSuccess)
+                {
+                    MessageBox.Show(this, $"切换输出设备失败: {switchResult.ErrorMessage}", "输出设备", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                var appliedDevice = switchResult.Device ?? selectedDevice;
+
+                if (_config != null)
+                {
+                    _config.OutputDevice = appliedDevice.DeviceId;
+                    _configManager?.Save(_config);
+                }
+
+                UpdateStatusBar($"输出设备已切换到: {appliedDevice.DisplayName}");
             }
         }
 
@@ -7934,7 +8022,7 @@ protected override void OnFormClosing(FormClosingEventArgs e)
         // ⭐ 使用 SeekManager 取消
         _seekManager?.CancelPendingSeeks();
         _seekManager?.Dispose();
-        _seekManager = null;
+        _seekManager = null!;
 
         _artistStatsRefreshCts?.Cancel();
         _artistStatsRefreshCts?.Dispose();

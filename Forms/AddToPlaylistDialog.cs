@@ -252,9 +252,11 @@ namespace YTPlayer.Forms
 
             foreach (var playlist in _playlists)
             {
-                if (!string.IsNullOrWhiteSpace(playlist?.Id))
+                var playlistId = playlist?.Id;
+                if (!string.IsNullOrWhiteSpace(playlistId))
                 {
-                    ids.Add(playlist.Id);
+                    var nonNullId = playlistId!;
+                    ids.Add(nonNullId);
                 }
             }
 
@@ -302,7 +304,8 @@ namespace YTPlayer.Forms
                 {
                     try
                     {
-                        var detail = await _apiClient.GetPlaylistDetailAsync(playlistId);
+                        var targetPlaylistId = playlistId!;
+                        var detail = await _apiClient.GetPlaylistDetailAsync(targetPlaylistId);
                         if (detail != null && !string.IsNullOrWhiteSpace(detail.Id))
                         {
                             return detail;

@@ -15,6 +15,7 @@ namespace YTPlayer.Forms
             new ShortcutEntry("播放控制", "快退 / 快进", "← / →", "以 5 秒为步长调整进度"),
             new ShortcutEntry("播放控制", "任意位置跳转", "F12", "打开跳转对话框，接受[时：分：秒]格式或百分比加%格式的位置跳转"),
             new ShortcutEntry("播放控制", "切换歌词朗读", "F11", "启用或关闭屏幕阅读器的歌词朗读"),
+            new ShortcutEntry("播放控制", "切换输出设备", "F9", "在不中断播放的情况下选择新的声音输出设备"),
             new ShortcutEntry("音量", "音量减 / 加", "F7 / F8", "以 2% 步长调节音量"),
             new ShortcutEntry("导航", "后退到上一视图", "Backspace", "返回上一页的浏览内容"),
             new ShortcutEntry("导航", "隐藏到托盘", "Shift + Esc", "最小化到托盘并保持后台播放"),

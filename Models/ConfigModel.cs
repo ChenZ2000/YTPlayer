@@ -29,6 +29,11 @@ namespace YTPlayer.Models
         /// </summary>
         public string DefaultQuality { get; set; } = "超清母带";
 
+        /// <summary>
+        /// 输出设备（Default 表示 Windows 默认）
+        /// </summary>
+        public string OutputDevice { get; set; } = AudioOutputDeviceInfo.WindowsDefaultId;
+
         #endregion
 
         #region 搜索和历史

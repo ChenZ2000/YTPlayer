@@ -167,13 +167,13 @@ namespace YTPlayer.Forms
             var agency = TakeMetadataValue("经纪公司");
             if (!string.IsNullOrWhiteSpace(agency))
             {
-                AddInfoRow(table, "经纪公司", agency);
+                AddInfoRow(table, "经纪公司", agency!);
             }
 
             var birth = TakeMetadataValue("出生日期");
             if (!string.IsNullOrWhiteSpace(birth))
             {
-                AddInfoRow(table, "出生日期", birth);
+                AddInfoRow(table, "出生日期", birth!);
             }
 
             group.Controls.Add(table);
@@ -251,7 +251,7 @@ namespace YTPlayer.Forms
 
             foreach (var entry in entries)
             {
-                AddInfoRow(table, entry.Key, entry.Value);
+                AddInfoRow(table, entry.Key, entry.Value ?? "--");
             }
 
             group.Controls.Add(table);
@@ -408,7 +408,7 @@ namespace YTPlayer.Forms
 
         private static string FormatValue(string? value)
         {
-            return string.IsNullOrWhiteSpace(value) ? "--" : value.Trim();
+            return string.IsNullOrWhiteSpace(value) ? "--" : value!.Trim();
         }
 
         private static string FormatAlias(string? alias)
@@ -418,7 +418,7 @@ namespace YTPlayer.Forms
                 return "--";
             }
 
-            var parts = alias
+            var parts = alias!
                 .Split(new[] { ',', ';', '/', '、', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
                 .Select(part => part.Trim())
                 .Where(part => part.Length > 0)
@@ -453,10 +453,10 @@ namespace YTPlayer.Forms
 
                 if (!string.IsNullOrWhiteSpace(title))
                 {
-                    builder.AppendLine(title.Trim());
+                    builder.AppendLine(title!.Trim());
                 }
 
-                builder.AppendLine(content.Trim());
+                builder.AppendLine(content!.Trim());
                 hasWrittenBlock = true;
             }
 

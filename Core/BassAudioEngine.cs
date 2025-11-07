@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -20,8 +22,9 @@ namespace YTPlayer.Core
         #region BASS 常量与 P/Invoke
 
         private const uint DeviceFrequency = 44100;
-        private const int BASS_DEVICE_DEFAULT = -1;  // -1 = 默认音频设备（真实输出）, 0 = 无声音设备
         private const int BASS_DEVICE_STEREO = 0x8000;
+        private const int BASS_DEVICE_ENABLED_FLAG = 0x1;
+        private const int BASS_DEVICE_DEFAULT_FLAG = 0x2;
 
         private const int BASS_POS_BYTE = 0;
         private const int BASS_ATTRIB_VOL = 2;
@@ -42,6 +45,15 @@ namespace YTPlayer.Core
 
         [DllImport("bass.dll")]
         private static extern bool BASS_Free();
+
+        [DllImport("bass.dll")]
+        private static extern bool BASS_GetDeviceInfo(int device, out BASS_DEVICEINFO info);
+
+        [DllImport("bass.dll")]
+        private static extern bool BASS_SetDevice(int device);
+
+        [DllImport("bass.dll")]
+        private static extern int BASS_GetDevice();
 
         [DllImport("bass.dll", CharSet = CharSet.Unicode)]
         private static extern int BASS_PluginLoad(string file, uint flags);
@@ -97,6 +109,18 @@ namespace YTPlayer.Core
         [DllImport("bass.dll")]
         private static extern bool BASS_ChannelGetInfo(int handle, ref BASS_CHANNELINFO info);
 
+        [DllImport("bass.dll")]
+        private static extern bool BASS_ChannelSetDevice(int handle, int device);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct BASS_DEVICEINFO
+        {
+            public IntPtr name;
+            public IntPtr driver;
+            public uint flags;
+            public IntPtr guid;
+        }
+
         [StructLayout(LayoutKind.Sequential)]
         private struct BASS_CHANNELINFO
         {
@@ -126,6 +150,26 @@ namespace YTPlayer.Core
             public Playback.PreloadedData Data { get; }
         }
 
+        private sealed class BassDeviceDescriptor
+        {
+            public BassDeviceDescriptor(int index, string name, string driver, Guid? guid, bool isEnabled, bool isDefault)
+            {
+                Index = index;
+                Name = name;
+                Driver = driver;
+                Guid = guid;
+                IsEnabled = isEnabled;
+                IsDefault = isDefault;
+            }
+
+            public int Index { get; }
+            public string Name { get; }
+            public string Driver { get; }
+            public Guid? Guid { get; }
+            public bool IsEnabled { get; }
+            public bool IsDefault { get; }
+        }
+
         #region 字段
 
         private readonly object _syncRoot = new object();
@@ -134,6 +178,7 @@ namespace YTPlayer.Core
         private readonly SemaphoreSlim _playSemaphore = new SemaphoreSlim(1, 1);
         private readonly SYNCPROC _endSyncProc;
         private readonly object _gaplessPreloadLock = new object();
+        private readonly HashSet<int> _initializedDeviceIndices = new HashSet<int>();
 
         private CancellationTokenSource? _positionMonitorCts;
         private Task? _positionMonitorTask;
@@ -152,6 +197,9 @@ namespace YTPlayer.Core
         private PlayMode _playMode = PlayMode.Loop;
         private bool _isInitialized;
         private bool _disposed;
+        private bool _bassFlacLoaded;
+        private int _currentDeviceIndex;
+        private string _activeOutputDeviceId = AudioOutputDeviceInfo.WindowsDefaultId;
 
         #endregion
 
@@ -170,7 +218,7 @@ namespace YTPlayer.Core
 
         #region 构造与属性
 
-        public BassAudioEngine()
+        public BassAudioEngine(string? preferredDeviceId = null)
         {
             _httpClient = new HttpClient
             {
@@ -182,7 +230,7 @@ namespace YTPlayer.Core
 
             _endSyncProc = OnStreamEnded;
 
-            InitializeBass();
+            InitializeBass(preferredDeviceId);
         }
 
         public bool IsInitialized => _isInitialized;
@@ -199,11 +247,87 @@ namespace YTPlayer.Core
             set => _playMode = value;
         }
 
+        public string ActiveOutputDeviceId => _activeOutputDeviceId;
+
         public SmartCacheManager? CurrentCacheManager => _currentCacheManager;
 
         #endregion
 
         #region 公共 API
+
+        public IReadOnlyList<AudioOutputDeviceInfo> GetOutputDevices()
+        {
+            lock (_syncRoot)
+            {
+                return EnumerateOutputDevicesInternal();
+            }
+        }
+
+        public async Task<AudioDeviceSwitchResult> SwitchOutputDeviceAsync(
+            AudioOutputDeviceInfo? selection,
+            CancellationToken cancellationToken = default)
+        {
+            if (selection == null)
+            {
+                return AudioDeviceSwitchResult.Failure("请选择有效的输出设备");
+            }
+
+            await _playSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                AudioDeviceSwitchResult result;
+
+                lock (_syncRoot)
+                {
+                    var descriptors = EnumerateBassDevices();
+                    var resolution = ResolveTargetDevice(selection, descriptors);
+
+                    if (!resolution.success)
+                    {
+                        result = AudioDeviceSwitchResult.Failure(resolution.errorMessage ?? "输出设备不可用");
+                    }
+                    else if (resolution.deviceIndex == _currentDeviceIndex &&
+                             string.Equals(_activeOutputDeviceId, resolution.resolvedId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        result = AudioDeviceSwitchResult.NoChange(selection);
+                    }
+                    else if (!EnsureDeviceInitialized(resolution.deviceIndex, out var initError))
+                    {
+                        result = AudioDeviceSwitchResult.Failure(initError ?? "输出设备初始化失败");
+                    }
+                    else if (_currentStream != 0 && !BASS_ChannelSetDevice(_currentStream, resolution.deviceIndex))
+                    {
+                        int errorCode = BASS_ErrorGetCode();
+                        result = AudioDeviceSwitchResult.Failure($"无法迁移当前播放流: {GetErrorMessage(errorCode)}");
+                    }
+                    else
+                    {
+                        int previousDeviceIndex = _currentDeviceIndex;
+                        _currentDeviceIndex = resolution.deviceIndex;
+                        _activeOutputDeviceId = resolution.resolvedId;
+
+                        var snapshot = FindDeviceSnapshot(_activeOutputDeviceId, _currentDeviceIndex) ?? selection;
+
+                        if (previousDeviceIndex != 0 && previousDeviceIndex != _currentDeviceIndex)
+                        {
+                            ReleaseDevice(previousDeviceIndex);
+                        }
+
+                        result = AudioDeviceSwitchResult.Success(snapshot);
+                    }
+                }
+
+                EnsureDeviceContext();
+                return result;
+            }
+            finally
+            {
+                _playSemaphore.Release();
+            }
+        }
 
         public async Task<bool> PlayAsync(SongInfo song, CancellationToken cancellationToken = default, Playback.PreloadedData? preloadedData = null)
         {
@@ -330,6 +454,7 @@ namespace YTPlayer.Core
                 }
 
                 _currentStreamProvider = new BassStreamProvider(cacheManager);
+                EnsureDeviceContext();
                 _currentStream = _currentStreamProvider.CreateStream();
 
                 // ⭐⭐⭐ 关键修复：BASS stream句柄是DWORD（无符号32位），但C#中声明为int（有符号）
@@ -750,9 +875,23 @@ namespace YTPlayer.Core
 
             _httpClient.Dispose();
 
-            if (_isInitialized)
+            lock (_syncRoot)
             {
-                BASS_Free();
+                var devices = _initializedDeviceIndices.ToList();
+                foreach (var deviceIndex in devices)
+                {
+                    try
+                    {
+                        ReleaseDevice(deviceIndex);
+                    }
+                    catch
+                    {
+                        // ignore release exceptions during dispose
+                    }
+                }
+
+                _initializedDeviceIndices.Clear();
+                _currentDeviceIndex = 0;
                 _isInitialized = false;
             }
 
@@ -764,41 +903,33 @@ namespace YTPlayer.Core
 
         #region 私有实现
 
-        private void InitializeBass()
+        private void InitializeBass(string? preferredDeviceId)
         {
             Debug.WriteLine("═══════════════════════════════════════════════════════");
             Debug.WriteLine("[BassAudioEngine] 开始初始化BASS音频引擎 (64-bit)");
             Debug.WriteLine("═══════════════════════════════════════════════════════");
 
-            // 步骤1: 初始化BASS核心库
-            Debug.WriteLine("[BassAudioEngine] [1/3] 初始化BASS核心库...");
-            _isInitialized = BASS_Init(
-                BASS_DEVICE_DEFAULT,    // 默认音频设备
-                DeviceFrequency,         // 44100 Hz
-                BASS_DEVICE_STEREO,     // 立体声
-                IntPtr.Zero,            // 窗口句柄（不使用）
-                IntPtr.Zero             // CLSID（不使用）
-            );
-
-            if (!_isInitialized)
+            lock (_syncRoot)
             {
-                int error = BASS_ErrorGetCode();
-                string errorMsg = GetErrorMessage(error);
-                Debug.WriteLine($"[BassAudioEngine] ❌ BASS_Init 失败: {errorMsg} (错误码: {error})");
-                throw new InvalidOperationException($"BASS 初始化失败: {errorMsg}");
+                var descriptors = EnumerateBassDevices();
+                if (descriptors.Count == 0)
+                {
+                    throw new InvalidOperationException("系统未检测到可用的声音输出设备");
+                }
+
+                var selectedDescriptor = ResolvePreferredDescriptor(preferredDeviceId, descriptors, out string resolvedId);
+
+                if (!EnsureDeviceInitialized(selectedDescriptor.Index, out var error))
+                {
+                    throw new InvalidOperationException($"BASS 初始化失败: {error ?? "未知错误"}");
+                }
+
+                _currentDeviceIndex = selectedDescriptor.Index;
+                _activeOutputDeviceId = resolvedId;
+                _isInitialized = true;
+
+                Debug.WriteLine($"[BassAudioEngine] ✓ 绑定输出设备: {selectedDescriptor.Name} (#{selectedDescriptor.Index})");
             }
-
-            Debug.WriteLine($"[BassAudioEngine] ✓ BASS_Init 成功 (频率: {DeviceFrequency} Hz)");
-
-            // 步骤2: 配置BASS缓冲区参数
-            Debug.WriteLine("[BassAudioEngine] [2/3] 配置播放缓冲区...");
-            BASS_SetConfig(BASS_CONFIG_BUFFER, 500);           // ⭐ 500ms缓冲（从2000改为500，减少MIXTIME提前触发时间）
-            BASS_SetConfig(BASS_CONFIG_UPDATEPERIOD, 50);      // 50ms更新周期
-            Debug.WriteLine("[BassAudioEngine] ✓ 缓冲区配置完成 (buffer=500ms, update=50ms)");
-
-            // 步骤3: 加载BASSFLAC插件
-            Debug.WriteLine("[BassAudioEngine] [3/3] 加载BASSFLAC插件...");
-            LoadBassFlacPlugin();
 
             Debug.WriteLine("═══════════════════════════════════════════════════════");
             Debug.WriteLine("[BassAudioEngine] ✓ BASS音频引擎初始化完成");
@@ -853,6 +984,7 @@ namespace YTPlayer.Core
                 Debug.WriteLine($"[BassAudioEngine] ✓ BASSFLAC插件加载成功");
                 Debug.WriteLine($"[BassAudioEngine]   插件句柄: {pluginHandle}");
                 Debug.WriteLine($"[BassAudioEngine]   支持格式: FLAC (无损音频)");
+                _bassFlacLoaded = true;
             }
             catch (Exception ex)
             {
@@ -1360,6 +1492,307 @@ namespace YTPlayer.Core
                 }
 
                 _gaplessPreload = new GaplessPreloadEntry(song, data);
+            }
+        }
+
+        private BassDeviceDescriptor ResolvePreferredDescriptor(
+            string? preferredDeviceId,
+            IReadOnlyList<BassDeviceDescriptor> descriptors,
+            out string resolvedId)
+        {
+            if (!string.IsNullOrWhiteSpace(preferredDeviceId) &&
+                !string.Equals(preferredDeviceId, AudioOutputDeviceInfo.WindowsDefaultId, StringComparison.OrdinalIgnoreCase))
+            {
+                var match = descriptors.FirstOrDefault(d =>
+                    d.IsEnabled && BuildDeviceIdentifier(d).Equals(preferredDeviceId, StringComparison.OrdinalIgnoreCase));
+                if (match != null)
+                {
+                    resolvedId = preferredDeviceId!;
+                    return match;
+                }
+            }
+
+            var fallback = descriptors.FirstOrDefault(d => d.IsEnabled && d.IsDefault) ??
+                           descriptors.FirstOrDefault(d => d.IsEnabled) ??
+                           throw new InvalidOperationException("系统未检测到可用的声音输出设备");
+
+            resolvedId = AudioOutputDeviceInfo.WindowsDefaultId;
+            return fallback;
+        }
+
+        private List<BassDeviceDescriptor> EnumerateBassDevices()
+        {
+            var devices = new List<BassDeviceDescriptor>();
+            int deviceIndex = 1;
+
+            while (BASS_GetDeviceInfo(deviceIndex, out var info))
+            {
+                string name = Marshal.PtrToStringAnsi(info.name) ?? $"设备 {deviceIndex}";
+                string driver = Marshal.PtrToStringAnsi(info.driver) ?? string.Empty;
+                Guid? guid = info.guid != IntPtr.Zero ? Marshal.PtrToStructure<Guid>(info.guid) : (Guid?)null;
+                bool enabled = (info.flags & BASS_DEVICE_ENABLED_FLAG) != 0;
+                bool isDefault = (info.flags & BASS_DEVICE_DEFAULT_FLAG) != 0;
+
+                devices.Add(new BassDeviceDescriptor(deviceIndex, name, driver, guid, enabled, isDefault));
+                deviceIndex++;
+            }
+
+            return devices;
+        }
+
+        private List<AudioOutputDeviceInfo> EnumerateOutputDevicesInternal()
+        {
+            var descriptors = EnumerateBassDevices();
+            var result = new List<AudioOutputDeviceInfo>();
+
+            var defaultDescriptor = descriptors.FirstOrDefault(d => d.IsEnabled && d.IsDefault) ??
+                                    descriptors.FirstOrDefault(d => d.IsEnabled);
+
+            if (defaultDescriptor != null)
+            {
+                result.Add(CreateDefaultDeviceInfo(defaultDescriptor));
+            }
+
+            foreach (var descriptor in descriptors)
+            {
+                if (!descriptor.IsEnabled || IsPlaceholderDefaultDevice(descriptor))
+                {
+                    continue;
+                }
+
+                result.Add(CreateDeviceInfo(descriptor));
+            }
+
+            return result;
+        }
+
+        private AudioOutputDeviceInfo CreateDefaultDeviceInfo(BassDeviceDescriptor descriptor)
+        {
+            string displayName = string.IsNullOrWhiteSpace(descriptor.Name)
+                ? "Windows 默认"
+                : $"Windows 默认（当前：{descriptor.Name}）";
+
+            return new AudioOutputDeviceInfo
+            {
+                DeviceId = AudioOutputDeviceInfo.WindowsDefaultId,
+                DisplayName = displayName,
+                IsWindowsDefault = true,
+                IsEnabled = descriptor.IsEnabled,
+                BassDeviceIndex = descriptor.Index,
+                DeviceGuid = descriptor.Guid,
+                Driver = descriptor.Driver,
+                IsCurrent = _activeOutputDeviceId == AudioOutputDeviceInfo.WindowsDefaultId
+            };
+        }
+
+        private AudioOutputDeviceInfo CreateDeviceInfo(BassDeviceDescriptor descriptor)
+        {
+            string displayName = string.IsNullOrWhiteSpace(descriptor.Name)
+                ? $"设备 {descriptor.Index}"
+                : descriptor.Name;
+
+            return new AudioOutputDeviceInfo
+            {
+                DeviceId = BuildDeviceIdentifier(descriptor),
+                DisplayName = displayName,
+                IsWindowsDefault = false,
+                IsEnabled = descriptor.IsEnabled,
+                BassDeviceIndex = descriptor.Index,
+                DeviceGuid = descriptor.Guid,
+                Driver = descriptor.Driver,
+                IsCurrent = descriptor.Index == _currentDeviceIndex &&
+                            _activeOutputDeviceId != AudioOutputDeviceInfo.WindowsDefaultId
+            };
+        }
+
+        private AudioOutputDeviceInfo? FindDeviceSnapshot(string deviceId, int deviceIndex)
+        {
+            var devices = EnumerateOutputDevicesInternal();
+
+            var match = devices.FirstOrDefault(d =>
+                string.Equals(d.DeviceId, deviceId, StringComparison.OrdinalIgnoreCase));
+
+            if (match != null)
+            {
+                return match;
+            }
+
+            return devices.FirstOrDefault(d => d.BassDeviceIndex == deviceIndex);
+        }
+
+        private (bool success, int deviceIndex, string resolvedId, string? errorMessage) ResolveTargetDevice(
+            AudioOutputDeviceInfo selection,
+            IReadOnlyList<BassDeviceDescriptor> descriptors)
+        {
+            if (selection.IsWindowsDefault)
+            {
+                var descriptor = descriptors.FirstOrDefault(d => d.IsEnabled && d.IsDefault) ??
+                                 descriptors.FirstOrDefault(d => d.IsEnabled);
+                if (descriptor == null)
+                {
+                    return (false, 0, AudioOutputDeviceInfo.WindowsDefaultId, "系统没有可用的声音输出设备");
+                }
+
+                return (true, descriptor.Index, AudioOutputDeviceInfo.WindowsDefaultId, null);
+            }
+
+            if (selection.BassDeviceIndex > 0)
+            {
+                return (true, selection.BassDeviceIndex, selection.DeviceId, null);
+            }
+
+            var match = descriptors.FirstOrDefault(d =>
+                BuildDeviceIdentifier(d).Equals(selection.DeviceId, StringComparison.OrdinalIgnoreCase));
+
+            if (match == null || !match.IsEnabled)
+            {
+                return (false, 0, selection.DeviceId, "所选输出设备不可用");
+            }
+
+            return (true, match.Index, selection.DeviceId, null);
+        }
+
+        private static string BuildDeviceIdentifier(BassDeviceDescriptor descriptor)
+        {
+            if (descriptor.Guid.HasValue && descriptor.Guid.Value != Guid.Empty)
+            {
+                return descriptor.Guid.Value.ToString("D");
+            }
+
+            return $"NAME:{descriptor.Name}|DRIVER:{descriptor.Driver}";
+        }
+
+        private static bool IsPlaceholderDefaultDevice(BassDeviceDescriptor descriptor)
+        {
+            if (!descriptor.IsDefault)
+            {
+                return false;
+            }
+
+            string name = descriptor.Name?.Trim() ?? string.Empty;
+            string driver = descriptor.Driver?.Trim() ?? string.Empty;
+
+            if (string.IsNullOrEmpty(name) && string.IsNullOrEmpty(driver))
+            {
+                return true;
+            }
+
+            if (string.Equals(name, "default", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (!string.IsNullOrEmpty(driver) &&
+                string.Equals(driver, "default", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool EnsureDeviceInitialized(int deviceIndex, out string? errorMessage)
+        {
+            if (_initializedDeviceIndices.Contains(deviceIndex))
+            {
+                ConfigureDeviceSettings(deviceIndex);
+                errorMessage = null;
+                return true;
+            }
+
+            Debug.WriteLine("[BassAudioEngine] [1/3] 初始化BASS核心库...");
+            bool initialized = BASS_Init(
+                deviceIndex,
+                DeviceFrequency,
+                BASS_DEVICE_STEREO,
+                IntPtr.Zero,
+                IntPtr.Zero);
+
+            if (!initialized)
+            {
+                int errorCode = BASS_ErrorGetCode();
+                errorMessage = GetErrorMessage(errorCode);
+                Debug.WriteLine($"[BassAudioEngine] ❌ BASS_Init 失败: {errorMessage} (错误码: {errorCode})");
+                return false;
+            }
+
+            Debug.WriteLine($"[BassAudioEngine] ✓ BASS_Init 成功 (设备: {deviceIndex}, 频率: {DeviceFrequency} Hz)");
+            _initializedDeviceIndices.Add(deviceIndex);
+
+            Debug.WriteLine("[BassAudioEngine] [2/3] 配置播放缓冲区...");
+            ConfigureDeviceSettings(deviceIndex);
+            Debug.WriteLine("[BassAudioEngine] ✓ 缓冲区配置完成 (buffer=500ms, update=50ms)");
+
+            if (!_bassFlacLoaded)
+            {
+                Debug.WriteLine("[BassAudioEngine] [3/3] 加载BASSFLAC插件...");
+                LoadBassFlacPlugin();
+            }
+
+            errorMessage = null;
+            return true;
+        }
+
+        private void ConfigureDeviceSettings(int deviceIndex)
+        {
+            if (deviceIndex <= 0)
+            {
+                return;
+            }
+
+            if (!BASS_SetDevice(deviceIndex))
+            {
+                int errorCode = BASS_ErrorGetCode();
+                Debug.WriteLine($"[BassAudioEngine] ⚠️ BASS_SetDevice({deviceIndex}) 失败: {GetErrorMessage(errorCode)}");
+                return;
+            }
+
+            BASS_SetConfig(BASS_CONFIG_BUFFER, 500);
+            BASS_SetConfig(BASS_CONFIG_UPDATEPERIOD, 50);
+        }
+
+        private void ReleaseDevice(int deviceIndex)
+        {
+            if (deviceIndex <= 0 || !_initializedDeviceIndices.Contains(deviceIndex))
+            {
+                return;
+            }
+
+            if (!BASS_SetDevice(deviceIndex))
+            {
+                return;
+            }
+
+            if (BASS_Free())
+            {
+                _initializedDeviceIndices.Remove(deviceIndex);
+                Debug.WriteLine($"[BassAudioEngine] ✓ 已释放输出设备 #{deviceIndex}");
+            }
+        }
+
+        private void EnsureDeviceContext()
+        {
+            int deviceIndex;
+            lock (_syncRoot)
+            {
+                deviceIndex = _currentDeviceIndex;
+            }
+
+            if (deviceIndex <= 0)
+            {
+                return;
+            }
+
+            int current = BASS_GetDevice();
+            if (current == deviceIndex)
+            {
+                return;
+            }
+
+            if (!BASS_SetDevice(deviceIndex))
+            {
+                int errorCode = BASS_ErrorGetCode();
+                Debug.WriteLine($"[BassAudioEngine] ⚠️ BASS_SetDevice({deviceIndex}) 失败: {GetErrorMessage(errorCode)}");
             }
         }
 

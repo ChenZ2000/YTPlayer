@@ -55,6 +55,7 @@
             this.surroundHDQualityMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.dolbyQualityMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.masterQualityMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.outputDeviceMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.prevMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.nextMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.jumpToPositionMenuItem = new System.Windows.Forms.ToolStripMenuItem();
@@ -226,6 +227,7 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             this.toolStripSeparator1,
             this.playbackMenuItem,
             this.qualityMenuItem,
+            this.outputDeviceMenuItem,
             this.prevMenuItem,
             this.nextMenuItem,
             this.jumpToPositionMenuItem,
@@ -302,6 +304,13 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             this.qualityMenuItem.Name = "qualityMenuItem";
             this.qualityMenuItem.Size = new System.Drawing.Size(180, 26);
             this.qualityMenuItem.Text = "音质";
+            //
+            // outputDeviceMenuItem
+            //
+            this.outputDeviceMenuItem.Name = "outputDeviceMenuItem";
+            this.outputDeviceMenuItem.Size = new System.Drawing.Size(180, 26);
+            this.outputDeviceMenuItem.Text = "输出设备...\tF9";
+            this.outputDeviceMenuItem.Click += new System.EventHandler(this.outputDeviceMenuItem_Click);
             //
             // standardQualityMenuItem
             //
@@ -1043,6 +1052,7 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
         private System.Windows.Forms.ToolStripMenuItem loopOneMenuItem;
         private System.Windows.Forms.ToolStripMenuItem randomMenuItem;
         private System.Windows.Forms.ToolStripMenuItem qualityMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem outputDeviceMenuItem;
         private System.Windows.Forms.ToolStripMenuItem standardQualityMenuItem;
         private System.Windows.Forms.ToolStripMenuItem highQualityMenuItem;
         private System.Windows.Forms.ToolStripMenuItem losslessQualityMenuItem;
