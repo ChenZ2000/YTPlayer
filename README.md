@@ -72,3 +72,6 @@ powershell -ExecutionPolicy Bypass -File .\Build-Debug.ps1
   核心贡献者，参与 UI/无障碍体验、下载与搜索交互优化和大量代码参考。
 
 欢迎通过 Issue/PR 提出建议或提交改进。Enjoy the music! 🎶
+
+## 给作者 ChenZ 买点零食~
+![微信扫一扫，给 ChenZ 买点零食](WeChatQRCode.jpg)
