@@ -14,6 +14,7 @@ using YTPlayer.Core.Lyrics;
 using YTPlayer.Models;
 using YTPlayer.Models.Auth;
 using YTPlayer.Utils;
+using YTPlayer.Forms;
 
 #pragma warning disable CS8600, CS8601, CS8602, CS8603, CS8604, CS8625
 
@@ -72,6 +73,7 @@ namespace YTPlayer
         private bool _isNavigating = false;                            // 是否正在执行导航操作
 
         private CancellationTokenSource? _availabilityCheckCts;        // 列表可用性检查取消令牌
+        private CancellationTokenSource? _searchCts;                   // 搜索请求取消令牌
 
         // 播放请求取消和防抖控制
         private const int CloudPageSize = 50;
@@ -867,8 +869,11 @@ namespace YTPlayer
             // 检查是否按下 Enter 键
             if (keyData == Keys.Enter)
             {
-                // 如果焦点在搜索框或搜索类型组合框
-                if (searchTextBox.Focused || searchTypeComboBox.Focused)
+                bool searchPanelHasFocus =
+                    (searchTextBox?.ContainsFocus ?? false) ||
+                    (searchTypeComboBox?.ContainsFocus ?? false);
+
+                if (searchPanelHasFocus)
                 {
                     // 🎯 触发搜索，阻止默认的焦点导航
                     _ = PerformSearch();
@@ -942,10 +947,19 @@ namespace YTPlayer
                 SaveNavigationState();
             }
 
+            var currentSearchCts = new CancellationTokenSource();
+            var token = currentSearchCts.Token;
+            var previousSearch = Interlocked.Exchange(ref _searchCts, currentSearchCts);
+            previousSearch?.Cancel();
+            previousSearch?.Dispose();
+
+            void ThrowIfSearchCancelled()
+            {
+                token.ThrowIfCancellationRequested();
+            }
+
             try
             {
-                searchButton.Enabled = false;
-                searchTextBox.Enabled = false;
                 UpdateStatusBar($"正在搜索: {keyword}...");
 
                 // 标记离开主页
@@ -957,6 +971,8 @@ namespace YTPlayer
                 {
                     int offset = (_currentPage - 1) * _resultsPerPage;
                     var songResult = await _apiClient.SearchSongsAsync(keyword, _resultsPerPage, offset);
+                    ThrowIfSearchCancelled();
+
                     _currentSongs = songResult?.Items ?? new List<SongInfo>();
 
                     int totalPages = 1;
@@ -971,9 +987,12 @@ namespace YTPlayer
                     string songsViewSource = $"search:{keyword}:page{_currentPage}";
                     System.Diagnostics.Debug.WriteLine($"[MainForm] 更新浏览列表来源: {songsViewSource}");
 
+                    int startIndex = (_currentPage - 1) * _resultsPerPage + 1;
+
                     if (_currentSongs == null || _currentSongs.Count == 0)
                     {
-                        int startIndex = (_currentPage - 1) * _resultsPerPage + 1;
+                        ThrowIfSearchCancelled();
+
                         DisplaySongs(
                             new List<SongInfo>(),
                             showPagination: true,
@@ -986,6 +1005,7 @@ namespace YTPlayer
 
                         if (_currentPage == 1)
                         {
+                            ThrowIfSearchCancelled();
                             MessageBox.Show($"未找到相关歌曲: {keyword}", "搜索结果",
                                 MessageBoxButtons.OK, MessageBoxIcon.Information);
                         }
@@ -993,7 +1013,8 @@ namespace YTPlayer
                     }
                     else
                     {
-                        int startIndex = (_currentPage - 1) * _resultsPerPage + 1;
+                        ThrowIfSearchCancelled();
+
                         DisplaySongs(
                             _currentSongs,
                             showPagination: true,
@@ -1003,6 +1024,8 @@ namespace YTPlayer
                             accessibleName: $"搜索: {keyword}");
                         int totalCount = songResult?.TotalCount ?? _currentSongs.Count;
                         UpdateStatusBar($"第 {_currentPage}/{_maxPage} 页，本页 {_currentSongs.Count} 首 / 总 {totalCount} 首");
+
+                        ThrowIfSearchCancelled();
 
                         // 焦点自动跳转到列表
                         if (resultListView.Items.Count > 0)
@@ -1016,6 +1039,8 @@ namespace YTPlayer
                 else if (searchType == "歌单")
                 {
                     var playlistResult = await _apiClient.SearchPlaylistsAsync(keyword, 100);
+                    ThrowIfSearchCancelled();
+
                     _currentPlaylists = playlistResult?.Items ?? new List<PlaylistInfo>();
                     _hasNextSearchPage = false;
                     _maxPage = 1;
@@ -1026,12 +1051,14 @@ namespace YTPlayer
 
                     if (_currentPlaylists == null || _currentPlaylists.Count == 0)
                     {
+                        ThrowIfSearchCancelled();
                         MessageBox.Show($"未找到相关歌单: {keyword}", "搜索结果",
                             MessageBoxButtons.OK, MessageBoxIcon.Information);
                         UpdateStatusBar("未找到结果");
                     }
                     else
                     {
+                        ThrowIfSearchCancelled();
                         DisplayPlaylists(
                             _currentPlaylists,
                             viewSource: playlistViewSource,
@@ -1043,6 +1070,8 @@ namespace YTPlayer
                 else if (searchType == "专辑")
                 {
                     var albumResult = await _apiClient.SearchAlbumsAsync(keyword, 100);
+                    ThrowIfSearchCancelled();
+
                     _currentAlbums = albumResult?.Items ?? new List<AlbumInfo>();
                     _hasNextSearchPage = false;
                     _maxPage = 1;
@@ -1053,12 +1082,14 @@ namespace YTPlayer
 
                     if (_currentAlbums == null || _currentAlbums.Count == 0)
                     {
+                        ThrowIfSearchCancelled();
                         MessageBox.Show($"未找到相关专辑: {keyword}", "搜索结果",
                             MessageBoxButtons.OK, MessageBoxIcon.Information);
                         UpdateStatusBar("未找到结果");
                     }
                     else
                     {
+                        ThrowIfSearchCancelled();
                         DisplayAlbums(
                             _currentAlbums,
                             viewSource: albumViewSource,
@@ -1071,6 +1102,8 @@ namespace YTPlayer
                 {
                     int offset = (_currentPage - 1) * _resultsPerPage;
                     var artistResult = await _apiClient.SearchArtistsAsync(keyword, _resultsPerPage, offset);
+                    ThrowIfSearchCancelled();
+
                     _currentArtists = artistResult?.Items ?? new List<ArtistInfo>();
 
                     int totalPages = 1;
@@ -1086,6 +1119,8 @@ namespace YTPlayer
 
                     if (_currentArtists.Count == 0)
                     {
+                        ThrowIfSearchCancelled();
+
                         DisplayArtists(
                             new List<ArtistInfo>(),
                             showPagination: true,
@@ -1096,6 +1131,7 @@ namespace YTPlayer
 
                         if (_currentPage == 1)
                         {
+                            ThrowIfSearchCancelled();
                             MessageBox.Show($"未找到相关歌手: {keyword}", "搜索结果",
                                 MessageBoxButtons.OK, MessageBoxIcon.Information);
                         }
@@ -1104,6 +1140,8 @@ namespace YTPlayer
                     }
                     else
                     {
+                        ThrowIfSearchCancelled();
+
                         DisplayArtists(
                             _currentArtists,
                             showPagination: true,
@@ -1117,6 +1155,11 @@ namespace YTPlayer
                     }
                 }
             }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                System.Diagnostics.Debug.WriteLine("[Search] 搜索请求被取消，已交由最新请求处理。");
+                UpdateStatusBar("搜索已取消");
+            }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"搜索异常: {ex}");
@@ -1129,8 +1172,11 @@ namespace YTPlayer
             }
             finally
             {
-                searchButton.Enabled = true;
-                searchTextBox.Enabled = true;
+                if (ReferenceEquals(_searchCts, currentSearchCts))
+                {
+                    _searchCts = null;
+                }
+                currentSearchCts.Dispose();
             }
         }
         /// <summary>
@@ -1626,61 +1672,38 @@ namespace YTPlayer
                     return;
                 }
 
-                var builder = new StringBuilder();
-
-                if (!string.IsNullOrWhiteSpace(detail.Description))
+                if (string.IsNullOrWhiteSpace(detail.Name))
                 {
-                    builder.AppendLine(detail.Description.Trim());
-                    builder.AppendLine();
-                }
-                else if (!string.IsNullOrWhiteSpace(detail.BriefDesc))
-                {
-                    builder.AppendLine(detail.BriefDesc.Trim());
-                    builder.AppendLine();
+                    detail.Name = artist.Name;
                 }
 
-                if (detail.Introductions != null && detail.Introductions.Count > 0)
+                if (string.IsNullOrWhiteSpace(detail.Alias))
                 {
-                    foreach (var section in detail.Introductions)
-                    {
-                        if (!string.IsNullOrWhiteSpace(section?.Title))
-                        {
-                            builder.AppendLine(section.Title.Trim());
-                        }
-
-                        if (!string.IsNullOrWhiteSpace(section?.Content))
-                        {
-                            builder.AppendLine(section.Content.Trim());
-                        }
-
-                        builder.AppendLine();
-                    }
+                    detail.Alias = artist.Alias;
                 }
 
-                var content = builder.Length > 0
-                    ? builder.ToString().Trim()
-                    : "暂无详细介绍。";
-
-                using (var dialog = new Form())
+                if (string.IsNullOrWhiteSpace(detail.AreaName))
                 {
-                    dialog.Text = $"歌手简介 - {detail.Name ?? artist.Name}";
-                    dialog.StartPosition = FormStartPosition.CenterParent;
-                    dialog.Width = 720;
-                    dialog.Height = 560;
+                    detail.AreaName = artist.AreaName;
+                }
 
-                    var textBox = new RichTextBox
-                    {
-                        Dock = DockStyle.Fill,
-                        ReadOnly = true,
-                        Multiline = true,
-                        WordWrap = true,
-                        ScrollBars = RichTextBoxScrollBars.Both,
-                        BackColor = SystemColors.Window,
-                        Font = new Font("Microsoft YaHei", 10),
-                        Text = content
-                    };
+                if (detail.AreaCode == 0)
+                {
+                    detail.AreaCode = artist.AreaCode;
+                }
 
-                    dialog.Controls.Add(textBox);
+                if (string.IsNullOrWhiteSpace(detail.TypeName))
+                {
+                    detail.TypeName = artist.TypeName;
+                }
+
+                if (detail.TypeCode == 0)
+                {
+                    detail.TypeCode = artist.TypeCode;
+                }
+
+                using (var dialog = new ArtistDetailDialog(detail))
+                {
                     dialog.ShowDialog(this);
                 }
             }
@@ -4839,7 +4862,7 @@ private void MainForm_KeyDown(object sender, KeyEventArgs e)
     }
 
     // ⭐ 如果焦点在文本框或搜索类型下拉框，只屏蔽方向键和空格
-    if (searchTextBox.Focused || searchTypeComboBox.Focused)
+    if ((searchTextBox?.ContainsFocus ?? false) || (searchTypeComboBox?.ContainsFocus ?? false))
     {
         // 屏蔽可能干扰文本输入的快捷键
         if (e.KeyCode == Keys.Space || 
@@ -6050,22 +6073,20 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
         /// <summary>
         /// 关于
         /// </summary>
+        private void shortcutsMenuItem_Click(object sender, EventArgs e)
+        {
+            using (var dialog = new KeyboardShortcutsDialog())
+            {
+                dialog.ShowDialog(this);
+            }
+        }
+
         private void aboutMenuItem_Click(object sender, EventArgs e)
         {
-            MessageBox.Show(
-                "易听 WinForms 版\n\n" +
-                "基于 .NET Framework 4.8\n" +
-                "音频引擎: BASS 2.4\n\n" +
-                "支持快捷键:\n" +
-                "  空格 - 播放/暂停\n" +
-                "  左右箭头 - 快退/快进5秒\n" +
-                "  F5/F6 - 上一首/下一首\n" +
-                "  F7/F8 - 音量减/加\n" +
-                "  F11 - 切换歌词朗读\n" +
-                "  F12 - 跳转到位置",
-                "关于",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information);
+            using (var dialog = new AboutDialog())
+            {
+                dialog.ShowDialog(this);
+            }
         }
 
         /// <summary>
@@ -6909,12 +6930,8 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             shareSongDirectMenuItem.Tag = null;
             sharePlaylistMenuItem.Visible = false;
             sharePlaylistMenuItem.Tag = null;
-            sharePlaylistWebMenuItem.Tag = null;
-            sharePlaylistDirectMenuItem.Tag = null;
             shareAlbumMenuItem.Visible = false;
             shareAlbumMenuItem.Tag = null;
-            shareAlbumWebMenuItem.Tag = null;
-            shareAlbumDirectMenuItem.Tag = null;
 
             // ⭐ 检查登录状态 - 未登录时收藏相关菜单项保持隐藏
             bool isLoggedIn = IsUserLoggedIn();
@@ -7002,8 +7019,6 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
 
                 sharePlaylistMenuItem.Visible = true;
                 sharePlaylistMenuItem.Tag = playlist;
-                sharePlaylistWebMenuItem.Tag = playlist;
-                sharePlaylistDirectMenuItem.Tag = playlist;
                 showViewSection = true;
             }
             else if (album != null)
@@ -7022,8 +7037,6 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
 
                 shareAlbumMenuItem.Visible = true;
                 shareAlbumMenuItem.Tag = album;
-                shareAlbumWebMenuItem.Tag = album;
-                shareAlbumDirectMenuItem.Tag = album;
                 showViewSection = true;
             }
             else
@@ -7581,7 +7594,7 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             }
         }
 
-        private async void sharePlaylistWebMenuItem_Click(object sender, EventArgs e)
+        private void sharePlaylistMenuItem_Click(object sender, EventArgs e)
         {
             var playlist = GetSelectedPlaylistFromContextMenu(sender);
             if (playlist == null || string.IsNullOrWhiteSpace(playlist.Id))
@@ -7592,128 +7605,17 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
 
             try
             {
-                UpdateStatusBar($"正在准备歌单「{playlist.Name}」分享...");
-                var songs = await _apiClient.GetPlaylistSongsAsync(playlist.Id);
-                if (songs == null || songs.Count == 0)
-                {
-                    MessageBox.Show("歌单中没有歌曲。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    UpdateStatusBar("歌单为空");
-                    return;
-                }
-
-                var availability = await FetchSongsAvailabilityAsync(songs);
-                var availableSongs = songs
-                    .Where(s => !string.IsNullOrWhiteSpace(s.Id) && availability.TryGetValue(s.Id, out var ok) && ok)
-                    .ToList();
-
-                if (availableSongs.Count == 0)
-                {
-                    MessageBox.Show("歌单中没有可用的歌曲资源。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    UpdateStatusBar("无可用歌曲可分享");
-                    return;
-                }
-
-                string content = string.Join(Environment.NewLine,
-                    songs.Where(s => !string.IsNullOrWhiteSpace(s.Id) && availability.TryGetValue(s.Id, out var ok) && ok)
-                         .Select(s => $"https://music.163.com/#/song?id={s.Id}"));
-
-                try
-                {
-                    Clipboard.SetText(content);
-                }
-                catch (ExternalException ex)
-                {
-                    MessageBox.Show($"复制链接失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    UpdateStatusBar("复制链接失败");
-                    return;
-                }
-
-                MessageBox.Show($"已复制 {availableSongs.Count}/{songs.Count} 首歌曲的网页链接到剪贴板。", "分享成功",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
-                UpdateStatusBar("歌单网页链接已复制");
+                string url = $"https://music.163.com/#/playlist?id={playlist.Id}";
+                Clipboard.SetText(url);
+                UpdateStatusBar("歌单链接已复制到剪贴板");
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"分享歌单失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                UpdateStatusBar("歌单分享失败");
+                MessageBox.Show($"复制链接失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("复制链接失败");
             }
         }
-
-        private async void sharePlaylistDirectMenuItem_Click(object sender, EventArgs e)
-        {
-            var playlist = GetSelectedPlaylistFromContextMenu(sender);
-            if (playlist == null || string.IsNullOrWhiteSpace(playlist.Id))
-            {
-                MessageBox.Show("无法获取歌单信息，无法分享。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
-
-            try
-            {
-                UpdateStatusBar($"正在生成歌单「{playlist.Name}」的歌曲直链...");
-                var songs = await _apiClient.GetPlaylistSongsAsync(playlist.Id);
-                if (songs == null || songs.Count == 0)
-                {
-                    MessageBox.Show("歌单中没有歌曲。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    UpdateStatusBar("歌单为空");
-                    return;
-                }
-
-                var availability = await FetchSongsAvailabilityAsync(songs);
-                var availableSongs = songs
-                    .Where(s => !string.IsNullOrWhiteSpace(s.Id) && availability.TryGetValue(s.Id, out var ok) && ok)
-                    .ToList();
-
-                if (availableSongs.Count == 0)
-                {
-                    MessageBox.Show("歌单中没有可用的歌曲资源。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    UpdateStatusBar("无可用歌曲可分享");
-                    return;
-                }
-
-                var urlMap = await FetchSongUrlsInBatchesAsync(availableSongs.Select(s => s.Id));
-                var directLinks = new List<string>();
-                foreach (var song in availableSongs)
-                {
-                    if (!string.IsNullOrWhiteSpace(song.Id) &&
-                        urlMap.TryGetValue(song.Id, out var urlInfo) &&
-                        !string.IsNullOrWhiteSpace(urlInfo.Url))
-                    {
-                        directLinks.Add(urlInfo.Url);
-                    }
-                }
-
-                if (directLinks.Count == 0)
-                {
-                    MessageBox.Show("未能获取任何歌曲直链，请稍后再试。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    UpdateStatusBar("未获取到直链");
-                    return;
-                }
-
-                string content = string.Join(Environment.NewLine, directLinks);
-                try
-                {
-                    Clipboard.SetText(content);
-                }
-                catch (ExternalException ex)
-                {
-                    MessageBox.Show($"复制链接失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    UpdateStatusBar("复制链接失败");
-                    return;
-                }
-
-                MessageBox.Show($"已复制 {directLinks.Count}/{availableSongs.Count} 首歌曲的直链到剪贴板。", "分享成功",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
-                UpdateStatusBar("歌单直链已复制");
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"分享歌单直链失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                UpdateStatusBar("歌单分享失败");
-            }
-        }
-
-        private async void shareAlbumWebMenuItem_Click(object sender, EventArgs e)
+        private void shareAlbumMenuItem_Click(object sender, EventArgs e)
         {
             var album = GetSelectedAlbumFromContextMenu(sender);
             if (album == null || string.IsNullOrWhiteSpace(album.Id))
@@ -7724,127 +7626,16 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
 
             try
             {
-                UpdateStatusBar($"正在准备专辑「{album.Name}」分享...");
-                var songs = await _apiClient.GetAlbumSongsAsync(album.Id ?? string.Empty);
-                if (songs == null || songs.Count == 0)
-                {
-                    MessageBox.Show("专辑中没有歌曲。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    UpdateStatusBar("专辑为空");
-                    return;
-                }
-
-                var availability = await FetchSongsAvailabilityAsync(songs);
-                var availableSongs = songs
-                    .Where(s => !string.IsNullOrWhiteSpace(s.Id) && availability.TryGetValue(s.Id, out var ok) && ok)
-                    .ToList();
-
-                if (availableSongs.Count == 0)
-                {
-                    MessageBox.Show("专辑中没有可用的歌曲资源。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    UpdateStatusBar("无可用歌曲可分享");
-                    return;
-                }
-
-                string content = string.Join(Environment.NewLine,
-                    songs.Where(s => !string.IsNullOrWhiteSpace(s.Id) && availability.TryGetValue(s.Id, out var ok) && ok)
-                         .Select(s => $"https://music.163.com/#/song?id={s.Id}"));
-
-                try
-                {
-                    Clipboard.SetText(content);
-                }
-                catch (ExternalException ex)
-                {
-                    MessageBox.Show($"复制链接失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    UpdateStatusBar("复制链接失败");
-                    return;
-                }
-
-                MessageBox.Show($"已复制 {availableSongs.Count}/{songs.Count} 首歌曲的网页链接到剪贴板。", "分享成功",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
-                UpdateStatusBar("专辑网页链接已复制");
+                string url = $"https://music.163.com/#/album?id={album.Id}";
+                Clipboard.SetText(url);
+                UpdateStatusBar("专辑链接已复制到剪贴板");
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"分享专辑失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                UpdateStatusBar("专辑分享失败");
+                MessageBox.Show($"复制链接失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("复制链接失败");
             }
         }
-
-        private async void shareAlbumDirectMenuItem_Click(object sender, EventArgs e)
-        {
-            var album = GetSelectedAlbumFromContextMenu(sender);
-            if (album == null || string.IsNullOrWhiteSpace(album.Id))
-            {
-                MessageBox.Show("无法获取专辑信息，无法分享。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
-
-            try
-            {
-                UpdateStatusBar($"正在生成专辑「{album.Name}」的歌曲直链...");
-                var songs = await _apiClient.GetAlbumSongsAsync(album.Id ?? string.Empty);
-                if (songs == null || songs.Count == 0)
-                {
-                    MessageBox.Show("专辑中没有歌曲。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    UpdateStatusBar("专辑为空");
-                    return;
-                }
-
-                var availability = await FetchSongsAvailabilityAsync(songs);
-                var availableSongs = songs
-                    .Where(s => !string.IsNullOrWhiteSpace(s.Id) && availability.TryGetValue(s.Id, out var ok) && ok)
-                    .ToList();
-
-                if (availableSongs.Count == 0)
-                {
-                    MessageBox.Show("专辑中没有可用的歌曲资源。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    UpdateStatusBar("无可用歌曲可分享");
-                    return;
-                }
-
-                var urlMap = await FetchSongUrlsInBatchesAsync(availableSongs.Select(s => s.Id));
-                var directLinks = new List<string>();
-                foreach (var song in availableSongs)
-                {
-                    if (!string.IsNullOrWhiteSpace(song.Id) &&
-                        urlMap.TryGetValue(song.Id, out var urlInfo) &&
-                        !string.IsNullOrWhiteSpace(urlInfo.Url))
-                    {
-                        directLinks.Add(urlInfo.Url);
-                    }
-                }
-
-                if (directLinks.Count == 0)
-                {
-                    MessageBox.Show("未能获取任何歌曲直链，请稍后再试。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    UpdateStatusBar("未获取到直链");
-                    return;
-                }
-
-                string content = string.Join(Environment.NewLine, directLinks);
-                try
-                {
-                    Clipboard.SetText(content);
-                }
-                catch (ExternalException ex)
-                {
-                    MessageBox.Show($"复制链接失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    UpdateStatusBar("复制链接失败");
-                    return;
-                }
-
-                MessageBox.Show($"已复制 {directLinks.Count}/{availableSongs.Count} 首歌曲的直链到剪贴板。", "分享成功",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
-                UpdateStatusBar("专辑直链已复制");
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"分享专辑直链失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                UpdateStatusBar("专辑分享失败");
-            }
-        }
-
         /// <summary>
         /// 收藏歌单
         /// </summary>

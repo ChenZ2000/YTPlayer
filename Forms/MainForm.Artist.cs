@@ -189,9 +189,10 @@ namespace YTPlayer
                 }
 
                 var entryItems = BuildArtistEntryItems(artist, _currentArtistDetail);
+                var listAccessibleName = string.IsNullOrWhiteSpace(artist.Name) ? "歌手" : artist.Name;
                 DisplayListItems(entryItems,
                     viewSource: $"artist_entries:{artist.Id}",
-                    accessibleName: $"歌手 {artist.Name} 入口列表");
+                    accessibleName: listAccessibleName);
 
                 UpdateStatusBar($"已打开歌手：{artist.Name}");
             }

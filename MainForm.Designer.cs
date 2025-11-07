@@ -60,6 +60,7 @@
             this.jumpToPositionMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.autoReadLyricsMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.helpMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.shortcutsMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.aboutMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.searchPanel = new System.Windows.Forms.Panel();
             this.searchTypeComboBox = new System.Windows.Forms.ComboBox();
@@ -97,11 +98,7 @@
             this.shareSongWebMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.shareSongDirectMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.sharePlaylistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
-            this.sharePlaylistWebMenuItem = new System.Windows.Forms.ToolStripMenuItem();
-            this.sharePlaylistDirectMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.shareAlbumMenuItem = new System.Windows.Forms.ToolStripMenuItem();
-            this.shareAlbumWebMenuItem = new System.Windows.Forms.ToolStripMenuItem();
-            this.shareAlbumDirectMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.toolStripSeparatorArtist = new System.Windows.Forms.ToolStripSeparator();
             this.viewArtistDetailMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.shareArtistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
@@ -390,16 +387,24 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             // helpMenuItem
             //
             this.helpMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
+            this.shortcutsMenuItem,
             this.aboutMenuItem});
             this.helpMenuItem.Name = "helpMenuItem";
             this.helpMenuItem.Size = new System.Drawing.Size(73, 24);
             this.helpMenuItem.Text = "帮助(&H)";
             //
+            // shortcutsMenuItem
+            //
+            this.shortcutsMenuItem.Name = "shortcutsMenuItem";
+            this.shortcutsMenuItem.Size = new System.Drawing.Size(224, 26);
+            this.shortcutsMenuItem.Text = "快捷键(&K)...";
+            this.shortcutsMenuItem.Click += new System.EventHandler(this.shortcutsMenuItem_Click);
+            //
             // aboutMenuItem
             //
             this.aboutMenuItem.Name = "aboutMenuItem";
-            this.aboutMenuItem.Size = new System.Drawing.Size(114, 26);
-            this.aboutMenuItem.Text = "关于";
+            this.aboutMenuItem.Size = new System.Drawing.Size(224, 26);
+            this.aboutMenuItem.Text = "关于(&A)...";
             this.aboutMenuItem.Click += new System.EventHandler(this.aboutMenuItem_Click);
             //
             // searchPanel
@@ -845,51 +850,19 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             //
             // sharePlaylistMenuItem
             //
-            this.sharePlaylistMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
-            this.sharePlaylistWebMenuItem,
-            this.sharePlaylistDirectMenuItem});
             this.sharePlaylistMenuItem.Name = "sharePlaylistMenuItem";
             this.sharePlaylistMenuItem.Size = new System.Drawing.Size(210, 24);
             this.sharePlaylistMenuItem.Text = "分享歌单(&J)";
             this.sharePlaylistMenuItem.Visible = false;
-            //
-            // sharePlaylistWebMenuItem
-            //
-            this.sharePlaylistWebMenuItem.Name = "sharePlaylistWebMenuItem";
-            this.sharePlaylistWebMenuItem.Size = new System.Drawing.Size(210, 26);
-            this.sharePlaylistWebMenuItem.Text = "分享网页(&W)";
-            this.sharePlaylistWebMenuItem.Click += new System.EventHandler(this.sharePlaylistWebMenuItem_Click);
-            //
-            // sharePlaylistDirectMenuItem
-            //
-            this.sharePlaylistDirectMenuItem.Name = "sharePlaylistDirectMenuItem";
-            this.sharePlaylistDirectMenuItem.Size = new System.Drawing.Size(210, 26);
-            this.sharePlaylistDirectMenuItem.Text = "分享直链(&L)";
-            this.sharePlaylistDirectMenuItem.Click += new System.EventHandler(this.sharePlaylistDirectMenuItem_Click);
+            this.sharePlaylistMenuItem.Click += new System.EventHandler(this.sharePlaylistMenuItem_Click);
             //
             // shareAlbumMenuItem
             //
-            this.shareAlbumMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
-            this.shareAlbumWebMenuItem,
-            this.shareAlbumDirectMenuItem});
             this.shareAlbumMenuItem.Name = "shareAlbumMenuItem";
             this.shareAlbumMenuItem.Size = new System.Drawing.Size(210, 24);
             this.shareAlbumMenuItem.Text = "分享专辑(&K)";
             this.shareAlbumMenuItem.Visible = false;
-            //
-            // shareAlbumWebMenuItem
-            //
-            this.shareAlbumWebMenuItem.Name = "shareAlbumWebMenuItem";
-            this.shareAlbumWebMenuItem.Size = new System.Drawing.Size(210, 26);
-            this.shareAlbumWebMenuItem.Text = "分享网页(&W)";
-            this.shareAlbumWebMenuItem.Click += new System.EventHandler(this.shareAlbumWebMenuItem_Click);
-            //
-            // shareAlbumDirectMenuItem
-            //
-            this.shareAlbumDirectMenuItem.Name = "shareAlbumDirectMenuItem";
-            this.shareAlbumDirectMenuItem.Size = new System.Drawing.Size(210, 26);
-            this.shareAlbumDirectMenuItem.Text = "分享直链(&L)";
-            this.shareAlbumDirectMenuItem.Click += new System.EventHandler(this.shareAlbumDirectMenuItem_Click);
+            this.shareAlbumMenuItem.Click += new System.EventHandler(this.shareAlbumMenuItem_Click);
             //
             // shareArtistMenuItem
             //
@@ -1083,6 +1056,7 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
         private System.Windows.Forms.ToolStripMenuItem autoReadLyricsMenuItem;
         private System.Windows.Forms.ToolStripMenuItem helpMenuItem;
         private System.Windows.Forms.ToolStripMenuItem aboutMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem shortcutsMenuItem;
         private System.Windows.Forms.Panel searchPanel;
         private System.Windows.Forms.ComboBox searchTypeComboBox;
         private System.Windows.Forms.Label searchTypeLabel;
@@ -1126,11 +1100,7 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
         private System.Windows.Forms.ToolStripMenuItem shareSongWebMenuItem;
         private System.Windows.Forms.ToolStripMenuItem shareSongDirectMenuItem;
         private System.Windows.Forms.ToolStripMenuItem sharePlaylistMenuItem;
-        private System.Windows.Forms.ToolStripMenuItem sharePlaylistWebMenuItem;
-        private System.Windows.Forms.ToolStripMenuItem sharePlaylistDirectMenuItem;
         private System.Windows.Forms.ToolStripMenuItem shareAlbumMenuItem;
-        private System.Windows.Forms.ToolStripMenuItem shareAlbumWebMenuItem;
-        private System.Windows.Forms.ToolStripMenuItem shareAlbumDirectMenuItem;
         private System.Windows.Forms.ToolStripMenuItem shareArtistMenuItem;
         private System.Windows.Forms.ToolStripMenuItem subscribeArtistMenuItem;
         private System.Windows.Forms.ToolStripMenuItem unsubscribeArtistMenuItem;
