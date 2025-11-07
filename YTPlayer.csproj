@@ -12,6 +12,7 @@
     <LangVersion>9.0</LangVersion>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
     <Nullable>enable</Nullable>
+    <VersionFile>version.txt</VersionFile>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <DebugSymbols>true</DebugSymbols>
@@ -112,6 +113,7 @@
     <Compile Include="Forms\AboutDialog.cs" />
     <Compile Include="Forms\KeyboardShortcutsDialog.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="Properties\VersionInfo.g.cs" />
     <Compile Include="Core\NeteaseApiClient.cs" />
     <Compile Include="Core\BassAudioEngine.cs" />
     <Compile Include="Core\SeekManager.cs" />
@@ -241,6 +243,60 @@
   <ItemGroup>
     <None Include="packages.config" />
     <None Include="App.config" />
+    <None Include="version.txt" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+  <Target Name="GenerateVersionInfo"
+          Inputs="$(VersionFile)"
+          Outputs="Properties\VersionInfo.g.cs"
+          BeforeTargets="BeforeCompile">
+    <Error Condition="!Exists('$(VersionFile)')" Text="缺少版本号文件 $(VersionFile)。" />
+    <ReadLinesFromFile File="$(VersionFile)">
+      <Output TaskParameter="Lines" ItemName="VersionFileContent" />
+    </ReadLinesFromFile>
+    <PropertyGroup>
+      <VersionRaw>@(VersionFileContent)</VersionRaw>
+      <VersionNumber>$([System.String]::Copy('$(VersionRaw)').Trim())</VersionNumber>
+    </PropertyGroup>
+    <Error Condition="'$(VersionNumber)' == ''" Text="version.txt 不能为空或仅包含空白字符。" />
+    <PropertyGroup>
+      <VersionSegmentCount>$([System.String]::Copy('$(VersionNumber)').Split('.').Length)</VersionSegmentCount>
+      <AssemblyVersionText Condition="'$(VersionSegmentCount)' == '3'">$(VersionNumber).0</AssemblyVersionText>
+      <AssemblyVersionText Condition="'$(VersionSegmentCount)' == '4'">$(VersionNumber)</AssemblyVersionText>
+      <AssemblyVersionText Condition="'$(AssemblyVersionText)' == ''">$(VersionNumber).0</AssemblyVersionText>
+    </PropertyGroup>
+    <ItemGroup>
+      <VersionInfoLines Include="Line1">
+        <Text>// &lt;auto-generated&gt; This file is generated from version.txt. Do not edit manually.</Text>
+      </VersionInfoLines>
+      <VersionInfoLines Include="Line2">
+        <Text>namespace YTPlayer</Text>
+      </VersionInfoLines>
+      <VersionInfoLines Include="Line3">
+        <Text>{</Text>
+      </VersionInfoLines>
+      <VersionInfoLines Include="Line4">
+        <Text>    internal static class VersionInfo</Text>
+      </VersionInfoLines>
+      <VersionInfoLines Include="Line5">
+        <Text>    {</Text>
+      </VersionInfoLines>
+      <VersionInfoLines Include="Line6">
+        <Text>        public const string Version = "$(VersionNumber)";</Text>
+      </VersionInfoLines>
+      <VersionInfoLines Include="Line7">
+        <Text>        public const string AssemblyVersion = "$(AssemblyVersionText)";</Text>
+      </VersionInfoLines>
+      <VersionInfoLines Include="Line8">
+        <Text>    }</Text>
+      </VersionInfoLines>
+      <VersionInfoLines Include="Line9">
+        <Text>}</Text>
+      </VersionInfoLines>
+    </ItemGroup>
+    <WriteLinesToFile File="Properties\VersionInfo.g.cs"
+                      Lines="@(VersionInfoLines->'%(Text)')"
+                      Overwrite="true"
+                      Encoding="UTF-8" />
+  </Target>
 </Project>

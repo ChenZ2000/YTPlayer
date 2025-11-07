@@ -93,6 +93,7 @@ namespace YTPlayer.Forms
             builder.AppendLine("易听 (YTPlayer)");
             builder.AppendLine("无障碍的网易云音乐桌面客户端");
             builder.AppendLine("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            builder.AppendLine($"版本      : {YTPlayer.VersionInfo.Version}");
             builder.AppendLine("作者 & 贡献者");
             builder.AppendLine($"  • 作者      : ChenZ  ({AuthorUrl})");
             builder.AppendLine($"  • 贡献者    : ZJN046 ({ContributorUrl})");

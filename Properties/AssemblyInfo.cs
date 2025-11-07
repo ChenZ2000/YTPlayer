@@ -14,5 +14,6 @@ using System.Runtime.InteropServices;
 
 [assembly: Guid("b1234567-c890-1234-5678-901234567890")]
 
-[assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.0.0.0")]
+[assembly: AssemblyVersion(YTPlayer.VersionInfo.AssemblyVersion)]
+[assembly: AssemblyFileVersion(YTPlayer.VersionInfo.AssemblyVersion)]
+[assembly: AssemblyInformationalVersion(YTPlayer.VersionInfo.Version)]
