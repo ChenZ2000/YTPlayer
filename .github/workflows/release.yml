@@ -4,18 +4,51 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version (e.g. 1.0.0)"
+        description: "Release version (e.g. 1.0.0 or v1.0.0)"
         required: true
   push:
     tags:
       - "v*"
 
 jobs:
-  build:
+  release:
     runs-on: windows-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        shell: pwsh
+        run: |
+          $event = '${{ github.event_name }}'
+          $inputVersion = '${{ github.event.inputs.version }}'
+          if ($event -eq 'workflow_dispatch') {
+              if ([string]::IsNullOrWhiteSpace($inputVersion)) {
+                  throw "版本号不能为空。"
+              }
+              $versionText = $inputVersion
+          }
+          else {
+              $versionText = '${{ github.ref_name }}'
+          }
+
+          if ([string]::IsNullOrWhiteSpace($versionText)) {
+              throw "无法解析版本号。"
+          }
+
+          if ($versionText -like 'v*') {
+              $tagName = $versionText
+              $displayVersion = $versionText.TrimStart('v')
+          }
+          else {
+              $tagName = "v$versionText"
+              $displayVersion = $versionText
+          }
+
+          "tag=$tagName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "version=$displayVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Setup NuGet
         uses: nuget/setup-nuget@v1
@@ -26,60 +59,45 @@ jobs:
       - name: Restore packages
         run: nuget restore YTPlayer.sln
 
-      - name: Build Release
-        run: msbuild YTPlayer.sln /t:Rebuild /p:Configuration=Release /p:Platform=x64
+      - name: Build Release (x64)
+        run: msbuild YTPlayer.sln /t:Rebuild /p:Configuration=Release /p:Platform=x64 /m
 
-      - name: Archive binaries
-        run: |
-          New-Item -ItemType Directory -Path release -Force | Out-Null
-          Compress-Archive -Path "bin\Release\*" -DestinationPath "release\YTPlayer.zip" -Force
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: YTPlayer-release
-          path: release/YTPlayer.zip
-
-  release:
-    needs: build
-    runs-on: windows-latest
-    steps:
-      - name: Download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: YTPlayer-release
-          path: release
-
-      - name: Prepare version
-        id: prep
+      - name: Package binaries with dependencies
+        id: package
         shell: pwsh
         run: |
-          $event = '${{ github.event_name }}'
-          $inputVersion = '${{ github.event.inputs.version }}'
-          $refName = '${{ github.ref_name }}'
-          if ($event -eq 'workflow_dispatch') {
-            $version = $inputVersion
-          } else {
-            $version = $refName
-          }
-          if ($version -notmatch '^v') {
-            $tag = "v$version"
-            $display = $version
-          } else {
-            $tag = $version
-            $display = $version.TrimStart('v')
-          }
-          Rename-Item -Path "release\YTPlayer.zip" -NewName "release\YTPlayer-$display.zip" -Force
-          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "version=$display" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          $stageRoot = Join-Path $pwd "dist"
+          $stageDir = Join-Path $stageRoot "YTPlayer"
+          if (Test-Path $stageRoot) { Remove-Item $stageRoot -Recurse -Force }
+          New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
 
-      - name: Create GitHub release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.prep.outputs.tag }}
-          name: YTPlayer v${{ steps.prep.outputs.version }}
-          files: release/YTPlayer-${{ steps.prep.outputs.version }}.zip
-          draft: false
-          prerelease: false
+          Copy-Item -Path "bin\Release\*" -Destination $stageDir -Recurse -Force
+
+          $zipName = "YTPlayer-${{ steps.version.outputs.version }}.zip"
+          $zipPath = Join-Path $pwd $zipName
+          if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+          Compress-Archive -Path (Join-Path $stageDir '*') -DestinationPath $zipPath -Force
+
+          "zip_path=$zipPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: actions/create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          release_name: YTPlayer v${{ steps.version.outputs.version }}
+          draft: false
+          prerelease: false
+          target_commitish: ${{ github.sha }}
+
+      - name: Upload packaged binary
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ${{ steps.package.outputs.zip_path }}
+          asset_name: YTPlayer-${{ steps.version.outputs.version }}.zip
+          asset_content_type: application/zip

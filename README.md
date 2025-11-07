@@ -68,7 +68,7 @@ powershell -ExecutionPolicy Bypass -File .\Build-Debug.ps1
 - **ChenZ** - [https://github.com/chenz2000](https://github.com/chenz2000)  
   项目作者 & 架构设计，负责整体产品定位、网络层与播放内核。
 - **ZJN046** - [https://github.com/zjn046](https://github.com/zjn046)  
-  主要贡献者，参与 UI/无障碍体验、下载与搜索交互优化。
+  核心贡献者，参与 UI/无障碍体验、下载与搜索交互优化和大量代码参考。
 
 欢迎通过 Issue/PR 提出建议或提交改进。Enjoy the music! 🎶
 
