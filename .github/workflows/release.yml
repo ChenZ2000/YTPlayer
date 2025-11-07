@@ -62,7 +62,13 @@ jobs:
         run: nuget restore YTPlayer.sln
 
       - name: Build Release
-        run: msbuild YTPlayer.sln /t:Rebuild /p:Configuration=Release /p:Platform=AnyCPU /m
+        shell: pwsh
+        run: |
+          msbuild YTPlayer.sln `
+            /t:Rebuild `
+            /p:Configuration=Release `
+            "/p:Platform=Any CPU" `
+            /m
 
       - name: Package binaries with dependencies
         id: package
