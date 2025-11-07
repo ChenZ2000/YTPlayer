@@ -99,7 +99,9 @@ jobs:
           if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
           Compress-Archive -Path (Join-Path $stageDir '*') -DestinationPath $zipPath -Force
 
-          "zip_path=$zipPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          $zipRelativePath = "./$zipName"
+
+          "zip_path=$zipRelativePath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v1
