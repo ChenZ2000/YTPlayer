@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -1554,7 +1555,14 @@ namespace YTPlayer
                 case ListItemType.Artist:
                     if (listItem.Artist != null)
                     {
-                        await OpenArtistAsync(listItem.Artist);
+                        if (IsArtistIntroEntryContext(listItem.Artist))
+                        {
+                            await ShowArtistIntroductionDialog(listItem.Artist);
+                        }
+                        else
+                        {
+                            await OpenArtistAsync(listItem.Artist);
+                        }
                     }
                     break;
 
@@ -1562,6 +1570,124 @@ namespace YTPlayer
                     // 加载分类内容
                     await LoadCategoryContent(listItem.CategoryId);
                     break;
+            }
+        }
+
+        private bool IsArtistIntroEntryContext(ArtistInfo artist)
+        {
+            if (artist == null || string.IsNullOrWhiteSpace(_currentViewSource))
+            {
+                return false;
+            }
+
+            if (!_currentViewSource.StartsWith("artist_entries:", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            long entryArtistId = ParseArtistIdFromViewSource(_currentViewSource, "artist_entries:");
+            if (entryArtistId > 0)
+            {
+                return entryArtistId == artist.Id;
+            }
+
+            if (_currentArtist != null && _currentArtist.Id == artist.Id)
+            {
+                return true;
+            }
+
+            if (_currentArtistDetail != null && _currentArtistDetail.Id == artist.Id)
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        private async Task ShowArtistIntroductionDialog(ArtistInfo artist)
+        {
+            try
+            {
+                ArtistDetail? detail = null;
+
+                if (_currentArtistDetail != null && _currentArtistDetail.Id == artist.Id)
+                {
+                    detail = _currentArtistDetail;
+                }
+                else
+                {
+                    detail = await _apiClient.GetArtistDetailAsync(artist.Id, includeIntroduction: true);
+                }
+
+                if (detail == null)
+                {
+                    MessageBox.Show("暂时无法获取该歌手的详细介绍。", "提示",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                var builder = new StringBuilder();
+
+                if (!string.IsNullOrWhiteSpace(detail.Description))
+                {
+                    builder.AppendLine(detail.Description.Trim());
+                    builder.AppendLine();
+                }
+                else if (!string.IsNullOrWhiteSpace(detail.BriefDesc))
+                {
+                    builder.AppendLine(detail.BriefDesc.Trim());
+                    builder.AppendLine();
+                }
+
+                if (detail.Introductions != null && detail.Introductions.Count > 0)
+                {
+                    foreach (var section in detail.Introductions)
+                    {
+                        if (!string.IsNullOrWhiteSpace(section?.Title))
+                        {
+                            builder.AppendLine(section.Title.Trim());
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(section?.Content))
+                        {
+                            builder.AppendLine(section.Content.Trim());
+                        }
+
+                        builder.AppendLine();
+                    }
+                }
+
+                var content = builder.Length > 0
+                    ? builder.ToString().Trim()
+                    : "暂无详细介绍。";
+
+                using (var dialog = new Form())
+                {
+                    dialog.Text = $"歌手简介 - {detail.Name ?? artist.Name}";
+                    dialog.StartPosition = FormStartPosition.CenterParent;
+                    dialog.Width = 720;
+                    dialog.Height = 560;
+
+                    var textBox = new RichTextBox
+                    {
+                        Dock = DockStyle.Fill,
+                        ReadOnly = true,
+                        Multiline = true,
+                        WordWrap = true,
+                        ScrollBars = RichTextBoxScrollBars.Both,
+                        BackColor = SystemColors.Window,
+                        Font = new Font("Microsoft YaHei", 10),
+                        Text = content
+                    };
+
+                    dialog.Controls.Add(textBox);
+                    dialog.ShowDialog(this);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"加载歌手介绍失败: {ex.Message}", "错误",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -2516,6 +2642,17 @@ namespace YTPlayer
                     song.FormattedDuration
                 });
                 item.Tag = index;  // 使用索引作为 Tag
+
+                if (song?.IsAvailable == false)
+                {
+                    item.ForeColor = SystemColors.GrayText;
+                    var duration = song.FormattedDuration;
+                    item.SubItems[4].Text = string.IsNullOrWhiteSpace(duration)
+                        ? "不可播放"
+                        : $"{duration} (不可播放)";
+                    item.ToolTipText = "歌曲已下架或暂不可播放";
+                }
+
                 resultListView.Items.Add(item);
                 displayNumber++;  // 显示序号递增
                 index++;  // 内部索引递增
@@ -6521,12 +6658,19 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                     return;
                 }
 
-                // 弹出历史项（单线程操作，无需锁）
-                var state = _navigationHistory.Pop();
-                System.Diagnostics.Debug.WriteLine($"[Navigation] 后退到: {state.ViewName}, 类型={state.PageType}, 剩余历史={_navigationHistory.Count}");
+                var state = _navigationHistory.Peek();
+                System.Diagnostics.Debug.WriteLine($"[Navigation] 尝试后退到: {state.ViewName}, 类型={state.PageType}, 当前历史={_navigationHistory.Count}");
 
-                // 根据页面类型重新加载（不保存状态，避免重复）
-                await RestoreNavigationState(state);
+                bool success = await RestoreNavigationStateAsync(state);
+                if (success)
+                {
+                    _navigationHistory.Pop();
+                    System.Diagnostics.Debug.WriteLine($"[Navigation] 后退成功: {state.ViewName}, 剩余历史={_navigationHistory.Count}");
+                }
+                else
+                {
+                    UpdateStatusBar("返回失败，已保持当前页面");
+                }
             }
             finally
             {
@@ -6537,8 +6681,9 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
         /// <summary>
         /// 恢复导航状态（重新加载页面）
         /// </summary>
-        private async Task RestoreNavigationState(NavigationHistoryItem state)
+        private async Task<bool> RestoreNavigationStateAsync(NavigationHistoryItem state)
         {
+            string previousViewSource = _currentViewSource ?? string.Empty;
             try
             {
                 switch (state.PageType)
@@ -6616,10 +6761,16 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                     await LoadArtistsByCategoryAsync(state.ArtistType, state.ArtistArea, state.ArtistOffset, skipSave: true);
                     break;
 
-                default:
-                    System.Diagnostics.Debug.WriteLine($"[Navigation] 未知的页面类型: {state.PageType}");
-                    UpdateStatusBar("无法恢复页面");
-                    return;
+                    default:
+                        System.Diagnostics.Debug.WriteLine($"[Navigation] 未知的页面类型: {state.PageType}");
+                        UpdateStatusBar("无法恢复页面");
+                        return false;
+                }
+
+                if (!IsNavigationStateApplied(state))
+                {
+                    System.Diagnostics.Debug.WriteLine($"[Navigation] 页面状态未切换，当前 view={_currentViewSource}, 期望={state.ViewSource}");
+                    return false;
                 }
 
                 // 恢复焦点
@@ -6651,12 +6802,63 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 }
 
                 UpdateStatusBar($"返回到: {state.ViewName}");
+                return true;
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[Navigation] 恢复状态失败: {ex}");
                 MessageBox.Show($"返回失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 UpdateStatusBar("返回失败");
+                _currentViewSource = previousViewSource;
+                return false;
+            }
+        }
+
+        private bool IsNavigationStateApplied(NavigationHistoryItem state)
+        {
+            if (state == null)
+            {
+                return false;
+            }
+
+            if (!string.IsNullOrWhiteSpace(state.ViewSource) &&
+                string.Equals(_currentViewSource, state.ViewSource, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            switch (state.PageType)
+            {
+                case "homepage":
+                    return _isHomePage || string.Equals(_currentViewSource, "homepage", StringComparison.OrdinalIgnoreCase);
+                case "category":
+                    return string.Equals(_currentViewSource, state.CategoryId, StringComparison.OrdinalIgnoreCase);
+                case "playlist":
+                    return string.Equals(_currentViewSource, $"playlist:{state.PlaylistId}", StringComparison.OrdinalIgnoreCase);
+                case "album":
+                    return string.Equals(_currentViewSource, $"album:{state.AlbumId}", StringComparison.OrdinalIgnoreCase);
+                case "artist_entries":
+                case "artist_top":
+                    return state.ArtistId > 0 &&
+                           (_currentViewSource ?? string.Empty).IndexOf(state.ArtistId.ToString(), StringComparison.OrdinalIgnoreCase) >= 0;
+                case "artist_songs":
+                    return state.ArtistId > 0 &&
+                           string.Equals(_currentViewSource, $"artist_songs:{state.ArtistId}:offset{state.ArtistOffset}", StringComparison.OrdinalIgnoreCase);
+                case "artist_albums":
+                    return state.ArtistId > 0 &&
+                           string.Equals(_currentViewSource, $"artist_albums:{state.ArtistId}:offset{state.ArtistOffset}", StringComparison.OrdinalIgnoreCase);
+                case "artist_favorites":
+                    return string.Equals(_currentViewSource, "artist_favorites", StringComparison.OrdinalIgnoreCase);
+                case "artist_category_types":
+                    return string.Equals(_currentViewSource, "artist_category_types", StringComparison.OrdinalIgnoreCase);
+                case "artist_category_type":
+                    return string.Equals(_currentViewSource, $"artist_category_type:{state.ArtistType}", StringComparison.OrdinalIgnoreCase);
+                case "artist_category_list":
+                    return string.Equals(_currentViewSource,
+                        $"artist_category_list:{state.ArtistType}:{state.ArtistArea}:offset{state.ArtistOffset}",
+                        StringComparison.OrdinalIgnoreCase);
+                default:
+                    return string.Equals(_currentViewSource, state.ViewSource, StringComparison.OrdinalIgnoreCase);
             }
         }
 

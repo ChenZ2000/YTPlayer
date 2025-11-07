@@ -7342,14 +7342,6 @@ namespace YTPlayer.Core
                     var status = song["st"]?.Value<int>() ?? song["status"]?.Value<int>() ?? 0;
                     var id = song["id"]?.Value<string>();
 
-                    // 跳过无效歌曲（下架、版权失效等）
-                    if (status < 0)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"[API] 跳过无效歌曲 ID={id}, status={status}");
-                        failCount++;
-                        continue;
-                    }
-
                     // 跳过没有 ID 或名称的歌曲
                     var name = song["name"]?.Value<string>();
                     if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(name))
@@ -7383,7 +7375,8 @@ namespace YTPlayer.Core
                         Duration = (song["dt"]?.Value<int>() ?? song["duration"]?.Value<int>() ?? 0) / 1000,
                         Album = albumName,
                         AlbumId = albumId,
-                        PicUrl = albumPic
+                        PicUrl = albumPic,
+                        IsAvailable = status >= 0
                     };
 
                     // 解析艺术家

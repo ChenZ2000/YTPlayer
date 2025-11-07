@@ -23,6 +23,7 @@ namespace YTPlayer.Core
 
         // 丢弃式 Seek 机制
         private double _latestSeekPosition = -1;  // 最新的目标位置
+        private double _latestSeekOriginPosition = -1; // 最新Seek请求时的播放位置
         private bool _hasNewSeekRequest = false;   // 是否有新的 Seek 请求
         private bool _isExecutingSeek = false;     // 是否正在执行 Seek
         private CancellationTokenSource? _currentSeekCts = null;  // 当前 Seek 操作的取消令牌
@@ -33,6 +34,8 @@ namespace YTPlayer.Core
 
         // 远距离跳转等待超时（60 秒，覆盖更多网络慢的情况）
         private const int SEEK_CACHE_WAIT_TIMEOUT_MS = 60000;
+        private const double NATURAL_PASS_TOLERANCE_SECONDS = 0.35;
+        private const int NATURAL_PROGRESS_POLL_INTERVAL_MS = 200;
 
         // 状态监控
         private int _consecutiveFailures = 0;
@@ -146,6 +149,7 @@ namespace YTPlayer.Core
             {
                 // 保存最新的目标位置（丢弃旧的）
                 _latestSeekPosition = targetSeconds;
+                _latestSeekOriginPosition = _audioEngine?.GetPosition() ?? -1;
                 _hasNewSeekRequest = true;
 
                 // 如果定时器未启动，启动它
@@ -176,6 +180,7 @@ namespace YTPlayer.Core
                 // 清除状态（但不取消当前正在执行的 seek，让它完成）
                 _hasNewSeekRequest = false;
                 _latestSeekPosition = -1;
+                _latestSeekOriginPosition = -1;
 
                 Debug.WriteLine("[SeekManager] Seek 序列结束（最后一次 seek 将继续完成）");
             }
@@ -206,6 +211,7 @@ namespace YTPlayer.Core
 
                 // 重置状态
                 _latestSeekPosition = -1;
+                _latestSeekOriginPosition = -1;
                 _hasNewSeekRequest = false;
                 _isExecutingSeek = false;
 
@@ -237,6 +243,7 @@ namespace YTPlayer.Core
         private void ExecuteSeekTimerCallback(object? state)
         {
             double targetPosition;
+            double originPosition;
             bool isUsingCache;
             SmartCacheManager? cacheManager;
             CancellationTokenSource? seekCts;
@@ -266,6 +273,7 @@ namespace YTPlayer.Core
 
                 // 获取最新的目标位置
                 targetPosition = _latestSeekPosition;
+                originPosition = _latestSeekOriginPosition;
                 isUsingCache = _isUsingCacheStream;
                 cacheManager = _cacheManager;
 
@@ -283,7 +291,7 @@ namespace YTPlayer.Core
             {
                 try
                 {
-                    await ExecuteSeekAsync(targetPosition, isUsingCache, cacheManager, seekCts.Token).ConfigureAwait(false);
+                    await ExecuteSeekAsync(targetPosition, originPosition, isUsingCache, cacheManager, seekCts.Token).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -306,58 +314,124 @@ namespace YTPlayer.Core
         /// </summary>
         private async Task ExecuteSeekAsync(
             double targetSeconds,
+            double originSeconds,
             bool isUsingCache,
             SmartCacheManager? cacheManager,
             CancellationToken cancellationToken)
         {
+            CancellationTokenSource? linkedCts = null;
+            Task? progressMonitor = null;
+            bool success = false;
+            bool cancelledByNaturalProgress = false;
+
             try
             {
                 Debug.WriteLine($"[SeekManager] ⚡ 执行智能 Seek: {targetSeconds:F1}s");
                 var startTime = DateTime.Now;
 
-                bool success = false;
+                bool isForwardSeek = originSeconds >= 0 && targetSeconds > originSeconds + 0.01;
+                CancellationToken effectiveToken = cancellationToken;
 
-                // ⭐ 核心：智能 Seek 策略
+                if (isForwardSeek)
+                {
+                    linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    effectiveToken = linkedCts.Token;
+                    progressMonitor = MonitorNaturalProgressAsync(targetSeconds, linkedCts);
+                }
+
                 if (isUsingCache && cacheManager != null)
                 {
-                    // 缓存流模式：等待数据就绪后跳转（支持远距离跳转）
                     success = await _audioEngine.SetPositionWithCacheWaitAsync(
                         targetSeconds,
                         SEEK_CACHE_WAIT_TIMEOUT_MS,
-                        cancellationToken).ConfigureAwait(false);
+                        effectiveToken).ConfigureAwait(false);
                 }
                 else
                 {
-                    // 直接流模式：直接跳转（仅支持已下载位置）
-                    success = _audioEngine.SetPosition(targetSeconds);
+                    if (linkedCts == null || !linkedCts.IsCancellationRequested)
+                    {
+                        success = _audioEngine.SetPosition(targetSeconds);
+                    }
                 }
 
                 var elapsed = (DateTime.Now - startTime).TotalMilliseconds;
 
                 if (success)
                 {
-                    // 🎵 应用 10ms 淡入效果，减少声音突变
                     _audioEngine.ApplySeekFadeIn();
                     Debug.WriteLine($"[SeekManager] ✓ 智能 Seek 成功 (含淡入): {targetSeconds:F1}s (耗时 {elapsed:F0}ms)");
                     _consecutiveFailures = 0;
                 }
-                else if (!cancellationToken.IsCancellationRequested)
+                else if (!effectiveToken.IsCancellationRequested)
                 {
-                    // 只有在非取消的情况下才记录失败
                     Debug.WriteLine($"[SeekManager] ⚠️ 智能 Seek 失败: {targetSeconds:F1}s (耗时 {elapsed:F0}ms)");
                     _consecutiveFailures++;
                 }
             }
             catch (OperationCanceledException)
             {
-                Debug.WriteLine($"[SeekManager] 🚫 Seek 被取消（新命令优先）: {targetSeconds:F1}s");
-                // 不增加失败计数，因为这是正常的取消操作
+                if (linkedCts != null && linkedCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                {
+                    cancelledByNaturalProgress = true;
+                    Debug.WriteLine($"[SeekManager] ⏹ Seek 因自然播放经过目标位置而取消: {targetSeconds:F1}s");
+                }
+                else
+                {
+                    Debug.WriteLine($"[SeekManager] 🚫 Seek 被取消（新命令优先）: {targetSeconds:F1}s");
+                }
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"[SeekManager] ❌ 智能 Seek 异常: {ex.Message}");
                 _consecutiveFailures++;
             }
+            finally
+            {
+                if (progressMonitor != null)
+                {
+                    try
+                    {
+                        await progressMonitor.ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // 忽略
+                    }
+                }
+
+                linkedCts?.Dispose();
+            }
+
+            if (cancelledByNaturalProgress)
+            {
+                _consecutiveFailures = 0;
+            }
+        }
+
+        private Task MonitorNaturalProgressAsync(double targetSeconds, CancellationTokenSource linkedCts)
+        {
+            return Task.Run(async () =>
+            {
+                try
+                {
+                    while (!linkedCts.IsCancellationRequested)
+                    {
+                        await Task.Delay(NATURAL_PROGRESS_POLL_INTERVAL_MS, linkedCts.Token).ConfigureAwait(false);
+
+                        double currentPosition = _audioEngine.GetPosition();
+                        if (currentPosition + NATURAL_PASS_TOLERANCE_SECONDS >= targetSeconds)
+                        {
+                            Debug.WriteLine($"[SeekManager] 🎯 当前播放 {currentPosition:F1}s 已超过目标 {targetSeconds:F1}s，取消本次 Seek");
+                            linkedCts.Cancel();
+                            break;
+                        }
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    // 正常取消
+                }
+            });
         }
 
         #endregion
