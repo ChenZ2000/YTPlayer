@@ -59,8 +59,8 @@ powershell -ExecutionPolicy Bypass -File .\Build-Debug.ps1
 
 ## 快速开始
 
-1. 运行构建脚本或直接用 VS 打开解决方案并编译。
-2. 启动 `bin\YTPlayer.exe`。
+1. 访问 [Releases](https://github.com/ChenZ2000/YTPlayer/releases) 页面并下载最新构建版压缩包。
+2. 解压并运行 `YTPlayer.exe`。
 3. 享受音乐吧！
 
 ## 作者 & 贡献者
