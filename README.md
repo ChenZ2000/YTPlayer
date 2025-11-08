@@ -16,38 +16,38 @@
 
 ## 功能总览
 
-### 搜索 & 浏览
-- 支持歌曲 / 歌手 / 专辑 / 歌单多类型浏览和搜索、收藏/取消收藏、歌单管理， Backspace 返回上一视图。
+### 搜索、账户与浏览
+- 支持歌曲 / 歌手 / 专辑 / 歌单多类型浏览和搜索、收藏/取消收藏、创建新歌单， Backspace 返回。
+- 提供二维码与短信验证码登录。
+- 云盘浏览、上传、下载与删除。
+- 基于账户等级、歌曲可用资源和用户选择动态提供最佳音质。
 
 ### 播放控制
 - 播放/暂停（空格）、上一曲/下一曲（F5/F6）、快退/快进（左右箭头）、音量（F7/F8）。
-- 任意时间跳转（F12）、队列插播逻辑、播放次序选择：列表循环/顺序播放/单曲循环/列表随机。
-- 朗读歌词（F11）可即时切换。
-- 输出设备切换（F9）：随时在 Windows 默认或任意可用声卡之间切换，播放不中断。
+- 任意时间跳转（F12）支持**时:分:秒**或**百分比加%**格式。
+- 队列插播、播放次序选择（列表循环/顺序播放/单曲循环/列表随机。
+- 屏幕阅读器歌词输出开关（F11）。
+- 输出设备切换（F9）。
 
 ### 下载与管理
 - 歌曲 / 歌单 / 专辑/分类批量下载，下载任务支持排队、取消与状态可视化。
-
-### 登录与账户
-- 二维码与短信登录并存，设备指纹模拟官方客户端，自动维护登录态与会员权益。
-- 多端一致的音质策略：基于账户等级和用户选择动态提供最佳音质并落地缓存。
 
 ## 构建方法
 
 ### 环境要求
 - Windows 10/11 64 位
 - .NET Framework 4.8 SDK
-- Visual Studio 2022 (含 MSBuild) 或 PowerShell 7+
+- Visual Studio 2022 (含 MSBuild) | PowerShell 7+
 
 ### 构建脚本
 ```powershell
-# Release
+#### Release
 powershell -ExecutionPolicy Bypass -File .\Build.ps1
 
-# Debug
+#### Debug
 powershell -ExecutionPolicy Bypass -File .\Build-Debug.ps1
 ```
-编译完成后可执行文件位于 `bin\Release\YTPlayer.exe` 或 `bin\Debug\YTPlayer.exe`。
+可执行文件位于 `bin\Release\YTPlayer.exe` 或 `bin\Debug\YTPlayer.exe`。
 
 ### 依赖还原
 项目使用 `packages.config` 管理 NuGet 依赖，构建脚本会自动执行 `nuget restore`，包含：
@@ -59,18 +59,23 @@ powershell -ExecutionPolicy Bypass -File .\Build-Debug.ps1
 
 ## 快速开始
 
-1. 访问 [Releases](https://github.com/ChenZ2000/YTPlayer/releases) 页面并下载最新构建版压缩包。
+1. 访问 [Releases 页面](https://github.com/ChenZ2000/YTPlayer/releases) 并下载最新构建版压缩包。
 2. 解压并运行 `YTPlayer.exe`。
 3. 享受音乐吧！
 
-## 作者 & 贡献者
+## 鸣谢
 
-- **ChenZ** - [https://github.com/chenz2000](https://github.com/chenz2000)  
-  项目作者 & 架构设计，负责整体产品定位、网络层与播放内核。
-- **ZJN046** - [https://github.com/zjn046](https://github.com/zjn046)  
-  核心贡献者，参与 UI/无障碍体验、搜索交互优化和大量代码参考。
+### 人员
+- 感谢[**@ZJN046** - https://github.com/zjn046](https://github.com/zjn046) 给本项目提供的灵感、 UI 交互优化和大量后端代码参考。
+### 代码库
+- [Binaryify/NeteaseCloudMusicApi](https://github.com/Binaryify/NeteaseCloudMusicApi)
+- [chaunsin/netease-cloud-music](https://github.com/chaunsin/netease-cloud-music)
+及本项目依赖的众多优秀第三方库
 
-欢迎通过 Issue/PR 提出建议或提交改进。Enjoy the music! 🎶
+## 欢迎通过 Issue/PR 提出建议或提交改进
 
-## 给作者 ChenZ 买点零食~
+Enjoy the music 🎶
+
+## 给开发者买点零食~
+
 ![微信扫一扫，给 ChenZ 买点零食](WeChatQRCode.jpg)
