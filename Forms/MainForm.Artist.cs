@@ -150,7 +150,7 @@ namespace YTPlayer
 
             SetViewContext(viewSource, defaultAccessibleName);
 
-            if (resultListView.Items.Count > 0)
+            if (!IsListAutoFocusSuppressed && resultListView.Items.Count > 0)
             {
                 int targetIndex = previousSelectedIndex >= 0
                     ? Math.Min(previousSelectedIndex, resultListView.Items.Count - 1)

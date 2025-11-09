@@ -61,6 +61,14 @@ namespace YTPlayer
         private bool _suppressAutoAdvance = false;
         // 当前浏览列表的来源标识
         private string _currentViewSource = "";
+        private CancellationTokenSource? _initialHomeLoadCts;
+        private CancellationTokenSource? _initialHomeFocusTimeoutCts;
+        private bool _initialHomeLoadCompleted = false;
+        private bool _initialHomeFocusSuppressed = false;
+        private int _autoFocusSuppressionDepth = 0;
+        private static readonly TimeSpan InitialHomeFocusTimeout = TimeSpan.FromSeconds(2);
+        private const int InitialHomeRetryDelayMs = 1500;
+        private bool IsListAutoFocusSuppressed => _autoFocusSuppressionDepth > 0 || _initialHomeFocusSuppressed;
         private long _loggedInUserId = 0;
 
         // 标识当前是否在主页状态
@@ -328,7 +336,136 @@ namespace YTPlayer
             });
 
             // 加载主页内容（用户歌单和官方歌单）
-            await LoadHomePageAsync();
+            await EnsureInitialHomePageLoadedAsync();
+        }
+
+        private async Task EnsureInitialHomePageLoadedAsync()
+        {
+            if (_initialHomeLoadCts != null)
+            {
+                StopInitialHomeLoadLoop("重启初始主页加载");
+            }
+
+            var cts = new CancellationTokenSource();
+            _initialHomeLoadCts = cts;
+            var token = cts.Token;
+            int attempt = 0;
+            bool showErrorDialog = true;
+            StartInitialHomeFocusCountdown();
+
+            while (!token.IsCancellationRequested)
+            {
+                attempt++;
+                try
+                {
+                    bool loaded = await LoadHomePageAsync(
+                        skipSave: false,
+                        showErrorDialog: showErrorDialog,
+                        isInitialLoad: true,
+                        cancellationToken: token);
+
+                    if (loaded)
+                    {
+                        StopInitialHomeLoadLoop("初始主页加载完成", cancelToken: false);
+                        return;
+                    }
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    System.Diagnostics.Debug.WriteLine("[HomePage] 初始主页加载被取消");
+                    return;
+                }
+
+                showErrorDialog = false;
+                try
+                {
+                    UpdateStatusBar($"主页加载失败，{InitialHomeRetryDelayMs / 1000.0:F1} 秒后重试（第 {attempt + 1} 次）...");
+                    await Task.Delay(InitialHomeRetryDelayMs, token);
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    System.Diagnostics.Debug.WriteLine("[HomePage] 主页加载重试等待被取消");
+                    return;
+                }
+            }
+        }
+
+        private void StopInitialHomeLoadLoop(string reason, bool cancelToken = true)
+        {
+            var cts = _initialHomeLoadCts;
+            if (cts == null)
+            {
+                return;
+            }
+
+            System.Diagnostics.Debug.WriteLine($"[HomePage] {(cancelToken ? "取消" : "清理")}初始加载: {reason}");
+            _initialHomeLoadCts = null;
+            StopInitialHomeFocusCountdown(markCompleted: !cancelToken);
+            _initialHomeFocusSuppressed = false;
+
+            if (cancelToken)
+            {
+                try
+                {
+                    cts.Cancel();
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+            }
+
+            cts.Dispose();
+        }
+
+        private void StartInitialHomeFocusCountdown()
+        {
+            StopInitialHomeFocusCountdown(markCompleted: false);
+            _initialHomeLoadCompleted = false;
+            _initialHomeFocusSuppressed = false;
+
+            var focusCts = new CancellationTokenSource();
+            _initialHomeFocusTimeoutCts = focusCts;
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay(InitialHomeFocusTimeout, focusCts.Token);
+
+                    if (!focusCts.Token.IsCancellationRequested && !_initialHomeLoadCompleted)
+                    {
+                        _initialHomeFocusSuppressed = true;
+                        System.Diagnostics.Debug.WriteLine("[HomePage] 初始主页加载超过阈值，自动焦点将被跳过");
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    // 计时被取消，忽略
+                }
+            });
+        }
+
+        private void StopInitialHomeFocusCountdown(bool markCompleted)
+        {
+            var focusCts = _initialHomeFocusTimeoutCts;
+            if (focusCts != null)
+            {
+                _initialHomeFocusTimeoutCts = null;
+                try
+                {
+                    focusCts.Cancel();
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+                focusCts.Dispose();
+            }
+
+            if (markCompleted)
+            {
+                _initialHomeLoadCompleted = true;
+                _initialHomeFocusSuppressed = false;
+            }
         }
 
         #endregion
@@ -1035,13 +1172,6 @@ namespace YTPlayer
 
                         ThrowIfSearchCancelled();
 
-                        // 焦点自动跳转到列表
-                        if (resultListView.Items.Count > 0)
-                        {
-                            resultListView.Items[0].Selected = true;
-                            resultListView.Items[0].Focused = true;
-                            resultListView.Focus();
-                        }
                     }
                 }
                 else if (searchType == "歌单")
@@ -1192,10 +1322,21 @@ namespace YTPlayer
         /// 使用分类结构，避免一次加载过多资源
         /// </summary>
         /// <param name="skipSave">是否跳过保存状态（用于后退时）</param>
-        private async Task LoadHomePageAsync(bool skipSave = false)
+        private async Task<bool> LoadHomePageAsync(
+            bool skipSave = false,
+            bool showErrorDialog = true,
+            bool isInitialLoad = false,
+            CancellationToken cancellationToken = default)
         {
             try
             {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                void ThrowIfHomeLoadCancelled()
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+
                 if (!skipSave)
                 {
                     // 主页是起始页，清空导航历史
@@ -1228,12 +1369,14 @@ namespace YTPlayer
                     try
                     {
                         var userInfo = await _apiClient.GetUserAccountAsync();
+                        ThrowIfHomeLoadCancelled();
                         if (userInfo != null && userInfo.UserId > 0)
                         {
                             _loggedInUserId = userInfo.UserId;
 
                             // 获取用户歌单列表与总数
                             var (playlists, totalCount) = await _apiClient.GetUserPlaylistsAsync(userInfo.UserId);
+                            ThrowIfHomeLoadCancelled();
                             if (playlists != null && playlists.Count > 0)
                             {
                                 likedPlaylist = playlists.FirstOrDefault(p =>
@@ -1253,6 +1396,7 @@ namespace YTPlayer
                             try
                             {
                                 var (_, albumCount) = await _apiClient.GetUserAlbumsAsync(1, 0);
+                                ThrowIfHomeLoadCancelled();
                                 userAlbumCount = albumCount;
                                 System.Diagnostics.Debug.WriteLine($"[HomePage] 收藏专辑数量: {userAlbumCount}");
                             }
@@ -1265,6 +1409,7 @@ namespace YTPlayer
                             try
                             {
                                 var favoriteArtists = await _apiClient.GetArtistSubscriptionsAsync(limit: 1, offset: 0);
+                                ThrowIfHomeLoadCancelled();
                                 artistFavoritesCount = favoriteArtists?.TotalCount ?? favoriteArtists?.Items.Count ?? 0;
                                 System.Diagnostics.Debug.WriteLine($"[HomePage] 收藏歌手数量: {artistFavoritesCount}");
                             }
@@ -1287,6 +1432,7 @@ namespace YTPlayer
                 try
                 {
                     var toplist = await toplistTask;
+                    ThrowIfHomeLoadCancelled();
                     toplistCount = toplist?.Count ?? 0;
                 }
                 catch (Exception ex)
@@ -1297,6 +1443,7 @@ namespace YTPlayer
                 try
                 {
                     var newAlbums = await newAlbumsTask;
+                    ThrowIfHomeLoadCancelled();
                     newAlbumCount = newAlbums?.Count ?? 0;
                 }
                 catch (Exception ex)
@@ -1317,6 +1464,7 @@ namespace YTPlayer
                         _cloudMaxSize = 0;
 
                         cloudSummary = await _apiClient.GetCloudSongsAsync(limit: 1, offset: 0);
+                        ThrowIfHomeLoadCancelled();
                         _cloudTotalCount = cloudSummary.TotalCount;
                         _cloudUsedSize = cloudSummary.UsedSize;
                         _cloudMaxSize = cloudSummary.MaxSize;
@@ -1556,22 +1704,33 @@ namespace YTPlayer
 
                 UpdateStatusBar($"主页加载完成");
 
-                // 焦点跳转到列表
-                if (resultListView.Items.Count > 0)
+                System.Diagnostics.Debug.WriteLine($"[LoadHomePage] 主页加载完成，共 {homeItems.Count} 个分类");
+
+                if (isInitialLoad)
                 {
-                    resultListView.Items[0].Selected = true;
-                    resultListView.Items[0].Focused = true;
-                    resultListView.Focus();
+                    _initialHomeLoadCompleted = true;
+                    StopInitialHomeFocusCountdown(markCompleted: true);
+                    _initialHomeFocusSuppressed = false;
                 }
 
-                System.Diagnostics.Debug.WriteLine($"[LoadHomePage] 主页加载完成，共 {homeItems.Count} 个分类");
+                return true;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                System.Diagnostics.Debug.WriteLine("[LoadHomePage] 主页加载被取消");
+                UpdateStatusBar("主页加载已取消");
+                return false;
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[LoadHomePage] 异常: {ex}");
-                MessageBox.Show($"加载主页失败: {ex.Message}\n\n请检查网络连接或稍后再试。", "错误",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                if (showErrorDialog)
+                {
+                    MessageBox.Show($"加载主页失败: {ex.Message}\n\n请检查网络连接或稍后再试。", "错误",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
                 UpdateStatusBar("加载主页失败");
+                return false;
             }
         }
 
@@ -2718,7 +2877,7 @@ namespace YTPlayer
 
             SetViewContext(viewSource, defaultAccessibleName);
 
-            if (resultListView.Items.Count > 0)
+            if (!IsListAutoFocusSuppressed && resultListView.Items.Count > 0)
             {
                 int targetIndex = previousSelectedIndex >= 0
                     ? Math.Min(previousSelectedIndex, resultListView.Items.Count - 1)
@@ -2850,7 +3009,7 @@ namespace YTPlayer
 
             SetViewContext(viewSource, defaultAccessibleName);
 
-            if (resultListView.Items.Count > 0)
+            if (!IsListAutoFocusSuppressed && resultListView.Items.Count > 0)
             {
                 int targetIndex = previousSelectedIndex >= 0
                     ? Math.Min(previousSelectedIndex, resultListView.Items.Count - 1)
@@ -2938,7 +3097,7 @@ namespace YTPlayer
 
             resultListView.EndUpdate();
 
-            if (resultListView.Items.Count > 0)
+            if (!IsListAutoFocusSuppressed && resultListView.Items.Count > 0)
             {
                 resultListView.Items[0].Selected = true;
                 resultListView.Items[0].Focused = true;
@@ -3032,7 +3191,7 @@ namespace YTPlayer
 
             SetViewContext(viewSource, defaultAccessibleName);
 
-            if (resultListView.Items.Count > 0)
+            if (!IsListAutoFocusSuppressed && resultListView.Items.Count > 0)
             {
                 int targetIndex = previousSelectedIndex >= 0
                     ? Math.Min(previousSelectedIndex, resultListView.Items.Count - 1)
@@ -6573,6 +6732,11 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
         /// </summary>
         private void SaveNavigationState()
         {
+            if (_initialHomeLoadCts != null)
+            {
+                StopInitialHomeLoadLoop("保存导航状态前中断主页加载");
+            }
+
             // 只有当当前有内容时才保存
             if (_currentSongs.Count == 0 && _currentPlaylists.Count == 0 &&
                 _currentAlbums.Count == 0 && _currentListItems.Count == 0 &&
@@ -6801,6 +6965,8 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
         private async Task<bool> RestoreNavigationStateAsync(NavigationHistoryItem state)
         {
             string previousViewSource = _currentViewSource ?? string.Empty;
+            int previousAutoFocusDepth = _autoFocusSuppressionDepth;
+            _autoFocusSuppressionDepth++;
             try
             {
                 switch (state.PageType)
@@ -6928,6 +7094,10 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 UpdateStatusBar("返回失败");
                 _currentViewSource = previousViewSource;
                 return false;
+            }
+            finally
+            {
+                _autoFocusSuppressionDepth = previousAutoFocusDepth;
             }
         }
 
@@ -8012,10 +8182,11 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
         /// <summary>
         /// 窗体关闭
         /// </summary>
-protected override void OnFormClosing(FormClosingEventArgs e)
-{
-    _isFormClosing = true;
-    base.OnFormClosing(e);
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            _isFormClosing = true;
+            StopInitialHomeLoadLoop("窗口关闭");
+            base.OnFormClosing(e);
 
     try
     {
