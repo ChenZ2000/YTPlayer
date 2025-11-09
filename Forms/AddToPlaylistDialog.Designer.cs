@@ -89,7 +89,7 @@ namespace YTPlayer.Forms
             this.createPlaylistButton.Name = "createPlaylistButton";
             this.createPlaylistButton.Size = new System.Drawing.Size(120, 32);
             this.createPlaylistButton.TabIndex = 2;
-            this.createPlaylistButton.Text = "创建新歌单...";
+            this.createPlaylistButton.Text = "新建歌单...";
             this.createPlaylistButton.UseVisualStyleBackColor = true;
             this.createPlaylistButton.Click += new System.EventHandler(this.createPlaylistButton_Click);
             //

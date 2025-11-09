@@ -161,9 +161,6 @@ namespace YTPlayer.Forms
 
             AddInfoRow(table, "姓名", FormatValue(_detail.Name));
             AddInfoRow(table, "别名", FormatAlias(_detail.Alias));
-            AddInfoRow(table, "地区", FormatValue(_detail.AreaName));
-            AddInfoRow(table, "类型", FormatValue(_detail.TypeName));
-
             var agency = TakeMetadataValue("经纪公司");
             if (!string.IsNullOrWhiteSpace(agency))
             {

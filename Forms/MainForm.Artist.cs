@@ -41,9 +41,9 @@ namespace YTPlayer
         {
             columnHeader1.Text = "#";
             columnHeader2.Text = "歌手";
-            columnHeader3.Text = "地区 / 类型";
-            columnHeader4.Text = "作品统计";
-            columnHeader5.Text = "简介";
+            columnHeader3.Text = "作品统计";
+            columnHeader4.Text = "简介";
+            columnHeader5.Text = string.Empty;
         }
 
         private void DisplayArtists(
@@ -95,12 +95,6 @@ namespace YTPlayer
                     }
                 }
 
-                string areaAndType = string.IsNullOrWhiteSpace(artist.TypeName)
-                    ? artist.AreaName
-                    : string.IsNullOrWhiteSpace(artist.AreaName)
-                        ? artist.TypeName
-                        : string.Join(" · ", new[] { artist.AreaName, artist.TypeName }.Where(s => !string.IsNullOrWhiteSpace(s)));
-
                 string counts = $"歌曲 {artist.MusicCount} / 专辑 {artist.AlbumCount}";
                 string description = !string.IsNullOrWhiteSpace(artist.Description)
                     ? artist.Description
@@ -110,9 +104,9 @@ namespace YTPlayer
                 {
                     displayNumber.ToString(),
                     artist.Name ?? "未知",
-                    areaAndType,
                     counts,
-                    description ?? string.Empty
+                    description ?? string.Empty,
+                    string.Empty
                 })
                 {
                     Tag = artist
@@ -362,7 +356,7 @@ namespace YTPlayer
             }
         }
 
-        private async Task LoadArtistFavoritesAsync(bool skipSave = false)
+        private async Task LoadArtistFavoritesAsync(bool skipSave = false, bool preserveSelection = false)
         {
             try
             {
@@ -381,15 +375,23 @@ namespace YTPlayer
                 }
 
                 var result = await _apiClient.GetArtistSubscriptionsAsync(limit: 200, offset: 0);
-                DisplayArtists(result.Items,
-                    showPagination: result.HasMore,
-                    hasNextPage: result.HasMore,
-                    startIndex: result.Offset + 1,
-                    preserveSelection: false,
+                var favoriteArtists = result?.Items ?? new List<ArtistInfo>();
+                bool hasMore = result?.HasMore ?? false;
+                int offset = result?.Offset ?? 0;
+                foreach (var artist in favoriteArtists)
+                {
+                    artist.IsSubscribed = true;
+                }
+
+                DisplayArtists(favoriteArtists,
+                    showPagination: hasMore,
+                    hasNextPage: hasMore,
+                    startIndex: offset + 1,
+                    preserveSelection: preserveSelection,
                     viewSource: "artist_favorites",
                     accessibleName: "收藏的歌手");
 
-                UpdateStatusBar($"收藏的歌手：{result.Items.Count} 位");
+                UpdateStatusBar($"收藏的歌手：{favoriteArtists.Count} 位");
             }
             catch (Exception ex)
             {
@@ -412,7 +414,6 @@ namespace YTPlayer
                 Type = ListItemType.Category,
                 CategoryId = $"artist_type_{option.Code}",
                 CategoryName = option.DisplayName,
-                CategoryDescription = "选择地区以浏览对应歌手"
             }).ToList();
 
             DisplayListItems(items,
@@ -439,7 +440,6 @@ namespace YTPlayer
                 Type = ListItemType.Category,
                 CategoryId = $"artist_area_{typeCode}_{option.Code}",
                 CategoryName = option.DisplayName,
-                CategoryDescription = "加载对应地区的歌手列表"
             }).ToList();
 
             DisplayListItems(items,
@@ -507,24 +507,26 @@ namespace YTPlayer
             subscribeAlbumMenuItem.Visible = false;
             unsubscribeAlbumMenuItem.Visible = false;
 
-            toolStripSeparatorArtist.Visible = true;
-            viewArtistDetailMenuItem.Visible = true;
             shareArtistMenuItem.Visible = true;
-            viewArtistDetailMenuItem.Tag = artist;
             shareArtistMenuItem.Tag = artist;
             subscribeArtistMenuItem.Tag = artist;
             unsubscribeArtistMenuItem.Tag = artist;
+
+            bool hasArtistActions = shareArtistMenuItem.Visible;
 
             if (IsUserLoggedIn())
             {
                 subscribeArtistMenuItem.Visible = !artist.IsSubscribed;
                 unsubscribeArtistMenuItem.Visible = artist.IsSubscribed;
+                hasArtistActions |= subscribeArtistMenuItem.Visible || unsubscribeArtistMenuItem.Visible;
             }
             else
             {
                 subscribeArtistMenuItem.Visible = false;
                 unsubscribeArtistMenuItem.Visible = false;
             }
+
+            toolStripSeparatorArtist.Visible = hasArtistActions;
         }
 
         private ArtistInfo? GetArtistFromMenuSender(object sender)
@@ -556,15 +558,6 @@ namespace YTPlayer
             }
 
             return null;
-        }
-
-        private async void viewArtistDetailMenuItem_Click(object sender, EventArgs e)
-        {
-            var artist = GetArtistFromMenuSender(sender);
-            if (artist != null)
-            {
-                await OpenArtistAsync(artist);
-            }
         }
 
         private void shareArtistMenuItem_Click(object sender, EventArgs e)
@@ -715,9 +708,9 @@ namespace YTPlayer
                     {
                         info.MusicCount = musicCount;
                         info.AlbumCount = albumCount;
-                        if (item.SubItems.Count > 3)
+                        if (item.SubItems.Count > 2)
                         {
-                            item.SubItems[3].Text = $"歌曲 {musicCount} / 专辑 {albumCount}";
+                            item.SubItems[2].Text = $"歌曲 {musicCount} / 专辑 {albumCount}";
                         }
 
                         break;
@@ -831,7 +824,7 @@ namespace YTPlayer
             {
                 if (string.Equals(_currentViewSource, "artist_favorites", StringComparison.OrdinalIgnoreCase))
                 {
-                    await LoadArtistFavoritesAsync(skipSave: true);
+                    await LoadArtistFavoritesAsync(skipSave: true, preserveSelection: true);
                 }
                 else if (_currentViewSource != null && _currentViewSource.StartsWith("artist_songs:", StringComparison.OrdinalIgnoreCase))
                 {

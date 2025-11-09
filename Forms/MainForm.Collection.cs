@@ -44,10 +44,15 @@ namespace YTPlayer
 
             if (song != null)
             {
+                if (!TryResolveSongIdForLibraryActions(song, "收藏歌曲", out var targetSongId))
+                {
+                    return;
+                }
+
                 try
                 {
                     UpdateStatusBar("正在收藏歌曲...");
-                    bool success = await _apiClient.LikeSongAsync(song.Id, true);
+                    bool success = await _apiClient.LikeSongAsync(targetSongId, true);
 
                     if (success)
                     {
@@ -100,10 +105,15 @@ namespace YTPlayer
 
             if (song != null)
             {
+                if (!TryResolveSongIdForLibraryActions(song, "取消收藏歌曲", out var targetSongId))
+                {
+                    return;
+                }
+
                 try
                 {
                     UpdateStatusBar("正在取消收藏...");
-                    bool success = await _apiClient.LikeSongAsync(song.Id, false);
+                    bool success = await _apiClient.LikeSongAsync(targetSongId, false);
 
                     if (success)
                     {
@@ -188,10 +198,15 @@ namespace YTPlayer
 
             if (song != null)
             {
+                if (!TryResolveSongIdForLibraryActions(song, "从歌单中移除歌曲", out var targetSongId))
+                {
+                    return;
+                }
+
                 try
                 {
                     UpdateStatusBar("正在从歌单中移除歌曲...");
-                    bool success = await _apiClient.RemoveTracksFromPlaylistAsync(playlistIdValue, new[] { song.Id });
+                    bool success = await _apiClient.RemoveTracksFromPlaylistAsync(playlistIdValue, new[] { targetSongId });
 
                     if (success)
                     {
@@ -261,6 +276,11 @@ namespace YTPlayer
 
             if (song != null)
             {
+                if (!TryResolveSongIdForLibraryActions(song, "添加到歌单", out var targetSongId))
+                {
+                    return;
+                }
+
                 try
                 {
                     // 获取用户信息
@@ -275,14 +295,14 @@ namespace YTPlayer
                     long userId = long.Parse(userInfo.UserId);
 
                     // 打开歌单选择对话框
-                    using (var dialog = new AddToPlaylistDialog(_apiClient, song.Id, userId))
+                    using (var dialog = new AddToPlaylistDialog(_apiClient, targetSongId, userId))
                     {
                         if (dialog.ShowDialog(this) == DialogResult.OK && !string.IsNullOrEmpty(dialog.SelectedPlaylistId))
                         {
                             // 添加歌曲到选中的歌单
                             UpdateStatusBar("正在添加歌曲到歌单...");
                             string targetPlaylistId = dialog.SelectedPlaylistId!;
-                            bool success = await _apiClient.AddTracksToPlaylistAsync(targetPlaylistId, new[] { song.Id });
+                            bool success = await _apiClient.AddTracksToPlaylistAsync(targetPlaylistId, new[] { targetSongId });
 
                             if (success)
                             {
@@ -309,5 +329,62 @@ namespace YTPlayer
         }
 
         #endregion
+
+        private bool TryResolveSongIdForLibraryActions(SongInfo? song, string actionDescription, out string resolvedSongId)
+        {
+            resolvedSongId = string.Empty;
+
+            if (!CanSongUseLibraryFeatures(song))
+            {
+                if (song?.IsCloudSong == true)
+                {
+                    MessageBox.Show($"当前云盘歌曲尚未匹配到网易云曲库，无法执行“{actionDescription}”。",
+                        "暂不支持", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                else
+                {
+                    MessageBox.Show($"无法执行“{actionDescription}”，歌曲缺少必要的ID信息。",
+                        "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+
+                return false;
+            }
+
+            if (song == null)
+            {
+                return false;
+            }
+
+            resolvedSongId = song.IsCloudSong && !string.IsNullOrWhiteSpace(song.CloudMatchedSongId)
+                ? song.CloudMatchedSongId!
+                : song.Id;
+
+            return !string.IsNullOrWhiteSpace(resolvedSongId);
+        }
+
+        private static bool CanSongUseLibraryFeatures(SongInfo? song)
+        {
+            if (song == null)
+            {
+                return false;
+            }
+
+            if (!song.IsCloudSong)
+            {
+                return !string.IsNullOrWhiteSpace(song.Id);
+            }
+
+            if (!string.IsNullOrWhiteSpace(song.CloudMatchedSongId))
+            {
+                return true;
+            }
+
+            if (string.IsNullOrWhiteSpace(song.Id) || string.IsNullOrWhiteSpace(song.CloudSongId))
+            {
+                return false;
+            }
+
+            return !string.Equals(song.Id, song.CloudSongId, StringComparison.Ordinal);
+        }
     }
 }

@@ -106,7 +106,7 @@ namespace YTPlayer.Models
                     ListItemType.Song => Song?.Artist ?? string.Empty,
                     ListItemType.Playlist => Playlist?.Creator ?? string.Empty,
                     ListItemType.Album => Album?.Artist ?? string.Empty,
-                    ListItemType.Artist => Artist?.AreaName ?? string.Empty,
+                    ListItemType.Artist => string.Empty,
                     ListItemType.Category => string.Empty,
                     _ => string.Empty
                 };
@@ -143,7 +143,7 @@ namespace YTPlayer.Models
                 {
                     ListItemType.Category => CategoryDescription ?? string.Empty,
                     ListItemType.Playlist => Playlist?.Description ?? string.Empty,
-                    ListItemType.Album => FormatCount(Album?.TrackCount),
+                    ListItemType.Album => Album?.Description ?? string.Empty,
                     ListItemType.Artist => !string.IsNullOrWhiteSpace(Artist?.Description)
                         ? Artist!.Description
                         : Artist?.BriefDesc ?? string.Empty,

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using YTPlayer.Models;
@@ -26,32 +27,6 @@ namespace YTPlayer.Utils
             { 2, "女歌手" },
             { 3, "乐队/组合" }
         };
-
-        /// <summary>
-        /// 获取地区名称。
-        /// </summary>
-        public static string ResolveAreaName(int areaCode)
-        {
-            if (AreaMappings.TryGetValue(areaCode, out var name))
-            {
-                return name;
-            }
-
-            return "其他";
-        }
-
-        /// <summary>
-        /// 获取歌手类型名称。
-        /// </summary>
-        public static string ResolveTypeName(int typeCode)
-        {
-            if (TypeMappings.TryGetValue(typeCode, out var name))
-            {
-                return name;
-            }
-
-            return "其他";
-        }
 
         /// <summary>
         /// 获取地区分类选项列表。

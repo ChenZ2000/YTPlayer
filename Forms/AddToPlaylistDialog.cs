@@ -179,18 +179,22 @@ namespace YTPlayer.Forms
 
         private async void createPlaylistButton_Click(object sender, EventArgs e)
         {
-            string? playlistName = Microsoft.VisualBasic.Interaction.InputBox(
-                "请输入新歌单的名称:",
-                "创建歌单",
-                "",
-                -1, -1);
+            string trimmedName;
+            using (var dialog = new NewPlaylistDialog())
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK)
+                {
+                    return;
+                }
 
-            if (string.IsNullOrWhiteSpace(playlistName))
+                trimmedName = dialog.PlaylistName;
+            }
+
+            if (string.IsNullOrWhiteSpace(trimmedName))
             {
                 return;
             }
 
-            string trimmedName = playlistName.Trim();
             var existingIds = CaptureCurrentPlaylistIds();
 
             createPlaylistButton.Enabled = false;
@@ -213,12 +217,12 @@ namespace YTPlayer.Forms
                     return;
                 }
 
-                MessageBox.Show("创建歌单失败，请稍后重试。", "错误",
+                MessageBox.Show("新建歌单失败，请稍后重试。", "错误",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"创建歌单失败: {ex.Message}", "错误",
+                MessageBox.Show($"新建歌单失败: {ex.Message}", "错误",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
 

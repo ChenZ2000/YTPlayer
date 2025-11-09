@@ -204,6 +204,11 @@ namespace YTPlayer.Models
         public long TrialEnd { get; set; }
 
         /// <summary>
+        /// 是否需要 VIP 才能播放。
+        /// </summary>
+        public bool RequiresVip { get; set; }
+
+        /// <summary>
         /// 设置特定音质的URL信息
         /// </summary>
         public void SetQualityUrl(string level, string url, long size, bool isAvailable, bool isTrial = false, long trialStart = 0, long trialEnd = 0)

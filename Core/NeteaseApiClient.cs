@@ -5878,9 +5878,11 @@ namespace YTPlayer.Core
                 {
                     Id = item["id"]?.Value<string>(),
                     Name = item["name"]?.Value<string>(),
-                    Artist = item["artist"]?.Value<string>() ?? item["artists"]?[0]?["name"]?.Value<string>(),
+                    Artist = ResolveAlbumArtistName(item),
                     PicUrl = item["picUrl"]?.Value<string>(),
-                    PublishTime = item["publishTime"]?.Value<long>().ToString()
+                    PublishTime = FormatAlbumPublishDate(item["publishTime"]?.Value<long>()),
+                    TrackCount = ResolveAlbumTrackCount(item),
+                    Description = ResolveAlbumDescription(item)
                 };
 
                 result.Add(album);
@@ -6014,6 +6016,19 @@ namespace YTPlayer.Core
                     if (string.IsNullOrEmpty(song.Album))
                     {
                         song.Album = item["album"]?.Value<string>() ?? string.Empty;
+                    }
+
+                    if (song.IsCloudSong)
+                    {
+                        if (string.Equals(song.Artist, "未知艺术家", StringComparison.OrdinalIgnoreCase))
+                        {
+                            song.Artist = string.Empty;
+                        }
+
+                        if (string.Equals(song.Album, "未知专辑", StringComparison.OrdinalIgnoreCase))
+                        {
+                            song.Album = string.Empty;
+                        }
                     }
 
                     page.Songs.Add(song);
@@ -6662,7 +6677,8 @@ namespace YTPlayer.Core
                 CloudSongId = cloudId,
                 CloudFileSize = entry["fileSize"]?.Value<long>() ?? 0,
                 CloudUploadTime = entry["addTime"]?.Value<long>(),
-                IsAvailable = true
+                IsAvailable = true,
+                RequiresVip = false
             };
 
             long durationMs = entry["simpleSong"]?["duration"]?.Value<long>() ??
@@ -6777,6 +6793,14 @@ namespace YTPlayer.Core
                         Duration = (int)(songData["dt"]?.Value<long>() ?? songData["duration"]?.Value<long>() ?? 0),
                         PicUrl = (songData["al"] ?? songData["album"])?["picUrl"]?.Value<string>() ?? ""
                     };
+                    if (songData is JObject playRecordSong)
+                    {
+                        song.RequiresVip = IsVipSong(playRecordSong);
+                    }
+                    if (songData is JObject recentSongObj)
+                    {
+                        song.RequiresVip = IsVipSong(recentSongObj);
+                    }
 
                     var recordArtists = songData["ar"] as JArray ?? songData["artists"] as JArray;
                     if (recordArtists != null && recordArtists.Count > 0)
@@ -7033,9 +7057,11 @@ namespace YTPlayer.Core
                     {
                         Id = albumData["id"]?.Value<string>() ?? albumData["id"]?.Value<long>().ToString(),
                         Name = albumData["name"]?.Value<string>() ?? "未知专辑",
-                        Artist = albumData["artist"]?["name"]?.Value<string>() ?? "未知艺术家",
+                        Artist = ResolveAlbumArtistName(albumData),
                         PicUrl = albumData["picUrl"]?.Value<string>() ?? "",
-                        PublishTime = albumData["publishTime"]?.Value<long>().ToString() ?? ""
+                        PublishTime = FormatAlbumPublishDate(albumData["publishTime"]?.Value<long>()),
+                        TrackCount = ResolveAlbumTrackCount(albumData),
+                        Description = ResolveAlbumDescription(albumData)
                     };
 
                     result.Add(album);
@@ -7147,9 +7173,11 @@ namespace YTPlayer.Core
                     {
                         Id = album["id"]?.Value<string>() ?? album["id"]?.Value<long>().ToString(),
                         Name = album["name"]?.Value<string>() ?? "未知专辑",
-                        Artist = album["artist"]?["name"]?.Value<string>() ?? "未知艺术家",
+                        Artist = ResolveAlbumArtistName(album),
                         PicUrl = album["picUrl"]?.Value<string>() ?? "",
-                        PublishTime = album["publishTime"]?.Value<long>().ToString() ?? ""
+                        PublishTime = FormatAlbumPublishDate(album["publishTime"]?.Value<long>()),
+                        TrackCount = ResolveAlbumTrackCount(album),
+                        Description = ResolveAlbumDescription(album)
                     };
 
                     result.Add(albumInfo);
@@ -7306,8 +7334,8 @@ namespace YTPlayer.Core
                 }
             }
 
-            artistInfo.AreaName = ArtistMetadataHelper.ResolveAreaName(artistInfo.AreaCode);
-            artistInfo.TypeName = ArtistMetadataHelper.ResolveTypeName(artistInfo.TypeCode);
+            artistInfo.AreaName = string.Empty;
+            artistInfo.TypeName = string.Empty;
             artistInfo.BriefDesc = NormalizeSummary(artistInfo.BriefDesc);
             artistInfo.Description = NormalizeDescription(artistInfo.Description, artistInfo.BriefDesc);
 
@@ -7378,6 +7406,7 @@ namespace YTPlayer.Core
                         PicUrl = albumPic,
                         IsAvailable = status >= 0
                     };
+                    songInfo.RequiresVip = IsVipSong(song);
 
                     // 解析艺术家
                     var artists = song["ar"] as JArray ?? song["artists"] as JArray;
@@ -7683,6 +7712,129 @@ namespace YTPlayer.Core
             }
         }
 
+        private static string ResolveAlbumArtistName(JToken? albumToken)
+        {
+            if (albumToken == null)
+            {
+                return string.Empty;
+            }
+
+            var names = new List<string>();
+
+            void AddName(string? value)
+            {
+                if (!string.IsNullOrWhiteSpace(value))
+                {
+                    names.Add(value.Trim());
+                }
+            }
+
+            if (albumToken["artist"] is JObject artistObj)
+            {
+                AddName(artistObj["name"]?.Value<string>());
+            }
+            else
+            {
+                AddName(albumToken["artist"]?.Value<string>());
+            }
+
+            var artistsArray = albumToken["artists"] as JArray ?? albumToken["ar"] as JArray;
+            if (artistsArray != null)
+            {
+                foreach (var artist in artistsArray.OfType<JToken>())
+                {
+                    AddName(artist["name"]?.Value<string>());
+                }
+            }
+
+            AddName(albumToken["artistName"]?.Value<string>());
+            AddName(albumToken["singerName"]?.Value<string>());
+
+            if (names.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            return string.Join("/", names.Distinct(StringComparer.OrdinalIgnoreCase));
+        }
+
+        private static int ResolveAlbumTrackCount(JToken? albumToken)
+        {
+            if (albumToken == null)
+            {
+                return 0;
+            }
+
+            var candidates = new[]
+            {
+                albumToken["trackCount"],
+                albumToken["size"],
+                albumToken["songCount"],
+                albumToken["trackTotal"],
+                albumToken["songs"]
+            };
+
+            foreach (var candidate in candidates)
+            {
+                if (candidate == null)
+                {
+                    continue;
+                }
+
+                if (candidate.Type == JTokenType.Integer || candidate.Type == JTokenType.Float)
+                {
+                    return Math.Max(0, candidate.Value<int>());
+                }
+
+                if (int.TryParse(candidate.Value<string>(), out var parsed))
+                {
+                    return Math.Max(0, parsed);
+                }
+            }
+
+            if (albumToken["songs"] is JArray songsArray)
+            {
+                return songsArray.Count;
+            }
+
+            return 0;
+        }
+
+        private static string ResolveAlbumDescription(JToken? albumToken)
+        {
+            if (albumToken == null)
+            {
+                return string.Empty;
+            }
+
+            string? description =
+                albumToken["description"]?.Value<string>() ??
+                albumToken["briefDesc"]?.Value<string>() ??
+                albumToken["desc"]?.Value<string>() ??
+                albumToken["info"]?["introduction"]?.Value<string>() ??
+                albumToken["intro"]?.Value<string>();
+
+            return NormalizeSummary(description, maxLength: 200);
+        }
+
+        private static string FormatAlbumPublishDate(long? publishTime)
+        {
+            if (!publishTime.HasValue || publishTime.Value <= 0)
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                return DateTimeOffset.FromUnixTimeMilliseconds(publishTime.Value)
+                    .DateTime.ToString("yyyy-MM-dd");
+            }
+            catch
+            {
+                return string.Empty;
+            }
+        }
+
         /// <summary>
         /// 解析专辑列表
         /// </summary>
@@ -7700,16 +7852,13 @@ namespace YTPlayer.Core
                         Id = album["id"]?.Value<string>(),
                         Name = album["name"]?.Value<string>(),
                         PicUrl = album["picUrl"]?.Value<string>(),
-                        Artist = album["artist"]?["name"]?.Value<string>(),
-                        TrackCount = album["size"]?.Value<int>() ?? 0
+                        Artist = ResolveAlbumArtistName(album),
+                        TrackCount = ResolveAlbumTrackCount(album),
+                        Description = ResolveAlbumDescription(album)
                     };
 
                     var publishTime = album["publishTime"]?.Value<long>();
-                    if (publishTime.HasValue)
-                    {
-                        albumInfo.PublishTime = DateTimeOffset.FromUnixTimeMilliseconds(publishTime.Value)
-                            .DateTime.ToString("yyyy-MM-dd");
-                    }
+                    albumInfo.PublishTime = FormatAlbumPublishDate(publishTime);
 
                     result.Add(albumInfo);
                 }
@@ -7787,6 +7936,23 @@ namespace YTPlayer.Core
 
             combined = Regex.Replace(combined.Trim(), "\\s+", " ");
             return TrimToLength(combined, maxLength);
+        }
+
+        private static bool IsVipSong(JObject? song)
+        {
+            if (song == null)
+            {
+                return false;
+            }
+
+            int fee = song["fee"]?.Value<int?>() ?? 0;
+            if (fee == 0)
+            {
+                var privilege = song["privilege"] as JObject;
+                fee = privilege?["fee"]?.Value<int?>() ?? 0;
+            }
+
+            return fee == 1;
         }
 
         private static string NormalizeSummary(string? source, int maxLength = 140)
@@ -8213,6 +8379,7 @@ namespace YTPlayer.Core
         public string PicUrl { get; set; } = string.Empty;
         public string PublishTime { get; set; } = string.Empty;
         public int TrackCount { get; set; }
+        public string Description { get; set; } = string.Empty;
     }
 
     /// <summary>

@@ -91,6 +91,7 @@
             this.subscribePlaylistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.unsubscribePlaylistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.deletePlaylistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.createPlaylistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.subscribeAlbumMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.unsubscribeAlbumMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.toolStripSeparatorView = new System.Windows.Forms.ToolStripSeparator();
@@ -102,7 +103,6 @@
             this.sharePlaylistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.shareAlbumMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.toolStripSeparatorArtist = new System.Windows.Forms.ToolStripSeparator();
-            this.viewArtistDetailMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.shareArtistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.subscribeArtistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.unsubscribeArtistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
@@ -523,7 +523,7 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             this.resultListView.TabIndex = 1;
             this.resultListView.UseCompatibleStateImageBehavior = false;
             this.resultListView.View = System.Windows.Forms.View.Details;
-            this.resultListView.AccessibleName = "主列表";
+            this.resultListView.AccessibleName = "正在加载";
             this.resultListView.ContextMenuStrip = this.songContextMenu;
             this.resultListView.ItemActivate += new System.EventHandler(this.resultListView_ItemActivate);
             this.resultListView.DoubleClick += new System.EventHandler(this.resultListView_DoubleClick);
@@ -694,6 +694,7 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             this.subscribePlaylistMenuItem,
             this.unsubscribePlaylistMenuItem,
             this.deletePlaylistMenuItem,
+            this.createPlaylistMenuItem,
             this.subscribeAlbumMenuItem,
             this.unsubscribeAlbumMenuItem,
             this.toolStripSeparatorView,
@@ -703,7 +704,6 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             this.sharePlaylistMenuItem,
             this.shareAlbumMenuItem,
             this.toolStripSeparatorArtist,
-            this.viewArtistDetailMenuItem,
             this.shareArtistMenuItem,
             this.subscribeArtistMenuItem,
             this.unsubscribeArtistMenuItem,
@@ -792,6 +792,14 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             this.deletePlaylistMenuItem.Text = "删除歌单(&D)";
             this.deletePlaylistMenuItem.Click += new System.EventHandler(this.deletePlaylistMenuItem_Click);
             //
+            // createPlaylistMenuItem
+            //
+            this.createPlaylistMenuItem.Name = "createPlaylistMenuItem";
+            this.createPlaylistMenuItem.Size = new System.Drawing.Size(210, 24);
+            this.createPlaylistMenuItem.Text = "新建歌单(&N)...";
+            this.createPlaylistMenuItem.Visible = false;
+            this.createPlaylistMenuItem.Click += new System.EventHandler(this.createPlaylistMenuItem_Click);
+            //
             // subscribeAlbumMenuItem
             //
             this.subscribeAlbumMenuItem.Name = "subscribeAlbumMenuItem";
@@ -833,15 +841,6 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             this.toolStripSeparatorArtist.Name = "toolStripSeparatorArtist";
             this.toolStripSeparatorArtist.Size = new System.Drawing.Size(207, 6);
             this.toolStripSeparatorArtist.Visible = false;
-            //
-            // viewArtistDetailMenuItem
-            //
-            this.viewArtistDetailMenuItem.Name = "viewArtistDetailMenuItem";
-            this.viewArtistDetailMenuItem.Size = new System.Drawing.Size(210, 24);
-            this.viewArtistDetailMenuItem.Text = "查看歌手(&V)";
-            this.viewArtistDetailMenuItem.Visible = false;
-            this.viewArtistDetailMenuItem.Click += new System.EventHandler(this.viewArtistDetailMenuItem_Click);
-            //
             // shareSongMenuItem
             //
             this.shareSongMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
@@ -1109,13 +1108,13 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
         private System.Windows.Forms.ToolStripMenuItem subscribePlaylistMenuItem;
         private System.Windows.Forms.ToolStripMenuItem unsubscribePlaylistMenuItem;
         private System.Windows.Forms.ToolStripMenuItem deletePlaylistMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem createPlaylistMenuItem;
         private System.Windows.Forms.ToolStripMenuItem subscribeAlbumMenuItem;
         private System.Windows.Forms.ToolStripMenuItem unsubscribeAlbumMenuItem;
         private System.Windows.Forms.ToolStripSeparator toolStripSeparatorView;
         private System.Windows.Forms.ToolStripMenuItem viewSongArtistMenuItem;
         private System.Windows.Forms.ToolStripMenuItem viewSongAlbumMenuItem;
         private System.Windows.Forms.ToolStripSeparator toolStripSeparatorArtist;
-        private System.Windows.Forms.ToolStripMenuItem viewArtistDetailMenuItem;
         private System.Windows.Forms.ToolStripMenuItem shareSongMenuItem;
         private System.Windows.Forms.ToolStripMenuItem shareSongWebMenuItem;
         private System.Windows.Forms.ToolStripMenuItem shareSongDirectMenuItem;
