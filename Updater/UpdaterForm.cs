@@ -89,6 +89,9 @@ namespace YTPlayer.Updater
         private async Task RunUpdateWorkflowAsync()
         {
             _state = UpdaterState.Running;
+            HideResumeOption();
+            cancelButton.Text = "取消";
+            cancelButton.Enabled = true;
             var token = _cts.Token;
 
             try
@@ -107,13 +110,11 @@ namespace YTPlayer.Updater
             catch (OperationCanceledException)
             {
                 AppendLog("更新已取消");
-                await RelaunchMainIfNeededAsync().ConfigureAwait(true);
                 ShowCancelledState();
             }
             catch (Exception ex)
             {
                 AppendLog($"更新失败：{ex.Message}");
-                await RelaunchMainIfNeededAsync().ConfigureAwait(true);
                 ShowFailedState(ex.Message);
             }
             finally
@@ -253,18 +254,24 @@ namespace YTPlayer.Updater
         {
             token.ThrowIfCancellationRequested();
             UpdateStage("正在验证版本...");
-            AppendLog("验证 version.txt");
 
-            string versionFile = Path.Combine(_options.TargetDirectory, "version.txt");
-            if (!File.Exists(versionFile))
+            string? expectedRaw = GetExpectedVersionString();
+            if (string.IsNullOrWhiteSpace(expectedRaw))
             {
-                throw new FileNotFoundException("目标目录缺少 version.txt", versionFile);
+                AppendLog("更新计划未指定目标版本，跳过验证");
+                UpdateProgress(VerifyEnd);
+                return;
             }
 
-            string versionText = await Task.Run(() => File.ReadAllText(versionFile), token).ConfigureAwait(true);
-            versionText = versionText.Trim();
-            string expected = NormalizeVersionString(string.IsNullOrWhiteSpace(_plan.DisplayVersion) ? _plan.TargetVersion : _plan.DisplayVersion);
-            string actual = NormalizeVersionString(versionText);
+            string expected = NormalizeVersionString(expectedRaw);
+            string? actual = await GetInstalledVersionAsync(token).ConfigureAwait(true);
+
+            if (string.IsNullOrWhiteSpace(actual))
+            {
+                AppendLog("无法解析已安装版本，跳过验证");
+                UpdateProgress(VerifyEnd);
+                return;
+            }
 
             if (!string.Equals(expected, actual, StringComparison.OrdinalIgnoreCase))
             {
@@ -277,11 +284,11 @@ namespace YTPlayer.Updater
 
         private async Task RelaunchMainAsync()
         {
-            await RelaunchMainIfNeededAsync().ConfigureAwait(true);
+            await RelaunchMainIfNeededAsync("update").ConfigureAwait(true);
             UpdateProgress(RelaunchEnd);
         }
 
-        private async Task RelaunchMainIfNeededAsync()
+        private async Task RelaunchMainIfNeededAsync(string reason = "update")
         {
             if (_mainRestarted)
             {
@@ -305,7 +312,14 @@ namespace YTPlayer.Updater
 
                 Process.Start(startInfo);
                 _mainRestarted = true;
-                AppendLog("已启动新版本主程序");
+                if (reason == "legacy")
+                {
+                    AppendLog("已启动旧版本易听");
+                }
+                else
+                {
+                    AppendLog("已启动新版本主程序");
+                }
             }
             catch (Exception ex)
             {
@@ -322,6 +336,7 @@ namespace YTPlayer.Updater
             AppendLog("更新流程完成");
             cancelButton.Text = "关闭";
             cancelButton.Enabled = true;
+            HideResumeOption();
 
             Task.Run(async () =>
             {
@@ -336,6 +351,7 @@ namespace YTPlayer.Updater
             UpdateStage($"更新失败：{message}");
             cancelButton.Text = "关闭";
             cancelButton.Enabled = true;
+            EnableResumeOption();
         }
 
         private void ShowCancelledState()
@@ -344,6 +360,7 @@ namespace YTPlayer.Updater
             UpdateStage("更新已取消");
             cancelButton.Text = "关闭";
             cancelButton.Enabled = true;
+            EnableResumeOption();
         }
 
         private void ReportDownloadProgress(UpdateDownloadProgress progress)
@@ -404,6 +421,30 @@ namespace YTPlayer.Updater
             logListBox.TopIndex = logListBox.Items.Count - 1;
         }
 
+        private void EnableResumeOption()
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(EnableResumeOption));
+                return;
+            }
+
+            resumeButton.Visible = true;
+            resumeButton.Enabled = true;
+        }
+
+        private void HideResumeOption()
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(HideResumeOption));
+                return;
+            }
+
+            resumeButton.Visible = false;
+            resumeButton.Enabled = true;
+        }
+
         private void cancelButton_Click(object sender, EventArgs e)
         {
             if (_state == UpdaterState.Running && !_cts.IsCancellationRequested)
@@ -414,6 +455,30 @@ namespace YTPlayer.Updater
             }
 
             Close();
+        }
+
+        private async void resumeButton_Click(object sender, EventArgs e)
+        {
+            if (_mainRestarted)
+            {
+                SafeClose();
+                return;
+            }
+
+            resumeButton.Enabled = false;
+            AppendLog("尝试重新启动易听...");
+            await RelaunchMainIfNeededAsync("legacy").ConfigureAwait(true);
+
+            if (_mainRestarted)
+            {
+                AppendLog("易听已重新启动，您可以关闭此窗口。");
+                SafeClose();
+            }
+            else
+            {
+                AppendLog("重新启动失败，请检查日志后重试。");
+                resumeButton.Enabled = true;
+            }
         }
 
         private void SafeClose()
@@ -470,6 +535,73 @@ namespace YTPlayer.Updater
             }
 
             return normalized.Trim().TrimStart('v', 'V');
+        }
+
+        private string? GetExpectedVersionString()
+        {
+            if (!string.IsNullOrWhiteSpace(_plan.DisplayVersion))
+            {
+                return _plan.DisplayVersion;
+            }
+
+            if (!string.IsNullOrWhiteSpace(_plan.TargetVersion))
+            {
+                return _plan.TargetVersion;
+            }
+
+            if (!string.IsNullOrWhiteSpace(_plan.TargetTag))
+            {
+                return _plan.TargetTag;
+            }
+
+            return null;
+        }
+
+        private async Task<string?> GetInstalledVersionAsync(CancellationToken token)
+        {
+            string versionFile = Path.Combine(_options.TargetDirectory, "version.txt");
+
+            if (File.Exists(versionFile))
+            {
+                AppendLog("验证 version.txt");
+                string versionText = await Task.Run(() => File.ReadAllText(versionFile), token).ConfigureAwait(true);
+                return NormalizeVersionString(versionText);
+            }
+
+            AppendLog("未找到 version.txt，尝试读取主程序元数据");
+
+            if (string.IsNullOrWhiteSpace(_options.MainExecutablePath))
+            {
+                AppendLog("主程序路径未知，无法验证版本");
+                return null;
+            }
+
+            string exePath = _options.MainExecutablePath;
+            if (!File.Exists(exePath))
+            {
+                AppendLog("主程序文件不存在，无法验证版本");
+                return null;
+            }
+
+            return await Task.Run(() =>
+            {
+                try
+                {
+                    var info = FileVersionInfo.GetVersionInfo(exePath);
+                    string? candidate = info.ProductVersion;
+                    if (string.IsNullOrWhiteSpace(candidate))
+                    {
+                        candidate = info.FileVersion;
+                    }
+
+                    return NormalizeVersionString(candidate);
+                }
+                catch (Exception ex)
+                {
+                    AppendLog($"读取主程序版本失败：{ex.Message}");
+                    return null;
+                }
+            }, token).ConfigureAwait(true);
         }
 
         private static string BuildArgumentString(string[] args)

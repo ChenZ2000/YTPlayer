@@ -21,6 +21,7 @@ namespace YTPlayer.Updater
             this.progressBar = new System.Windows.Forms.ProgressBar();
             this.logListBox = new System.Windows.Forms.ListBox();
             this.cancelButton = new System.Windows.Forms.Button();
+            this.resumeButton = new System.Windows.Forms.Button();
             this.SuspendLayout();
             // 
             // headingLabel
@@ -71,22 +72,34 @@ namespace YTPlayer.Updater
             this.logListBox.TabIndex = 4;
             // 
             // cancelButton
-            // 
+            //
             this.cancelButton.DialogResult = System.Windows.Forms.DialogResult.Cancel;
             this.cancelButton.Location = new System.Drawing.Point(417, 333);
             this.cancelButton.Name = "cancelButton";
             this.cancelButton.Size = new System.Drawing.Size(111, 32);
             this.cancelButton.TabIndex = 5;
-            this.cancelButton.Text = "取消";
+            this.cancelButton.Text = "关闭";
             this.cancelButton.UseVisualStyleBackColor = true;
             this.cancelButton.Click += new System.EventHandler(this.cancelButton_Click);
-            // 
+            //
+            // resumeButton
+            //
+            this.resumeButton.Location = new System.Drawing.Point(298, 333);
+            this.resumeButton.Name = "resumeButton";
+            this.resumeButton.Size = new System.Drawing.Size(111, 32);
+            this.resumeButton.TabIndex = 6;
+            this.resumeButton.Text = "回到易听";
+            this.resumeButton.UseVisualStyleBackColor = true;
+            this.resumeButton.Visible = false;
+            this.resumeButton.Click += new System.EventHandler(this.resumeButton_Click);
+            //
             // UpdaterForm
-            // 
+            //
             this.AutoScaleDimensions = new System.Drawing.SizeF(8F, 20F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.CancelButton = this.cancelButton;
             this.ClientSize = new System.Drawing.Size(550, 380);
+            this.Controls.Add(this.resumeButton);
             this.Controls.Add(this.cancelButton);
             this.Controls.Add(this.logListBox);
             this.Controls.Add(this.progressBar);
@@ -112,5 +125,6 @@ namespace YTPlayer.Updater
         private System.Windows.Forms.ProgressBar progressBar;
         private System.Windows.Forms.ListBox logListBox;
         private System.Windows.Forms.Button cancelButton;
+        private System.Windows.Forms.Button resumeButton;
     }
 }
