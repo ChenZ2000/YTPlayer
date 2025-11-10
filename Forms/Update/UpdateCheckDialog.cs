@@ -86,7 +86,7 @@ namespace YTPlayer.Forms
                 token.ThrowIfCancellationRequested();
                 _lastResult = result;
 
-                var asset = SelectPreferredAsset(result.Response.Data?.Assets);
+                var asset = UpdateFormatting.SelectPreferredAsset(result.Response.Data?.Assets);
                 bool updateAvailable = result.Response.Data?.UpdateAvailable == true && asset != null;
 
                 progressBar.Style = ProgressBarStyle.Continuous;
@@ -124,7 +124,7 @@ namespace YTPlayer.Forms
         private void ShowUpdateAvailable(UpdatePlan plan, UpdateCheckResult result)
         {
             _state = UpdateDialogState.ReadyToInstall;
-            string versionLabel = FormatVersionLabel(plan, result?.Response?.Data?.Latest?.SemanticVersion);
+            string versionLabel = UpdateFormatting.FormatVersionLabel(plan, result?.Response?.Data?.Latest?.SemanticVersion);
             statusLabel.Text = $"有新版本 {versionLabel}";
 
             updateButton.Visible = true;
@@ -137,7 +137,7 @@ namespace YTPlayer.Forms
             {
                 $"当前版本：v{VersionInfo.Version}",
                 $"最新版本：{versionLabel}",
-                $"更新包：{plan.AssetName}（{FormatSize(plan.AssetSize)}）"
+                $"更新包：{plan.AssetName}（{UpdateFormatting.FormatSize(plan.AssetSize)}）"
             };
 
             if (!string.IsNullOrWhiteSpace(plan.ReleaseTitle))
@@ -169,7 +169,7 @@ namespace YTPlayer.Forms
             updateButton.Visible = false;
 
             string latestText = result?.Response?.Data?.Latest != null
-                ? $"最新版本：{FormatVersionLabel(null, result.Response.Data.Latest.SemanticVersion)}"
+                ? $"最新版本：{UpdateFormatting.FormatVersionLabel(null, result.Response.Data.Latest.SemanticVersion)}"
                 : "未获取到最新版本信息。";
 
             SetResultText(
@@ -273,58 +273,6 @@ namespace YTPlayer.Forms
             }
 
             SetResultText(lines.Where(line => !string.IsNullOrWhiteSpace(line)).ToArray());
-        }
-
-        private static UpdateAsset? SelectPreferredAsset(IReadOnlyList<UpdateAsset>? assets)
-        {
-            if (assets == null || assets.Count == 0)
-            {
-                return null;
-            }
-
-            UpdateAsset? preferred = assets
-                .FirstOrDefault(a => a?.Name != null &&
-                                     a.Name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) &&
-                                     a.Name.IndexOf("win-x64", StringComparison.OrdinalIgnoreCase) >= 0);
-
-            if (preferred != null)
-            {
-                return preferred;
-            }
-
-            preferred = assets.FirstOrDefault(a => a?.Name != null && a.Name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase));
-            return preferred ?? assets[0];
-        }
-
-        private static string FormatVersionLabel(UpdatePlan? plan, string? semanticFallback)
-        {
-            string label = plan?.DisplayVersion ?? string.Empty;
-            if (string.IsNullOrWhiteSpace(label))
-            {
-                label = plan?.TargetTag ?? semanticFallback ?? string.Empty;
-            }
-
-            if (string.IsNullOrWhiteSpace(label))
-            {
-                return "最新版本";
-            }
-
-            return label.StartsWith("v", StringComparison.OrdinalIgnoreCase) ? label : $"v{label}";
-        }
-
-        private static string FormatSize(long bytes)
-        {
-            if (bytes <= 0) return "未知大小";
-            string[] units = { "B", "KB", "MB", "GB" };
-            double value = bytes;
-            int unitIndex = 0;
-            while (value >= 1024 && unitIndex < units.Length - 1)
-            {
-                value /= 1024;
-                unitIndex++;
-            }
-
-            return $"{value:0.##}{units[unitIndex]}";
         }
 
         private enum UpdateDialogState

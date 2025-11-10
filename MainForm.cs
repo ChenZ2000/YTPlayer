@@ -53,6 +53,9 @@ namespace YTPlayer
         private bool _isApplicationExitRequested = false;  // ⭐ 标志：是否正在退出应用
         private bool _isFormClosing = false;
         private DateTime _appStartTime = DateTime.Now;  // ⭐ 应用启动时间（用于冷启动风控检测）
+        private CancellationTokenSource? _autoUpdateCheckCts;
+        private bool _autoUpdateCheckScheduled;
+        private bool _autoUpdatePromptShown;
         private bool _isUserDragging = false;
         private int _currentPage = 1;
         private string _currentSearchType = "歌曲";
@@ -340,6 +343,8 @@ namespace YTPlayer
                     System.Diagnostics.Debug.WriteLine($"[MainForm] 热身失败（忽略）: {ex.Message}");
                 }
             });
+
+            ScheduleBackgroundUpdateCheck();
 
             // 加载主页内容（用户歌单和官方歌单）
             await EnsureInitialHomePageLoadedAsync();
@@ -6627,6 +6632,80 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             return label.StartsWith("v", StringComparison.OrdinalIgnoreCase) ? label : $"v{label}";
         }
 
+        #region 自动更新
+
+        private void ScheduleBackgroundUpdateCheck()
+        {
+            if (_autoUpdateCheckScheduled || DesignMode)
+            {
+                return;
+            }
+
+            _autoUpdateCheckScheduled = true;
+            _autoUpdateCheckCts?.Cancel();
+            _autoUpdateCheckCts?.Dispose();
+            _autoUpdateCheckCts = new CancellationTokenSource();
+            var token = _autoUpdateCheckCts.Token;
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(8), token).ConfigureAwait(false);
+                    await CheckForUpdatesSilentlyAsync(token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                }
+                catch (Exception ex)
+                {
+                    DebugLogger.LogException("Update", ex, "自动检查更新失败（忽略）");
+                }
+            }, token);
+        }
+
+        private async Task CheckForUpdatesSilentlyAsync(CancellationToken cancellationToken)
+        {
+            using var client = new UpdateServiceClient(UpdateConstants.DefaultEndpoint, "YTPlayer", VersionInfo.Version);
+            var result = await client.CheckForUpdatesAsync(VersionInfo.Version, cancellationToken).ConfigureAwait(false);
+            var asset = UpdateFormatting.SelectPreferredAsset(result.Response.Data?.Assets);
+            bool updateAvailable = result.Response.Data?.UpdateAvailable == true && asset != null;
+            if (!updateAvailable)
+            {
+                return;
+            }
+
+            var plan = UpdatePlan.FromResponse(result.Response, asset!, VersionInfo.Version);
+            string versionLabel = UpdateFormatting.FormatVersionLabel(plan, result.Response.Data?.Latest?.SemanticVersion);
+            ShowAutoUpdatePrompt(plan, versionLabel);
+        }
+
+        private void ShowAutoUpdatePrompt(UpdatePlan plan, string? versionLabel)
+        {
+            if (plan == null || _autoUpdatePromptShown)
+            {
+                return;
+            }
+
+            _autoUpdatePromptShown = true;
+
+            SafeInvoke(() =>
+            {
+                if (IsDisposed || _isFormClosing)
+                {
+                    return;
+                }
+
+                using (var dialog = new UpdateAvailablePromptDialog(plan, versionLabel))
+                {
+                    dialog.UpdateLauncher = ExecuteUpdatePlan;
+                    dialog.ShowDialog(this);
+                }
+            });
+        }
+
+        #endregion
+
         private void shortcutsMenuItem_Click(object sender, EventArgs e)
         {
             using (var dialog = new KeyboardShortcutsDialog())
@@ -8645,6 +8724,9 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             _isFormClosing = true;
             _isApplicationExitRequested = true;
             StopInitialHomeLoadLoop("窗口关闭");
+            _autoUpdateCheckCts?.Cancel();
+            _autoUpdateCheckCts?.Dispose();
+            _autoUpdateCheckCts = null;
             base.OnFormClosing(e);
 
     try

@@ -55,6 +55,11 @@ namespace YTPlayer.Forms
             // 默认显示二维码登录标签页
             loginTabControl.SelectedIndex = 0;
 
+            // 短信输入框回车即触发登录
+            countryCodeTextBox.KeyDown += SmsInput_KeyDown;
+            phoneTextBox.KeyDown += SmsInput_KeyDown;
+            captchaTextBox.KeyDown += SmsInput_KeyDown;
+
             // 初始化短信倒计时定时器
             _smsTimer = new System.Windows.Forms.Timer();
             _smsTimer.Interval = 1000; // 1秒
@@ -408,6 +413,19 @@ namespace YTPlayer.Forms
         #endregion
 
         #region 短信验证码登录
+
+        private void SmsInput_KeyDown(object? sender, KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.Enter)
+            {
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+                if (smsLoginButton.Enabled)
+                {
+                    smsLoginButton.PerformClick();
+                }
+            }
+        }
 
         private async void sendSmsButton_Click(object sender, EventArgs e)
         {

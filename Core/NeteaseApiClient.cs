@@ -366,6 +366,52 @@ namespace YTPlayer.Core
             }
         }
 
+        private bool ApplySetCookieHeader(string? rawSetCookie)
+        {
+            if (string.IsNullOrWhiteSpace(rawSetCookie))
+            {
+                return false;
+            }
+
+            var segments = rawSetCookie.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
+            if (segments.Length == 0)
+            {
+                return false;
+            }
+
+            var nameValue = segments[0].Split(new[] { '=' }, 2);
+            if (nameValue.Length != 2)
+            {
+                return false;
+            }
+
+            string name = nameValue[0].Trim();
+            string value = nameValue[1].Trim();
+            if (string.IsNullOrEmpty(name))
+            {
+                return false;
+            }
+
+            UpsertCookie(name, value);
+
+            if (name.Equals("MUSIC_U", StringComparison.OrdinalIgnoreCase))
+            {
+                _musicU = value;
+                System.Diagnostics.Debug.WriteLine($"[COOKIE] Captured MUSIC_U (len={value.Length})");
+            }
+            else if (name.Equals("__csrf", StringComparison.OrdinalIgnoreCase))
+            {
+                _csrfToken = value;
+                System.Diagnostics.Debug.WriteLine($"[COOKIE] Captured __csrf ({_csrfToken})");
+            }
+            else if (name.Equals("MUSIC_A", StringComparison.OrdinalIgnoreCase))
+            {
+                System.Diagnostics.Debug.WriteLine("[COOKIE] Captured MUSIC_A from Set-Cookie");
+            }
+
+            return true;
+        }
+
         /// <summary>
         /// 设置默认请求头（参考 Python 版本 Netease-music.py:7598-7606）
         /// 使用完整的浏览器请求头，避免触发风控机制返回 404
@@ -1471,23 +1517,31 @@ namespace YTPlayer.Core
 
                         if (response.StatusCode == HttpStatusCode.OK)
                         {
-                            // ⭐ 处理 Set-Cookie 响应头，更新 __csrf token
+                            // ⭐ 处理 Set-Cookie 响应头，提取 MUSIC_U/__csrf 等关键 Cookie
                             if (response.Headers.Contains("Set-Cookie"))
                             {
                                 try
                                 {
+                                    bool appliedCookie = false;
                                     foreach (var setCookie in response.Headers.GetValues("Set-Cookie"))
                                     {
-                                        if (setCookie.Contains("__csrf="))
+                                        if (ApplySetCookieHeader(setCookie))
                                         {
-                                            var match = Regex.Match(setCookie, @"__csrf=([^;]+)");
-                                            if (match.Success)
-                                            {
-                                                string csrfValue = match.Groups[1].Value;
-                                                UpsertCookie("__csrf", csrfValue);
-                                                _csrfToken = csrfValue;
-                                                System.Diagnostics.Debug.WriteLine($"[iOS WEAPI] Updated CSRF token: {csrfValue}");
-                                            }
+                                            appliedCookie = true;
+                                        }
+                                    }
+
+                                    if (appliedCookie)
+                                    {
+                                        UpdateCookies();
+                                        try
+                                        {
+                                            var cookies = _cookieContainer.GetCookies(MUSIC_URI);
+                                            _authContext?.SyncFromCookies(cookies);
+                                        }
+                                        catch (Exception syncEx)
+                                        {
+                                            System.Diagnostics.Debug.WriteLine($"[iOS WEAPI] Sync cookies failed: {syncEx.Message}");
                                         }
                                     }
                                 }
@@ -2687,9 +2741,10 @@ namespace YTPlayer.Core
                 case 803:
                     pollResult.State = QrLoginState.Authorized;
                     pollResult.Message = "登录成功";
-                    if (!string.IsNullOrEmpty(cookieString))
+                    var finalizedCookie = FinalizeLoginCookies(cookieString);
+                    if (!string.IsNullOrEmpty(finalizedCookie))
                     {
-                        pollResult.Cookie = FinalizeLoginCookies(cookieString);
+                        pollResult.Cookie = finalizedCookie;
                     }
                     break;
                 case 8605:

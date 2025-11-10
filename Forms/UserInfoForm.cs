@@ -34,9 +34,20 @@ namespace YTPlayer.Forms
             this.Text = "用户信息";
             this.Size = new Size(500, 400);
             this.BackColor = SystemColors.Control;
+            this.KeyPreview = true;
+            this.KeyDown += UserInfoForm_KeyDown;
 
             // 加载用户信息
             this.Load += UserInfoForm_Load;
+        }
+
+        private void UserInfoForm_KeyDown(object? sender, KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.Escape)
+            {
+                e.Handled = true;
+                Close();
+            }
         }
 
         private async void UserInfoForm_Load(object sender, EventArgs e)

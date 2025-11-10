@@ -23,6 +23,7 @@ namespace YTPlayer
         #region 私有字段 - 下载
 
         private DownloadManager? _downloadManager;
+        private DownloadManagerForm? _downloadManagerForm;
 
         #endregion
 
@@ -112,12 +113,36 @@ namespace YTPlayer
         {
             try
             {
-                var form = new DownloadManagerForm();
-                form.Show();
+                if (_downloadManagerForm != null && !_downloadManagerForm.IsDisposed)
+                {
+                    if (_downloadManagerForm.WindowState == FormWindowState.Minimized)
+                    {
+                        _downloadManagerForm.WindowState = FormWindowState.Normal;
+                    }
+                    _downloadManagerForm.BringToFront();
+                    _downloadManagerForm.Activate();
+                    _downloadManagerForm.Focus();
+                    return;
+                }
+
+                _downloadManagerForm = new DownloadManagerForm();
+                _downloadManagerForm.FormClosed += DownloadManagerForm_FormClosed;
+                _downloadManagerForm.Show(this);
+                _downloadManagerForm.BringToFront();
+                _downloadManagerForm.Activate();
             }
             catch (Exception ex)
             {
                 MessageBox.Show($"无法打开下载管理器：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void DownloadManagerForm_FormClosed(object? sender, FormClosedEventArgs e)
+        {
+            if (_downloadManagerForm != null)
+            {
+                _downloadManagerForm.FormClosed -= DownloadManagerForm_FormClosed;
+                _downloadManagerForm = null;
             }
         }
 

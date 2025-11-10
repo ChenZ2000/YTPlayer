@@ -22,6 +22,8 @@ namespace YTPlayer.Forms.Download
         private readonly System.Windows.Forms.Timer _refreshTimer;
         private DownloadTask? _selectedDownloadTask;
         private UploadTask? _selectedUploadTask;
+        private static int _lastSelectedTabIndex = 0;
+        private static bool _hasLastTabSelection;
 
         #endregion
 
@@ -33,6 +35,8 @@ namespace YTPlayer.Forms.Download
         public DownloadManagerForm()
         {
             InitializeComponent();
+            this.KeyPreview = true;
+            this.KeyDown += DownloadManagerForm_KeyDown;
 
             _downloadManager = DownloadManager.Instance;
             _uploadManager = UploadManager.Instance;
@@ -60,6 +64,7 @@ namespace YTPlayer.Forms.Download
 
             // 初始化列表
             InitializeListViews();
+            ApplyInitialTabSelection();
             RefreshLists();
 
             // 启动定时器
@@ -109,6 +114,35 @@ namespace YTPlayer.Forms.Download
             lvCompleted.Columns.Add("完成时间", 150);
             lvCompleted.Columns.Add("文件大小", 100);
             lvCompleted.MouseClick += LvCompleted_MouseClick;
+        }
+
+        private void ApplyInitialTabSelection()
+        {
+            int activeDownloads = _downloadManager.GetActiveTasks().Count;
+            int activeUploads = _uploadManager.GetAllActiveTasks().Count;
+            bool hasCompleted = _downloadManager.GetCompletedTasks().Any() ||
+                                _uploadManager.GetCompletedTasks().Any();
+
+            if (activeDownloads > 0)
+            {
+                tabControl.SelectedTab = tabPageActive;
+            }
+            else if (activeUploads > 0)
+            {
+                tabControl.SelectedTab = tabPageUpload;
+            }
+            else if (hasCompleted)
+            {
+                tabControl.SelectedTab = tabPageCompleted;
+            }
+            else if (_hasLastTabSelection && _lastSelectedTabIndex >= 0 && _lastSelectedTabIndex < tabControl.TabCount)
+            {
+                tabControl.SelectedIndex = _lastSelectedTabIndex;
+            }
+            else
+            {
+                tabControl.SelectedIndex = 0;
+            }
         }
 
         #endregion
@@ -226,6 +260,15 @@ namespace YTPlayer.Forms.Download
         private void RefreshTimer_Tick(object? sender, EventArgs e)
         {
             RefreshLists();
+        }
+
+        private void DownloadManagerForm_KeyDown(object? sender, KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.Escape)
+            {
+                e.Handled = true;
+                Close();
+            }
         }
 
         private void TabControl_SelectedIndexChanged(object? sender, EventArgs e)
@@ -730,6 +773,12 @@ namespace YTPlayer.Forms.Download
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            if (tabControl?.TabCount > 0)
+            {
+                _lastSelectedTabIndex = Math.Max(0, Math.Min(tabControl.SelectedIndex, tabControl.TabCount - 1));
+                _hasLastTabSelection = true;
+            }
+
             // 停止定时器
             _refreshTimer?.Stop();
 
