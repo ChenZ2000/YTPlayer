@@ -32,6 +32,11 @@
 ### 下载与管理
 - 歌曲 / 歌单 / 专辑/分类批量下载，下载任务支持排队、取消与状态可视化。
 
+### 自动更新
+- 通过“帮助 → 检查更新”触发异步版本检测，实时展示服务端进度、发布说明与下载包信息，任意阶段皆可取消或重试。
+- 若有新版本，内置更新器会在独立进程下载官方压缩包、解压、请求主程序退出后替换全部二进制，并在验证版本一致后重新启动易听。
+- 更新器全程提供进度条与日志，任何失败都会明确提示且可重新打开主程序，不会阻塞原有播放指令。
+
 ## 构建方法
 
 ### 环境要求
@@ -47,7 +52,7 @@ powershell -ExecutionPolicy Bypass -File .\Build.ps1
 #### Debug
 powershell -ExecutionPolicy Bypass -File .\Build-Debug.ps1
 ```
-可执行文件位于 `bin\Release\YTPlayer.exe` 或 `bin\Debug\YTPlayer.exe`。
+可执行文件位于 `bin\Release\YTPlayer.exe` 或 `bin\Debug\YTPlayer.exe`，同时会生成并复制自动更新器 `YTPlayer.Updater.exe`。
 
 ### 依赖还原
 项目使用 `packages.config` 管理 NuGet 依赖，构建脚本会自动执行 `nuget restore`，包含：

@@ -1,5 +1,6 @@
 ﻿using System;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Newtonsoft.Json.Linq;
@@ -178,7 +179,62 @@ namespace YTPlayer
 
             if (result == DialogResult.No)
             {
-                Application.Exit();
+                RequestShutdown();
+            }
+        }
+
+        private static void RequestShutdown()
+        {
+            try
+            {
+                var forms = Application.OpenForms.Cast<Form>().ToArray();
+                if (forms.Length == 0)
+                {
+                    Application.ExitThread();
+                    return;
+                }
+
+                foreach (var form in forms)
+                {
+                    try
+                    {
+                        if (form.IsDisposed)
+                        {
+                            continue;
+                        }
+
+                        if (form.InvokeRequired)
+                        {
+                            form.BeginInvoke(new Action(() =>
+                            {
+                                try
+                                {
+                                    if (!form.IsDisposed)
+                                    {
+                                        form.Close();
+                                    }
+                                }
+                                catch (Exception closeEx)
+                                {
+                                    DebugLogger.LogException("Program", closeEx, "关闭窗体失败");
+                                }
+                            }));
+                        }
+                        else
+                        {
+                            form.Close();
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        DebugLogger.LogException("Program", ex, "请求关闭窗体失败");
+                    }
+                }
+            }
+            catch (Exception outer)
+            {
+                DebugLogger.LogException("Program", outer, "RequestShutdown 失败");
+                Application.ExitThread();
             }
         }
 

@@ -621,6 +621,8 @@ namespace YTPlayer
                 System.Diagnostics.Debug.WriteLine("[MainForm] 播放队列为空，无法播放下一首");
                 UpdateTrayIconTooltip(null);
                 UpdateStatusBar("播放队列为空");
+                currentSongLabel.Text = "未播放";
+                UpdatePlayButtonDescription(null);
                 return;
             }
 
@@ -629,6 +631,10 @@ namespace YTPlayer
                 if (isManual && result.ReachedBoundary)
                 {
                     UpdateStatusBar("已经是最后一首");
+                }
+                else if (!isManual && playMode == PlayMode.Sequential && result.ReachedBoundary)
+                {
+                    HandleSequentialPlaybackCompleted();
                 }
                 return;
             }
@@ -891,6 +897,17 @@ namespace YTPlayer
                     System.Diagnostics.Debug.WriteLine("[MainForm] ExecutePlayNextResultAsync 未匹配可播放路由");
                     break;
             }
+        }
+
+        private void HandleSequentialPlaybackCompleted()
+        {
+            SafeInvoke(() =>
+            {
+                currentSongLabel.Text = "未播放";
+                UpdateStatusBar("顺序播放已完成");
+                UpdatePlayButtonDescription(null);
+                UpdateTrayIconTooltip(null);
+            });
         }
 
         private bool RemoveSongFromQueueAndCaches(SongInfo song)

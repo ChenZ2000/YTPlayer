@@ -61,6 +61,7 @@
             this.jumpToPositionMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.autoReadLyricsMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.helpMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.checkUpdateMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.donateMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.shortcutsMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.aboutMenuItem = new System.Windows.Forms.ToolStripMenuItem();
@@ -397,12 +398,20 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             // helpMenuItem
             //
             this.helpMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
+            this.checkUpdateMenuItem,
             this.donateMenuItem,
             this.shortcutsMenuItem,
             this.aboutMenuItem});
             this.helpMenuItem.Name = "helpMenuItem";
             this.helpMenuItem.Size = new System.Drawing.Size(73, 24);
             this.helpMenuItem.Text = "帮助(&H)";
+            //
+            // checkUpdateMenuItem
+            //
+            this.checkUpdateMenuItem.Name = "checkUpdateMenuItem";
+            this.checkUpdateMenuItem.Size = new System.Drawing.Size(224, 26);
+            this.checkUpdateMenuItem.Text = "检查更新(&U)...";
+            this.checkUpdateMenuItem.Click += new System.EventHandler(this.checkUpdateMenuItem_Click);
             //
             // donateMenuItem
             //
@@ -1073,6 +1082,7 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
         private System.Windows.Forms.ToolStripMenuItem jumpToPositionMenuItem;
         private System.Windows.Forms.ToolStripMenuItem autoReadLyricsMenuItem;
         private System.Windows.Forms.ToolStripMenuItem helpMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem checkUpdateMenuItem;
         private System.Windows.Forms.ToolStripMenuItem donateMenuItem;
         private System.Windows.Forms.ToolStripMenuItem shortcutsMenuItem;
         private System.Windows.Forms.ToolStripMenuItem aboutMenuItem;

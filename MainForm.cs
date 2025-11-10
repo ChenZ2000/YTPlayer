@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Linq;
+using System.IO;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -15,6 +17,7 @@ using YTPlayer.Models;
 using YTPlayer.Models.Auth;
 using YTPlayer.Utils;
 using YTPlayer.Forms;
+using YTPlayer.Update;
 
 #pragma warning disable CS8600, CS8601, CS8602, CS8603, CS8604, CS8625
 
@@ -47,7 +50,7 @@ namespace YTPlayer
         private System.Windows.Forms.Timer? _updateTimer;
         private System.Windows.Forms.NotifyIcon? _trayIcon;
         private Utils.ContextMenuHost? _contextMenuHost;  // ⭐ 自定义菜单宿主窗口
-        private bool _isExitingFromTrayMenu = false;  // ⭐ 标志：是否正在从托盘菜单退出
+        private bool _isApplicationExitRequested = false;  // ⭐ 标志：是否正在退出应用
         private bool _isFormClosing = false;
         private DateTime _appStartTime = DateTime.Now;  // ⭐ 应用启动时间（用于冷启动风控检测）
         private bool _isUserDragging = false;
@@ -80,6 +83,7 @@ namespace YTPlayer
         private DateTime _lastBackTime = DateTime.MinValue;           // 上次后退时间
         private const int MIN_BACK_INTERVAL_MS = 300;                 // 最小后退间隔（毫秒）
         private bool _isNavigating = false;                            // 是否正在执行导航操作
+        private const string BaseWindowTitle = "易听";
 
         private CancellationTokenSource? _availabilityCheckCts;        // 列表可用性检查取消令牌
         private CancellationTokenSource? _searchCts;                   // 搜索请求取消令牌
@@ -291,6 +295,7 @@ namespace YTPlayer
         public MainForm()
         {
             InitializeComponent();
+            UpdateWindowTitle(null);
             InitializeServices();
             SetupEventHandlers();
             LoadConfig();
@@ -3876,12 +3881,13 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
             if (song == null)
             {
                 playPauseButton.AccessibleDescription = "播放/暂停";
+                UpdateWindowTitle(null);
                 return;
             }
 
-            // 构建描述文本：正在播放：歌曲名 - 艺术家 [专辑名] | X音质
+            // 构建描述文本：歌曲名 - 艺术家 [专辑名] | X音质
             string songDisplayName = song.IsTrial ? $"{song.Name}(试听版)" : song.Name;
-            string description = $"正在播放：{songDisplayName} - {song.Artist}";
+            string description = $"{songDisplayName} - {song.Artist}";
 
             // 如果有专辑信息，添加专辑名
             if (!string.IsNullOrEmpty(song.Album))
@@ -3897,7 +3903,41 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
             }
 
             playPauseButton.AccessibleDescription = description;
+            UpdateWindowTitle(description);
             System.Diagnostics.Debug.WriteLine($"[MainForm] 更新播放按钮描述: {description}");
+        }
+
+        private void UpdateWindowTitle(string? playbackDescription)
+        {
+            if (this.IsDisposed)
+            {
+                return;
+            }
+
+            if (this.InvokeRequired)
+            {
+                try
+                {
+                    this.BeginInvoke(new Action<string?>(UpdateWindowTitle), playbackDescription);
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+                catch (InvalidOperationException)
+                {
+                }
+
+                return;
+            }
+
+            string finalTitle = string.IsNullOrWhiteSpace(playbackDescription) || playbackDescription == "播放/暂停"
+                ? BaseWindowTitle
+                : $"{BaseWindowTitle} - {playbackDescription}";
+
+            if (!string.Equals(this.Text, finalTitle, StringComparison.Ordinal))
+            {
+                this.Text = finalTitle;
+            }
         }
 
         /// <summary>
@@ -5272,8 +5312,7 @@ private void MainForm_KeyDown(object sender, KeyEventArgs e)
     }
 
     // 构建与播放按钮 AccessibleDescription 完全一致的文本
-    string prefix = isPaused ? "已暂停：" : "正在播放：";
-    string tooltipText = $"{prefix}{song.Name} - {song.Artist}";
+    string tooltipText = $"{song.Name} - {song.Artist}";
 
     // 添加试听标识
     if (song.IsTrial)
@@ -5820,7 +5859,8 @@ private void TrayIcon_MouseClick(object sender, System.Windows.Forms.MouseEventA
         /// </summary>
         private void exitMenuItem_Click(object sender, EventArgs e)
         {
-            Application.Exit();
+            _isApplicationExitRequested = true;
+            Close();
         }
 
 /// <summary>
@@ -5897,7 +5937,7 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             System.Diagnostics.Debug.WriteLine("[trayExitMenuItem] 退出菜单项被点击");
 
             // ⭐ 关键：设置退出标志，防止 Closed 事件中的操作与退出冲突
-            _isExitingFromTrayMenu = true;
+            _isApplicationExitRequested = true;
 
             // ⭐ 延迟退出，避免在菜单事件处理过程中直接操作
             this.BeginInvoke(new Action(() =>
@@ -5989,7 +6029,7 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
 
             // ⭐⭐⭐ 关键：如果是从退出菜单触发的，跳过所有后续操作
             // 避免与 Application.Exit() 冲突导致 "Collection was modified" 异常
-            if (_isExitingFromTrayMenu)
+            if (_isApplicationExitRequested)
             {
                 System.Diagnostics.Debug.WriteLine("[TrayContextMenu] 检测到退出操作，跳过 Closed 事件处理");
                 return;
@@ -6452,6 +6492,139 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             {
                 dialog.ShowDialog(this);
             }
+        }
+
+        private void checkUpdateMenuItem_Click(object sender, EventArgs e)
+        {
+            using (var dialog = new UpdateCheckDialog())
+            {
+                dialog.UpdateLauncher = ExecuteUpdatePlan;
+                dialog.ShowDialog(this);
+            }
+        }
+
+        private bool ExecuteUpdatePlan(UpdatePlan plan)
+        {
+            if (plan == null)
+            {
+                return false;
+            }
+
+            try
+            {
+                string appDir = AppDomain.CurrentDomain.BaseDirectory;
+                string updaterSource = Path.Combine(appDir, "YTPlayer.Updater.exe");
+                if (!File.Exists(updaterSource))
+                {
+                    MessageBox.Show(this, "未找到更新程序 YTPlayer.Updater.exe，请重新安装或修复。", "更新失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return false;
+                }
+
+                string sessionDir = CreateUpdateSessionDirectory();
+                string updaterDestination = Path.Combine(sessionDir, Path.GetFileName(updaterSource));
+                File.Copy(updaterSource, updaterDestination, overwrite: true);
+
+                CopyUpdaterDependency(Path.Combine(appDir, "Newtonsoft.Json.dll"), sessionDir);
+
+                string planFilePath = Path.Combine(sessionDir, UpdateConstants.DefaultPlanFileName);
+                plan.SaveTo(planFilePath);
+
+                string serializedArgs = SerializeCommandLineArguments();
+                var argumentBuilder = new StringBuilder();
+                argumentBuilder.Append($"--plan \"{planFilePath}\" ");
+                argumentBuilder.Append($"--target \"{appDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)}\" ");
+                argumentBuilder.Append($"--main \"{Application.ExecutablePath}\" ");
+                argumentBuilder.Append($"--pid {Process.GetCurrentProcess().Id} ");
+                if (!string.IsNullOrEmpty(serializedArgs))
+                {
+                    argumentBuilder.Append($"--main-args \"{serializedArgs}\" ");
+                }
+
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = updaterDestination,
+                    Arguments = argumentBuilder.ToString(),
+                    UseShellExecute = false,
+                    WorkingDirectory = sessionDir
+                };
+
+                var updaterProcess = Process.Start(startInfo);
+                if (updaterProcess == null)
+                {
+                    throw new InvalidOperationException("无法启动更新程序。");
+                }
+
+                _isApplicationExitRequested = true;
+                string versionLabel = GetPlanVersionLabel(plan);
+                UpdateStatusBar($"正在准备更新至 {versionLabel}");
+                Task.Run(() =>
+                {
+                    Thread.Sleep(300);
+                    SafeInvoke(() => Close());
+                });
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"启动更新程序失败：{ex.Message}", "更新失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
+            }
+        }
+
+        private static string CreateUpdateSessionDirectory()
+        {
+            string tempRoot = Path.Combine(Path.GetTempPath(), "YTPlayerUpdater");
+            string sessionDir = Path.Combine(tempRoot, $"{DateTime.UtcNow:yyyyMMddHHmmss}-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(sessionDir);
+            return sessionDir;
+        }
+
+        private static void CopyUpdaterDependency(string sourceFile, string destinationDirectory)
+        {
+            if (File.Exists(sourceFile))
+            {
+                string destination = Path.Combine(destinationDirectory, Path.GetFileName(sourceFile)!);
+                File.Copy(sourceFile, destination, overwrite: true);
+            }
+        }
+
+        private static string SerializeCommandLineArguments()
+        {
+            var args = Environment.GetCommandLineArgs();
+            if (args == null || args.Length <= 1)
+            {
+                return string.Empty;
+            }
+
+            string joined = string.Join("\u001f", args.Skip(1));
+            if (string.IsNullOrEmpty(joined))
+            {
+                return string.Empty;
+            }
+
+            return Convert.ToBase64String(Encoding.UTF8.GetBytes(joined));
+        }
+
+        private static string GetPlanVersionLabel(UpdatePlan plan)
+        {
+            if (plan == null)
+            {
+                return "最新版本";
+            }
+
+            string label = plan.DisplayVersion;
+            if (string.IsNullOrWhiteSpace(label))
+            {
+                label = plan.TargetTag;
+            }
+
+            if (string.IsNullOrWhiteSpace(label))
+            {
+                return "最新版本";
+            }
+
+            return label.StartsWith("v", StringComparison.OrdinalIgnoreCase) ? label : $"v{label}";
         }
 
         private void shortcutsMenuItem_Click(object sender, EventArgs e)
@@ -8470,6 +8643,7 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             _isFormClosing = true;
+            _isApplicationExitRequested = true;
             StopInitialHomeLoadLoop("窗口关闭");
             base.OnFormClosing(e);
 
