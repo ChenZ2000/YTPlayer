@@ -81,73 +81,67 @@ namespace YTPlayer
         /// </summary>
         private async void unlikeSongMenuItem_Click(object sender, EventArgs e)
         {
-            // 检查登录状态
+            await UnlikeSelectedSongAsync();
+        }
+
+        private async Task<bool> UnlikeSelectedSongAsync()
+        {
             if (!IsUserLoggedIn())
             {
                 MessageBox.Show("请先登录", "提示",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
+                return false;
             }
 
-            var selectedItem = resultListView.SelectedItems.Count > 0 ? resultListView.SelectedItems[0] : null;
-            if (selectedItem == null) return;
-
-            // 兼容逻辑：Tag 可能是 int 索引或 SongInfo 对象
-            SongInfo? song = null;
-            if (selectedItem.Tag is int index && index >= 0 && index < _currentSongs.Count)
+            var song = GetSelectedSongFromContextMenu();
+            if (song == null)
             {
-                song = _currentSongs[index];
-            }
-            else if (selectedItem.Tag is SongInfo songInfo)
-            {
-                song = songInfo;
+                return false;
             }
 
-            if (song != null)
+            if (!TryResolveSongIdForLibraryActions(song, "取消收藏歌曲", out var targetSongId))
             {
-                if (!TryResolveSongIdForLibraryActions(song, "取消收藏歌曲", out var targetSongId))
+                return false;
+            }
+
+            try
+            {
+                UpdateStatusBar("正在取消收藏...");
+                bool success = await _apiClient.LikeSongAsync(targetSongId, false);
+
+                if (success)
                 {
-                    return;
-                }
+                    MessageBox.Show($"已取消收藏：{song.Name} - {song.Artist}", "成功",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    UpdateStatusBar("取消收藏成功");
 
-                try
-                {
-                    UpdateStatusBar("正在取消收藏...");
-                    bool success = await _apiClient.LikeSongAsync(targetSongId, false);
-
-                    if (success)
+                    if (string.Equals(_currentViewSource, "user_liked_songs", StringComparison.OrdinalIgnoreCase))
                     {
-                        MessageBox.Show($"已取消收藏：{song.Name} - {song.Artist}", "成功",
-                            MessageBoxButtons.OK, MessageBoxIcon.Information);
-                        UpdateStatusBar("取消收藏成功");
-
-                        // 如果当前在"我喜欢的音乐"列表中，刷新列表并保持焦点
-                        if (string.Equals(_currentViewSource, "user_liked_songs", StringComparison.OrdinalIgnoreCase))
+                        try
                         {
-                            try
-                            {
-                                await LoadUserLikedSongs(preserveSelection: true);
-                            }
-                            catch (Exception refreshEx)
-                            {
-                                System.Diagnostics.Debug.WriteLine($"[UI] 刷新我喜欢的音乐列表失败: {refreshEx}");
-                            }
+                            await LoadUserLikedSongs(preserveSelection: true);
+                        }
+                        catch (Exception refreshEx)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[UI] 刷新我喜欢的音乐列表失败: {refreshEx}");
                         }
                     }
-                    else
-                    {
-                        MessageBox.Show("取消收藏失败，请检查网络或稍后重试。", "失败",
-                            MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        UpdateStatusBar("取消收藏失败");
-                    }
+
+                    return true;
                 }
-                catch (Exception ex)
-                {
-                    MessageBox.Show($"取消收藏失败: {ex.Message}", "错误",
-                        MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    UpdateStatusBar("取消收藏失败");
-                }
+
+                MessageBox.Show("取消收藏失败，请检查网络或稍后重试。", "失败",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("取消收藏失败");
             }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"取消收藏失败: {ex.Message}", "错误",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("取消收藏失败");
+            }
+
+            return false;
         }
 
         #endregion
@@ -159,6 +153,12 @@ namespace YTPlayer
         /// </summary>
         private async void removeFromPlaylistMenuItem_Click(object sender, EventArgs e)
         {
+            if (IsCurrentLikedSongsView())
+            {
+                await UnlikeSelectedSongAsync();
+                return;
+            }
+
             // 检查登录状态
             if (!IsUserLoggedIn())
             {

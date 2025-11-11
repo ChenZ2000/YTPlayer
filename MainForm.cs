@@ -7754,7 +7754,7 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 if (!string.IsNullOrWhiteSpace(playlist.Id))
                 {
                     contextCommentTarget = new CommentTarget(
-                        playlist.Id,
+                        playlist.Id!,
                         CommentType.Playlist,
                         string.IsNullOrWhiteSpace(playlist.Name) ? "歌单" : playlist.Name,
                         playlist.Creator);
@@ -7780,7 +7780,7 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 if (!string.IsNullOrWhiteSpace(album.Id))
                 {
                     contextCommentTarget = new CommentTarget(
-                        album.Id,
+                        album.Id!,
                         CommentType.Album,
                         string.IsNullOrWhiteSpace(album.Name) ? "专辑" : album.Name,
                         album.Artist);
@@ -7829,12 +7829,12 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
 
                 if (isLoggedIn)
                 {
-                    bool isLikedSongsView = string.Equals(_currentViewSource, "user_liked_songs", StringComparison.OrdinalIgnoreCase);
+                    bool isLikedSongsView = IsCurrentLikedSongsView();
 
                     if (canUseLibraryFeatures)
                     {
                         likeSongMenuItem.Visible = !isLikedSongsView;
-                        unlikeSongMenuItem.Visible = isLikedSongsView;
+                        unlikeSongMenuItem.Visible = false;
                     }
                     else
                     {
@@ -7847,7 +7847,17 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                     bool isInUserPlaylist = _currentViewSource.StartsWith("playlist:", StringComparison.OrdinalIgnoreCase) &&
                                             _currentPlaylist != null &&
                                             IsPlaylistCreatedByCurrentUser(_currentPlaylist);
-                    removeFromPlaylistMenuItem.Visible = canUseLibraryFeatures && isInUserPlaylist;
+
+                    if (isLikedSongsView)
+                    {
+                        removeFromPlaylistMenuItem.Text = "取消收藏(&R)";
+                        removeFromPlaylistMenuItem.Visible = canUseLibraryFeatures;
+                    }
+                    else
+                    {
+                        removeFromPlaylistMenuItem.Text = "从歌单中移除(&R)";
+                        removeFromPlaylistMenuItem.Visible = canUseLibraryFeatures && isInUserPlaylist;
+                    }
                 }
                 else
                 {
@@ -7855,6 +7865,7 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                     unlikeSongMenuItem.Visible = false;
                     addToPlaylistMenuItem.Visible = false;
                     removeFromPlaylistMenuItem.Visible = false;
+                    removeFromPlaylistMenuItem.Text = "从歌单中移除(&R)";
                 }
 
                 downloadSongMenuItem.Visible = !isCloudSong;
@@ -8764,6 +8775,29 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             }
 
             return false;
+        }
+
+        private bool IsCurrentLikedSongsView()
+        {
+            if (string.Equals(_currentViewSource, "user_liked_songs", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (_currentPlaylist == null)
+            {
+                return false;
+            }
+
+            if (_userLikedPlaylist != null &&
+                !string.IsNullOrWhiteSpace(_userLikedPlaylist.Id) &&
+                string.Equals(_currentPlaylist.Id, _userLikedPlaylist.Id, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            long currentUserId = GetCurrentUserId();
+            return currentUserId > 0 && IsLikedMusicPlaylist(_currentPlaylist, currentUserId);
         }
 
         #endregion

@@ -904,7 +904,7 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             //
             this.commentMenuItem.Name = "commentMenuItem";
             this.commentMenuItem.Size = new System.Drawing.Size(210, 24);
-            this.commentMenuItem.Text = "评论";
+            this.commentMenuItem.Text = "评论(&C)";
             this.commentMenuItem.Visible = false;
             this.commentMenuItem.Click += new System.EventHandler(this.commentMenuItem_Click);
             //
@@ -912,7 +912,7 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             //
             this.shareArtistMenuItem.Name = "shareArtistMenuItem";
             this.shareArtistMenuItem.Size = new System.Drawing.Size(210, 24);
-            this.shareArtistMenuItem.Text = "分享歌手(&H)";
+            this.shareArtistMenuItem.Text = "分享歌手(&S)";
             this.shareArtistMenuItem.Visible = false;
             this.shareArtistMenuItem.Click += new System.EventHandler(this.shareArtistMenuItem_Click);
             //

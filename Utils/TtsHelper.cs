@@ -61,6 +61,9 @@ namespace YTPlayer.Utils
         private static bool _ttsInitialized = false;
         private static int _ttsType = -1; // -1: 未初始化, 0: NVDA, 1: 争渡, 2: 阳光
         private static readonly object _lock = new object();
+        private const string NvdaDllName = "nvdaControllerClient.dll";
+        private const string ZdsrDllName = "ZDSRAPI.dll";
+        private const string BoyCtrlDllName = "BoyCtrl.dll";
 
         #endregion
 
@@ -71,7 +74,7 @@ namespace YTPlayer.Utils
         /// </summary>
         /// <param name="text">要朗读的文本</param>
         /// <returns>是否成功朗读</returns>
-        public static bool SpeakText(string text)
+        public static bool SpeakText(string text, bool interrupt = true)
         {
             if (string.IsNullOrWhiteSpace(text))
             {
@@ -82,23 +85,25 @@ namespace YTPlayer.Utils
             {
                 try
                 {
-                    System.Diagnostics.Debug.WriteLine($"[TTS] 尝试朗读文本: '{text}' (当前状态: 已初始化={_ttsInitialized}, 类型={_ttsType})");
+                    System.Diagnostics.Debug.WriteLine($"[TTS] 尝试朗读文本: '{text}' (已初始化={_ttsInitialized}, 类型={_ttsType}, interrupt={interrupt})");
+
+                    if (interrupt)
+                    {
+                        CancelActiveSpeech(_ttsInitialized && _ttsType >= 0 ? _ttsType : null);
+                    }
 
                     // 如果已初始化，先尝试使用上次成功的TTS类型
                     if (_ttsInitialized && _ttsType >= 0)
                     {
                         try
                         {
-                            if (TrySpeakWithType(_ttsType, text))
+                            if (TrySpeakWithType(_ttsType, text, interrupt))
                             {
                                 return true;
                             }
-                            else
-                            {
-                                // 如果失败，重置初始化状态
-                                System.Diagnostics.Debug.WriteLine($"[TTS] TTS type {_ttsType} failed, will retry with all types");
-                                _ttsInitialized = false;
-                            }
+
+                            System.Diagnostics.Debug.WriteLine($"[TTS] TTS type {_ttsType} failed, will retry with all types");
+                            _ttsInitialized = false;
                         }
                         catch (Exception ex)
                         {
@@ -108,8 +113,7 @@ namespace YTPlayer.Utils
                     }
 
                     // 按顺序尝试所有TTS引擎
-                    // 1. 尝试 NVDA
-                    if (TryNvda(text))
+                    if (TryNvda(text, interrupt))
                     {
                         _ttsType = 0;
                         _ttsInitialized = true;
@@ -117,8 +121,7 @@ namespace YTPlayer.Utils
                         return true;
                     }
 
-                    // 2. 尝试争渡读屏
-                    if (TryZdsrapi(text))
+                    if (TryZdsrapi(text, interrupt))
                     {
                         _ttsType = 1;
                         _ttsInitialized = true;
@@ -126,8 +129,7 @@ namespace YTPlayer.Utils
                         return true;
                     }
 
-                    // 3. 尝试阳光读屏
-                    if (TryBoyCtrl(text))
+                    if (TryBoyCtrl(text, interrupt))
                     {
                         _ttsType = 2;
                         _ttsInitialized = true;
@@ -143,6 +145,17 @@ namespace YTPlayer.Utils
                     System.Diagnostics.Debug.WriteLine($"[TTS] SpeakText failed: {ex.Message}");
                     return false;
                 }
+            }
+        }
+
+        /// <summary>
+        /// 立即停止当前朗读
+        /// </summary>
+        public static void StopSpeaking()
+        {
+            lock (_lock)
+            {
+                CancelActiveSpeech(_ttsInitialized && _ttsType >= 0 ? _ttsType : null);
             }
         }
 
@@ -185,20 +198,92 @@ namespace YTPlayer.Utils
 
         #region 私有方法
 
-        private static bool TrySpeakWithType(int type, string text)
+        private static string ResolveDllPath(string dllName)
+        {
+            return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, dllName);
+        }
+
+        private static bool DllExists(string dllName)
+        {
+            try
+            {
+                return File.Exists(ResolveDllPath(dllName));
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static void CancelActiveSpeech(int? preferredType)
+        {
+            int[] engines;
+            if (preferredType.HasValue)
+            {
+                engines = new[] { preferredType.Value };
+            }
+            else if (_ttsInitialized && _ttsType >= 0)
+            {
+                engines = new[] { _ttsType };
+            }
+            else
+            {
+                engines = new[] { 0 };
+            }
+
+            foreach (var engine in engines)
+            {
+                try
+                {
+                    switch (engine)
+                    {
+                        case 0:
+                            if (DllExists(NvdaDllName))
+                            {
+                                nvdaController_cancelSpeech();
+                            }
+                            break;
+                        case 1:
+                            if (DllExists(ZdsrDllName))
+                            {
+                                Speak(string.Empty, true);
+                            }
+                            break;
+                        case 2:
+                            if (DllExists(BoyCtrlDllName))
+                            {
+                                BoyCtrlSpeak(string.Empty, async: false, purge: true, spell: false, IntPtr.Zero);
+                            }
+                            break;
+                    }
+                }
+                catch (DllNotFoundException)
+                {
+                }
+                catch (EntryPointNotFoundException)
+                {
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[TTS] Cancel speech failed for engine {engine}: {ex.Message}");
+                }
+            }
+        }
+
+        private static bool TrySpeakWithType(int type, string text, bool interrupt)
         {
             try
             {
                 switch (type)
                 {
-                    case 0: // NVDA - 队列模式（不打断当前朗读）
-                        return nvdaController_speakText(text) == 0;
+                    case 0:
+                        return TryNvda(text, interrupt);
 
-                    case 1: // 争渡 - 使用 interrupt=false 队列模式
-                        return Speak(text, interrupt: false) == 0;
+                    case 1:
+                        return TryZdsrapi(text, interrupt);
 
-                    case 2: // 阳光 - 使用 purge=false 队列模式
-                        return BoyCtrlSpeak(text, async: false, purge: false, spell: true, IntPtr.Zero) == 0;
+                    case 2:
+                        return TryBoyCtrl(text, interrupt);
 
                     default:
                         return false;
@@ -210,12 +295,12 @@ namespace YTPlayer.Utils
             }
         }
 
-        private static bool TryNvda(string text)
+        private static bool TryNvda(string text, bool interrupt)
         {
             try
             {
                 // 检查 DLL 是否存在
-                string dllPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "nvdaControllerClient.dll");
+                string dllPath = ResolveDllPath(NvdaDllName);
                 if (!File.Exists(dllPath))
                 {
                     System.Diagnostics.Debug.WriteLine($"[TTS] NVDA DLL not found at: {dllPath}");
@@ -228,6 +313,11 @@ namespace YTPlayer.Utils
                 {
                     System.Diagnostics.Debug.WriteLine($"[TTS] NVDA not running (test returned {testResult})");
                     return false;
+                }
+
+                if (interrupt)
+                {
+                    CancelActiveSpeech(0);
                 }
 
                 // ⭐ 队列模式：直接朗读新内容（不打断当前朗读）
@@ -252,12 +342,12 @@ namespace YTPlayer.Utils
             }
         }
 
-        private static bool TryZdsrapi(string text)
+        private static bool TryZdsrapi(string text, bool interrupt)
         {
             try
             {
                 // 检查 DLL 是否存在
-                string dllPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ZDSRAPI.dll");
+                string dllPath = ResolveDllPath(ZdsrDllName);
                 if (!File.Exists(dllPath))
                 {
                     System.Diagnostics.Debug.WriteLine($"[TTS] 争渡 DLL not found at: {dllPath}");
@@ -272,8 +362,8 @@ namespace YTPlayer.Utils
                     return false;
                 }
 
-                // ⭐ 朗读文本（使用 interrupt=false 队列模式）
-                int speakResult = Speak(text, interrupt: false);
+                // ⭐ 朗读文本
+                int speakResult = Speak(text, interrupt);
                 if (speakResult == 0)
                 {
                     System.Diagnostics.Debug.WriteLine("[TTS] 争渡 speak succeeded (queue mode)");
@@ -295,12 +385,12 @@ namespace YTPlayer.Utils
             }
         }
 
-        private static bool TryBoyCtrl(string text)
+        private static bool TryBoyCtrl(string text, bool interrupt)
         {
             try
             {
                 // 检查 DLL 是否存在
-                string dllPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "BoyCtrl.dll");
+                string dllPath = ResolveDllPath(BoyCtrlDllName);
                 if (!File.Exists(dllPath))
                 {
                     System.Diagnostics.Debug.WriteLine($"[TTS] 阳光 DLL not found at: {dllPath}");
@@ -316,7 +406,7 @@ namespace YTPlayer.Utils
                 }
 
                 // ⭐ 朗读文本（使用 purge=false 队列模式）
-                int speakResult = BoyCtrlSpeak(text, async: false, purge: false, spell: true, IntPtr.Zero);
+                int speakResult = BoyCtrlSpeak(text, async: false, purge: interrupt, spell: true, IntPtr.Zero);
                 if (speakResult == 0)
                 {
                     System.Diagnostics.Debug.WriteLine("[TTS] 阳光 speak succeeded (queue mode)");

@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using YTPlayer.Core;
 using YTPlayer.Models;
+using YTPlayer.Utils;
 
 namespace YTPlayer.Forms
 {
@@ -28,6 +29,9 @@ namespace YTPlayer.Forms
         private readonly ToolStripMenuItem _copyNodeMenuItem;
         private readonly ToolStripMenuItem _replyNodeMenuItem;
         private readonly ToolStripMenuItem _deleteNodeMenuItem;
+        private readonly string _targetCommentsLabel;
+        private bool _suspendAnnouncements;
+        private bool _suspendSelectionEvents;
 
         private readonly CancellationTokenSource _lifecycleCts = new CancellationTokenSource();
         private CancellationTokenSource? _loadCommentsCts;
@@ -37,11 +41,11 @@ namespace YTPlayer.Forms
         private int _nextPageNumber = 1;
         private bool _hasMore;
         private bool _isLoading;
-        private Color _statusDefaultColor;
         private string? _currentCursor;
         private bool _suppressAutoLoad;
 
         private static readonly object PlaceholderNodeTag = new object();
+        private const int AnnouncementContentLimit = 160;
 
         public CommentsDialog(NeteaseApiClient apiClient, CommentTarget target, string? currentUserId, bool isLoggedIn)
         {
@@ -49,6 +53,9 @@ namespace YTPlayer.Forms
             _target = target ?? throw new ArgumentNullException(nameof(target));
             _currentUserId = currentUserId;
             _isLoggedIn = isLoggedIn;
+            _targetCommentsLabel = string.IsNullOrWhiteSpace(_target.DisplayName)
+                ? "评论"
+                : $"{_target.DisplayName}的评论";
 
             Text = $"评论 - {target.DisplayName}";
             StartPosition = FormStartPosition.CenterParent;
@@ -91,6 +98,8 @@ namespace YTPlayer.Forms
                 ScrollBars = ScrollBars.Vertical,
                 Height = 70
             };
+            _commentInput.AccessibleName = "编辑评论";
+            _commentInput.AccessibleDescription = "按 Shift + Enter 发表";
 
             _sendButton = new Button
             {
@@ -109,9 +118,9 @@ namespace YTPlayer.Forms
             _statusLabel = new Label
             {
                 Dock = DockStyle.Fill,
-                TextAlign = ContentAlignment.MiddleRight
+                TextAlign = ContentAlignment.MiddleRight,
+                Text = _targetCommentsLabel
             };
-            _statusDefaultColor = _statusLabel.ForeColor;
 
             _nodeContextMenu = new ContextMenuStrip();
             _copyNodeMenuItem = new ToolStripMenuItem("复制 (&C)");
@@ -191,6 +200,7 @@ namespace YTPlayer.Forms
             mainLayout.Controls.Add(inputLayout, 0, 2);
 
             Controls.Add(mainLayout);
+            RefreshStatusLabel();
 
             CancelButton = _closeButton;
 
@@ -250,9 +260,10 @@ namespace YTPlayer.Forms
 
         private void CommentInput_KeyDown(object? sender, KeyEventArgs e)
         {
-            if (e.KeyCode == Keys.Enter && !e.Shift && !e.Control && !e.Alt)
+            if (e.KeyCode == Keys.Enter && e.Shift && !e.Control && !e.Alt)
             {
                 e.SuppressKeyPress = true;
+                e.Handled = true;
                 _ = SubmitNewCommentAsync();
             }
         }
@@ -280,9 +291,19 @@ namespace YTPlayer.Forms
                 ? CaptureSelectionSnapshot(focusCommentId)
                 : null;
 
+            TreeNode? pendingSelection = null;
+            bool shouldSelectPending = false;
+            bool previousAnnouncementState = _suspendAnnouncements;
+            bool previousSelectionState = _suspendSelectionEvents;
+            bool previousAutoLoadState = _suppressAutoLoad;
+            _suspendAnnouncements = true;
+            _suspendSelectionEvents = true;
+            _suppressAutoLoad = true;
+
             try
             {
                 _isLoading = true;
+                RefreshStatusLabel();
                 ToggleCommandButtons(false);
 
                 _loadCommentsCts?.Cancel();
@@ -291,7 +312,6 @@ namespace YTPlayer.Forms
                 var token = _loadCommentsCts.Token;
 
                 int requestPage = Math.Max(1, _nextPageNumber);
-                UpdateStatus($"正在加载第 {requestPage} 页评论...");
 
                 string? cursorParameter = null;
                 if (_sortType == CommentSortType.Time && requestPage > 1)
@@ -312,44 +332,56 @@ namespace YTPlayer.Forms
                 _currentCursor = result.Cursor;
                 _nextPageNumber = _hasMore ? requestPage + 1 : requestPage;
 
+                var nodesToAdd = result.Comments
+                    .Select(CreateCommentNode)
+                    .ToArray();
+
                 _commentsTreeView.BeginUpdate();
-                foreach (var comment in result.Comments)
+                try
                 {
-                    _commentsTreeView.Nodes.Add(CreateCommentNode(comment));
+                    if (nodesToAdd.Length > 0)
+                    {
+                        _commentsTreeView.Nodes.AddRange(nodesToAdd);
+                    }
                 }
-                _commentsTreeView.EndUpdate();
+                finally
+                {
+                    _commentsTreeView.EndUpdate();
+                }
 
                 if (snapshot != null)
                 {
-                    _suppressAutoLoad = true;
-                    RestoreSelection(snapshot);
-                    _suppressAutoLoad = false;
+                    pendingSelection = ResolveSelectionTarget(snapshot);
+                    shouldSelectPending = pendingSelection != null;
                 }
                 else if (_commentsTreeView.SelectedNode == null && _commentsTreeView.Nodes.Count > 0)
                 {
-                    _suppressAutoLoad = true;
-                    var firstNode = _commentsTreeView.Nodes[0];
-                    _commentsTreeView.SelectedNode = firstNode;
-                    firstNode.EnsureVisible();
-                    _suppressAutoLoad = false;
+                    pendingSelection = _commentsTreeView.Nodes[0];
+                    shouldSelectPending = pendingSelection != null;
                 }
 
-                int loadedCount = _commentsTreeView.Nodes.Count;
-                _statusLabel.ForeColor = _statusDefaultColor;
-                _statusLabel.Text = $"共 {result.TotalCount} 条评论";
             }
             catch (OperationCanceledException)
             {
-                UpdateStatus("加载已取消。");
             }
             catch (Exception ex)
             {
-                UpdateStatus($"加载评论失败：{ex.Message}", isError: true);
+                ShowError($"加载评论失败：{ex.Message}");
             }
             finally
             {
+                _suppressAutoLoad = previousAutoLoadState;
+                _suspendSelectionEvents = previousSelectionState;
+                _suspendAnnouncements = previousAnnouncementState;
                 _isLoading = false;
                 ToggleCommandButtons(true);
+                RefreshStatusLabel();
+            }
+
+            if (shouldSelectPending && pendingSelection != null)
+            {
+                SelectNodeSilently(pendingSelection);
+                AnnounceNode(pendingSelection);
             }
         }
 
@@ -371,10 +403,29 @@ namespace YTPlayer.Forms
             _sendButton.Enabled = enabled && HasPendingCommentText();
         }
 
-        private void UpdateStatus(string message, bool isError = false)
+        private void RefreshStatusLabel()
         {
-            _statusLabel.Text = message;
-            _statusLabel.ForeColor = isError ? Color.Firebrick : _statusDefaultColor;
+            _statusLabel.Text = _isLoading ? "正在加载 ..." : _targetCommentsLabel;
+        }
+
+        private void ShowInfo(string message)
+        {
+            if (string.IsNullOrWhiteSpace(message))
+            {
+                return;
+            }
+
+            MessageBox.Show(this, message, "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        private void ShowError(string message)
+        {
+            if (string.IsNullOrWhiteSpace(message))
+            {
+                return;
+            }
+
+            MessageBox.Show(this, message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
 
         private void UpdateSendButtonState()
@@ -432,11 +483,11 @@ namespace YTPlayer.Forms
         {
             if (e.Node?.Tag is CommentTreeNodeState state)
             {
-                bool needsLoad = state.Comment.ReplyCount > 0 && (!state.RepliesLoaded || state.HasMoreReplies);
+                bool needsLoad = state.Comment.ReplyCount > 0 && !state.RepliesLoaded;
                 if (needsLoad)
                 {
                     e.Cancel = true;
-                    await LoadRepliesForNodeAsync(e.Node, state, append: state.RepliesLoaded);
+                    await LoadRepliesForNodeAsync(e.Node, state, append: state.RepliesLoaded, focusNewReplies: false);
                     e.Node.Expand();
                 }
             }
@@ -457,7 +508,7 @@ namespace YTPlayer.Forms
         {
             if (e.Node?.Tag is LoadMoreNodeTag loadMore && e.Node.Parent != null)
             {
-                await LoadRepliesForNodeAsync(e.Node.Parent, loadMore.ParentState, append: true);
+                await LoadRepliesForNodeAsync(e.Node.Parent, loadMore.ParentState, append: true, focusNewReplies: true);
             }
         }
 
@@ -474,7 +525,7 @@ namespace YTPlayer.Forms
                 if (selected.Tag is LoadMoreNodeTag loadMore && selected.Parent != null)
                 {
                     e.Handled = true;
-                    await LoadRepliesForNodeAsync(selected.Parent, loadMore.ParentState, append: true);
+                    await LoadRepliesForNodeAsync(selected.Parent, loadMore.ParentState, append: true, focusNewReplies: true);
                 }
                 else
                 {
@@ -508,17 +559,40 @@ namespace YTPlayer.Forms
 
             e.Node.EnsureVisible();
 
-            if (_suppressAutoLoad)
+            if (_suspendSelectionEvents)
             {
                 return;
             }
 
-            TryTriggerAutoLoadNearEnd(e.Node);
+            if (!_suppressAutoLoad)
+            {
+                TryTriggerAutoLoad(e.Node);
+            }
+
+            AnnounceNode(e.Node);
         }
 
-        private void TryTriggerAutoLoadNearEnd(TreeNode node)
+        private void TryTriggerAutoLoad(TreeNode node)
         {
-            if (_isLoading || !_hasMore)
+            if (node.Tag is LoadMoreNodeTag loadMore && node.Parent != null)
+            {
+                _ = LoadRepliesForNodeAsync(node.Parent, loadMore.ParentState, append: true, focusNewReplies: true);
+                return;
+            }
+
+            if (node.Level == 0)
+            {
+                TryTriggerRootAutoLoad(node);
+            }
+            else
+            {
+                TryTriggerReplyAutoLoad(node);
+            }
+        }
+
+        private void TryTriggerRootAutoLoad(TreeNode node)
+        {
+            if (_isLoading || !_hasMore || _suppressAutoLoad)
             {
                 return;
             }
@@ -536,6 +610,144 @@ namespace YTPlayer.Forms
             }
         }
 
+        private void TryTriggerReplyAutoLoad(TreeNode node)
+        {
+            var parent = node.Parent;
+            if (parent?.Tag is not CommentTreeNodeState parentState)
+            {
+                return;
+            }
+
+            if (!parentState.HasMoreReplies || parentState.IsLoading || _suppressAutoLoad)
+            {
+                return;
+            }
+
+            int remaining = parent.Nodes.Count - node.Index - 1;
+            if (remaining <= AutoLoadThreshold)
+            {
+                _ = LoadRepliesForNodeAsync(parent, parentState, append: true, focusNewReplies: false);
+            }
+        }
+
+        private void AnnounceNode(TreeNode node, string? context = null)
+        {
+            if (_suspendAnnouncements)
+            {
+                return;
+            }
+
+            var text = BuildNodeAnnouncement(node, context);
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return;
+            }
+
+            try
+            {
+                TtsHelper.SpeakText(text!, interrupt: true);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[CommentsDialog] TTS announce failed: {ex.Message}");
+            }
+        }
+
+        private string? BuildNodeAnnouncement(TreeNode node, string? context)
+        {
+            if (node.Tag is CommentTreeNodeState state)
+            {
+                var info = state.Comment;
+                var user = string.IsNullOrWhiteSpace(info.UserName) ? "匿名用户" : info.UserName.Trim();
+                var summary = string.IsNullOrWhiteSpace(info.Content)
+                    ? "（无内容）"
+                    : NormalizeSingleLine(info.Content);
+
+                if (summary.Length > AnnouncementContentLimit)
+                {
+                    summary = summary.Substring(0, AnnouncementContentLimit) + "…";
+                }
+
+                var builder = new System.Text.StringBuilder();
+                if (node.Level == 0)
+                {
+                    builder.Append(node.Index + 1);
+                    builder.Append(". ");
+                }
+                builder.Append(user);
+
+                var replyTarget = info.BeRepliedUserName?.Trim();
+                if (node.Level > 0 && !string.IsNullOrWhiteSpace(replyTarget))
+                {
+                    builder.Append(" 回复 ");
+                    builder.Append(replyTarget);
+                }
+
+                builder.Append("：");
+                builder.Append(summary);
+                builder.Append("（");
+                builder.Append(info.Time.ToString("yyyy-MM-dd HH:mm"));
+                builder.Append("）");
+
+                if (!string.IsNullOrWhiteSpace(context))
+                {
+                    builder.Append('。');
+                    builder.Append(context);
+                }
+
+                return builder.ToString();
+            }
+
+            string? baseText = string.IsNullOrWhiteSpace(node.Text) ? null : node.Text.Trim();
+            if (string.IsNullOrWhiteSpace(baseText))
+            {
+                return null;
+            }
+
+            if (!string.IsNullOrWhiteSpace(context))
+            {
+                return $"{baseText}。{context}";
+            }
+
+            return baseText;
+        }
+
+        private static string NormalizeSingleLine(string text)
+        {
+            return text
+                .Replace("\r", " ")
+                .Replace("\n", " ")
+                .Replace("\t", " ")
+                .Trim();
+        }
+
+        private void SelectNodeSilently(TreeNode node)
+        {
+            if (node == null)
+            {
+                return;
+            }
+
+            if (_commentsTreeView.SelectedNode != node)
+            {
+                bool previousAutoLoad = _suppressAutoLoad;
+                bool previousSelectionState = _suspendSelectionEvents;
+                _suppressAutoLoad = true;
+                _suspendSelectionEvents = true;
+                try
+                {
+                    _commentsTreeView.SelectedNode = node;
+                }
+                finally
+                {
+                    _suspendSelectionEvents = previousSelectionState;
+                    _suppressAutoLoad = previousAutoLoad;
+                }
+            }
+
+            node.EnsureVisible();
+        }
+
         private void NodeContextMenu_Opening(object? sender, System.ComponentModel.CancelEventArgs e)
         {
             if (_commentsTreeView.SelectedNode?.Tag is CommentTreeNodeState state)
@@ -548,45 +760,83 @@ namespace YTPlayer.Forms
             }
         }
 
-        private async Task LoadRepliesForNodeAsync(TreeNode node, CommentTreeNodeState state, bool append)
+
+
+        private async Task LoadRepliesForNodeAsync(TreeNode node, CommentTreeNodeState state, bool append, bool focusNewReplies)
         {
             if (state.IsLoading)
             {
                 return;
             }
 
+            state.IsLoading = true;
+
+            if (_commentsTreeView.SelectedNode?.Tag is LoadMoreNodeTag loadMore && loadMore.ParentState == state)
+            {
+                SelectNodeSilently(node);
+            }
+
+            TreeNode? selectionAfterLoad = null;
+            bool previousAnnouncementState = _suspendAnnouncements;
+            bool previousSelectionState = _suspendSelectionEvents;
+            bool previousAutoLoadState = _suppressAutoLoad;
+            _suspendAnnouncements = true;
+            _suspendSelectionEvents = true;
+            _suppressAutoLoad = true;
+
             try
             {
-                if (!append)
+                _commentsTreeView.BeginUpdate();
+                try
                 {
-                    node.Nodes.Clear();
+                    if (!append)
+                    {
+                        node.Nodes.Clear();
+                    }
+                    else
+                    {
+                        RemoveLoadMoreNode(node);
+                    }
+
+                    int previousChildCount = node.Nodes.Count;
+                    var token = _lifecycleCts.Token;
+                    var result = await _apiClient.GetCommentFloorAsync(
+                        _target.ResourceId,
+                        state.Comment.CommentId,
+                        _target.Type,
+                        state.NextFloorTime,
+                        20,
+                        token).ConfigureAwait(true);
+
+                    var replyNodes = result.Comments
+                        .Select(CreateCommentNode)
+                        .ToArray();
+
+                    if (replyNodes.Length > 0)
+                    {
+                        node.Nodes.AddRange(replyNodes);
+                        if (append && focusNewReplies)
+                        {
+                            int firstNewIndex = previousChildCount;
+                            if (firstNewIndex >= 0 && firstNewIndex < node.Nodes.Count)
+                            {
+                                selectionAfterLoad = node.Nodes[firstNewIndex];
+                            }
+                        }
+                    }
+
+                    state.RepliesLoaded = true;
+                    state.NextFloorTime = result.NextTime;
+                    state.HasMoreReplies = result.HasMore && result.NextTime.HasValue;
+
+                    if (state.HasMoreReplies)
+                    {
+                        node.Nodes.Add(CreateLoadMoreNode(state));
+                    }
                 }
-                else
+                finally
                 {
-                    RemoveLoadMoreNode(node);
-                }
-
-                var token = _lifecycleCts.Token;
-                var result = await _apiClient.GetCommentFloorAsync(
-                    _target.ResourceId,
-                    state.Comment.CommentId,
-                    _target.Type,
-                    state.NextFloorTime,
-                    20,
-                    token).ConfigureAwait(true);
-
-                foreach (var reply in result.Comments)
-                {
-                    node.Nodes.Add(CreateCommentNode(reply));
-                }
-
-                state.RepliesLoaded = true;
-                state.NextFloorTime = result.NextTime;
-                state.HasMoreReplies = result.HasMore && result.NextTime.HasValue;
-
-                if (state.HasMoreReplies)
-                {
-                    node.Nodes.Add(CreateLoadMoreNode(state));
+                    _commentsTreeView.EndUpdate();
                 }
             }
             catch (OperationCanceledException)
@@ -595,7 +845,7 @@ namespace YTPlayer.Forms
             }
             catch (Exception ex)
             {
-                UpdateStatus($"加载回复失败：{ex.Message}", isError: true);
+                ShowError($"加载回复失败：{ex.Message}");
                 if (node.Nodes.Count == 0)
                 {
                     node.Nodes.Add(CreatePlaceholderNode("加载失败，重新展开重试"));
@@ -603,7 +853,21 @@ namespace YTPlayer.Forms
             }
             finally
             {
+                _suppressAutoLoad = previousAutoLoadState;
+                _suspendSelectionEvents = previousSelectionState;
+                _suspendAnnouncements = previousAnnouncementState;
                 state.IsLoading = false;
+            }
+
+            if (selectionAfterLoad != null)
+            {
+                SelectNodeSilently(selectionAfterLoad);
+                AnnounceNode(selectionAfterLoad);
+            }
+            else
+            {
+                SelectNodeSilently(node);
+                AnnounceNode(node);
             }
         }
 
@@ -664,19 +928,17 @@ namespace YTPlayer.Forms
             return SelectionSnapshot.Empty;
         }
 
-        private void RestoreSelection(SelectionSnapshot snapshot)
+        private TreeNode? ResolveSelectionTarget(SelectionSnapshot snapshot)
         {
             if (snapshot.IsEmpty || _commentsTreeView.Nodes.Count == 0)
             {
-                return;
+                return null;
             }
 
             var node = FindNodeByPath(snapshot.Path);
             if (node != null)
             {
-                _commentsTreeView.SelectedNode = node;
-                node.EnsureVisible();
-                return;
+                return node;
             }
 
             if (snapshot.Path.Count > 1)
@@ -685,19 +947,17 @@ namespace YTPlayer.Forms
                 var parentNode = FindNodeByPath(parentPath);
                 if (parentNode != null)
                 {
-                    _commentsTreeView.SelectedNode = parentNode;
-                    parentNode.EnsureVisible();
-                    return;
+                    return parentNode;
                 }
             }
 
             int fallbackIndex = Math.Min(snapshot.RootIndex ?? 0, _commentsTreeView.Nodes.Count - 1);
             if (fallbackIndex >= 0 && _commentsTreeView.Nodes.Count > fallbackIndex)
             {
-                var fallback = _commentsTreeView.Nodes[fallbackIndex];
-                _commentsTreeView.SelectedNode = fallback;
-                fallback.EnsureVisible();
+                return _commentsTreeView.Nodes[fallbackIndex];
             }
+
+            return null;
         }
 
         private TreeNode? FindNodeByPath(IReadOnlyList<string> path)
@@ -737,7 +997,7 @@ namespace YTPlayer.Forms
             var content = _commentInput.Text?.Trim();
             if (string.IsNullOrWhiteSpace(content))
             {
-                UpdateStatus("请输入评论内容。", isError: true);
+                ShowInfo("请输入评论内容。");
                 return;
             }
 
@@ -750,22 +1010,20 @@ namespace YTPlayer.Forms
             try
             {
                 ToggleCommandButtons(false);
-                UpdateStatus("正在发表...");
                 var result = await _apiClient.AddCommentAsync(
                     _target.ResourceId,
-                    content,
+                    content!,
                     _target.Type,
                     _lifecycleCts.Token).ConfigureAwait(true);
 
                 if (result.Success)
                 {
                     _commentInput.Clear();
-                    UpdateStatus("评论已发表。");
                     await RefreshCommentsAsync(resetPage: true, append: false, focusCommentId: result.Comment?.CommentId);
                 }
                 else
                 {
-                    UpdateStatus(result.Message ?? "发表评论失败。", isError: true);
+                    ShowError(result.Message ?? "发表评论失败。");
                 }
             }
             catch (OperationCanceledException)
@@ -773,7 +1031,7 @@ namespace YTPlayer.Forms
             }
             catch (Exception ex)
             {
-                UpdateStatus($"发表评论失败：{ex.Message}", isError: true);
+                ShowError($"发表评论失败：{ex.Message}");
             }
             finally
             {
@@ -812,22 +1070,20 @@ namespace YTPlayer.Forms
             try
             {
                 ToggleCommandButtons(false);
-                UpdateStatus("正在回复...");
                 var result = await _apiClient.ReplyCommentAsync(
                     _target.ResourceId,
                     state.Comment.CommentId,
-                    text,
+                    text!,
                     _target.Type,
                     _lifecycleCts.Token).ConfigureAwait(true);
 
                 if (result.Success)
                 {
-                    UpdateStatus("回复已发送。");
                     await RefreshCommentsAsync(resetPage: true, append: false, focusCommentId: result.Comment?.CommentId);
                 }
                 else
                 {
-                    UpdateStatus(result.Message ?? "回复失败。", isError: true);
+                    ShowError(result.Message ?? "回复失败。");
                 }
             }
             catch (OperationCanceledException)
@@ -835,7 +1091,7 @@ namespace YTPlayer.Forms
             }
             catch (Exception ex)
             {
-                UpdateStatus($"回复失败：{ex.Message}", isError: true);
+                ShowError($"回复失败：{ex.Message}");
             }
             finally
             {
@@ -853,7 +1109,7 @@ namespace YTPlayer.Forms
 
             if (!IsCurrentUser(state.Comment.UserId))
             {
-                UpdateStatus("只能删除自己发表的评论。", isError: true);
+                ShowInfo("只能删除自己发表的评论。");
                 return;
             }
 
@@ -865,7 +1121,6 @@ namespace YTPlayer.Forms
             try
             {
                 ToggleCommandButtons(false);
-                UpdateStatus("正在删除...");
                 var result = await _apiClient.DeleteCommentAsync(
                     _target.ResourceId,
                     state.Comment.CommentId,
@@ -874,12 +1129,11 @@ namespace YTPlayer.Forms
 
                 if (result.Success)
                 {
-                    UpdateStatus("评论已删除。");
                     node.Remove();
                 }
                 else
                 {
-                    UpdateStatus(result.Message ?? "删除失败。", isError: true);
+                    ShowError(result.Message ?? "删除失败。");
                 }
             }
             catch (OperationCanceledException)
@@ -887,7 +1141,7 @@ namespace YTPlayer.Forms
             }
             catch (Exception ex)
             {
-                UpdateStatus($"删除失败：{ex.Message}", isError: true);
+                ShowError($"删除失败：{ex.Message}");
             }
             finally
             {
@@ -901,7 +1155,6 @@ namespace YTPlayer.Forms
             {
                 var text = $"{state.Comment.UserName} @ {state.Comment.Time:yyyy-MM-dd HH:mm:ss}\r\n{state.Comment.Content}";
                 Clipboard.SetText(text);
-                UpdateStatus("评论内容已复制。");
             }
         }
 
@@ -916,6 +1169,7 @@ namespace YTPlayer.Forms
         {
             MessageBox.Show(this, "该操作需要登录网易云账号。", "需要登录", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
+
         private sealed class CommentTreeNodeState
         {
             public CommentTreeNodeState(CommentInfo comment)
@@ -957,7 +1211,7 @@ namespace YTPlayer.Forms
                 var snapshot = new SelectionSnapshot();
                 if (!string.IsNullOrWhiteSpace(commentId))
                 {
-                    snapshot.Path.Add(commentId);
+                    snapshot.Path.Add(commentId!);
                 }
 
                 return snapshot;
@@ -1006,6 +1260,8 @@ namespace YTPlayer.Forms
                     AcceptsReturn = true,
                     ScrollBars = ScrollBars.Vertical
                 };
+                _input.AccessibleName = "编辑回复";
+                _input.AccessibleDescription = "按 Shift + Enter 发表";
 
                 _sendButton = new Button
                 {
@@ -1046,6 +1302,18 @@ namespace YTPlayer.Forms
                 CancelButton = _cancelButton;
 
                 _input.TextChanged += (_, __) => _sendButton.Enabled = !string.IsNullOrWhiteSpace(_input.Text);
+                _input.KeyDown += (_, e) =>
+                {
+                    if (e.KeyCode == Keys.Enter && e.Shift && !e.Control && !e.Alt)
+                    {
+                        e.SuppressKeyPress = true;
+                        e.Handled = true;
+                        if (_sendButton.Enabled)
+                        {
+                            _sendButton.PerformClick();
+                        }
+                    }
+                };
                 _sendButton.Click += (_, __) =>
                 {
                     if (!string.IsNullOrWhiteSpace(_input.Text))
