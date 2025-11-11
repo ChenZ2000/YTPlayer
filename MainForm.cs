@@ -7646,6 +7646,9 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             subscribeArtistMenuItem.Visible = false;
             unsubscribeArtistMenuItem.Visible = false;
             toolStripSeparatorView.Visible = false;
+            commentMenuItem.Visible = false;
+            commentMenuItem.Tag = null;
+            commentMenuSeparator.Visible = false;
             viewSongArtistMenuItem.Visible = false;
             viewSongArtistMenuItem.Tag = null;
             viewSongAlbumMenuItem.Visible = false;
@@ -7686,6 +7689,7 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             PlaylistInfo? playlistFromListItem = null;
             AlbumInfo? albumFromListItem = null;
             SongInfo? songFromListItem = null;
+            CommentTarget? contextCommentTarget = null;
 
             // 根据Tag类型决定显示哪些菜单项
             if (selectedItem.Tag is ArtistInfo directArtist)
@@ -7747,6 +7751,14 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 sharePlaylistMenuItem.Visible = true;
                 sharePlaylistMenuItem.Tag = playlist;
                 showViewSection = true;
+                if (!string.IsNullOrWhiteSpace(playlist.Id))
+                {
+                    contextCommentTarget = new CommentTarget(
+                        playlist.Id,
+                        CommentType.Playlist,
+                        string.IsNullOrWhiteSpace(playlist.Name) ? "歌单" : playlist.Name,
+                        playlist.Creator);
+                }
             }
             else if (album != null)
             {
@@ -7765,6 +7777,14 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 shareAlbumMenuItem.Visible = true;
                 shareAlbumMenuItem.Tag = album;
                 showViewSection = true;
+                if (!string.IsNullOrWhiteSpace(album.Id))
+                {
+                    contextCommentTarget = new CommentTarget(
+                        album.Id,
+                        CommentType.Album,
+                        string.IsNullOrWhiteSpace(album.Name) ? "专辑" : album.Name,
+                        album.Artist);
+                }
             }
             else
             {
@@ -7783,6 +7803,15 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 else if (resolvedSongFromListItem != null)
                 {
                     currentSong = resolvedSongFromListItem;
+                }
+
+                if (currentSong != null && !string.IsNullOrWhiteSpace(currentSong.Id) && !currentSong.IsCloudSong)
+                {
+                    contextCommentTarget = new CommentTarget(
+                        currentSong.Id,
+                        CommentType.Song,
+                        string.IsNullOrWhiteSpace(currentSong.Name) ? "歌曲" : currentSong.Name,
+                        currentSong.Artist);
                 }
 
                 bool isCloudSong = isCloudView && currentSong != null && currentSong.IsCloudSong;
@@ -7860,7 +7889,33 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 showViewSection = showViewSection || showArtistMenu || showAlbumMenu || showShareMenu;
             }
 
+            if (contextCommentTarget != null)
+            {
+                commentMenuItem.Visible = true;
+                commentMenuItem.Tag = contextCommentTarget;
+                commentMenuSeparator.Visible = true;
+            }
+
             toolStripSeparatorView.Visible = showViewSection;
+        }
+
+        private void commentMenuItem_Click(object sender, EventArgs e)
+        {
+            if (sender is ToolStripItem menuItem && menuItem.Tag is CommentTarget target)
+            {
+                ShowCommentsDialog(target);
+            }
+        }
+
+        private void ShowCommentsDialog(CommentTarget target)
+        {
+            if (_apiClient == null)
+            {
+                return;
+            }
+
+            using var dialog = new CommentsDialog(_apiClient, target, _accountState?.UserId, IsUserLoggedIn());
+            dialog.ShowDialog(this);
         }
 
         /// <summary>

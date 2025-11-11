@@ -186,6 +186,7 @@
     <Compile Include="Models\ArtistInfo.cs" />
     <Compile Include="Models\PlaylistInfo.cs" />
     <Compile Include="Models\CommentInfo.cs" />
+    <Compile Include="Models\CommentTarget.cs" />
     <Compile Include="Models\ConfigModel.cs" />
     <Compile Include="Models\AudioOutputDeviceInfo.cs" />
     <Compile Include="Models\AudioDeviceSwitchResult.cs" />
@@ -220,6 +221,9 @@
       <DependentUpon>UserInfoForm.cs</DependentUpon>
     </Compile>
     <Compile Include="Forms\JumpToPositionDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Forms\CommentsDialog.cs">
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="Forms\Download\DownloadManagerForm.cs">

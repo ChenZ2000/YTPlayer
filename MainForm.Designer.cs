@@ -103,6 +103,8 @@
             this.shareSongDirectMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.sharePlaylistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.shareAlbumMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.commentMenuSeparator = new System.Windows.Forms.ToolStripSeparator();
+            this.commentMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.toolStripSeparatorArtist = new System.Windows.Forms.ToolStripSeparator();
             this.shareArtistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.subscribeArtistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
@@ -712,6 +714,8 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             this.shareSongMenuItem,
             this.sharePlaylistMenuItem,
             this.shareAlbumMenuItem,
+            this.commentMenuSeparator,
+            this.commentMenuItem,
             this.toolStripSeparatorArtist,
             this.shareArtistMenuItem,
             this.subscribeArtistMenuItem,
@@ -889,6 +893,20 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             this.shareAlbumMenuItem.Text = "分享专辑(&K)";
             this.shareAlbumMenuItem.Visible = false;
             this.shareAlbumMenuItem.Click += new System.EventHandler(this.shareAlbumMenuItem_Click);
+            //
+            // commentMenuSeparator
+            //
+            this.commentMenuSeparator.Name = "commentMenuSeparator";
+            this.commentMenuSeparator.Size = new System.Drawing.Size(207, 6);
+            this.commentMenuSeparator.Visible = false;
+            //
+            // commentMenuItem
+            //
+            this.commentMenuItem.Name = "commentMenuItem";
+            this.commentMenuItem.Size = new System.Drawing.Size(210, 24);
+            this.commentMenuItem.Text = "评论";
+            this.commentMenuItem.Visible = false;
+            this.commentMenuItem.Click += new System.EventHandler(this.commentMenuItem_Click);
             //
             // shareArtistMenuItem
             //
@@ -1130,6 +1148,8 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
         private System.Windows.Forms.ToolStripMenuItem shareSongDirectMenuItem;
         private System.Windows.Forms.ToolStripMenuItem sharePlaylistMenuItem;
         private System.Windows.Forms.ToolStripMenuItem shareAlbumMenuItem;
+        private System.Windows.Forms.ToolStripSeparator commentMenuSeparator;
+        private System.Windows.Forms.ToolStripMenuItem commentMenuItem;
         private System.Windows.Forms.ToolStripMenuItem shareArtistMenuItem;
         private System.Windows.Forms.ToolStripMenuItem subscribeArtistMenuItem;
         private System.Windows.Forms.ToolStripMenuItem unsubscribeArtistMenuItem;

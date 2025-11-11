@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace YTPlayer.Models
 {
@@ -48,6 +49,11 @@ namespace YTPlayer.Models
         public DateTime Time { get; set; }
 
         /// <summary>
+        /// 原始时间戳（毫秒）
+        /// </summary>
+        public long TimeMilliseconds { get; set; }
+
+        /// <summary>
         /// IP归属地
         /// </summary>
         public string IpLocation { get; set; } = string.Empty;
@@ -61,6 +67,20 @@ namespace YTPlayer.Models
         /// 被回复的用户名
         /// </summary>
         public string? BeRepliedUserName { get; set; }
+
+        /// <summary>
+        /// 父级评论ID（楼层归属）
+        /// </summary>
+        public string? ParentCommentId { get; set; }
+
+        /// <summary>
+        /// 该评论拥有的回复数量（包含懒加载数据）
+        /// </summary>
+        public int ReplyCount { get; set; }
+
+        /// <summary>
+        /// 子回复集合（用于树状展示）
+        /// </summary>
+        public List<CommentInfo> Replies { get; } = new List<CommentInfo>();
     }
 }
-

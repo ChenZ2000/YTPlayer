@@ -7256,23 +7256,278 @@ namespace YTPlayer.Core
         /// 获取评论
         /// </summary>
         public async Task<CommentResult> GetCommentsAsync(string resourceId, CommentType type = CommentType.Song,
-            int pageNo = 1, int pageSize = 20, CommentSortType sortType = CommentSortType.Hot)
+            int pageNo = 1, int pageSize = 20, CommentSortType sortType = CommentSortType.Hot,
+            string? cursor = null, CancellationToken cancellationToken = default)
         {
-            int resourceType = (int)type;
-            int sort = (int)sortType;
+            if (string.IsNullOrWhiteSpace(resourceId))
+            {
+                throw new ArgumentException("resourceId cannot be null or empty", nameof(resourceId));
+            }
+
+            resourceId = resourceId.Trim();
+            if (pageNo <= 0) pageNo = 1;
+            if (pageSize <= 0) pageSize = 20;
+
+            string threadId = BuildCommentThreadId(type, resourceId);
+            int sortCode = MapCommentSortType(sortType);
+            string resolvedCursor = BuildCommentCursor(sortCode, pageNo, pageSize, cursor);
 
             var payload = new Dictionary<string, object>
             {
-                { "rid", resourceId },
-                { "threadId", $"R_SO_4_{resourceId}" },
+                { "threadId", threadId },
                 { "pageNo", pageNo },
                 { "pageSize", pageSize },
-                { "cursor", (pageNo - 1) * pageSize },
-                { "sortType", sort }
+                { "cursor", resolvedCursor },
+                { "sortType", sortCode },
+                { "showInner", true }
             };
 
-            var response = await PostWeApiAsync<JObject>("/comment/page", payload);
+            var response = await PostEApiAsync<JObject>("/api/v2/resource/comments", payload, useIosHeaders: false);
+            int code = response["code"]?.Value<int>() ?? -1;
+            if (code != 200)
+            {
+                string? message = response["message"]?.Value<string>()
+                    ?? response["msg"]?.Value<string>()
+                    ?? "未知错误";
+                throw new InvalidOperationException($"评论接口请求失败: code={code}, message={message}");
+            }
+
             return ParseComments(response);
+        }
+
+        /// <summary>
+        /// 获取楼层评论（指定父级评论的回复列表）
+        /// </summary>
+        public async Task<CommentFloorResult> GetCommentFloorAsync(string resourceId, string parentCommentId,
+            CommentType type = CommentType.Song, long? timeCursor = null, int limit = 20,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(resourceId))
+            {
+                throw new ArgumentException("resourceId cannot be null or empty", nameof(resourceId));
+            }
+
+            if (string.IsNullOrWhiteSpace(parentCommentId))
+            {
+                throw new ArgumentException("parentCommentId cannot be null or empty", nameof(parentCommentId));
+            }
+
+            resourceId = resourceId.Trim();
+            parentCommentId = parentCommentId.Trim();
+
+            var payload = new Dictionary<string, object>
+            {
+                { "parentCommentId", parentCommentId },
+                { "threadId", BuildCommentThreadId(type, resourceId) },
+                { "time", timeCursor ?? -1 },
+                { "limit", limit <= 0 ? 20 : limit },
+                { "id", resourceId },
+                { "type", (int)type }
+            };
+
+            var response = await PostWeApiAsync<JObject>(
+                "/api/resource/comment/floor/get",
+                payload,
+                cancellationToken: cancellationToken,
+                autoConvertApiSegment: true);
+
+            return ParseCommentFloor(response, parentCommentId);
+        }
+
+        /// <summary>
+        /// 发表评论
+        /// </summary>
+        public Task<CommentMutationResult> AddCommentAsync(string resourceId, string content,
+            CommentType type = CommentType.Song, CancellationToken cancellationToken = default)
+        {
+            return ExecuteCommentMutationAsync(CommentMutationAction.Add, type, resourceId, content, null, cancellationToken);
+        }
+
+        /// <summary>
+        /// 回复评论
+        /// </summary>
+        public Task<CommentMutationResult> ReplyCommentAsync(string resourceId, string parentCommentId, string content,
+            CommentType type = CommentType.Song, CancellationToken cancellationToken = default)
+        {
+            return ExecuteCommentMutationAsync(CommentMutationAction.Reply, type, resourceId, content, parentCommentId, cancellationToken);
+        }
+
+        /// <summary>
+        /// 删除评论
+        /// </summary>
+        public Task<CommentMutationResult> DeleteCommentAsync(string resourceId, string commentId,
+            CommentType type = CommentType.Song, CancellationToken cancellationToken = default)
+        {
+            return ExecuteCommentMutationAsync(CommentMutationAction.Delete, type, resourceId, null, commentId, cancellationToken);
+        }
+
+        private async Task<CommentMutationResult> ExecuteCommentMutationAsync(
+            CommentMutationAction action,
+            CommentType type,
+            string resourceId,
+            string? content,
+            string? commentId,
+            CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrWhiteSpace(resourceId))
+            {
+                throw new ArgumentException("resourceId cannot be null or empty", nameof(resourceId));
+            }
+
+            resourceId = resourceId.Trim();
+            var payload = new Dictionary<string, object>
+            {
+                { "threadId", BuildCommentThreadId(type, resourceId) },
+                { "id", resourceId },
+                { "type", (int)type }
+            };
+
+            switch (action)
+            {
+                case CommentMutationAction.Add:
+                    {
+                        var normalized = content?.Trim();
+                        if (string.IsNullOrWhiteSpace(normalized))
+                        {
+                            throw new ArgumentException("content cannot be null or whitespace", nameof(content));
+                        }
+
+                        payload["content"] = normalized!;
+                        break;
+                    }
+                case CommentMutationAction.Reply:
+                    {
+                        var normalized = content?.Trim();
+                        if (string.IsNullOrWhiteSpace(normalized))
+                        {
+                            throw new ArgumentException("content cannot be null or whitespace", nameof(content));
+                        }
+
+                        if (string.IsNullOrWhiteSpace(commentId))
+                        {
+                            throw new ArgumentException("commentId cannot be null or empty", nameof(commentId));
+                        }
+
+                        payload["content"] = normalized!;
+                        payload["commentId"] = commentId.Trim();
+                        break;
+                    }
+                case CommentMutationAction.Delete:
+                    {
+                        if (string.IsNullOrWhiteSpace(commentId))
+                        {
+                            throw new ArgumentException("commentId cannot be null or empty", nameof(commentId));
+                        }
+
+                        payload["commentId"] = commentId.Trim();
+                        break;
+                    }
+            }
+
+            string actionPath = action switch
+            {
+                CommentMutationAction.Add => "add",
+                CommentMutationAction.Reply => "reply",
+                CommentMutationAction.Delete => "delete",
+                _ => "add"
+            };
+
+            try
+            {
+                var response = await PostWeApiAsync<JObject>(
+                    $"/resource/comments/{actionPath}",
+                    payload,
+                    cancellationToken: cancellationToken);
+
+                int code = response["code"]?.Value<int>() ?? -1;
+                string? message = response["message"]?.Value<string>() ?? response["msg"]?.Value<string>();
+
+                var result = new CommentMutationResult
+                {
+                    Success = code == 200,
+                    Message = message,
+                    CommentId = commentId
+                };
+
+                if (result.Success && action != CommentMutationAction.Delete)
+                {
+                    var commentToken = response["comment"] as JObject
+                        ?? response["data"]?["comment"] as JObject;
+
+                    if (commentToken != null)
+                    {
+                        var parsed = ParseCommentToken(commentToken,
+                            action == CommentMutationAction.Reply ? commentId : null);
+                        if (parsed != null)
+                        {
+                            result.Comment = parsed;
+                        }
+                    }
+                }
+
+                return result;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[API] 评论操作失败: {ex.Message}");
+                return new CommentMutationResult
+                {
+                    Success = false,
+                    Message = ex.Message,
+                    CommentId = commentId
+                };
+            }
+        }
+
+        private enum CommentMutationAction
+        {
+            Add,
+            Reply,
+            Delete
+        }
+
+        private static string BuildCommentThreadId(CommentType type, string resourceId)
+        {
+            string prefix = GetCommentThreadPrefix(type);
+            return $"{prefix}{resourceId}";
+        }
+
+        private static int MapCommentSortType(CommentSortType sortType)
+        {
+            return sortType switch
+            {
+                CommentSortType.Hot => 2,
+                CommentSortType.Time => 3,
+                _ => 99
+            };
+        }
+
+        private static string BuildCommentCursor(int apiSortType, int pageNo, int pageSize, string? cursor)
+        {
+            int safePageNo = Math.Max(1, pageNo);
+            int safePageSize = Math.Max(1, pageSize);
+            int offset = (safePageNo - 1) * safePageSize;
+
+            return apiSortType switch
+            {
+                2 => $"normalHot#{offset}",
+                3 => string.IsNullOrWhiteSpace(cursor) ? "0" : cursor!,
+                _ => offset.ToString()
+            };
+        }
+
+        private static string GetCommentThreadPrefix(CommentType type)
+        {
+            return type switch
+            {
+                CommentType.Song => "R_SO_4_",
+                CommentType.MV => "R_MV_5_",
+                CommentType.Playlist => "A_PL_0_",
+                CommentType.Album => "R_AL_3_",
+                CommentType.DJRadio => "A_DJ_1_",
+                CommentType.Video => "R_VI_62_",
+                _ => "R_SO_4_"
+            };
         }
 
         #endregion
@@ -8155,52 +8410,241 @@ namespace YTPlayer.Core
         /// </summary>
         private CommentResult ParseComments(JObject commentData)
         {
-            var result = new CommentResult
-            {
-                TotalCount = commentData["data"]?["totalCount"]?.Value<int>() ?? 0,
-                Comments = new List<CommentInfo>()
-            };
+            var result = new CommentResult();
 
-            var comments = commentData["data"]?["comments"] as JArray;
+            if (commentData == null)
+            {
+                return result;
+            }
+
+            var data = commentData["data"] as JObject ?? commentData;
+            result.TotalCount = data["totalCount"]?.Value<int>()
+                ?? data["commentCount"]?.Value<int>()
+                ?? data["size"]?.Value<int>()
+                ?? result.TotalCount;
+
+            result.HasMore = data["hasMore"]?.Value<bool>() ?? data["more"]?.Value<bool>() ?? false;
+            result.PageNumber = data["pageNo"]?.Value<int>() ?? result.PageNumber;
+            result.PageSize = data["pageSize"]?.Value<int>() ?? result.PageSize;
+            result.Cursor = ExtractCursorValue(data["cursor"]) ?? result.Cursor;
+
+            int sortValue = data["sortType"]?.Value<int?>() ?? (int)result.SortType;
+            result.SortType = Enum.IsDefined(typeof(CommentSortType), sortValue)
+                ? (CommentSortType)sortValue
+                : result.SortType;
+
+            var comments = data["comments"] as JArray;
             if (comments != null)
             {
                 foreach (var comment in comments)
                 {
-                    try
+                    if (comment is JObject commentObject)
                     {
-                        var commentInfo = new CommentInfo
+                        var parsed = ParseCommentToken(commentObject);
+                        if (parsed != null)
                         {
-                            CommentId = comment["commentId"]?.Value<string>(),
-                            UserId = comment["user"]?["userId"]?.Value<string>(),
-                            UserName = comment["user"]?["nickname"]?.Value<string>(),
-                            AvatarUrl = comment["user"]?["avatarUrl"]?.Value<string>(),
-                            Content = comment["content"]?.Value<string>(),
-                            LikedCount = comment["likedCount"]?.Value<int>() ?? 0,
-                            Liked = comment["liked"]?.Value<bool>() ?? false,
-                            IpLocation = comment["ipLocation"]?["location"]?.Value<string>()
-                        };
-
-                        var timeValue = comment["time"]?.Value<long>();
-                        if (timeValue.HasValue)
-                        {
-                            commentInfo.Time = DateTimeOffset.FromUnixTimeMilliseconds(timeValue.Value).DateTime;
+                            result.Comments.Add(parsed);
                         }
-
-                        // 被回复的评论
-                        var beReplied = comment["beReplied"] as JArray;
-                        if (beReplied != null && beReplied.Count > 0)
-                        {
-                            commentInfo.BeRepliedId = beReplied[0]["beRepliedCommentId"]?.Value<string>();
-                            commentInfo.BeRepliedUserName = beReplied[0]["user"]?["nickname"]?.Value<string>();
-                        }
-
-                        result.Comments.Add(commentInfo);
                     }
-                    catch { }
                 }
             }
 
             return result;
+        }
+
+        private CommentFloorResult ParseCommentFloor(JObject commentData, string parentCommentId)
+        {
+            var result = new CommentFloorResult
+            {
+                ParentCommentId = parentCommentId
+            };
+
+            if (commentData == null)
+            {
+                return result;
+            }
+
+            try
+            {
+                var data = commentData["data"] as JObject;
+                if (data == null)
+                {
+                    return result;
+                }
+
+                result.ParentCommentId = ConvertToStringId(data["parentCommentId"]) ?? result.ParentCommentId;
+                result.TotalCount = data["totalCount"]?.Value<int>()
+                    ?? data["commentCount"]?.Value<int>()
+                    ?? result.TotalCount;
+                result.HasMore = data["hasMore"]?.Value<bool>() ?? false;
+                result.NextTime = data["time"]?.Value<long?>();
+
+                var comments = data["comments"] as JArray;
+                if (comments != null)
+                {
+                    foreach (var comment in comments)
+                    {
+                        if (comment is JObject commentObject)
+                        {
+                            var parsed = ParseCommentToken(commentObject, result.ParentCommentId);
+                            if (parsed != null)
+                            {
+                                result.Comments.Add(parsed);
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[API] 解析楼层评论失败: {ex.Message}");
+            }
+
+            return result;
+        }
+
+        private CommentInfo? ParseCommentToken(JObject? commentObject, string? parentCommentId = null)
+        {
+            if (commentObject == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                string? commentId = ConvertToStringId(commentObject["commentId"]);
+                if (string.IsNullOrWhiteSpace(commentId))
+                {
+                    return null;
+                }
+
+                var user = commentObject["user"] as JObject;
+                var commentInfo = new CommentInfo
+                {
+                    CommentId = commentId,
+                    UserId = ConvertToStringId(user?["userId"]) ?? string.Empty,
+                    UserName = user?["nickname"]?.Value<string>() ?? string.Empty,
+                    AvatarUrl = user?["avatarUrl"]?.Value<string>() ?? string.Empty,
+                    Content = commentObject["content"]?.Value<string>() ?? string.Empty,
+                    LikedCount = commentObject["likedCount"]?.Value<int>() ?? 0,
+                    Liked = commentObject["liked"]?.Value<bool>() ?? false,
+                    IpLocation = commentObject["ipLocation"]?["location"]?.Value<string>() ?? string.Empty,
+                    ParentCommentId = NormalizeParentCommentId(commentObject["parentCommentId"], parentCommentId)
+                };
+
+                var timeValue = commentObject["time"]?.Value<long?>();
+                if (timeValue.HasValue)
+                {
+                    commentInfo.TimeMilliseconds = timeValue.Value;
+                    commentInfo.Time = DateTimeOffset.FromUnixTimeMilliseconds(timeValue.Value).LocalDateTime;
+                }
+
+                var beReplied = commentObject["beReplied"] as JArray;
+                if (beReplied != null && beReplied.Count > 0)
+                {
+                    commentInfo.BeRepliedId = ConvertToStringId(beReplied[0]?["beRepliedCommentId"]);
+                    commentInfo.BeRepliedUserName = beReplied[0]?["user"]?["nickname"]?.Value<string>();
+                }
+
+                int replyCount = commentObject["replyCount"]?.Value<int>() ?? 0;
+
+                var showFloorComment = commentObject["showFloorComment"] as JObject;
+                if (showFloorComment != null)
+                {
+                    replyCount = Math.Max(replyCount, showFloorComment["replyCount"]?.Value<int>() ?? 0);
+                    var floorComments = showFloorComment["comments"] as JArray;
+                    if (floorComments != null)
+                    {
+                        foreach (var reply in floorComments)
+                        {
+                            if (reply is JObject replyObject)
+                            {
+                                var replyInfo = ParseCommentToken(replyObject, commentInfo.CommentId);
+                                if (replyInfo != null)
+                                {
+                                    commentInfo.Replies.Add(replyInfo);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                commentInfo.ReplyCount = replyCount > 0
+                    ? replyCount
+                    : commentInfo.Replies.Count;
+
+                return commentInfo;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[API] 解析评论失败: {ex.Message}");
+                return null;
+            }
+        }
+
+        private static string? NormalizeParentCommentId(JToken? token, string? fallback)
+        {
+            var id = ConvertToStringId(token);
+            if (string.IsNullOrWhiteSpace(id) || id == "0")
+            {
+                return fallback;
+            }
+
+            return id;
+        }
+
+        private static string? ConvertToStringId(JToken? token)
+        {
+            if (token == null)
+            {
+                return null;
+            }
+
+            var longValue = token.Value<long?>();
+            if (longValue.HasValue && longValue.Value > 0)
+            {
+                return longValue.Value.ToString();
+            }
+
+            var stringValue = token.Value<string>();
+            if (!string.IsNullOrWhiteSpace(stringValue))
+            {
+                return stringValue;
+            }
+
+            return null;
+        }
+
+        private static string? ExtractCursorValue(JToken? token)
+        {
+            if (token == null)
+            {
+                return null;
+            }
+
+            if (token.Type == JTokenType.String)
+            {
+                return token.Value<string>();
+            }
+
+            if (token.Type == JTokenType.Integer)
+            {
+                return token.Value<long?>()?.ToString(CultureInfo.InvariantCulture);
+            }
+
+            if (token.Type == JTokenType.Float)
+            {
+                return token.Value<double?>()?.ToString(CultureInfo.InvariantCulture);
+            }
+
+            if (token.Type == JTokenType.Object)
+            {
+                return token["cursor"]?.Value<string>()
+                    ?? token["value"]?.Value<string>()
+                    ?? token["text"]?.Value<string>();
+            }
+
+            return token.ToString();
         }
 
         #endregion
@@ -8458,7 +8902,29 @@ namespace YTPlayer.Core
     public class CommentResult
     {
         public int TotalCount { get; set; }
+        public bool HasMore { get; set; }
+        public int PageNumber { get; set; } = 1;
+        public int PageSize { get; set; } = 20;
+        public CommentSortType SortType { get; set; } = CommentSortType.Hot;
+        public string? Cursor { get; set; }
         public List<CommentInfo> Comments { get; set; } = new List<CommentInfo>();
+    }
+
+    public class CommentFloorResult
+    {
+        public string? ParentCommentId { get; set; }
+        public List<CommentInfo> Comments { get; set; } = new List<CommentInfo>();
+        public bool HasMore { get; set; }
+        public long? NextTime { get; set; }
+        public int TotalCount { get; set; }
+    }
+
+    public class CommentMutationResult
+    {
+        public bool Success { get; set; }
+        public string? Message { get; set; }
+        public string? CommentId { get; set; }
+        public CommentInfo? Comment { get; set; }
     }
 
     #endregion

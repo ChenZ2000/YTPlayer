@@ -20,7 +20,11 @@ namespace YTPlayer.Forms
             new ShortcutEntry("导航", "后退到上一视图", "Backspace", "返回上一页的浏览内容"),
             new ShortcutEntry("导航", "隐藏到托盘", "Shift + Esc", "最小化到托盘并保持后台播放"),
             new ShortcutEntry("搜索体验", "执行搜索", "Enter", "在关键词或类型组合框内按下回车"),
-            new ShortcutEntry("搜索体验", "焦点保护 / 取消", "Esc", "保持焦点在编辑控件或关闭对话框")
+            new ShortcutEntry("搜索体验", "焦点保护 / 取消", "Esc", "保持焦点在编辑控件或关闭对话框"),
+            new ShortcutEntry("评论管理", "回复选中评论", "Enter", "在评论树中按回车可直接打开回复对话框"),
+            new ShortcutEntry("评论管理", "复制评论文本", "Ctrl + C", "复制当前选中评论的完整内容"),
+            new ShortcutEntry("评论管理", "删除自己的评论", "Delete", "仅对由自己发表的评论可用，删除前将二次确认"),
+            new ShortcutEntry("评论管理", "发表新的顶层评论", "Enter (输入框)", "在评论输入框中按回车或点击“发表评论”按钮可立即发送")
         };
 
         public KeyboardShortcutsDialog()
