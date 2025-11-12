@@ -155,22 +155,12 @@ namespace YTPlayer
         /// </summary>
         internal async void DownloadSong_Click(object? sender, EventArgs e)
         {
-            if (resultListView.SelectedItems.Count == 0)
+            var song = GetSelectedSongFromContextMenu(sender);
+            if (song == null)
             {
-                MessageBox.Show("请先选择要下载的歌曲", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                ShowContextSongMissingMessage("下载的歌曲");
                 return;
             }
-
-            var selectedItem = resultListView.SelectedItems[0];
-
-            // Tag 存储的是索引，需要从 _currentSongs 获取实际的歌曲对象
-            if (selectedItem.Tag is not int index || index < 0 || index >= _currentSongs.Count)
-            {
-                MessageBox.Show("无法获取歌曲信息", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
-
-            var song = _currentSongs[index];
 
             try
             {
@@ -195,6 +185,45 @@ namespace YTPlayer
             catch (Exception ex)
             {
                 MessageBox.Show($"下载失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        internal async void DownloadLyrics_Click(object? sender, EventArgs e)
+        {
+            var song = GetSelectedSongFromContextMenu(sender);
+            if (song == null || string.IsNullOrWhiteSpace(song.Id))
+            {
+                ShowContextSongMissingMessage("下载歌词的歌曲");
+                return;
+            }
+
+            try
+            {
+                var lyricInfo = await _apiClient.GetLyricsAsync(song.Id);
+                if (lyricInfo == null || string.IsNullOrWhiteSpace(lyricInfo.Lyric))
+                {
+                    MessageBox.Show("该歌曲没有歌词", "提示",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                string sourceList = GetCurrentViewName();
+                var task = await _downloadManager!.AddLyricDownloadAsync(song, sourceList, lyricInfo.Lyric);
+                if (task != null)
+                {
+                    MessageBox.Show($"已添加歌词下载任务：\n{song.Name} - {song.Artist}", "提示",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                else
+                {
+                    MessageBox.Show("歌词下载任务创建失败", "错误",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"下载歌词失败：{ex.Message}", "错误",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 

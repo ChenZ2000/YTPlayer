@@ -666,6 +666,19 @@ namespace YTPlayer
                 return;
             }
 
+            bool hasValidDetailName = !string.IsNullOrWhiteSpace(detail.Name);
+            bool isPlaceholderName =
+                string.IsNullOrWhiteSpace(artist.Name) ||
+                string.Equals(artist.Name, "歌手", StringComparison.OrdinalIgnoreCase) ||
+                (artist.Id > 0 &&
+                 string.Equals(artist.Name, $"歌手 {artist.Id}", StringComparison.OrdinalIgnoreCase));
+
+            if (hasValidDetailName && (isPlaceholderName ||
+                !string.Equals(artist.Name, detail.Name, StringComparison.OrdinalIgnoreCase)))
+            {
+                artist.Name = detail.Name;
+            }
+
             artist.MusicCount = detail.MusicCount;
             artist.AlbumCount = detail.AlbumCount;
             artist.MvCount = detail.MvCount;

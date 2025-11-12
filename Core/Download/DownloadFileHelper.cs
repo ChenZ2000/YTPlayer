@@ -345,6 +345,39 @@ namespace YTPlayer.Core.Download
             return fullPath;
         }
 
+        public static string BuildLyricFilePath(
+            string downloadDirectory,
+            SongInfo song)
+        {
+            if (string.IsNullOrWhiteSpace(downloadDirectory))
+            {
+                throw new ArgumentException("下载目录不能为空", nameof(downloadDirectory));
+            }
+
+            if (song == null)
+            {
+                throw new ArgumentNullException(nameof(song));
+            }
+
+            EnsureDirectoryExists(downloadDirectory);
+
+            string fileName = CreateSafeFileName(song.Name, song.Artist, isTrial: song.IsTrial);
+            string baseName = Path.Combine(downloadDirectory, fileName + ".lrc");
+            if (!File.Exists(baseName))
+            {
+                return baseName;
+            }
+
+            int counter = 1;
+            string candidate;
+            do
+            {
+                candidate = Path.Combine(downloadDirectory, $"{fileName} ({counter++}).lrc");
+            } while (File.Exists(candidate));
+
+            return candidate;
+        }
+
         /// <summary>
         /// 检查文件或目录是否存在冲突
         /// </summary>

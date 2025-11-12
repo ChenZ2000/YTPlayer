@@ -30,6 +30,11 @@ namespace YTPlayer.Models.Download
         public string DownloadUrl { get; set; }
 
         /// <summary>
+        /// 下载内容类型（音频/歌词等）
+        /// </summary>
+        public DownloadContentType ContentType { get; set; } = DownloadContentType.Audio;
+
+        /// <summary>
         /// 质量级别
         /// </summary>
         public QualityLevel Quality { get; set; }
@@ -93,6 +98,11 @@ namespace YTPlayer.Models.Download
         /// 重试次数
         /// </summary>
         public int RetryCount { get; set; }
+
+        /// <summary>
+        /// 歌词内容缓存（用于歌词下载）
+        /// </summary>
+        public string? LyricContent { get; set; }
 
         /// <summary>
         /// 构造函数

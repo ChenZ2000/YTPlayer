@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using YTPlayer.Core.Streaming;
@@ -63,6 +64,7 @@ namespace YTPlayer.Core.Download
         #region 私有字段
 
         private readonly HttpClient _httpClient;
+        private readonly NeteaseApiClient? _apiClient;
         private readonly AudioMetadataWriter? _metadataWriter;
         private bool _disposed;
 
@@ -79,11 +81,12 @@ namespace YTPlayer.Core.Download
             // 使用针对下载优化的 HttpClient（较长超时）
             _httpClient = OptimizedHttpClientFactory.CreateForPreCache(TimeSpan.FromMinutes(30));
             _disposed = false;
+            _apiClient = apiClient;
 
             // 如果提供了 API 客户端，创建元数据写入器
-            if (apiClient != null)
+            if (_apiClient != null)
             {
-                _metadataWriter = new AudioMetadataWriter(apiClient);
+                _metadataWriter = new AudioMetadataWriter(_apiClient);
             }
         }
 
@@ -115,6 +118,11 @@ namespace YTPlayer.Core.Download
             if (task == null)
             {
                 throw new ArgumentNullException(nameof(task));
+            }
+
+            if (task.ContentType == DownloadContentType.Lyrics)
+            {
+                return await ExecuteLyricDownloadAsync(task, cancellationToken).ConfigureAwait(false);
             }
 
             if (string.IsNullOrWhiteSpace(task.DownloadUrl))
@@ -234,6 +242,74 @@ namespace YTPlayer.Core.Download
         #endregion
 
         #region 私有方法
+
+        private async Task<bool> ExecuteLyricDownloadAsync(DownloadTask task, CancellationToken cancellationToken)
+        {
+            try
+            {
+                var lyricContent = await ResolveLyricContentAsync(task, cancellationToken).ConfigureAwait(false);
+                if (string.IsNullOrWhiteSpace(lyricContent))
+                {
+                    task.Status = DownloadStatus.Failed;
+                    task.ErrorMessage = "该歌曲没有歌词";
+                    DownloadFailed?.Invoke(task, new InvalidOperationException(task.ErrorMessage));
+                    return false;
+                }
+                string lyricText = lyricContent!;
+
+                string? directory = Path.GetDirectoryName(task.DestinationPath);
+                if (!string.IsNullOrEmpty(directory))
+                {
+                    DownloadFileHelper.EnsureDirectoryExists(directory);
+                }
+
+                task.Status = DownloadStatus.Downloading;
+                using (var writer = new StreamWriter(task.DestinationPath, false, Encoding.UTF8))
+                {
+                    await writer.WriteAsync(lyricText).ConfigureAwait(false);
+                }
+
+                task.LyricContent = null;
+
+                var info = new FileInfo(task.DestinationPath);
+                task.TotalBytes = info.Exists ? info.Length : lyricText.Length;
+                task.DownloadedBytes = task.TotalBytes;
+                task.DownloadSpeed = 0;
+                task.CompletedTime = DateTime.Now;
+                task.Status = DownloadStatus.Completed;
+                DownloadCompleted?.Invoke(task);
+                return true;
+            }
+            catch (OperationCanceledException)
+            {
+                task.Status = DownloadStatus.Cancelled;
+                throw;
+            }
+            catch (Exception ex)
+            {
+                task.Status = DownloadStatus.Failed;
+                task.ErrorMessage = ex.Message;
+                DownloadFailed?.Invoke(task, ex);
+                return false;
+            }
+        }
+
+        private async Task<string?> ResolveLyricContentAsync(DownloadTask task, CancellationToken cancellationToken)
+        {
+            if (!string.IsNullOrWhiteSpace(task.LyricContent))
+            {
+                return task.LyricContent;
+            }
+
+            if (_apiClient == null || task.Song == null || string.IsNullOrWhiteSpace(task.Song.Id))
+            {
+                return null;
+            }
+
+            var lyricInfo = await _apiClient.GetLyricsAsync(task.Song.Id!).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            return lyricInfo?.Lyric;
+        }
 
         /// <summary>
         /// 执行下载（支持断点续传）

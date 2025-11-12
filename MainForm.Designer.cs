@@ -33,6 +33,7 @@
             this.fileMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.homeMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.loginMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.currentPlayingMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.toolStripSeparatorDownload1 = new System.Windows.Forms.ToolStripSeparator();
             this.openDownloadDirMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.changeDownloadDirMenuItem = new System.Windows.Forms.ToolStripMenuItem();
@@ -111,6 +112,7 @@
             this.unsubscribeArtistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.toolStripSeparatorDownload3 = new System.Windows.Forms.ToolStripSeparator();
             this.downloadSongMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.downloadLyricsMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.downloadPlaylistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.downloadAlbumMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.batchDownloadMenuItem = new System.Windows.Forms.ToolStripMenuItem();
@@ -164,16 +166,17 @@ this.hideMenuItem.ShortcutKeyDisplayString = "Shift+Esc";
 this.hideMenuItem.Click += new System.EventHandler(this.hideMenuItem_Click);
 
 // 修改原来的 AddRange，把"登录"和"隐藏"放到"退出"之前，添加下载菜单项：
-this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
-    this.homeMenuItem,
-    this.loginMenuItem,
-    this.toolStripSeparatorDownload1,
-    this.openDownloadDirMenuItem,
-    this.changeDownloadDirMenuItem,
-    this.downloadManagerMenuItem,
-    this.toolStripSeparatorDownload2,
-    this.hideMenuItem,
-    this.exitMenuItem});
+            this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
+            this.homeMenuItem,
+            this.loginMenuItem,
+            this.currentPlayingMenuItem,
+            this.toolStripSeparatorDownload1,
+            this.openDownloadDirMenuItem,
+            this.changeDownloadDirMenuItem,
+            this.downloadManagerMenuItem,
+            this.toolStripSeparatorDownload2,
+            this.hideMenuItem,
+            this.exitMenuItem});
 
             this.fileMenuItem.Name = "fileMenuItem";
             this.fileMenuItem.Size = new System.Drawing.Size(98, 24);
@@ -194,6 +197,14 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             this.loginMenuItem.Size = new System.Drawing.Size(178, 26);
             this.loginMenuItem.Text = "登录";
             this.loginMenuItem.Click += new System.EventHandler(this.loginMenuItem_Click);
+            //
+            // currentPlayingMenuItem
+            //
+            this.currentPlayingMenuItem.Name = "currentPlayingMenuItem";
+            this.currentPlayingMenuItem.Size = new System.Drawing.Size(200, 26);
+            this.currentPlayingMenuItem.Text = "当前播放";
+            this.currentPlayingMenuItem.Visible = false;
+            this.currentPlayingMenuItem.DropDownOpening += new System.EventHandler(this.currentPlayingMenuItem_DropDownOpening);
             //
             // openDownloadDirMenuItem
             //
@@ -502,7 +513,7 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             this.searchTextBox.Size = new System.Drawing.Size(470, 33);
             this.searchTextBox.TabIndex = 1;
             this.searchTextBox.AccessibleName = "搜索关键词";
-            this.searchTextBox.AccessibleDescription = "输入要搜索的歌曲、歌单或专辑名称";
+            this.searchTextBox.AccessibleDescription = "输入要搜索的歌曲、歌单、专辑名称或链接，多个链接用分号分隔";
             this.searchTextBox.KeyDown += new System.Windows.Forms.KeyEventHandler(this.searchTextBox_KeyDown);
             //
             // searchLabel
@@ -722,6 +733,7 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             this.unsubscribeArtistMenuItem,
             this.toolStripSeparatorDownload3,
             this.downloadSongMenuItem,
+            this.downloadLyricsMenuItem,
             this.downloadPlaylistMenuItem,
             this.downloadAlbumMenuItem,
             this.batchDownloadMenuItem,
@@ -730,6 +742,8 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             this.songContextMenu.Name = "songContextMenu";
             this.songContextMenu.Size = new System.Drawing.Size(211, 320);
             this.songContextMenu.Opening += new System.ComponentModel.CancelEventHandler(this.songContextMenu_Opening);
+            this.songContextMenu.Closed += new System.Windows.Forms.ToolStripDropDownClosedEventHandler(this.songContextMenu_Closed);
+            this.currentPlayingMenuItem.DropDown = this.songContextMenu;
             //
             // insertPlayMenuItem
             //
@@ -944,6 +958,13 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
             this.downloadSongMenuItem.Text = "下载歌曲(&D)";
             this.downloadSongMenuItem.Click += new System.EventHandler(this.DownloadSong_Click);
             //
+            // downloadLyricsMenuItem
+            //
+            this.downloadLyricsMenuItem.Name = "downloadLyricsMenuItem";
+            this.downloadLyricsMenuItem.Size = new System.Drawing.Size(210, 24);
+            this.downloadLyricsMenuItem.Text = "下载歌词(&L)";
+            this.downloadLyricsMenuItem.Click += new System.EventHandler(this.DownloadLyrics_Click);
+            //
             // downloadPlaylistMenuItem
             //
             this.downloadPlaylistMenuItem.Name = "downloadPlaylistMenuItem";
@@ -1075,6 +1096,7 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
         private System.Windows.Forms.ToolStripMenuItem openDownloadDirMenuItem;
         private System.Windows.Forms.ToolStripMenuItem changeDownloadDirMenuItem;
         private System.Windows.Forms.ToolStripMenuItem downloadManagerMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem currentPlayingMenuItem;
         private System.Windows.Forms.ToolStripSeparator toolStripSeparatorDownload2;
         private System.Windows.Forms.ToolStripMenuItem hideMenuItem;
         private System.Windows.Forms.ToolStripMenuItem exitMenuItem;
@@ -1155,6 +1177,7 @@ this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[
         private System.Windows.Forms.ToolStripMenuItem unsubscribeArtistMenuItem;
         private System.Windows.Forms.ToolStripSeparator toolStripSeparatorDownload3;
         private System.Windows.Forms.ToolStripMenuItem downloadSongMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem downloadLyricsMenuItem;
         private System.Windows.Forms.ToolStripMenuItem downloadPlaylistMenuItem;
         private System.Windows.Forms.ToolStripMenuItem downloadAlbumMenuItem;
         private System.Windows.Forms.ToolStripMenuItem batchDownloadMenuItem;

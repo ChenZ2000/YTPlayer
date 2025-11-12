@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Linq;
 using System.IO;
+using System.Globalization;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -62,12 +63,18 @@ namespace YTPlayer
         private int _resultsPerPage = 100;
         private int _maxPage = 1;
         private bool _hasNextSearchPage = false;
+        private bool _isCurrentPlayingMenuActive = false;
+        private SongInfo? _currentPlayingMenuSong;
         private int _lastListViewFocusedIndex = -1;  // 记录列表最后聚焦的索引
         private string _lastKeyword = "";
         private readonly PlaybackQueueManager _playbackQueue = new PlaybackQueueManager();
         private bool _suppressAutoAdvance = false;
         // 当前浏览列表的来源标识
         private string _currentViewSource = "";
+        private const string MixedSearchTypeDisplayName = "混合";
+        private bool _isMixedSearchTypeActive = false;
+        private string _lastExplicitSearchType = "歌曲";
+        private string? _currentMixedQueryKey = null;
         private CancellationTokenSource? _initialHomeLoadCts;
         private CancellationTokenSource? _initialHomeFocusTimeoutCts;
         private bool _initialHomeLoadCompleted = false;
@@ -1059,6 +1066,20 @@ namespace YTPlayer
         /// </summary>
         private void searchTypeComboBox_KeyDown(object sender, KeyEventArgs e)
         {
+            if (_isMixedSearchTypeActive && (e.KeyCode == Keys.Down || e.KeyCode == Keys.Up))
+            {
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+
+                if (searchTypeComboBox.Items.Count > 0)
+                {
+                    int targetIndex = e.KeyCode == Keys.Down ? 0 : searchTypeComboBox.Items.Count - 1;
+                    string targetType = searchTypeComboBox.Items[targetIndex]?.ToString() ?? _lastExplicitSearchType;
+                    DeactivateMixedSearchTypeOption(targetType);
+                }
+                return;
+            }
+
             if (e.KeyCode == Keys.Enter)
             {
                 e.Handled = true;
@@ -1072,11 +1093,274 @@ namespace YTPlayer
         /// </summary>
         private string GetSelectedSearchType()
         {
+            if (_isMixedSearchTypeActive)
+            {
+                return _lastExplicitSearchType;
+            }
+
             if (searchTypeComboBox.SelectedIndex >= 0 && searchTypeComboBox.SelectedIndex < searchTypeComboBox.Items.Count)
             {
-                return searchTypeComboBox.Items[searchTypeComboBox.SelectedIndex].ToString();
+                var selected = searchTypeComboBox.Items[searchTypeComboBox.SelectedIndex]?.ToString();
+                if (!string.IsNullOrWhiteSpace(selected))
+                {
+                    return selected!;
+                }
             }
-            return "歌曲";  // 默认返回歌曲
+
+            string comboText = searchTypeComboBox.Text;
+            if (!string.IsNullOrWhiteSpace(comboText))
+            {
+                return comboText.Trim();
+            }
+
+            return _lastExplicitSearchType;
+        }
+
+        private void EnsureSearchTypeSelection(string searchType)
+        {
+            if (string.IsNullOrWhiteSpace(searchType))
+            {
+                return;
+            }
+
+            if (string.Equals(searchType, MixedSearchTypeDisplayName, StringComparison.OrdinalIgnoreCase))
+            {
+                ActivateMixedSearchTypeOption();
+                return;
+            }
+
+            _lastExplicitSearchType = searchType;
+
+            if (_isMixedSearchTypeActive)
+            {
+                _isMixedSearchTypeActive = false;
+            }
+
+            int index = searchTypeComboBox.Items.IndexOf(searchType);
+            if (index >= 0)
+            {
+                if (searchTypeComboBox.SelectedIndex != index)
+                {
+                    searchTypeComboBox.SelectedIndex = index;
+                }
+                else
+                {
+                    UpdateSearchTypeAccessibleAnnouncement(searchType);
+                }
+            }
+            else
+            {
+                searchTypeComboBox.SelectedIndex = -1;
+                searchTypeComboBox.Text = searchType;
+                UpdateSearchTypeAccessibleAnnouncement(searchType);
+            }
+        }
+
+        private void ActivateMixedSearchTypeOption()
+        {
+            _isMixedSearchTypeActive = true;
+            searchTypeComboBox.SelectedIndex = -1;
+            searchTypeComboBox.Text = MixedSearchTypeDisplayName;
+            UpdateSearchTypeAccessibleAnnouncement(MixedSearchTypeDisplayName);
+        }
+
+        private void DeactivateMixedSearchTypeOption(string? targetType = null)
+        {
+            if (!_isMixedSearchTypeActive)
+            {
+                return;
+            }
+
+            _isMixedSearchTypeActive = false;
+
+            string resolvedType = targetType ?? _lastExplicitSearchType;
+            if (string.IsNullOrWhiteSpace(resolvedType))
+            {
+                resolvedType = _lastExplicitSearchType = "歌曲";
+            }
+
+            int index = searchTypeComboBox.Items.IndexOf(resolvedType);
+            if (index >= 0)
+            {
+                searchTypeComboBox.SelectedIndex = index;
+            }
+            else
+            {
+                searchTypeComboBox.SelectedIndex = -1;
+                searchTypeComboBox.Text = resolvedType;
+                UpdateSearchTypeAccessibleAnnouncement(resolvedType);
+            }
+        }
+
+        private void UpdateSearchTypeAccessibleAnnouncement(string? text)
+        {
+            string label = string.IsNullOrEmpty(text)
+                ? "类型"
+                : $"类型{text}";
+            searchTypeComboBox.AccessibleName = label;
+            this.AccessibilityNotifyClients(AccessibleEvents.NameChange, -1);
+            this.AccessibilityNotifyClients(AccessibleEvents.ValueChange, -1);
+            this.AccessibilityNotifyClients(AccessibleEvents.Selection, -1);
+        }
+
+        private static readonly char[] MultiUrlSeparators = new[] { ';', '；' };
+
+        private static List<string> SplitMultiSearchInput(string? rawInput)
+        {
+            if (string.IsNullOrWhiteSpace(rawInput))
+            {
+                return new List<string>();
+            }
+
+            return rawInput!
+                .Split(MultiUrlSeparators, StringSplitOptions.RemoveEmptyEntries)
+                .Select(part => part.Trim())
+                .Where(part => !string.IsNullOrEmpty(part))
+                .ToList();
+        }
+
+        private bool TryParseMultiUrlInput(
+            List<string> segments,
+            out List<NeteaseUrlMatch> matches,
+            out string errorMessage)
+        {
+            matches = new List<NeteaseUrlMatch>();
+            errorMessage = string.Empty;
+
+            if (segments == null || segments.Count == 0)
+            {
+                return false;
+            }
+
+            var errors = new List<string>();
+            foreach (var segment in segments)
+            {
+                if (!NeteaseUrlParser.TryParse(segment, out var parsed) || parsed == null)
+                {
+                    errors.Add(segment);
+                    continue;
+                }
+
+                matches.Add(parsed);
+            }
+
+            if (errors.Count > 0)
+            {
+                var preview = errors
+                    .Take(5)
+                    .Select((value, index) => $"{index + 1}. {value}");
+                string suffix = errors.Count > 5 ? "\n..." : string.Empty;
+                errorMessage = $"以下链接无法解析：\n{string.Join("\n", preview)}{suffix}";
+                matches.Clear();
+                return false;
+            }
+
+            return matches.Count > 0;
+        }
+
+        private string ResolveSearchTypeForMatches(IReadOnlyCollection<NeteaseUrlMatch> matches)
+        {
+            if (matches == null || matches.Count == 0)
+            {
+                return "歌曲";
+            }
+
+            var distinctTypes = matches
+                .Select(m => m.Type)
+                .Distinct()
+                .Take(2)
+                .ToList();
+
+            if (distinctTypes.Count > 1)
+            {
+                return MixedSearchTypeDisplayName;
+            }
+
+            return MapUrlTypeToSearchType(distinctTypes[0]);
+        }
+
+        private void ApplySearchTypeDisplayForMatches(IReadOnlyCollection<NeteaseUrlMatch> matches)
+        {
+            string resolvedType = ResolveSearchTypeForMatches(matches);
+            if (string.Equals(resolvedType, MixedSearchTypeDisplayName, StringComparison.OrdinalIgnoreCase))
+            {
+                ActivateMixedSearchTypeOption();
+            }
+            else
+            {
+                EnsureSearchTypeSelection(resolvedType);
+            }
+        }
+
+        private string BuildMixedQueryKey(IEnumerable<NeteaseUrlMatch> matches)
+        {
+            if (matches == null)
+            {
+                return string.Empty;
+            }
+
+            return string.Join(";", matches.Select(m => $"{(int)m.Type}:{m.ResourceId}"));
+        }
+
+        private bool TryParseMixedQueryKey(string? key, out List<NeteaseUrlMatch> matches)
+        {
+            matches = new List<NeteaseUrlMatch>();
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                return false;
+            }
+
+            var tokens = key.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (var token in tokens)
+            {
+                var pair = token.Split(new[] { ':' }, 2);
+                if (pair.Length != 2)
+                {
+                    return false;
+                }
+
+                if (!int.TryParse(pair[0], out var typeValue) ||
+                    !Enum.IsDefined(typeof(NeteaseUrlType), typeValue))
+                {
+                    return false;
+                }
+
+                string resourceId = pair[1];
+                matches.Add(new NeteaseUrlMatch((NeteaseUrlType)typeValue, resourceId, resourceId));
+            }
+
+            return matches.Count > 0;
+        }
+
+        private static string GetEntityDisplayName(NeteaseUrlType type)
+        {
+            switch (type)
+            {
+                case NeteaseUrlType.Playlist:
+                    return "歌单";
+                case NeteaseUrlType.Album:
+                    return "专辑";
+                case NeteaseUrlType.Artist:
+                    return "歌手";
+                default:
+                    return "歌曲";
+            }
+        }
+
+        private readonly struct NormalizedUrlMatch
+        {
+            public NormalizedUrlMatch(NeteaseUrlType type, string entityName, long numericId)
+            {
+                Type = type;
+                EntityName = entityName;
+                NumericId = numericId;
+                IdText = numericId.ToString(CultureInfo.InvariantCulture);
+            }
+
+            public NeteaseUrlType Type { get; }
+            public string EntityName { get; }
+            public long NumericId { get; }
+            public string IdText { get; }
         }
 
         /// <summary>
@@ -1093,11 +1377,54 @@ namespace YTPlayer
                 return;
             }
 
+            var multiSegments = SplitMultiSearchInput(keyword);
+            List<NeteaseUrlMatch>? multiMatches = null;
+            bool isMultiUrlSearch = false;
+
+            if (multiSegments.Count > 1)
+            {
+                if (!TryParseMultiUrlInput(multiSegments, out var parsedMatches, out var parseError))
+                {
+                    MessageBox.Show(parseError, "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                if (parsedMatches.Count > 1)
+                {
+                    isMultiUrlSearch = true;
+                    multiMatches = parsedMatches;
+                }
+            }
+
+            bool singleUrlSearch = false;
+            NeteaseUrlMatch? parsedUrl = null;
+            if (!isMultiUrlSearch)
+            {
+                singleUrlSearch = NeteaseUrlParser.TryParse(keyword, out parsedUrl);
+            }
+
+            bool isUrlSearch = isMultiUrlSearch || singleUrlSearch;
+
+            string searchType;
+            if (isMultiUrlSearch && multiMatches != null)
+            {
+                searchType = ResolveSearchTypeForMatches(multiMatches);
+                ApplySearchTypeDisplayForMatches(multiMatches);
+            }
+            else if (singleUrlSearch && parsedUrl != null)
+            {
+                searchType = MapUrlTypeToSearchType(parsedUrl.Type);
+                EnsureSearchTypeSelection(searchType);
+            }
+            else
+            {
+                searchType = GetSelectedSearchType();
+            }
+
             bool isNewKeyword = !string.Equals(keyword, _lastKeyword, StringComparison.OrdinalIgnoreCase);
-            string searchType = GetSelectedSearchType();
             bool isTypeChanged = !string.Equals(searchType, _currentSearchType, StringComparison.OrdinalIgnoreCase);
 
-            if (isNewKeyword || isTypeChanged)
+            if (!isUrlSearch && (isNewKeyword || isTypeChanged))
             {
                 SaveNavigationState();
             }
@@ -1123,6 +1450,20 @@ namespace YTPlayer
                 _isHomePage = false;
 
                 _currentSearchType = searchType;
+
+                if (isMultiUrlSearch && multiMatches != null)
+                {
+                    await HandleMultipleNeteaseUrlSearchAsync(multiMatches, ThrowIfSearchCancelled);
+                    _lastKeyword = keyword;
+                    return;
+                }
+
+                if (singleUrlSearch && parsedUrl != null)
+                {
+                    await HandleNeteaseUrlSearchAsync(parsedUrl, ThrowIfSearchCancelled);
+                    _lastKeyword = keyword;
+                    return;
+                }
 
                 if (searchType == "歌曲")
                 {
@@ -1364,6 +1705,469 @@ namespace YTPlayer
                 currentSearchCts.Dispose();
             }
         }
+
+        private async Task HandleNeteaseUrlSearchAsync(
+            NeteaseUrlMatch match,
+            Action throwIfCancelled)
+        {
+            switch (match.Type)
+            {
+                case NeteaseUrlType.Song:
+                    await HandleSongUrlAsync(match, throwIfCancelled);
+                    UpdateStatusBar("已定位歌曲");
+                    break;
+                case NeteaseUrlType.Playlist:
+                    await HandlePlaylistUrlAsync(match, throwIfCancelled);
+                    break;
+                case NeteaseUrlType.Album:
+                    await HandleAlbumUrlAsync(match, throwIfCancelled);
+                    break;
+                case NeteaseUrlType.Artist:
+                    await HandleArtistUrlAsync(match, throwIfCancelled);
+                    break;
+                default:
+                    MessageBox.Show("暂不支持该链接类型。", "提示",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    UpdateStatusBar("不支持的链接类型");
+                    break;
+            }
+        }
+
+        private async Task HandleSongUrlAsync(
+            NeteaseUrlMatch match,
+            Action throwIfCancelled)
+        {
+            if (!TryValidateNeteaseResourceId(match.ResourceId, "歌曲", out var parsedSongId))
+            {
+                return;
+            }
+
+            string resolvedSongId = parsedSongId.ToString();
+            var songs = await _apiClient.GetSongDetailAsync(new[] { resolvedSongId });
+            throwIfCancelled();
+
+            var song = songs?.FirstOrDefault();
+            if (song == null)
+            {
+                MessageBox.Show("未能找到该链接指向的歌曲。", "提示",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                UpdateStatusBar("未找到歌曲");
+                return;
+            }
+
+            DisplaySongFromUrl(song, resolvedSongId, skipSave: false);
+        }
+
+        private async Task<bool> LoadSongFromUrlAsync(string songId, bool skipSave = false)
+        {
+            if (string.IsNullOrWhiteSpace(songId))
+            {
+                System.Diagnostics.Debug.WriteLine("[Navigation] 无法加载歌曲视图，缺少歌曲ID");
+                return false;
+            }
+
+            try
+            {
+                var songs = await _apiClient.GetSongDetailAsync(new[] { songId });
+                var song = songs?.FirstOrDefault();
+                if (song == null)
+                {
+                    MessageBox.Show("未能找到该链接指向的歌曲。", "提示",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    UpdateStatusBar("未找到歌曲");
+                    return false;
+                }
+
+                return DisplaySongFromUrl(song, songId, skipSave);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[Navigation] 加载歌曲失败: {ex}");
+                MessageBox.Show($"加载歌曲失败: {ex.Message}", "错误",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("加载歌曲失败");
+                return false;
+            }
+        }
+
+        private bool DisplaySongFromUrl(SongInfo song, string? fallbackSongId, bool skipSave)
+        {
+            if (song == null)
+            {
+                return false;
+            }
+
+            string resolvedSongId = !string.IsNullOrWhiteSpace(song.Id)
+                ? song.Id
+                : (fallbackSongId ?? string.Empty);
+            if (string.IsNullOrWhiteSpace(resolvedSongId))
+            {
+                MessageBox.Show("无法显示该歌曲，缺少有效的歌曲ID。", "错误",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
+            }
+
+            if (!skipSave)
+            {
+                SaveNavigationState();
+            }
+
+            _isHomePage = false;
+            _currentSongs = new List<SongInfo> { song };
+            _currentPlaylist = null;
+            _currentPage = 1;
+            _maxPage = 1;
+            _hasNextSearchPage = false;
+
+            string viewSource = $"url:song:{resolvedSongId}";
+            _currentViewSource = viewSource;
+
+            string accessibleName = string.IsNullOrWhiteSpace(song.Name)
+                ? $"歌曲: {resolvedSongId}"
+                : $"歌曲: {song.Name}";
+
+            DisplaySongs(
+                _currentSongs,
+                showPagination: false,
+                hasNextPage: false,
+                startIndex: 1,
+                viewSource: viewSource,
+                accessibleName: accessibleName);
+
+            return true;
+        }
+
+        private async Task HandlePlaylistUrlAsync(
+            NeteaseUrlMatch match,
+            Action throwIfCancelled)
+        {
+            if (!TryValidateNeteaseResourceId(match.ResourceId, "歌单", out var parsedPlaylistId))
+            {
+                return;
+            }
+
+            var playlist = await _apiClient.GetPlaylistDetailAsync(parsedPlaylistId.ToString());
+            throwIfCancelled();
+            if (playlist == null)
+            {
+                MessageBox.Show("未能找到该链接指向的歌单。", "提示",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                UpdateStatusBar("未找到歌单");
+                return;
+            }
+
+            await OpenPlaylist(playlist);
+        }
+
+        private async Task HandleAlbumUrlAsync(
+            NeteaseUrlMatch match,
+            Action throwIfCancelled)
+        {
+            if (!TryValidateNeteaseResourceId(match.ResourceId, "专辑", out var parsedAlbumId))
+            {
+                return;
+            }
+
+            AlbumInfo? album = await _apiClient.GetAlbumDetailAsync(parsedAlbumId.ToString());
+            throwIfCancelled();
+            if (album == null)
+            {
+                MessageBox.Show("未能找到该链接指向的专辑。", "提示",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                UpdateStatusBar("未找到专辑");
+                return;
+            }
+
+            await OpenAlbum(album);
+        }
+
+        private async Task HandleArtistUrlAsync(
+            NeteaseUrlMatch match,
+            Action throwIfCancelled)
+        {
+            if (!TryValidateNeteaseResourceId(match.ResourceId, "歌手", out var artistId))
+            {
+                return;
+            }
+
+            var artist = new ArtistInfo
+            {
+                Id = artistId,
+                Name = $"歌手 {artistId}"
+            };
+
+            await OpenArtistAsync(artist);
+        }
+
+        private async Task HandleMultipleNeteaseUrlSearchAsync(
+            List<NeteaseUrlMatch> matches,
+            Action? throwIfCancelled,
+            bool skipSave = false,
+            string? mixedQueryKeyOverride = null)
+        {
+            if (matches == null || matches.Count == 0)
+            {
+                return;
+            }
+
+            var normalizedMatches = new List<NormalizedUrlMatch>();
+            var failures = new List<string>();
+
+            foreach (var match in matches)
+            {
+                string entityName = GetEntityDisplayName(match.Type);
+                if (!TryValidateNeteaseResourceId(match.ResourceId, entityName, out var parsedId))
+                {
+                    failures.Add($"{entityName}（{match.ResourceId}）");
+                    continue;
+                }
+
+                normalizedMatches.Add(new NormalizedUrlMatch(match.Type, entityName, parsedId));
+            }
+
+            if (normalizedMatches.Count == 0)
+            {
+                string failureMessage = failures.Count > 0
+                    ? $"以下链接无法解析：\n{string.Join("\n", failures.Take(5))}"
+                    : "未能解析任何有效的链接。";
+                MessageBox.Show(failureMessage, "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                UpdateStatusBar("链接解析失败");
+                return;
+            }
+
+            if (!skipSave)
+            {
+                SaveNavigationState();
+            }
+
+            ApplySearchTypeDisplayForMatches(matches);
+
+            var listItems = new List<ListItemInfo>();
+            var aggregatedSongs = new List<SongInfo>();
+            var playlistCache = new Dictionary<string, PlaylistInfo>(StringComparer.OrdinalIgnoreCase);
+            var albumCache = new Dictionary<string, AlbumInfo>(StringComparer.OrdinalIgnoreCase);
+            var artistCache = new Dictionary<long, ArtistInfo>();
+            Dictionary<string, SongInfo>? songMap = null;
+
+            var songIds = normalizedMatches
+                .Where(n => n.Type == NeteaseUrlType.Song)
+                .Select(n => n.IdText)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            try
+            {
+                if (songIds.Count > 0)
+                {
+                    var songDetails = await _apiClient.GetSongDetailAsync(songIds.ToArray());
+                    throwIfCancelled?.Invoke();
+                    if (songDetails != null)
+                    {
+                        songMap = songDetails
+                            .Where(s => !string.IsNullOrWhiteSpace(s.Id))
+                            .GroupBy(s => s.Id!, StringComparer.OrdinalIgnoreCase)
+                            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"加载歌曲详情失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            foreach (var normalized in normalizedMatches)
+            {
+                throwIfCancelled?.Invoke();
+
+                switch (normalized.Type)
+                {
+                    case NeteaseUrlType.Song:
+                        if (songMap != null && songMap.TryGetValue(normalized.IdText, out var song) && song != null)
+                        {
+                            listItems.Add(new ListItemInfo
+                            {
+                                Type = ListItemType.Song,
+                                Song = song
+                            });
+                            aggregatedSongs.Add(song);
+                        }
+                        else
+                        {
+                            failures.Add($"{normalized.EntityName}（{normalized.IdText}）");
+                        }
+                        break;
+
+                    case NeteaseUrlType.Playlist:
+                        if (!playlistCache.TryGetValue(normalized.IdText, out var playlist) || playlist == null)
+                        {
+                            playlist = await _apiClient.GetPlaylistDetailAsync(normalized.IdText);
+                            throwIfCancelled?.Invoke();
+                            if (playlist != null)
+                            {
+                                playlistCache[normalized.IdText] = playlist;
+                            }
+                        }
+
+                        if (playlist != null)
+                        {
+                            listItems.Add(new ListItemInfo
+                            {
+                                Type = ListItemType.Playlist,
+                                Playlist = playlist
+                            });
+                        }
+                        else
+                        {
+                            failures.Add($"{normalized.EntityName}（{normalized.IdText}）");
+                        }
+                        break;
+
+                    case NeteaseUrlType.Album:
+                        if (!albumCache.TryGetValue(normalized.IdText, out var album) || album == null)
+                        {
+                            album = await _apiClient.GetAlbumDetailAsync(normalized.IdText);
+                            throwIfCancelled?.Invoke();
+                            if (album != null)
+                            {
+                                albumCache[normalized.IdText] = album;
+                            }
+                        }
+
+                        if (album != null)
+                        {
+                            listItems.Add(new ListItemInfo
+                            {
+                                Type = ListItemType.Album,
+                                Album = album
+                            });
+                        }
+                        else
+                        {
+                            failures.Add($"{normalized.EntityName}（{normalized.IdText}）");
+                        }
+                        break;
+
+                    case NeteaseUrlType.Artist:
+                        if (!artistCache.TryGetValue(normalized.NumericId, out var artist) || artist == null)
+                        {
+                            var detail = await _apiClient.GetArtistDetailAsync(normalized.NumericId, includeIntroduction: true);
+                            throwIfCancelled?.Invoke();
+                            if (detail != null)
+                            {
+                                artist = new ArtistInfo
+                                {
+                                    Id = normalized.NumericId,
+                                    Name = string.IsNullOrWhiteSpace(detail.Name)
+                                        ? $"歌手 {normalized.NumericId}"
+                                        : detail.Name!
+                                };
+                                ApplyArtistDetailToArtist(artist, detail);
+                                artistCache[normalized.NumericId] = artist;
+                            }
+                        }
+
+                        if (artist != null)
+                        {
+                            listItems.Add(new ListItemInfo
+                            {
+                                Type = ListItemType.Artist,
+                                Artist = artist
+                            });
+                        }
+                        else
+                        {
+                            failures.Add($"{normalized.EntityName}（{normalized.IdText}）");
+                        }
+                        break;
+
+                    default:
+                        failures.Add($"{normalized.EntityName}（{normalized.IdText}）");
+                        break;
+                }
+            }
+
+            if (listItems.Count == 0)
+            {
+                string failureMessage = failures.Count > 0
+                    ? $"未能加载任何结果：\n{string.Join("\n", failures.Take(5))}"
+                    : "未能加载任何结果。";
+                MessageBox.Show(failureMessage, "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                UpdateStatusBar("链接加载失败");
+                return;
+            }
+
+            var normalizedForKey = normalizedMatches
+                .Select(n => new NeteaseUrlMatch(n.Type, n.IdText, n.IdText))
+                .ToList();
+            _currentMixedQueryKey = mixedQueryKeyOverride ?? BuildMixedQueryKey(normalizedForKey);
+
+            string viewSource = $"url:mixed:{_currentMixedQueryKey}";
+            DisplayListItems(listItems, viewSource: viewSource, accessibleName: "结果");
+
+            _currentSongs.Clear();
+            if (aggregatedSongs.Count > 0)
+            {
+                _currentSongs.AddRange(aggregatedSongs);
+            }
+
+            UpdateStatusBar($"已加载 {listItems.Count} 个链接结果");
+
+            if (failures.Count > 0)
+            {
+                var preview = failures.Take(5);
+                string suffix = failures.Count > 5 ? "\n..." : string.Empty;
+                MessageBox.Show(
+                    $"部分链接未能加载：\n{string.Join("\n", preview)}{suffix}",
+                    "提示",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+            }
+        }
+
+        private async Task<bool> RestoreMixedUrlStateAsync(string mixedQueryKey)
+        {
+            if (!TryParseMixedQueryKey(mixedQueryKey, out var matches) || matches.Count == 0)
+            {
+                MessageBox.Show("无法恢复混合链接结果。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return false;
+            }
+
+            await HandleMultipleNeteaseUrlSearchAsync(matches, null, skipSave: true, mixedQueryKeyOverride: mixedQueryKey);
+            return true;
+        }
+
+        private string MapUrlTypeToSearchType(NeteaseUrlType type)
+        {
+            switch (type)
+            {
+                case NeteaseUrlType.Playlist:
+                    return "歌单";
+                case NeteaseUrlType.Album:
+                    return "专辑";
+                case NeteaseUrlType.Artist:
+                    return "歌手";
+                default:
+                    return "歌曲";
+            }
+        }
+
+        private bool TryValidateNeteaseResourceId(string? resourceId, string entityName, out long parsedId)
+        {
+            parsedId = 0;
+            if (string.IsNullOrWhiteSpace(resourceId) ||
+                !long.TryParse(resourceId, out parsedId) ||
+                parsedId <= 0)
+            {
+                MessageBox.Show($"{entityName}链接格式不正确。", "提示",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                UpdateStatusBar($"无法解析{entityName}链接");
+                return false;
+            }
+
+            return true;
+        }
+
         /// <summary>
         /// 加载主页列表（包含推荐歌单、用户歌单、排行榜等）
         /// 使用分类结构，避免一次加载过多资源
@@ -2435,7 +3239,7 @@ namespace YTPlayer
         /// <summary>
         /// 加载用户喜欢的歌曲
         /// </summary>
-        private async Task LoadUserLikedSongs(bool preserveSelection = false)
+        private async Task LoadUserLikedSongs(bool preserveSelection = false, bool skipSaveNavigation = false)
         {
             try
             {
@@ -2443,7 +3247,7 @@ namespace YTPlayer
                 if (_userLikedPlaylist != null)
                 {
                     System.Diagnostics.Debug.WriteLine($"[LoadUserLikedSongs] 使用缓存的歌单对象: {_userLikedPlaylist.Name}");
-                    await OpenPlaylist(_userLikedPlaylist, skipSave: false, preserveSelection: preserveSelection);
+                    await OpenPlaylist(_userLikedPlaylist, skipSave: skipSaveNavigation, preserveSelection: preserveSelection);
                     return;
                 }
 
@@ -2480,7 +3284,7 @@ namespace YTPlayer
 
                 // 缓存歌单对象
                 _userLikedPlaylist = likedPlaylist;
-                await OpenPlaylist(likedPlaylist, skipSave: false, preserveSelection: preserveSelection);
+                await OpenPlaylist(likedPlaylist, skipSave: skipSaveNavigation, preserveSelection: preserveSelection);
             }
             catch (Exception ex)
             {
@@ -2945,6 +3749,12 @@ namespace YTPlayer
             else if (string.IsNullOrEmpty(_currentViewSource))
             {
                 _isHomePage = false;
+            }
+
+            if (string.IsNullOrWhiteSpace(_currentViewSource) ||
+                !_currentViewSource.StartsWith("url:mixed", StringComparison.OrdinalIgnoreCase))
+            {
+                _currentMixedQueryKey = null;
             }
 
             if (!string.IsNullOrWhiteSpace(accessibleName))
@@ -3887,6 +4697,7 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
             {
                 playPauseButton.AccessibleDescription = "播放/暂停";
                 UpdateWindowTitle(null);
+                UpdateCurrentPlayingMenuItem(null);
                 return;
             }
 
@@ -3909,7 +4720,24 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
 
             playPauseButton.AccessibleDescription = description;
             UpdateWindowTitle(description);
+            UpdateCurrentPlayingMenuItem(song);
             System.Diagnostics.Debug.WriteLine($"[MainForm] 更新播放按钮描述: {description}");
+        }
+
+        private void UpdateCurrentPlayingMenuItem(SongInfo? song)
+        {
+            if (currentPlayingMenuItem == null)
+            {
+                return;
+            }
+
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action<SongInfo?>(UpdateCurrentPlayingMenuItem), song);
+                return;
+            }
+
+            currentPlayingMenuItem.Visible = song != null;
         }
 
         private void UpdateWindowTitle(string? playbackDescription)
@@ -5139,21 +5967,22 @@ private void searchTypeComboBox_KeyPress(object sender, System.Windows.Forms.Key
 }
 
 // 选中项变化时：更新可访问名称并主动通知辅助技术
-private void searchTypeComboBox_SelectedIndexChanged(object sender, System.EventArgs e)
-{
-    string text = this.searchTypeComboBox.SelectedItem != null
-        ? this.searchTypeComboBox.SelectedItem.ToString()
-        : string.Empty;
+        private void searchTypeComboBox_SelectedIndexChanged(object sender, System.EventArgs e)
+        {
+            if (searchTypeComboBox.SelectedIndex < 0)
+            {
+                return;
+            }
 
-    this.searchTypeComboBox.AccessibleName = string.IsNullOrEmpty(text)
-        ? "类型"
-        : "类型" + text;
+            string text = searchTypeComboBox.SelectedItem?.ToString() ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(text))
+            {
+                _lastExplicitSearchType = text;
+            }
 
-    // 主动广播：名称/值/选中已变化（让不同读屏路径都能收到）
-    this.AccessibilityNotifyClients(System.Windows.Forms.AccessibleEvents.NameChange, -1);
-    this.AccessibilityNotifyClients(System.Windows.Forms.AccessibleEvents.ValueChange, -1);
-    this.AccessibilityNotifyClients(System.Windows.Forms.AccessibleEvents.Selection, -1);
-}
+            _isMixedSearchTypeActive = false;
+            UpdateSearchTypeAccessibleAnnouncement(text);
+        }
 
 // 下拉收起时：把焦点切到编辑子控件，并广播焦点事件
 private void searchTypeComboBox_DropDownClosed(object sender, System.EventArgs e)
@@ -6767,38 +7596,19 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
         /// </summary>
         private void insertPlayMenuItem_Click(object sender, EventArgs e)
         {
-            if (resultListView.SelectedItems.Count == 0)
+            var song = GetSelectedSongFromContextMenu(sender);
+            if (song == null)
+            {
+                ShowContextSongMissingMessage("插播的歌曲");
                 return;
-
-            var selectedItem = resultListView.SelectedItems[0];
-            System.Diagnostics.Debug.WriteLine($"[MainForm] 插播菜单, Tag={selectedItem.Tag}");
-
-            SongInfo? song = null;
-
-            // Tag 存储的是索引
-            if (selectedItem.Tag is int index && index >= 0 && index < _currentSongs.Count)
-            {
-                song = _currentSongs[index];
-            }
-            else if (selectedItem.Tag is SongInfo songInfo)
-            {
-                // 兼容：如果 Tag 直接是 SongInfo
-                song = songInfo;
             }
 
-            if (song != null)
-            {
-                _playbackQueue.SetPendingInjection(song, _currentViewSource);
-                UpdateStatusBar($"已设置下一首插播：{song.Name} - {song.Artist}");
-                System.Diagnostics.Debug.WriteLine($"[MainForm] 设置插播歌曲: {song.Name}");
+            _playbackQueue.SetPendingInjection(song, _currentViewSource);
+            UpdateStatusBar($"已设置下一首插播：{song.Name} - {song.Artist}");
+            System.Diagnostics.Debug.WriteLine($"[MainForm] 设置插播歌曲: {song.Name}");
 
-                // ⭐ 插播设置后，立即刷新预加载（下一首已改变）
-                RefreshNextSongPreload();
-            }
-            else
-            {
-                System.Diagnostics.Debug.WriteLine("[MainForm ERROR] 无法获取选中的歌曲信息");
-            }
+            // ⭐ 插播设置后，立即刷新预加载（下一首已改变）
+            RefreshNextSongPreload();
         }
 
         #endregion
@@ -7242,6 +8052,16 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 state.ArtistArea = areaCode;
                 state.ArtistOffset = offset;
             }
+            else if (_currentViewSource.StartsWith("url:mixed", StringComparison.OrdinalIgnoreCase))
+            {
+                state.PageType = "url_mixed";
+                state.MixedQueryKey = _currentMixedQueryKey ?? string.Empty;
+            }
+            else if (_currentViewSource.StartsWith("url:song:", StringComparison.OrdinalIgnoreCase))
+            {
+                state.PageType = "url_song";
+                state.SongId = _currentViewSource.Substring("url:song:".Length);
+            }
             else
             {
                 state.PageType = "category";
@@ -7353,6 +8173,10 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                     return a.ArtistType == b.ArtistType;
                 case "artist_category_list":
                     return a.ArtistType == b.ArtistType && a.ArtistArea == b.ArtistArea && a.ArtistOffset == b.ArtistOffset;
+                case "url_song":
+                    return string.Equals(a.SongId, b.SongId, StringComparison.OrdinalIgnoreCase);
+                case "url_mixed":
+                    return string.Equals(a.MixedQueryKey, b.MixedQueryKey, StringComparison.OrdinalIgnoreCase);
                 default:
                     return string.Equals(a.ViewSource, b.ViewSource, StringComparison.OrdinalIgnoreCase);
             }
@@ -7443,9 +8267,23 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                         await LoadPlaylistById(state.PlaylistId, skipSave: true);
                         break;
 
-                    case "album":
-                        await LoadAlbumById(state.AlbumId, skipSave: true);
-                        break;
+                case "album":
+                    await LoadAlbumById(state.AlbumId, skipSave: true);
+                    break;
+
+                case "url_song":
+                    if (!await LoadSongFromUrlAsync(state.SongId, skipSave: true))
+                    {
+                        return false;
+                    }
+                    break;
+
+                case "url_mixed":
+                    if (!await RestoreMixedUrlStateAsync(state.MixedQueryKey))
+                    {
+                        return false;
+                    }
+                    break;
 
                 case "search":
                     await LoadSearchResults(state.SearchKeyword, state.SearchType, state.CurrentPage, skipSave: true);
@@ -7604,6 +8442,10 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                     return string.Equals(_currentViewSource,
                         $"artist_category_list:{state.ArtistType}:{state.ArtistArea}:offset{state.ArtistOffset}",
                         StringComparison.OrdinalIgnoreCase);
+                case "url_song":
+                    return string.Equals(_currentViewSource, $"url:song:{state.SongId}", StringComparison.OrdinalIgnoreCase);
+                case "url_mixed":
+                    return string.Equals(_currentMixedQueryKey, state.MixedQueryKey, StringComparison.OrdinalIgnoreCase);
                 default:
                     return string.Equals(_currentViewSource, state.ViewSource, StringComparison.OrdinalIgnoreCase);
             }
@@ -7612,6 +8454,21 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
         #endregion
 
         #region 上下文菜单
+
+        private void currentPlayingMenuItem_DropDownOpening(object sender, EventArgs e)
+        {
+            var song = _audioEngine?.CurrentSong;
+            if (song == null)
+            {
+                _isCurrentPlayingMenuActive = false;
+                _currentPlayingMenuSong = null;
+                currentPlayingMenuItem.Visible = false;
+                return;
+            }
+
+            _isCurrentPlayingMenuActive = true;
+            _currentPlayingMenuSong = song;
+        }
 
         /// <summary>
         /// 上下文菜单打开前动态调整菜单项可见性
@@ -7626,18 +8483,26 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             subscribeAlbumMenuItem.Visible = false;
             unsubscribeAlbumMenuItem.Visible = false;
             likeSongMenuItem.Visible = false;
+            likeSongMenuItem.Tag = null;
             unlikeSongMenuItem.Visible = false;
+            unlikeSongMenuItem.Tag = null;
             addToPlaylistMenuItem.Visible = false;
+            addToPlaylistMenuItem.Tag = null;
             removeFromPlaylistMenuItem.Visible = false;
+            removeFromPlaylistMenuItem.Tag = null;
             insertPlayMenuItem.Visible = true;
+            insertPlayMenuItem.Tag = null;
 
             // 默认隐藏所有下载菜单项
             downloadSongMenuItem.Visible = false;
+            downloadSongMenuItem.Tag = null;
             downloadPlaylistMenuItem.Visible = false;
             downloadAlbumMenuItem.Visible = false;
             batchDownloadMenuItem.Visible = false;
             downloadCategoryMenuItem.Visible = false;
             batchDownloadPlaylistsMenuItem.Visible = false;
+            downloadLyricsMenuItem.Visible = false;
+            downloadLyricsMenuItem.Tag = null;
             cloudMenuSeparator.Visible = false;
             uploadToCloudMenuItem.Visible = false;
             deleteFromCloudMenuItem.Visible = false;
@@ -7677,7 +8542,7 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             }
 
             var selectedItem = resultListView.SelectedItems.Count > 0 ? resultListView.SelectedItems[0] : null;
-            if (selectedItem == null)
+            if (selectedItem == null && !_isCurrentPlayingMenuActive)
             {
                 return;
             }
@@ -7692,13 +8557,13 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             CommentTarget? contextCommentTarget = null;
 
             // 根据Tag类型决定显示哪些菜单项
-            if (selectedItem.Tag is ArtistInfo directArtist)
+            if (!_isCurrentPlayingMenuActive && selectedItem?.Tag is ArtistInfo directArtist)
             {
                 ConfigureArtistContextMenu(directArtist);
                 return;
             }
 
-            if (selectedItem.Tag is ListItemInfo listItem)
+            if (!_isCurrentPlayingMenuActive && selectedItem?.Tag is ListItemInfo listItem)
             {
                 if (listItem.Type == ListItemType.Artist && listItem.Artist != null)
                 {
@@ -7727,8 +8592,8 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                     songFromListItem = listItem.Song;
                 }
             }
-            var playlist = selectedItem.Tag as PlaylistInfo ?? playlistFromListItem;
-            var album = selectedItem.Tag as AlbumInfo ?? albumFromListItem;
+            var playlist = _isCurrentPlayingMenuActive ? null : selectedItem?.Tag as PlaylistInfo ?? playlistFromListItem;
+            var album = _isCurrentPlayingMenuActive ? null : selectedItem?.Tag as AlbumInfo ?? albumFromListItem;
             var resolvedSongFromListItem = songFromListItem;
 
             if (playlist != null)
@@ -7792,11 +8657,15 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 insertPlayMenuItem.Visible = true;
 
                 SongInfo? currentSong = null;
-                if (selectedItem.Tag is int songIndex && songIndex >= 0 && songIndex < _currentSongs.Count)
+                if (_isCurrentPlayingMenuActive)
+                {
+                    currentSong = _currentPlayingMenuSong;
+                }
+                else if (selectedItem?.Tag is int songIndex && songIndex >= 0 && songIndex < _currentSongs.Count)
                 {
                     currentSong = _currentSongs[songIndex];
                 }
-                else if (selectedItem.Tag is SongInfo directSong)
+                else if (selectedItem?.Tag is SongInfo directSong)
                 {
                     currentSong = directSong;
                 }
@@ -7804,6 +8673,8 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 {
                     currentSong = resolvedSongFromListItem;
                 }
+
+                insertPlayMenuItem.Tag = currentSong;
 
                 if (currentSong != null && !string.IsNullOrWhiteSpace(currentSong.Id) && !currentSong.IsCloudSong)
                 {
@@ -7842,7 +8713,10 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                         unlikeSongMenuItem.Visible = false;
                     }
 
+                    likeSongMenuItem.Tag = canUseLibraryFeatures ? currentSong : null;
+                    unlikeSongMenuItem.Tag = canUseLibraryFeatures ? currentSong : null;
                     addToPlaylistMenuItem.Visible = canUseLibraryFeatures;
+                    addToPlaylistMenuItem.Tag = canUseLibraryFeatures ? currentSong : null;
 
                     bool isInUserPlaylist = _currentViewSource.StartsWith("playlist:", StringComparison.OrdinalIgnoreCase) &&
                                             _currentPlaylist != null &&
@@ -7852,11 +8726,13 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                     {
                         removeFromPlaylistMenuItem.Text = "取消收藏(&R)";
                         removeFromPlaylistMenuItem.Visible = canUseLibraryFeatures;
+                        removeFromPlaylistMenuItem.Tag = canUseLibraryFeatures ? currentSong : null;
                     }
                     else
                     {
                         removeFromPlaylistMenuItem.Text = "从歌单中移除(&R)";
                         removeFromPlaylistMenuItem.Visible = canUseLibraryFeatures && isInUserPlaylist;
+                        removeFromPlaylistMenuItem.Tag = removeFromPlaylistMenuItem.Visible ? currentSong : null;
                     }
                 }
                 else
@@ -7866,10 +8742,17 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                     addToPlaylistMenuItem.Visible = false;
                     removeFromPlaylistMenuItem.Visible = false;
                     removeFromPlaylistMenuItem.Text = "从歌单中移除(&R)";
+                    likeSongMenuItem.Tag = null;
+                    unlikeSongMenuItem.Tag = null;
+                    addToPlaylistMenuItem.Tag = null;
+                    removeFromPlaylistMenuItem.Tag = null;
                 }
 
                 downloadSongMenuItem.Visible = !isCloudSong;
-                batchDownloadMenuItem.Visible = !isCloudSong;
+                downloadSongMenuItem.Tag = currentSong;
+                downloadLyricsMenuItem.Visible = !isCloudSong;
+                downloadLyricsMenuItem.Tag = currentSong;
+                batchDownloadMenuItem.Visible = !isCloudSong && !_isCurrentPlayingMenuActive;
 
                 bool showArtistMenu = currentSong != null &&
                     (!currentSong.IsCloudSong || !string.IsNullOrWhiteSpace(currentSong?.Artist));
@@ -7910,6 +8793,12 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             toolStripSeparatorView.Visible = showViewSection;
         }
 
+        private void songContextMenu_Closed(object sender, System.Windows.Forms.ToolStripDropDownClosedEventArgs e)
+        {
+            _isCurrentPlayingMenuActive = false;
+            _currentPlayingMenuSong = null;
+        }
+
         private void commentMenuItem_Click(object sender, EventArgs e)
         {
             if (sender is ToolStripItem menuItem && menuItem.Tag is CommentTarget target)
@@ -7934,6 +8823,11 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
         /// </summary>
         private SongInfo? GetSelectedSongFromContextMenu(object? sender = null)
         {
+            if (_isCurrentPlayingMenuActive && _currentPlayingMenuSong != null)
+            {
+                return _currentPlayingMenuSong;
+            }
+
             if (sender is ToolStripItem menuItem && menuItem.Tag is SongInfo taggedSong)
             {
                 return taggedSong;
@@ -7962,6 +8856,14 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             }
 
             return null;
+        }
+
+        private void ShowContextSongMissingMessage(string actionDescription)
+        {
+            string message = _isCurrentPlayingMenuActive
+                ? "当前没有正在播放的歌曲"
+                : $"请先选择要{actionDescription}的歌曲";
+            MessageBox.Show(message, "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         /// <summary>
@@ -8955,6 +9857,16 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
         /// 专辑ID（用于重新加载专辑）
         /// </summary>
         public string AlbumId { get; set; } = string.Empty;
+
+        /// <summary>
+        /// 歌曲ID（用于URL歌曲视图）
+        /// </summary>
+        public string SongId { get; set; } = string.Empty;
+
+        /// <summary>
+        /// 混合链接查询标识
+        /// </summary>
+        public string MixedQueryKey { get; set; } = string.Empty;
 
         /// <summary>
         /// 搜索关键词（用于重新搜索）

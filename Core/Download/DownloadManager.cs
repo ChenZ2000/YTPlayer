@@ -175,6 +175,7 @@ namespace YTPlayer.Core.Download
                     Quality = quality,
                     DestinationPath = "",  // 稍后填充
                     SourceList = sourceList,
+                    ContentType = DownloadContentType.Audio,
                     Status = DownloadStatus.Pending
                 };
 
@@ -257,6 +258,7 @@ namespace YTPlayer.Core.Download
                         Quality = quality,
                         DestinationPath = "",  // 稍后填充
                         SourceList = sourceList,
+                        ContentType = DownloadContentType.Audio,
                         TrackNumber = trackNumber,  // 设置曲目编号（用于元数据写入）
                         Status = DownloadStatus.Pending
                     };
@@ -300,6 +302,87 @@ namespace YTPlayer.Core.Download
             }
 
             return addedTasks;
+        }
+
+        /// <summary>
+        /// 添加歌词下载任务
+        /// </summary>
+        public async Task<DownloadTask?> AddLyricDownloadAsync(
+            SongInfo song,
+            string sourceList = "",
+            string? lyricContent = null)
+        {
+            if (song == null)
+            {
+                throw new ArgumentNullException(nameof(song));
+            }
+
+            if (string.IsNullOrWhiteSpace(song.Id))
+            {
+                DebugLogger.Log(
+                    DebugLogger.LogLevel.Warning,
+                    "DownloadManager",
+                    "歌曲缺少 ID，无法下载歌词。");
+                return null;
+            }
+
+            var config = _configManager.Load();
+            string downloadDirectory = ConfigManager.GetFullDownloadPath(config.DownloadDirectory);
+
+            try
+            {
+                string filePath = DownloadFileHelper.BuildLyricFilePath(downloadDirectory, song);
+                var task = new DownloadTask
+                {
+                    Song = song,
+                    DestinationPath = filePath,
+                    SourceList = sourceList,
+                    ContentType = DownloadContentType.Lyrics,
+                    LyricContent = lyricContent,
+                    Status = DownloadStatus.Pending,
+                    Quality = QualityLevel.Standard
+                };
+
+                if (string.IsNullOrWhiteSpace(task.LyricContent))
+                {
+                    if (_apiClient == null)
+                    {
+                        task.Dispose();
+                        return null;
+                    }
+
+                var lyricInfo = await _apiClient.GetLyricsAsync(song.Id!);
+                if (lyricInfo == null || string.IsNullOrWhiteSpace(lyricInfo.Lyric))
+                {
+                    DebugLogger.Log(
+                        DebugLogger.LogLevel.Info,
+                        "DownloadManager",
+                        $"歌曲 {song.Name} 未找到歌词，跳过歌词下载任务。");
+                    task.Dispose();
+                    return null;
+                }
+
+                    task.LyricContent = lyricInfo.Lyric;
+                }
+
+                lock (_queueLock)
+                {
+                    _pendingQueue.Add(task);
+                }
+
+                DebugLogger.Log(
+                    DebugLogger.LogLevel.Info,
+                    "DownloadManager",
+                    $"已添加歌词下载任务: {song.Name} - {song.Artist}");
+
+                QueueStateChanged?.Invoke();
+                return task;
+            }
+            catch (Exception ex)
+            {
+                DebugLogger.LogException("DownloadManager", ex, $"添加歌词下载任务失败: {song.Name}");
+                return null;
+            }
         }
 
         #endregion

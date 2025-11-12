@@ -179,6 +179,7 @@
     <Compile Include="Utils\ContextMenuHost.cs">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="Utils\NeteaseUrlParser.cs" />
     <Compile Include="Models\SongInfo.cs" />
     <Compile Include="Models\CloudSongPageResult.cs" />
     <Compile Include="Models\CloudUploadProgress.cs" />
@@ -198,6 +199,7 @@
     <Compile Include="Models\Download\DownloadStatus.cs" />
     <Compile Include="Models\Download\DownloadBatch.cs" />
     <Compile Include="Models\Download\ConflictResolution.cs" />
+    <Compile Include="Models\Download\DownloadContentType.cs" />
     <Compile Include="Models\Upload\UploadTask.cs" />
     <Compile Include="Forms\LoginForm.cs">
       <SubType>Form</SubType>

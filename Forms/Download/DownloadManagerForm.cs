@@ -621,11 +621,13 @@ namespace YTPlayer.Forms.Download
             }
 
             // 如果不存在，创建新项
+            string title = FormatTaskTitle(task);
+
             if (existingItem == null)
             {
                 existingItem = new ListViewItem(new[]
                 {
-                    task.Song.Name,
+                    title,
                     task.Song.Artist,
                     task.SourceList,
                     $"{task.ProgressPercentage:F1}%",
@@ -640,7 +642,7 @@ namespace YTPlayer.Forms.Download
             else
             {
                 // 更新现有项
-                existingItem.SubItems[0].Text = task.Song.Name;
+                existingItem.SubItems[0].Text = title;
                 existingItem.SubItems[1].Text = task.Song.Artist;
                 existingItem.SubItems[2].Text = task.SourceList;
                 existingItem.SubItems[3].Text = $"{task.ProgressPercentage:F1}%";
@@ -690,8 +692,8 @@ namespace YTPlayer.Forms.Download
                     ? DownloadFileHelper.FormatFileSize(downloadTask.TotalBytes)
                     : "";
 
-                existingItem.SubItems[0].Text = downloadTask.Song.Name;
-                existingItem.SubItems[1].Text = "下载";
+                existingItem.SubItems[0].Text = FormatTaskTitle(downloadTask);
+                existingItem.SubItems[1].Text = downloadTask.ContentType == DownloadContentType.Lyrics ? "歌词" : "下载";
                 existingItem.SubItems[2].Text = downloadTask.SourceList;
                 existingItem.SubItems[3].Text = GetStatusText(downloadTask.Status);
                 existingItem.SubItems[4].Text = completedTime;
@@ -765,6 +767,18 @@ namespace YTPlayer.Forms.Download
                 default:
                     return "未知";
             }
+        }
+
+        private static string FormatTaskTitle(DownloadTask task)
+        {
+            if (task == null || task.Song == null)
+            {
+                return string.Empty;
+            }
+
+            return task.ContentType == DownloadContentType.Lyrics
+                ? $"{task.Song.Name} (歌词)"
+                : task.Song.Name;
         }
 
         #endregion

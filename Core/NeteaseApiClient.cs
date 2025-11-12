@@ -4565,6 +4565,48 @@ namespace YTPlayer.Core
         }
 
         /// <summary>
+        /// 获取专辑详情（名称、歌手、封面等基础信息）
+        /// </summary>
+        public async Task<AlbumInfo?> GetAlbumDetailAsync(string albumId)
+        {
+            if (string.IsNullOrWhiteSpace(albumId))
+            {
+                return null;
+            }
+
+            try
+            {
+                string url = $"https://music.163.com/api/album/{albumId}";
+                var response = await _httpClient.GetAsync(url).ConfigureAwait(false);
+                var jsonString = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                var json = JObject.Parse(jsonString);
+                var albumToken = json["album"];
+                if (albumToken == null)
+                {
+                    return null;
+                }
+
+                var album = new AlbumInfo
+                {
+                    Id = albumToken["id"]?.Value<string>() ?? albumToken["id"]?.Value<long>().ToString() ?? albumId,
+                    Name = albumToken["name"]?.Value<string>() ?? $"专辑 {albumId}",
+                    Artist = ResolveAlbumArtistName(albumToken),
+                    PicUrl = albumToken["picUrl"]?.Value<string>() ?? string.Empty,
+                    PublishTime = FormatAlbumPublishDate(albumToken["publishTime"]?.Value<long>()),
+                    TrackCount = ResolveAlbumTrackCount(albumToken),
+                    Description = ResolveAlbumDescription(albumToken)
+                };
+
+                return album;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[API] 获取专辑详情失败: {ex.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
         /// 获取专辑内的所有歌曲（参考 Python 版本 _fetch_album_detail，14999-15048行）
         /// </summary>
         public async Task<List<SongInfo>> GetAlbumSongsAsync(string albumId)
