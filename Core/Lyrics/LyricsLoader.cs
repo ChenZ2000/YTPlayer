@@ -56,29 +56,44 @@ namespace YTPlayer.Core.Lyrics
                 // 检查取消
                 cancellationToken.ThrowIfCancellationRequested();
 
-                // 优先使用 YrcLyric（逐字歌词），如果没有则使用 Lyric
-                string primaryLyric = !string.IsNullOrWhiteSpace(lyricInfo.YrcLyric)
-                    ? lyricInfo.YrcLyric
-                    : lyricInfo.Lyric;
+                // 优先尝试逐字歌词（YRC），解析失败时自动回退到标准 LRC
+                LyricsData? lyricsData = null;
+                bool usedYrcSource = false;
 
-                if (string.IsNullOrWhiteSpace(primaryLyric))
+                if (!string.IsNullOrWhiteSpace(lyricInfo.YrcLyric))
                 {
-                    DebugLogger.Log(
-                        DebugLogger.LogLevel.Info,
-                        "LyricsLoader",
-                        $"歌曲无歌词内容，耗时 {stopwatch.ElapsedMilliseconds}ms");
-                    return null;
+                    lyricsData = EnhancedLyricsParser.ParseLyricsData(
+                        songId,
+                        lyricInfo.YrcLyric,
+                        lyricInfo.TLyric,
+                        lyricInfo.RomaLyric
+                    );
+
+                    if (lyricsData.IsEmpty)
+                    {
+                        DebugLogger.Log(
+                            DebugLogger.LogLevel.Warning,
+                            "LyricsLoader",
+                            "逐字歌词解析为空，已自动回退到标准歌词");
+                        lyricsData = null;
+                    }
+                    else
+                    {
+                        usedYrcSource = true;
+                    }
                 }
 
-                // 解析歌词数据
-                var lyricsData = EnhancedLyricsParser.ParseLyricsData(
-                    songId,
-                    primaryLyric,
-                    lyricInfo.TLyric,
-                    lyricInfo.RomaLyric
-                );
+                if (lyricsData == null && !string.IsNullOrWhiteSpace(lyricInfo.Lyric))
+                {
+                    lyricsData = EnhancedLyricsParser.ParseLyricsData(
+                        songId,
+                        lyricInfo.Lyric,
+                        lyricInfo.TLyric,
+                        lyricInfo.RomaLyric
+                    );
+                }
 
-                if (lyricsData.IsEmpty)
+                if (lyricsData == null || lyricsData.IsEmpty)
                 {
                     DebugLogger.Log(
                         DebugLogger.LogLevel.Warning,
@@ -90,7 +105,7 @@ namespace YTPlayer.Core.Lyrics
                 DebugLogger.Log(
                     DebugLogger.LogLevel.Info,
                     "LyricsLoader",
-                    $"✓ 歌词加载成功: {lyricsData.Lines.Count} 行, " +
+                    $"✓ 歌词加载成功(来源={(usedYrcSource ? "YRC" : "LRC")}): {lyricsData.Lines.Count} 行, " +
                     $"逐字={lyricsData.HasWordTimings}, " +
                     $"翻译={lyricsData.HasTranslation}, " +
                     $"罗马音={lyricsData.HasRomaLyric}, " +

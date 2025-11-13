@@ -47,6 +47,14 @@ namespace YTPlayer
         private LyricsDisplayManager _lyricsDisplayManager = null!;
         private LyricsLoader _lyricsLoader = null!;
         private bool _autoReadLyrics = false;  // 自动朗读歌词开关
+        private CancellationTokenSource? _lyricsSpeechCts;
+        private readonly object _lyricsSpeechLock = new object();
+        private TimeSpan? _lastLyricSpeechAnchor;
+        private TimeSpan? _lastLyricPlaybackPosition;
+        private bool _suppressLyricSpeech;
+        private double? _resumeLyricSpeechAtSeconds;
+        private static readonly TimeSpan LyricsSpeechClusterTolerance = TimeSpan.FromMilliseconds(320);
+        private static readonly TimeSpan LyricJumpThreshold = TimeSpan.FromSeconds(1.5);
 
         private System.Windows.Forms.Timer? _updateTimer;
         private System.Windows.Forms.NotifyIcon? _trayIcon;
@@ -4450,6 +4458,7 @@ namespace YTPlayer
 
                 // 加载到显示管理器
                 _lyricsDisplayManager.LoadLyrics(lyricsData);
+                CancelPendingLyricSpeech();
 
                 // ⭐ 向后兼容：保持旧的 _currentLyrics 字段（用于旧代码）
                 if (lyricsData != null && !lyricsData.IsEmpty)
@@ -4467,12 +4476,14 @@ namespace YTPlayer
                 // 忽略取消异常
                 _lyricsDisplayManager.Clear();
                 _currentLyrics.Clear();
+                CancelPendingLyricSpeech();
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[Lyrics] 加载失败: {ex.Message}");
                 _lyricsDisplayManager.Clear();
                 _currentLyrics.Clear();
+                CancelPendingLyricSpeech();
             }
         }
 
@@ -4857,14 +4868,14 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
         {
             // ⭐ 丢弃式 Seek：用户拖动进度条时实时调用 RequestSeek
             // SeekManager 以 50ms 间隔执行，新命令覆盖旧命令
-            if (_audioEngine == null || _seekManager == null) return;
+            if (_audioEngine == null) return;
 
             var duration = GetCachedDuration();
             if (duration > 0)
             {
                 double newPosition = progressTrackBar.Value;
                 System.Diagnostics.Debug.WriteLine($"[MainForm] 进度条 Scroll: {newPosition:F1}s");
-                _seekManager.RequestSeek(newPosition);
+                RequestSeekAndResetLyrics(newPosition);
             }
         }
 
@@ -5009,7 +5020,7 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
 
         private void ScheduleSeek(double direction, bool enableScrubbing = false)
         {
-            if (_seekManager == null || _audioEngine == null)
+            if (_audioEngine == null)
                 return;
 
             // ⭐ 使用缓存值计算目标位置
@@ -5022,8 +5033,7 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
 
             System.Diagnostics.Debug.WriteLine($"[MainForm] 请求 Seek: {currentPos:F1}s → {targetPos:F1}s (方向: {direction:+0;-0})");
 
-            // 所有 Seek 请求都通过 SeekManager（自动防抖 + 缓存预加载）
-            _seekManager.RequestSeek(targetPos);
+            RequestSeekAndResetLyrics(targetPos);
         }
 
         /// <summary>
@@ -5036,11 +5046,8 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
         /// </summary>
         private void PerformSeek(double targetPosition)
         {
-            if (_seekManager == null)
-                return;
-
             System.Diagnostics.Debug.WriteLine($"[MainForm] 进度条拖动 Seek: {targetPosition:F1}s");
-            _seekManager.RequestSeek(targetPosition);
+            RequestSeekAndResetLyrics(targetPosition);
         }
 
         /// <summary>
@@ -5213,6 +5220,7 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
         /// </summary>
         private void OnAudioPositionChanged(object? sender, TimeSpan position)
         {
+            DetectLyricPositionJump(position);
             // 更新歌词显示（这是同步调用，由 BassAudioEngine 的位置监控线程调用）
             _lyricsDisplayManager?.UpdatePosition(position);
         }
@@ -5240,18 +5248,7 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
                 // ⭐ 自动朗读歌词（如果开启）
                 if (_autoReadLyrics && e.IsNewLine && e.CurrentLine != null)
                 {
-                    // 只朗读原文歌词，不包括翻译和罗马音
-                    string textToSpeak = e.CurrentLine.Text;
-
-                    if (!string.IsNullOrWhiteSpace(textToSpeak))
-                    {
-                        // 在后台线程朗读，避免阻塞UI
-                        System.Threading.Tasks.Task.Run(() =>
-                        {
-                            bool success = Utils.TtsHelper.SpeakText(textToSpeak);
-                            System.Diagnostics.Debug.WriteLine($"[TTS] Speak '{textToSpeak}': {(success ? "成功" : "失败")}");
-                        });
-                    }
+                    HandleLyricAutoRead(e.CurrentLine);
                 }
 
                 // ⭐ 更新无障碍支持（屏幕阅读器）
@@ -5265,6 +5262,161 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[Lyrics] 更新UI失败: {ex.Message}");
+            }
+        }
+
+        private void HandleLyricAutoRead(EnhancedLyricLine currentLine)
+        {
+            if (_lyricsCacheManager == null || currentLine == null)
+            {
+                return;
+            }
+
+            if (_suppressLyricSpeech)
+            {
+                double resumeAt = _resumeLyricSpeechAtSeconds ?? double.MaxValue;
+                double currentSeconds = currentLine.Time.TotalSeconds;
+                if (currentSeconds + 0.05 >= resumeAt)
+                {
+                    _suppressLyricSpeech = false;
+                    _resumeLyricSpeechAtSeconds = null;
+                }
+                else
+                {
+                    return;
+                }
+            }
+
+            var cluster = _lyricsCacheManager.GetLineCluster(currentLine.Time, LyricsSpeechClusterTolerance);
+
+            if (cluster == null || cluster.Count == 0)
+            {
+                cluster = new List<EnhancedLyricLine> { currentLine };
+            }
+
+            var clusterStartTime = cluster[0].Time;
+
+            if (_lastLyricSpeechAnchor.HasValue)
+            {
+                var diff = (clusterStartTime - _lastLyricSpeechAnchor.Value).Duration();
+                if (diff <= LyricsSpeechClusterTolerance)
+                {
+                    return;
+                }
+            }
+
+            var segments = cluster
+                .Select(line => line.Text)
+                .Where(text => !string.IsNullOrWhiteSpace(text))
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+
+            if (segments.Count == 0)
+            {
+                return;
+            }
+
+            _lastLyricSpeechAnchor = clusterStartTime;
+            QueueLyricSpeech(segments);
+        }
+
+        private void QueueLyricSpeech(List<string> segments)
+        {
+            if (segments == null || segments.Count == 0)
+            {
+                return;
+            }
+
+            string textToSpeak = string.Join("，", segments);
+
+            CancellationToken token;
+            lock (_lyricsSpeechLock)
+            {
+                _lyricsSpeechCts ??= new CancellationTokenSource();
+                token = _lyricsSpeechCts.Token;
+            }
+
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                try
+                {
+                    if (token.IsCancellationRequested || string.IsNullOrWhiteSpace(textToSpeak))
+                    {
+                        return;
+                    }
+
+                    bool success = Utils.TtsHelper.SpeakText(textToSpeak, interrupt: false);
+                    System.Diagnostics.Debug.WriteLine($"[TTS] Speak '{textToSpeak}': {(success ? "成功" : "失败")}");
+                }
+                catch (OperationCanceledException)
+                {
+                    System.Diagnostics.Debug.WriteLine("[TTS] 歌词朗读任务被取消");
+                }
+            }, token);
+        }
+
+        private void CancelPendingLyricSpeech(bool resetSuppression = true)
+        {
+            lock (_lyricsSpeechLock)
+            {
+                if (_lyricsSpeechCts != null)
+                {
+                    _lyricsSpeechCts.Cancel();
+                    _lyricsSpeechCts.Dispose();
+                    _lyricsSpeechCts = null;
+                }
+            }
+
+            Utils.TtsHelper.StopSpeaking();
+            _lastLyricSpeechAnchor = null;
+            _lastLyricPlaybackPosition = null;
+            if (resetSuppression)
+            {
+                _suppressLyricSpeech = false;
+                _resumeLyricSpeechAtSeconds = null;
+            }
+        }
+
+        private void DetectLyricPositionJump(TimeSpan position)
+        {
+            if (!_autoReadLyrics)
+            {
+                _lastLyricPlaybackPosition = position;
+                return;
+            }
+
+            if (_lastLyricPlaybackPosition.HasValue)
+            {
+                double diffSeconds = Math.Abs((position - _lastLyricPlaybackPosition.Value).TotalSeconds);
+                if (diffSeconds >= LyricJumpThreshold.TotalSeconds)
+                {
+                    CancelPendingLyricSpeech(resetSuppression: false);
+                    BeginLyricSeekSuppression(position.TotalSeconds);
+                }
+            }
+
+            _lastLyricPlaybackPosition = position;
+        }
+
+        private void BeginLyricSeekSuppression(double targetPosition)
+        {
+            _suppressLyricSpeech = true;
+            _resumeLyricSpeechAtSeconds = targetPosition;
+        }
+
+        private void RequestSeekAndResetLyrics(double targetPosition)
+        {
+            CancelPendingLyricSpeech(resetSuppression: false);
+            BeginLyricSeekSuppression(targetPosition);
+            _lastLyricPlaybackPosition = TimeSpan.FromSeconds(targetPosition);
+
+            if (_seekManager != null)
+            {
+                _seekManager.RequestSeek(targetPosition);
+            }
+            else
+            {
+                _audioEngine?.SetPosition(targetPosition);
             }
         }
 
@@ -6984,15 +7136,7 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                         double targetPosition = dialog.TargetPosition;
 
                         // 使用 SeekManager 执行跳转（如果可用）
-                        if (_seekManager != null)
-                        {
-                            _seekManager.RequestSeek(targetPosition);
-                        }
-                        else
-                        {
-                            // 回退到直接设置位置
-                            _audioEngine.SetPosition(targetPosition);
-                        }
+                        RequestSeekAndResetLyrics(targetPosition);
 
                         System.Diagnostics.Debug.WriteLine($"[MainForm] 跳转到位置: {targetPosition:F2} 秒");
                     }
@@ -7565,6 +7709,10 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
         private void ToggleAutoReadLyrics()
         {
             _autoReadLyrics = !_autoReadLyrics;
+            if (!_autoReadLyrics)
+            {
+                CancelPendingLyricSpeech();
+            }
 
             // 更新菜单项状态
             try
@@ -9718,6 +9866,7 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             _autoUpdateCheckCts?.Cancel();
             _autoUpdateCheckCts?.Dispose();
             _autoUpdateCheckCts = null;
+            CancelPendingLyricSpeech();
             base.OnFormClosing(e);
 
     try

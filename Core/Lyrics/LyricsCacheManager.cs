@@ -261,6 +261,68 @@ namespace YTPlayer.Core.Lyrics
         }
 
         /// <summary>
+        /// 获取指定时间点开始、在容差范围内的歌词簇（用于同一时间或极短间隔的歌词）
+        /// </summary>
+        public List<EnhancedLyricLine> GetLineCluster(TimeSpan anchorTime, TimeSpan tolerance)
+        {
+            var cluster = new List<EnhancedLyricLine>();
+
+            if (tolerance < TimeSpan.Zero)
+            {
+                tolerance = TimeSpan.Zero;
+            }
+
+            lock (_lock)
+            {
+                if (_currentLyrics == null || _currentLyrics.IsEmpty)
+                {
+                    return cluster;
+                }
+
+                var lines = _currentLyrics.Lines;
+                if (lines.Count == 0)
+                {
+                    return cluster;
+                }
+
+                int index = BinarySearchLyricLine(lines, anchorTime);
+                if (index < 0)
+                {
+                    return cluster;
+                }
+
+                TimeSpan clusterStartTime = lines[index].Time;
+
+                // 回溯到该时间点的第一条歌词，用于处理同一时间戳多条歌词
+                while (index > 0 && lines[index - 1].Time == clusterStartTime)
+                {
+                    index--;
+                }
+
+                for (int i = index; i < lines.Count; i++)
+                {
+                    var line = lines[i];
+                    if (line.Time < clusterStartTime)
+                    {
+                        continue;
+                    }
+
+                    var diff = line.Time - clusterStartTime;
+                    if (diff <= tolerance)
+                    {
+                        cluster.Add(line);
+                    }
+                    else
+                    {
+                        break;
+                    }
+                }
+            }
+
+            return cluster;
+        }
+
+        /// <summary>
         /// 获取下一句歌词（用于预显示）
         /// </summary>
         public EnhancedLyricLine? GetNextLine(TimeSpan position)
