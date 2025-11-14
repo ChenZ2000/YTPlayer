@@ -89,6 +89,9 @@
     <Compile Include="Forms\MainForm.Playback.cs">
       <DependentUpon>MainForm.cs</DependentUpon>
     </Compile>
+    <Compile Include="Forms\MainForm.PlaybackReporting.cs">
+      <DependentUpon>MainForm.cs</DependentUpon>
+    </Compile>
     <Compile Include="Forms\MainForm.CommandQueue.cs">
       <DependentUpon>MainForm.cs</DependentUpon>
     </Compile>
@@ -135,6 +138,7 @@
     <Compile Include="Core\Exceptions\SongResourceNotFoundException.cs" />
     <Compile Include="Core\Playback\PlaybackQueueManager.cs" />
     <Compile Include="Core\Playback\PlaybackCommandQueue.cs" />
+    <Compile Include="Core\Playback\PlaybackReportingService.cs" />
     <Compile Include="Core\Playback\PlaybackStateMachine.cs" />
     <Compile Include="Core\Playback\PlaybackOrchestrator.cs" />
     <Compile Include="Core\Playback\NextSongPreloader.cs" />
@@ -175,11 +179,12 @@
     <Compile Include="Utils\DebugLogger.cs" />
     <Compile Include="Utils\PerformanceMonitor.cs" />
     <Compile Include="Utils\TtsHelper.cs" />
-    <Compile Include="Utils\ArtistMetadataHelper.cs" />
-    <Compile Include="Utils\ContextMenuHost.cs">
-      <SubType>Form</SubType>
-    </Compile>
-    <Compile Include="Utils\NeteaseUrlParser.cs" />
+      <Compile Include="Utils\ArtistMetadataHelper.cs" />
+      <Compile Include="Utils\DocumentationLoader.cs" />
+      <Compile Include="Utils\ContextMenuHost.cs">
+        <SubType>Form</SubType>
+      </Compile>
+      <Compile Include="Utils\NeteaseUrlParser.cs" />
     <Compile Include="Models\SongInfo.cs" />
     <Compile Include="Models\CloudSongPageResult.cs" />
     <Compile Include="Models\CloudUploadProgress.cs" />
@@ -283,6 +288,12 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Forms\Update\UpdateAvailablePromptDialog.resx">
       <DependentUpon>UpdateAvailablePromptDialog.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Docs\KeyboardShortcuts.md">
+      <LogicalName>YTPlayer.Docs.KeyboardShortcuts.md</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Docs\About.md">
+      <LogicalName>YTPlayer.Docs.About.md</LogicalName>
     </EmbeddedResource>
   </ItemGroup>
   <ItemGroup>

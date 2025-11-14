@@ -40,7 +40,9 @@ namespace YTPlayer
         private PlaylistInfo? _userLikedPlaylist = null;  // 缓存的"喜欢的音乐"歌单对象
         private List<AlbumInfo> _currentAlbums = new List<AlbumInfo>();
         private List<ListItemInfo> _currentListItems = new List<ListItemInfo>(); // 统一的列表项
+        private int _recentPlayCount = 0;
         private List<LyricLine> _currentLyrics = new List<LyricLine>();  // 保留用于向后兼容
+        private PlaybackReportingService? _playbackReportingService;
 
         // ⭐ 新的歌词系统
         private LyricsCacheManager _lyricsCacheManager = null!;
@@ -173,6 +175,7 @@ namespace YTPlayer
         private const int INITIAL_RETRY_DELAY_MS = 1200;
         private const int MAX_RETRY_DELAY_MS = 5000;
         private const int SONG_URL_CACHE_MINUTES = 30; // URL缓存时间延长到30分钟
+        private const int RecentPlayFetchLimit = 300;
 
         #endregion
 
@@ -570,6 +573,7 @@ namespace YTPlayer
 
                 // 初始化下载功能
                 InitializeDownload();
+                InitializePlaybackReportingService();
 
                 UpdateStatusBar("就绪");
             }
@@ -724,6 +728,7 @@ namespace YTPlayer
                 // 忽略菜单更新错误
             }
             System.Diagnostics.Debug.WriteLine($"[CONFIG] LyricsReadingEnabled={_autoReadLyrics}");
+            _playbackReportingService?.UpdateSettings(_config);
 
             // UsePersonalCookie 现在根据 MusicU 是否为空自动判断，无需手动设置
             System.Diagnostics.Debug.WriteLine($"[CONFIG] UsePersonalCookie={_apiClient.UsePersonalCookie} (自动检测)");
@@ -773,6 +778,7 @@ namespace YTPlayer
 
             _accountState = _apiClient?.GetAccountStateSnapshot() ?? new AccountState { IsLoggedIn = false };
             UpdateUiFromAccountState(reapplyCookies: false);
+            ClearPlaybackReportingSession();
         }
 
         /// <summary>
@@ -2344,6 +2350,16 @@ namespace YTPlayer
                         ItemUnit = "首"
                     });
 
+                    homeItems.Add(new ListItemInfo
+                    {
+                        Type = ListItemType.Category,
+                        CategoryId = "recent_play",
+                        CategoryName = "最近播放",
+                        CategoryDescription = "最近听过的歌曲",
+                        ItemCount = _recentPlayCount,
+                        ItemUnit = "首"
+                    });
+
                     // 2. 我的歌单
                     homeItems.Add(new ListItemInfo
                     {
@@ -2751,6 +2767,10 @@ namespace YTPlayer
                 case "user_cloud":
                     _cloudPage = 1;
                     await LoadCloudSongsAsync();
+                    break;
+
+                case "recent_play":
+                    await LoadRecentPlayedSongsAsync();
                     break;
 
                 case "daily_recommend":
@@ -3404,6 +3424,49 @@ namespace YTPlayer
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[LoadUserAlbums] 异常: {ex}");
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// 加载最近播放的歌曲（只读）
+        /// </summary>
+        private async Task LoadRecentPlayedSongsAsync()
+        {
+            if (!IsUserLoggedIn())
+            {
+                MessageBox.Show("请先登录网易云账号以查看最近播放记录。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                await LoadHomePageAsync(skipSave: true, showErrorDialog: false);
+                return;
+            }
+
+            try
+            {
+                UpdateStatusBar("正在加载最近播放...");
+                var songs = await _apiClient.GetRecentPlayedSongsAsync(RecentPlayFetchLimit);
+                var list = songs ?? new List<SongInfo>();
+                _recentPlayCount = list.Count;
+
+                if (list.Count == 0)
+                {
+                    MessageBox.Show("暂时没有最近播放记录。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    DisplaySongs(list, viewSource: "recent_play", accessibleName: "最近播放");
+                    _currentPlaylist = null;
+                    UpdateStatusBar("暂无最近播放记录");
+                    return;
+                }
+
+                DisplaySongs(
+                    list,
+                    viewSource: "recent_play",
+                    accessibleName: "最近播放");
+                _currentPlaylist = null;
+                UpdateStatusBar($"最近播放，共 {list.Count} 首歌曲");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[LoadRecentPlayedSongs] 异常: {ex}");
+                MessageBox.Show($"加载最近播放失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 throw;
             }
         }
@@ -5436,6 +5499,7 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
             }
 
             System.Diagnostics.Debug.WriteLine($"[MainForm] 当前播放模式: {_audioEngine?.PlayMode}");
+            CompleteActivePlaybackSession(PlaybackEndReason.Stopped);
             SyncPlayPauseButtonText();
             UpdateTrayIconTooltip(null);
 
@@ -5504,6 +5568,10 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
 
             var playMode = _audioEngine?.PlayMode ?? PlayMode.Loop;
             System.Diagnostics.Debug.WriteLine($"[MainForm] 播放模式: {playMode}");
+            if (e != null)
+            {
+                CompleteActivePlaybackSession(PlaybackEndReason.Completed, e.Id);
+            }
 
             // 单曲循环模式：重新播放当前歌曲
             if (playMode == PlayMode.LoopOne && e != null)
@@ -5548,6 +5616,13 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
             {
                 return;
             }
+
+            if (e.PreviousSong != null)
+            {
+                CompleteActivePlaybackSession(PlaybackEndReason.Completed, e.PreviousSong.Id);
+            }
+
+            BeginPlaybackReportingSession(e.NextSong);
 
             var nextSong = e.NextSong;
             var playMode = _audioEngine?.PlayMode ?? PlayMode.Loop;
@@ -9868,6 +9943,7 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             _autoUpdateCheckCts = null;
             CancelPendingLyricSpeech();
             base.OnFormClosing(e);
+            CompleteActivePlaybackSession(PlaybackEndReason.Stopped);
 
     try
     {
@@ -9954,6 +10030,7 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             _contextMenuHost = null;
         }
 
+        _playbackReportingService?.Dispose();
         SaveConfig();
     }
     catch (Exception ex)

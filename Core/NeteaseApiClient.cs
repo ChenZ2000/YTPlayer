@@ -5937,6 +5937,51 @@ namespace YTPlayer.Core
             }
         }
 
+        public async Task<bool> SendPlaybackLogsAsync(IEnumerable<Dictionary<string, object>> logEntries, CancellationToken cancellationToken = default)
+        {
+            if (logEntries == null)
+            {
+                return false;
+            }
+
+            var entries = new List<Dictionary<string, object>>();
+            foreach (var entry in logEntries)
+            {
+                if (entry != null && entry.Count > 0)
+                {
+                    entries.Add(entry);
+                }
+            }
+
+            if (entries.Count == 0)
+            {
+                return false;
+            }
+
+            var payload = new Dictionary<string, object>
+            {
+                { "logs", JsonConvert.SerializeObject(entries, Formatting.None) }
+            };
+
+            try
+            {
+                var response = await PostWeApiAsync<JObject>("/feedback/weblog", payload, cancellationToken: cancellationToken).ConfigureAwait(false);
+                int code = response["code"]?.Value<int>() ?? -1;
+                if (code != 200)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[PlaybackReporting] weblog 返回异常: code={code}, msg={response["message"]}");
+                    return false;
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[PlaybackReporting] weblog 请求失败: {ex.Message}");
+                return false;
+            }
+        }
+
         /// <summary>
         /// 获取用户收藏的专辑列表
         /// 参考: NeteaseCloudMusicApi/module/album_sublist.js

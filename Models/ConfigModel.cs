@@ -94,6 +94,11 @@ namespace YTPlayer.Models
         /// </summary>
         public bool LyricsReadingEnabled { get; set; } = false;
 
+        /// <summary>
+        /// 是否启用播放数据上报，保持“最近播放/听歌排行”与官方账号同步
+        /// </summary>
+        public bool PlaybackReportingEnabled { get; set; } = true;
+
         #endregion
     }
 

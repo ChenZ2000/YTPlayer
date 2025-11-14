@@ -1,31 +1,16 @@
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
-using System.Linq;
 using System.Text;
 using System.Windows.Forms;
+using YTPlayer.Utils;
 
 namespace YTPlayer.Forms
 {
     internal sealed class KeyboardShortcutsDialog : Form
     {
-        private readonly ShortcutEntry[] _entries =
-        {
-            new ShortcutEntry("播放控制", "播放 / 暂停", "空格", "切换当前曲目的播放状态"),
-            new ShortcutEntry("播放控制", "上一曲 / 下一曲", "F5 / F6", "在播放队列中切换歌曲"),
-            new ShortcutEntry("播放控制", "快退 / 快进", "← / →", "以 5 秒为步长调整进度"),
-            new ShortcutEntry("播放控制", "任意位置跳转", "F12", "打开跳转对话框，接受[时：分：秒]格式或百分比加%格式的位置跳转"),
-            new ShortcutEntry("播放控制", "切换歌词朗读", "F11", "启用或关闭屏幕阅读器的歌词朗读"),
-            new ShortcutEntry("播放控制", "切换输出设备", "F9", "在不中断播放的情况下选择新的声音输出设备"),
-            new ShortcutEntry("音量", "音量减 / 加", "F7 / F8", "以 2% 步长调节音量"),
-            new ShortcutEntry("导航", "后退到上一视图", "Backspace", "返回上一页的浏览内容"),
-            new ShortcutEntry("导航", "隐藏到托盘", "Shift + Esc", "最小化到托盘并保持后台播放"),
-            new ShortcutEntry("搜索体验", "执行搜索", "Enter", "在关键词或类型组合框内按下回车"),
-            new ShortcutEntry("搜索体验", "焦点保护 / 取消", "Esc", "保持焦点在编辑控件或关闭对话框"),
-            new ShortcutEntry("评论管理", "回复选中评论", "Enter", "在评论树中按回车可直接打开回复对话框"),
-            new ShortcutEntry("评论管理", "复制评论文本", "Ctrl + C", "复制当前选中评论的完整内容"),
-            new ShortcutEntry("评论管理", "删除自己的评论", "Delete", "仅对由自己发表的评论可用，删除前将二次确认"),
-            new ShortcutEntry("评论管理", "发表评论 / 回复", "Shift + Enter (输入框)", "在评论或回复输入框中按 Shift + Enter 发送，单独按 Enter 可换行")
-        };
+        private static readonly Lazy<ShortcutDocument> Document = new(() => ShortcutDocument.Load(), isThreadSafe: true);
 
         public KeyboardShortcutsDialog()
         {
@@ -34,7 +19,9 @@ namespace YTPlayer.Forms
 
         private void InitializeComponent()
         {
-            Text = "快捷键";
+            var document = Document.Value;
+
+            Text = document.WindowTitle;
             StartPosition = FormStartPosition.CenterParent;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
@@ -68,14 +55,7 @@ namespace YTPlayer.Forms
                 Font = new Font("Consolas", 10F),
                 WordWrap = false,
                 ScrollBars = RichTextBoxScrollBars.Both,
-                Text = BuildShortcutText()
-            };
-
-            var closeButton = new Button
-            {
-                Text = "关闭",
-                AutoSize = true,
-                DialogResult = DialogResult.OK
+                Text = document.BuildDisplayText()
             };
 
             var buttonPanel = new FlowLayoutPanel
@@ -84,37 +64,70 @@ namespace YTPlayer.Forms
                 FlowDirection = FlowDirection.RightToLeft,
                 AutoSize = true
             };
-            buttonPanel.Controls.Add(closeButton);
+            Button? acceptButton = null;
+            Button? fallbackButton = null;
+            foreach (var buttonSpec in document.Buttons)
+            {
+                var button = CreateButton(buttonSpec);
+                buttonPanel.Controls.Add(button);
+                fallbackButton ??= button;
+                if (acceptButton is null && buttonSpec.Behavior.Type == ButtonBehaviorType.Close)
+                {
+                    acceptButton = button;
+                }
+            }
+
+            if (fallbackButton is null)
+            {
+                var button = CreateButton(ButtonSpec.Close("关闭"));
+                buttonPanel.Controls.Add(button);
+                acceptButton = button;
+                fallbackButton = button;
+            }
 
             layout.Controls.Add(infoBox, 0, 0);
             layout.Controls.Add(buttonPanel, 0, 1);
 
             Controls.Add(layout);
-            AcceptButton = closeButton;
+            AcceptButton = acceptButton ?? fallbackButton;
         }
 
-        private string BuildShortcutText()
+        private Button CreateButton(ButtonSpec spec)
         {
-            var builder = new StringBuilder();
-            builder.AppendLine("键盘快捷方式参考");
-            builder.AppendLine("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            builder.AppendLine("提示：在任意对话框内按 ESC 也可立即关闭当前窗口。");
-            builder.AppendLine();
-
-            var grouped = _entries.GroupBy(e => e.Category);
-            foreach (var group in grouped)
+            var button = new Button
             {
-                builder.AppendLine(group.Key);
-                foreach (var entry in group)
-                {
-                    builder.AppendLine($"  {entry.Shortcut.PadRight(12)} {entry.Action}");
-                    builder.AppendLine($"      {entry.Description}");
-                }
-                builder.AppendLine();
+                Text = spec.Text,
+                AutoSize = true
+            };
+
+            switch (spec.Behavior.Type)
+            {
+                case ButtonBehaviorType.Close:
+                    button.DialogResult = DialogResult.OK;
+                    break;
+                case ButtonBehaviorType.OpenUrl when !string.IsNullOrWhiteSpace(spec.Behavior.Target):
+                    button.Click += (_, __) => OpenUrl(spec.Behavior.Target!);
+                    break;
             }
 
-            builder.AppendLine("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            return builder.ToString();
+            return button;
+        }
+
+        private static void OpenUrl(string url)
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = url,
+                    UseShellExecute = true
+                });
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"无法打开链接：{ex.Message}", "错误",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
 
         private void HandleEscKey(object? sender, KeyEventArgs e)
@@ -126,20 +139,285 @@ namespace YTPlayer.Forms
             }
         }
 
-        private readonly struct ShortcutEntry
+        private sealed class ShortcutDocument
         {
-            public ShortcutEntry(string category, string action, string shortcut, string description)
+            private ShortcutDocument(string windowTitle, string? tip, IReadOnlyList<ShortcutGroup> groups, IReadOnlyList<ButtonSpec> buttons)
             {
-                Category = category;
+                WindowTitle = windowTitle;
+                Tip = string.IsNullOrWhiteSpace(tip) ? null : tip;
+                Groups = groups;
+                Buttons = buttons;
+            }
+
+            public string WindowTitle { get; }
+            public string? Tip { get; }
+            public IReadOnlyList<ShortcutGroup> Groups { get; }
+            public IReadOnlyList<ButtonSpec> Buttons { get; }
+
+            public static ShortcutDocument Load()
+            {
+                try
+                {
+                    var markdown = DocumentationLoader.ReadMarkdown("Docs.KeyboardShortcuts.md");
+                    return Parse(markdown);
+                }
+                catch (Exception ex)
+                {
+                    var fallbackGroup = new ShortcutGroup("文档状态", new[]
+                    {
+                        new ShortcutEntry("请检查 Docs/KeyboardShortcuts.md 是否存在。", "-", ex.Message)
+                    });
+
+                    return new ShortcutDocument(
+                        "快捷键",
+                        "无法加载快捷键文档，列出了错误详情以便快速处理。",
+                        new[] { fallbackGroup },
+                        new[] { ButtonSpec.Close("关闭") });
+                }
+            }
+
+            public string BuildDisplayText()
+            {
+                var builder = new StringBuilder();
+                builder.AppendLine(WindowTitle);
+                builder.AppendLine("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+                if (!string.IsNullOrWhiteSpace(Tip))
+                {
+                    builder.AppendLine(Tip);
+                    builder.AppendLine();
+                }
+
+                foreach (var group in Groups)
+                {
+                    builder.AppendLine(group.Name);
+
+                    foreach (var entry in group.Entries)
+                    {
+                        builder.AppendLine($"  {entry.Shortcut.PadRight(18)} {entry.Action}");
+                        builder.AppendLine($"      {entry.Description}");
+                    }
+
+                    builder.AppendLine();
+                }
+
+                builder.AppendLine("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                return builder.ToString();
+            }
+
+            private static ShortcutDocument Parse(string markdown)
+            {
+                var title = "快捷键";
+                var tipBuilder = new StringBuilder();
+                var groups = new List<ShortcutGroup>();
+                var buttons = new List<ButtonSpec>();
+                ShortcutGroup? currentGroup = null;
+                var inButtonsSection = false;
+                var titleInitialized = false;
+
+                foreach (var rawLine in ReadLines(markdown))
+                {
+                    var trimmed = rawLine.Trim();
+                    if (string.IsNullOrWhiteSpace(trimmed))
+                    {
+                        continue;
+                    }
+
+                    if (!titleInitialized && trimmed.StartsWith("# ", StringComparison.Ordinal))
+                    {
+                        title = trimmed.Substring(2).Trim();
+                        titleInitialized = true;
+                        continue;
+                    }
+
+                    if (trimmed.StartsWith("> ", StringComparison.Ordinal))
+                    {
+                        if (tipBuilder.Length > 0)
+                        {
+                            tipBuilder.AppendLine();
+                        }
+
+                        tipBuilder.Append(trimmed.Substring(2).Trim());
+                        continue;
+                    }
+
+                    if (trimmed.StartsWith("## Buttons", StringComparison.OrdinalIgnoreCase))
+                    {
+                        inButtonsSection = true;
+                        currentGroup = null;
+                        continue;
+                    }
+
+                    if (trimmed.StartsWith("### ", StringComparison.Ordinal))
+                    {
+                        inButtonsSection = false;
+                        currentGroup = new ShortcutGroup(trimmed.Substring(4).Trim(), new List<ShortcutEntry>());
+                        groups.Add(currentGroup);
+                        continue;
+                    }
+
+                    if (inButtonsSection)
+                    {
+                        if (TryParseLinkLine(trimmed, out var text, out var target))
+                        {
+                            buttons.Add(ParseButton(text, target));
+                        }
+
+                        continue;
+                    }
+
+                    if (trimmed.StartsWith("- ", StringComparison.Ordinal) && currentGroup is not null)
+                    {
+                        var entry = ParseEntry(trimmed.Substring(2).Trim());
+                        if (entry is not null)
+                        {
+                            currentGroup.Entries.Add(entry);
+                        }
+                    }
+                }
+
+                if (groups.Count == 0)
+                {
+                    var fallback = new ShortcutGroup("快捷方式", new List<ShortcutEntry>
+                    {
+                        new ShortcutEntry("暂无数据", "-", "Docs/KeyboardShortcuts.md 中没有任何条目。")
+                    });
+                    groups.Add(fallback);
+                }
+
+                if (buttons.Count == 0)
+                {
+                    buttons.Add(ButtonSpec.Close("关闭"));
+                }
+
+                return new ShortcutDocument(title, tipBuilder.ToString(), groups, buttons);
+            }
+
+            private static ShortcutEntry? ParseEntry(string payload)
+            {
+                var parts = payload.Split(new[] { '|' }, StringSplitOptions.None);
+                if (parts.Length < 3)
+                {
+                    return null;
+                }
+
+                var action = parts[0].Trim();
+                var shortcut = parts[1].Trim();
+                var description = string.Join(" | ", parts, 2, parts.Length - 2).Trim();
+                return new ShortcutEntry(action, shortcut, description);
+            }
+
+            private static IEnumerable<string> ReadLines(string markdown)
+            {
+                using var reader = new System.IO.StringReader(markdown);
+                string? line;
+                while ((line = reader.ReadLine()) is not null)
+                {
+                    yield return line;
+                }
+            }
+        }
+
+        private sealed class ShortcutGroup
+        {
+            public ShortcutGroup(string name, IList<ShortcutEntry> entries)
+            {
+                Name = name;
+                Entries = entries;
+            }
+
+            public string Name { get; }
+            public IList<ShortcutEntry> Entries { get; }
+        }
+
+        private sealed class ShortcutEntry
+        {
+            public ShortcutEntry(string action, string shortcut, string description)
+            {
                 Action = action;
                 Shortcut = shortcut;
                 Description = description;
             }
 
-            public string Category { get; }
             public string Action { get; }
             public string Shortcut { get; }
             public string Description { get; }
+        }
+
+        private sealed class ButtonSpec
+        {
+            public ButtonSpec(string text, ButtonBehavior behavior)
+            {
+                Text = text;
+                Behavior = behavior;
+            }
+
+            public string Text { get; }
+            public ButtonBehavior Behavior { get; }
+
+            public static ButtonSpec Close(string text) => new(text, ButtonBehavior.Close());
+
+            public static ButtonSpec OpenUrl(string text, string url) =>
+                new(text, ButtonBehavior.OpenUrl(url));
+        }
+
+        private sealed class ButtonBehavior
+        {
+            private ButtonBehavior(ButtonBehaviorType type, string? target)
+            {
+                Type = type;
+                Target = target;
+            }
+
+            public ButtonBehaviorType Type { get; }
+            public string? Target { get; }
+
+            public static ButtonBehavior Close() => new(ButtonBehaviorType.Close, null);
+
+            public static ButtonBehavior OpenUrl(string url) => new(ButtonBehaviorType.OpenUrl, url);
+        }
+
+        private enum ButtonBehaviorType
+        {
+            Close,
+            OpenUrl
+        }
+
+        private static bool TryParseLinkLine(string line, out string text, out string target)
+        {
+            text = string.Empty;
+            target = string.Empty;
+
+            if (!line.StartsWith("- [", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var closingBracketIndex = line.IndexOf("](", StringComparison.Ordinal);
+            if (closingBracketIndex <= 3)
+            {
+                return false;
+            }
+
+            var closingParenIndex = line.LastIndexOf(')');
+            if (closingParenIndex <= closingBracketIndex + 1)
+            {
+                return false;
+            }
+
+            text = line.Substring(3, closingBracketIndex - 3).Trim();
+            target = line.Substring(closingBracketIndex + 2, closingParenIndex - closingBracketIndex - 2).Trim();
+            return true;
+        }
+
+        private static ButtonSpec ParseButton(string text, string target)
+        {
+            if (target.Equals("action:close", StringComparison.OrdinalIgnoreCase))
+            {
+                return ButtonSpec.Close(text);
+            }
+
+            return ButtonSpec.OpenUrl(text, target);
         }
     }
 }

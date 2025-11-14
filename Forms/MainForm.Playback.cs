@@ -237,6 +237,8 @@ namespace YTPlayer
                 return;
             }
 
+            PreparePlaybackReportingForNextSong(song);
+
             // ⭐ 清理过期的预加载数据（只保留当前歌曲和下一首）
             var currentSongId = song.Id;
             var nextSong = PredictNextSong();
@@ -503,6 +505,8 @@ namespace YTPlayer
                         ShowTrayBalloonTip(song, "正在播放");
                     }
                 });
+
+                BeginPlaybackReportingSession(song);
 
                 // ⭐ 试听版本：始终通过 TTS 发送提示（不受歌词朗读开关控制）
                 if (song.IsTrial)

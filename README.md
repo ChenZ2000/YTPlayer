@@ -30,6 +30,7 @@
 - 队列插播、播放次序选择（列表循环/顺序播放/单曲循环/列表随机）。
 - 屏幕阅读器歌词输出开关（F11）。
 - 输出设备切换（F9）。
+- **实时播放上报**：每次播放歌曲/歌单/专辑都会将「播放开始」「播放完成」日志上报至网易云服务器，几秒内即可在官方 App 的“最近播放”“听歌排行”中看到易听的播放记录。
 
 ### 下载与管理
 - 歌曲 / 歌单 / 专辑/分类批量下载，下载任务支持排队、取消与状态可视化。
@@ -68,6 +69,11 @@ powershell -ExecutionPolicy Bypass -File .\Build-Debug.ps1
 - BrotliSharpLib
 - System.Runtime.CompilerServices.Unsafe
 - taglib-sharp
+
+## 文档
+
+- `Docs/KeyboardShortcuts.md`：集中维护快捷键说明，构建时会被嵌入到快捷键参考对话框。
+- `Docs/About.md`：维护关于对话框文案与按钮信息，文件顶部的 `--- ... ---` 元数据块可配置 `ProjectUrl`、`AuthorName`、`AuthorUrl`、`ContributorName`、`ContributorUrl` 等键，正文中继续支持 `{{Version}}` 等占位符。
 
 ## 快速开始
 
