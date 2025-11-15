@@ -82,7 +82,7 @@ namespace YTPlayer.Forms
         {
             try
             {
-                var result = await _updateClient.CheckForUpdatesAsync(VersionInfo.Version, token).ConfigureAwait(true);
+                var result = await PollUpdateStatusAsync(token).ConfigureAwait(true);
                 token.ThrowIfCancellationRequested();
                 _lastResult = result;
 
@@ -119,6 +119,95 @@ namespace YTPlayer.Forms
             {
                 ShowError(ex.Message);
             }
+        }
+
+        private async Task<UpdateCheckResult> PollUpdateStatusAsync(CancellationToken token)
+        {
+            UpdateCheckResult result;
+            while (true)
+            {
+                result = await _updateClient.CheckForUpdatesAsync(VersionInfo.Version, token).ConfigureAwait(true);
+                token.ThrowIfCancellationRequested();
+
+                if (!result.ShouldPollForCompletion)
+                {
+                    return result;
+                }
+
+                int delaySeconds = NormalizePollDelay(result.GetRecommendedPollDelaySeconds(4));
+                ShowPendingStatus(result, delaySeconds);
+                await Task.Delay(TimeSpan.FromSeconds(delaySeconds), token).ConfigureAwait(true);
+            }
+        }
+
+        private void ShowPendingStatus(UpdateCheckResult result, int nextDelaySeconds)
+        {
+            _state = UpdateDialogState.Checking;
+            cancelButton.Text = "取消";
+            cancelButton.Enabled = true;
+            retryButton.Visible = false;
+            retryButton.Enabled = false;
+            updateButton.Visible = false;
+
+            string status = string.IsNullOrWhiteSpace(result.Status) ? "pending" : result.Status;
+            string message = result.Response.Message ?? "正在准备更新...";
+            statusLabel.Text = message;
+
+            var combined = result.CombinedProgress;
+            if (combined != null && combined.Count > 0)
+            {
+                progressBar.Style = ProgressBarStyle.Continuous;
+                int lastProgress = combined[combined.Count - 1].Progress;
+                progressBar.Value = Math.Max(progressBar.Minimum, Math.Min(progressBar.Maximum, lastProgress));
+            }
+            else
+            {
+                progressBar.Style = ProgressBarStyle.Marquee;
+            }
+
+            var lines = new List<string>
+            {
+                $"状态：{status}",
+                message
+            };
+
+            if (combined != null)
+            {
+                foreach (var stage in combined)
+                {
+                    string line = $"{stage.Progress,3}% [{stage.State}] {stage.Message}";
+                    lines.Add(line);
+                }
+            }
+
+            if (result.Response.Data?.Cache?.Ready == false && result.Response.Data.Cache.Asset?.Name != null)
+            {
+                lines.Add($"正在准备：{result.Response.Data.Cache.Asset.Name}");
+            }
+
+            lines.Add($"下次尝试：约 {nextDelaySeconds} 秒后");
+
+            SetResultText(lines);
+        }
+
+        private static int NormalizePollDelay(int seconds)
+        {
+            if (seconds < 1)
+            {
+                return 4;
+            }
+
+            if (seconds < 2)
+            {
+                return 2;
+            }
+
+            if (seconds > 30)
+            {
+                return 30;
+            }
+
+            return seconds;
         }
 
         private void ShowUpdateAvailable(UpdatePlan plan, UpdateCheckResult result)

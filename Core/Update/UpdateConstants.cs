@@ -8,6 +8,8 @@ namespace YTPlayer.Update
 
         public const string DefaultPlanFileName = "update-plan.json";
 
+        public static readonly TimeSpan DefaultCheckTimeout = TimeSpan.FromSeconds(15);
+
         public static string CreateUserAgent(string product, string version)
         {
             if (string.IsNullOrWhiteSpace(product))

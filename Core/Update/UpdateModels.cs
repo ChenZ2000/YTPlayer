@@ -46,6 +46,24 @@ namespace YTPlayer.Update
         public string Download { get; set; } = string.Empty;
     }
 
+    public sealed class UpdateCacheAssetInfo
+    {
+        [JsonProperty("id")]
+        public long Id { get; set; }
+
+        [JsonProperty("name")]
+        public string? Name { get; set; }
+    }
+
+    public sealed class UpdateCacheInfo
+    {
+        [JsonProperty("ready")]
+        public bool Ready { get; set; }
+
+        [JsonProperty("asset")]
+        public UpdateCacheAssetInfo? Asset { get; set; }
+    }
+
     public sealed class UpdateReleaseInfo
     {
         [JsonProperty("tag")]
@@ -80,6 +98,12 @@ namespace YTPlayer.Update
 
         [JsonProperty("assets")]
         public List<UpdateAsset>? Assets { get; set; }
+
+        [JsonProperty("cache")]
+        public UpdateCacheInfo? Cache { get; set; }
+
+        [JsonProperty("refresh")]
+        public object? Refresh { get; set; }
     }
 
     public sealed class UpdateErrorInfo
@@ -110,6 +134,9 @@ namespace YTPlayer.Update
 
         [JsonProperty("message")]
         public string? Message { get; set; }
+
+        [JsonProperty("nextPollAfter")]
+        public int? NextPollAfter { get; set; }
     }
 
     public sealed class UpdateCheckResult
@@ -135,6 +162,27 @@ namespace YTPlayer.Update
 
                 return HeaderProgress;
             }
+        }
+
+        public string Status => Response.Status ?? string.Empty;
+
+        public bool IsPending =>
+            string.Equals(Status, "pending", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(Status, "preparing", StringComparison.OrdinalIgnoreCase);
+
+        public bool CacheReady => Response.Data?.Cache?.Ready == true;
+
+        public bool ShouldPollForCompletion => IsPending || !CacheReady;
+
+        public int GetRecommendedPollDelaySeconds(int fallbackSeconds = 4)
+        {
+            int? serverSuggestion = Response.NextPollAfter;
+            if (!serverSuggestion.HasValue || serverSuggestion.Value < 1)
+            {
+                return fallbackSeconds;
+            }
+
+            return serverSuggestion.Value;
         }
     }
 

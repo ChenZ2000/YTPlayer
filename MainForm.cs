@@ -2727,13 +2727,13 @@ namespace YTPlayer
                         ItemUnit = "位"
                     });
 
-                    // 3.6 收藏的电台
+                    // 3.6 收藏的播客
                     homeItems.Add(new ListItemInfo
                     {
                         Type = ListItemType.Category,
                         CategoryId = "user_podcasts",
-                        CategoryName = "收藏的电台",
-                        CategoryDescription = "您收藏的电台",
+                        CategoryName = "收藏的播客",
+                        CategoryDescription = "您收藏的播客",
                         ItemCount = podcastFavoritesCount,
                         ItemUnit = "个"
                     });
@@ -8800,7 +8800,7 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
         private async Task CheckForUpdatesSilentlyAsync(CancellationToken cancellationToken)
         {
             using var client = new UpdateServiceClient(UpdateConstants.DefaultEndpoint, "YTPlayer", VersionInfo.Version);
-            var result = await client.CheckForUpdatesAsync(VersionInfo.Version, cancellationToken).ConfigureAwait(false);
+            var result = await PollUpdateStatusSilentlyAsync(client, cancellationToken).ConfigureAwait(false);
             var asset = UpdateFormatting.SelectPreferredAsset(result.Response.Data?.Assets);
             bool updateAvailable = result.Response.Data?.UpdateAvailable == true && asset != null;
             if (!updateAvailable)
@@ -8835,6 +8835,37 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                     dialog.ShowDialog(this);
                 }
             });
+        }
+
+        private static async Task<UpdateCheckResult> PollUpdateStatusSilentlyAsync(UpdateServiceClient client, CancellationToken cancellationToken)
+        {
+            UpdateCheckResult result;
+            while (true)
+            {
+                result = await client.CheckForUpdatesAsync(VersionInfo.Version, cancellationToken).ConfigureAwait(false);
+                if (!result.ShouldPollForCompletion)
+                {
+                    return result;
+                }
+
+                int delaySeconds = NormalizeUpdatePollDelay(result.GetRecommendedPollDelaySeconds(4));
+                await Task.Delay(TimeSpan.FromSeconds(delaySeconds), cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        private static int NormalizeUpdatePollDelay(int seconds)
+        {
+            if (seconds < 2)
+            {
+                return 2;
+            }
+
+            if (seconds > 30)
+            {
+                return 30;
+            }
+
+            return seconds;
         }
 
         #endregion

@@ -1,0 +1,37 @@
+{
+    "schema": 2,
+    "etag": "W/\"a44d35e9f96d2165ebe172a7ef5d5e42823d975dd06698fa9663bb1d89ed8f8f\"",
+    "last_checked_at": "2025-11-15T16:42:51+00:00",
+    "refreshed_at": "2025-11-15T16:28:59+00:00",
+    "release": {
+        "id": 262674275,
+        "tag": "v1.7.0",
+        "name": "YTPlayer v1.7.0 - 初步实现播客搜索、解析与 UI 处理逻辑、最近播放歌单、最近播放专辑",
+        "body": "**Full Changelog**: https://github.com/ChenZ2000/YTPlayer/compare/v1.6.0...v1.7.0",
+        "published_at": "2025-11-15T14:46:47Z",
+        "url": "https://github.com/ChenZ2000/YTPlayer/releases/tag/v1.7.0"
+    },
+    "assets": [
+        {
+            "id": 316781483,
+            "name": "YTPlayer-1.7.0.zip",
+            "size": 3001238,
+            "content_type": "application/zip",
+            "download_url": "https://github.com/ChenZ2000/YTPlayer/releases/download/v1.7.0/YTPlayer-1.7.0.zip",
+            "updated_at": "2025-11-15T14:46:48Z",
+            "cached": {
+                "status": "missing",
+                "path": "assets/316781483-YTPlayer-1.7.0.zip"
+            }
+        }
+    ],
+    "primary_asset_id": 316781483,
+    "refresh": {
+        "state": "idle",
+        "message": "Cached asset already up to date",
+        "asset_id": 316781483,
+        "reason": "download",
+        "version": "v1.7.0",
+        "updated_at": "2025-11-15T16:42:51+00:00"
+    }
+}

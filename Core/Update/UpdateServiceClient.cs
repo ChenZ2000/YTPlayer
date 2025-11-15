@@ -14,7 +14,7 @@ namespace YTPlayer.Update
 {
     public sealed class UpdateServiceClient : IDisposable
     {
-        private static readonly string ProgressHeaderName = "X-YT-Update-Progress";
+        private static readonly string[] ProgressHeaderNames = { "X-YT-Update-Progress", "X-YT-Download-Progress" };
         private readonly HttpClient _httpClient;
         private readonly string _endpoint;
 
@@ -54,40 +54,53 @@ namespace YTPlayer.Update
 
             string requestUri = $"{_endpoint}?action=check&version={Uri.EscapeDataString(currentVersion)}";
             using var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
-            using HttpResponseMessage response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
-
-            IReadOnlyList<UpdateProgressStage> headerProgress = ParseProgressHeader(response);
-
-            string payload = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (!response.IsSuccessStatusCode)
-            {
-                throw new UpdateServiceException($"检查更新失败 ({(int)response.StatusCode})", response.StatusCode, payload);
-            }
-
-            UpdateCheckResponse? parsed = null;
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(UpdateConstants.DefaultCheckTimeout);
+            HttpResponseMessage response;
             try
             {
-                parsed = JsonConvert.DeserializeObject<UpdateCheckResponse>(payload);
+                response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeoutCts.Token).ConfigureAwait(false);
             }
-            catch (JsonException ex)
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeoutCts.IsCancellationRequested)
             {
-                throw new UpdateServiceException($"解析更新响应失败: {ex.Message}", response.StatusCode, payload);
+                throw new UpdateServiceException($"检查更新超时（超过 {UpdateConstants.DefaultCheckTimeout.TotalSeconds:0} 秒）");
             }
 
-            if (parsed == null)
+            using (response)
             {
-                throw new UpdateServiceException("更新服务器返回了空响应");
-            }
+                IReadOnlyList<UpdateProgressStage> headerProgress = ParseProgressHeader(response);
 
-            if (!string.Equals(parsed.Status, "ok", StringComparison.OrdinalIgnoreCase))
-            {
-                string errorMessage = parsed.Error?.Message ?? parsed.Message ?? "未知错误";
-                throw new UpdateServiceException($"更新服务返回错误: {errorMessage}");
-            }
+                string payload = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                timeoutCts.Token.ThrowIfCancellationRequested();
 
-            return new UpdateCheckResult(parsed, headerProgress);
+                if (!response.IsSuccessStatusCode)
+                {
+                    throw new UpdateServiceException($"检查更新失败 ({(int)response.StatusCode})", response.StatusCode, payload);
+                }
+
+                UpdateCheckResponse? parsed = null;
+                try
+                {
+                    parsed = JsonConvert.DeserializeObject<UpdateCheckResponse>(payload);
+                }
+                catch (JsonException ex)
+                {
+                    throw new UpdateServiceException($"解析更新响应失败: {ex.Message}", response.StatusCode, payload);
+                }
+
+                if (parsed == null)
+                {
+                    throw new UpdateServiceException("更新服务器返回了空响应");
+                }
+
+                if (string.Equals(parsed.Status, "error", StringComparison.OrdinalIgnoreCase))
+                {
+                    string errorMessage = parsed.Error?.Message ?? parsed.Message ?? "未知错误";
+                    throw new UpdateServiceException($"更新服务返回错误: {errorMessage}");
+                }
+
+                return new UpdateCheckResult(parsed, headerProgress);
+            }
         }
 
         public async Task DownloadAssetAsync(string downloadUrl, string destinationFilePath, IProgress<UpdateDownloadProgress>? progress, CancellationToken cancellationToken)
@@ -139,26 +152,34 @@ namespace YTPlayer.Update
 
         private static IReadOnlyList<UpdateProgressStage> ParseProgressHeader(HttpResponseMessage response)
         {
-            if (!response.Headers.TryGetValues(ProgressHeaderName, out IEnumerable<string>? values))
+            foreach (string headerName in ProgressHeaderNames)
             {
-                return Array.Empty<UpdateProgressStage>();
+                if (!response.Headers.TryGetValues(headerName, out IEnumerable<string>? values))
+                {
+                    continue;
+                }
+
+                string raw = values.FirstOrDefault();
+                if (string.IsNullOrWhiteSpace(raw))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    var stages = JsonConvert.DeserializeObject<List<UpdateProgressStage>>(raw);
+                    if (stages != null)
+                    {
+                        return stages;
+                    }
+                }
+                catch (JsonException)
+                {
+                    return Array.Empty<UpdateProgressStage>();
+                }
             }
 
-            string raw = values.FirstOrDefault();
-            if (string.IsNullOrWhiteSpace(raw))
-            {
-                return Array.Empty<UpdateProgressStage>();
-            }
-
-            try
-            {
-                var stages = JsonConvert.DeserializeObject<List<UpdateProgressStage>>(raw);
-                return stages ?? (IReadOnlyList<UpdateProgressStage>)Array.Empty<UpdateProgressStage>();
-            }
-            catch (JsonException)
-            {
-                return Array.Empty<UpdateProgressStage>();
-            }
+            return Array.Empty<UpdateProgressStage>();
         }
     }
 }
