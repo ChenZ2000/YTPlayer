@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using YTPlayer.Core.Playback;
 using YTPlayer.Models;
 
@@ -60,15 +61,20 @@ namespace YTPlayer
 
             var source = BuildPlaybackSourceContext(song);
             int durationSeconds = NormalizeDurationSeconds(song);
+            string resourceType = song.IsPodcastEpisode ? "djprogram" : "song";
+            string? contentOverride = song.IsPodcastEpisode ? BuildPodcastContentOverride(song) : null;
+
             var session = new PlaybackReportContext(
                 song.Id,
                 song.Name ?? string.Empty,
                 song.Artist ?? string.Empty,
                 source,
                 durationSeconds,
-                song.IsTrial)
+                song.IsTrial,
+                resourceType)
             {
-                StartedAt = DateTimeOffset.UtcNow
+                StartedAt = DateTimeOffset.UtcNow,
+                ContentOverride = contentOverride
             };
 
             lock (_playbackReportingLock)
@@ -176,6 +182,26 @@ namespace YTPlayer
             string sourceType = "list";
             string? sourceId = null;
 
+            bool podcastContext = song.IsPodcastEpisode || IsPodcastEpisodeView();
+            if (podcastContext)
+            {
+                var radioId = ResolvePodcastRadioId(song);
+                if (radioId > 0)
+                {
+                    sourceId = radioId.ToString(CultureInfo.InvariantCulture);
+                }
+                else
+                {
+                    var radioName = song.PodcastRadioName;
+                    if (!string.IsNullOrWhiteSpace(radioName))
+                    {
+                        sourceId = radioName;
+                    }
+                }
+
+                return new PlaybackSourceContext("djradio", sourceId);
+            }
+
             if (_currentPlaylist != null && !string.IsNullOrWhiteSpace(_currentPlaylist.Id))
             {
                 sourceType = "list";
@@ -197,6 +223,52 @@ namespace YTPlayer
             }
 
             return new PlaybackSourceContext(sourceType, sourceId);
+        }
+
+        private long ResolvePodcastRadioId(SongInfo song)
+        {
+            if (song.PodcastRadioId > 0)
+            {
+                return song.PodcastRadioId;
+            }
+
+            if (_currentPodcast?.Id > 0)
+            {
+                return _currentPodcast.Id;
+            }
+
+            if (!string.IsNullOrWhiteSpace(_currentViewSource) &&
+                _currentViewSource.StartsWith("podcast:", StringComparison.OrdinalIgnoreCase))
+            {
+                var segments = _currentViewSource.Split(new[] { ':' }, StringSplitOptions.RemoveEmptyEntries);
+                if (segments.Length >= 2 && long.TryParse(segments[1], out var parsedId))
+                {
+                    return parsedId;
+                }
+            }
+
+            return 0;
+        }
+
+        private string? BuildPodcastContentOverride(SongInfo song)
+        {
+            if (song == null)
+            {
+                return null;
+            }
+
+            long programId = song.PodcastProgramId;
+            if (programId <= 0 && long.TryParse(song.Id, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedId))
+            {
+                programId = parsedId;
+            }
+
+            if (programId <= 0)
+            {
+                return null;
+            }
+
+            return $"id={programId}";
         }
 
         private int NormalizeDurationSeconds(SongInfo song)

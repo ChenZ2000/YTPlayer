@@ -60,7 +60,8 @@ namespace YTPlayer.Core.Playback
             string artist,
             PlaybackSourceContext source,
             int durationSeconds,
-            bool isTrial)
+            bool isTrial,
+            string resourceType)
         {
             if (string.IsNullOrWhiteSpace(songId))
             {
@@ -73,6 +74,7 @@ namespace YTPlayer.Core.Playback
             Source = source ?? throw new ArgumentNullException(nameof(source));
             DurationSeconds = durationSeconds;
             IsTrial = isTrial;
+            ResourceType = string.IsNullOrWhiteSpace(resourceType) ? "song" : resourceType.Trim();
             StartedAt = DateTimeOffset.UtcNow;
         }
 
@@ -82,6 +84,8 @@ namespace YTPlayer.Core.Playback
         public PlaybackSourceContext Source { get; }
         public int DurationSeconds { get; }
         public bool IsTrial { get; }
+        public string ResourceType { get; }
+        public string? ContentOverride { get; set; }
         public DateTimeOffset StartedAt { get; set; }
         public double PlayedSeconds { get; set; }
         internal bool HasCompleted { get; set; }
@@ -217,7 +221,7 @@ namespace YTPlayer.Core.Playback
         private Task<bool> SendStartLogsAsync(PlaybackReportContext context)
         {
             var logs = new List<Dictionary<string, object>>();
-            string content = BuildContent(context.Source);
+            string content = BuildContent(context);
 
             logs.Add(new Dictionary<string, object>
             {
@@ -226,7 +230,7 @@ namespace YTPlayer.Core.Playback
                     "json", new Dictionary<string, object>
                     {
                         { "id", context.SongId },
-                        { "type", "song" },
+                        { "type", context.ResourceType },
                         { "mainsite", "1" },
                         { "content", content }
                     }
@@ -240,7 +244,7 @@ namespace YTPlayer.Core.Playback
                     "json", new Dictionary<string, object>
                     {
                         { "id", context.SongId },
-                        { "type", "song" },
+                        { "type", context.ResourceType },
                         { "source", string.IsNullOrWhiteSpace(context.Source.Source) ? "list" : context.Source.Source },
                         { "sourceid", context.Source.SourceIdLong ?? (object)(context.Source.SourceId ?? string.Empty) },
                         { "mainsite", "1" },
@@ -266,7 +270,7 @@ namespace YTPlayer.Core.Playback
                 {
                     "json", new Dictionary<string, object>
                     {
-                        { "type", "song" },
+                        { "type", context.ResourceType },
                         { "wifi", 0 },
                         { "download", 0 },
                         { "id", context.SongId },
@@ -275,7 +279,7 @@ namespace YTPlayer.Core.Playback
                         { "source", string.IsNullOrWhiteSpace(context.Source.Source) ? "list" : context.Source.Source },
                         { "sourceId", context.Source.SourceIdLong ?? (object)(context.Source.SourceId ?? string.Empty) },
                         { "mainsite", "1" },
-                        { "content", BuildContent(context.Source) }
+                        { "content", BuildContent(context) }
                     }
                 }
             };
@@ -294,6 +298,16 @@ namespace YTPlayer.Core.Playback
                 default:
                     return "interrupt";
             }
+        }
+
+        private static string BuildContent(PlaybackReportContext context)
+        {
+            if (!string.IsNullOrWhiteSpace(context.ContentOverride))
+            {
+                return context.ContentOverride!;
+            }
+
+            return BuildContent(context.Source);
         }
 
         private static string BuildContent(PlaybackSourceContext source)

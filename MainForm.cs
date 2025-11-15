@@ -47,19 +47,16 @@ namespace YTPlayer
         private List<ListItemInfo> _currentListItems = new List<ListItemInfo>(); // 统一的列表项
         private const string RecentListenedCategoryId = "recent_listened";
         private const string RecentPodcastsCategoryId = "recent_podcasts";
-        private const string RecentSoundsCategoryId = "recent_sounds";
         private const string DownloadSongMenuText = "下载歌曲(&D)";
         private const string DownloadSoundMenuText = "下载声音(&D)";
         private int _recentPlayCount = 0;
         private int _recentPlaylistCount = 0;
         private int _recentAlbumCount = 0;
         private int _recentPodcastCount = 0;
-        private int _recentSoundCount = 0;
         private List<SongInfo> _recentSongsCache = new List<SongInfo>();
         private List<PlaylistInfo> _recentPlaylistsCache = new List<PlaylistInfo>();
         private List<AlbumInfo> _recentAlbumsCache = new List<AlbumInfo>();
         private List<PodcastRadioInfo> _recentPodcastsCache = new List<PodcastRadioInfo>();
-        private List<PodcastEpisodeInfo> _recentSoundsCache = new List<PodcastEpisodeInfo>();
         private DateTime _recentSummaryLastUpdatedUtc = DateTime.MinValue;
         private bool _currentPodcastSortAscending = false;
         private List<LyricLine> _currentLyrics = new List<LyricLine>();  // 保留用于向后兼容
@@ -199,6 +196,7 @@ namespace YTPlayer
         private const int RecentPlayFetchLimit = 300;
         private const int RecentPlaylistFetchLimit = 100;
         private const int RecentAlbumFetchLimit = 100;
+        private const int RecentPodcastFetchLimit = 100;
         private const int PodcastSoundPageSize = 50;
 
         #endregion
@@ -1431,6 +1429,20 @@ namespace YTPlayer
                 cancellationToken: cancellationToken);
         }
 
+        private async Task<List<PodcastRadioInfo>> FetchRecentPodcastsAsync(int limit, CancellationToken cancellationToken = default)
+        {
+            return await ExecuteWithRetryAsync(
+                async () =>
+                {
+                    var podcasts = await _apiClient.GetRecentPodcastsAsync(limit);
+                    return podcasts ?? new List<PodcastRadioInfo>();
+                },
+                maxAttempts: 3,
+                initialDelayMs: 600,
+                operationName: "RecentPodcasts",
+                cancellationToken: cancellationToken);
+        }
+
         private async Task RefreshRecentSummariesAsync(bool forceRefresh, CancellationToken cancellationToken = default)
         {
             if (!IsUserLoggedIn())
@@ -1438,9 +1450,11 @@ namespace YTPlayer
                 _recentSongsCache.Clear();
                 _recentPlaylistsCache.Clear();
                 _recentAlbumsCache.Clear();
+                _recentPodcastsCache.Clear();
                 _recentPlayCount = 0;
                 _recentPlaylistCount = 0;
                 _recentAlbumCount = 0;
+                _recentPodcastCount = 0;
                 _recentSummaryLastUpdatedUtc = DateTime.MinValue;
                 return;
             }
@@ -1457,6 +1471,7 @@ namespace YTPlayer
             var songsTask = FetchRecentSongsAsync(RecentPlayFetchLimit, cancellationToken);
             var playlistsTask = FetchRecentPlaylistsAsync(RecentPlaylistFetchLimit, cancellationToken);
             var albumsTask = FetchRecentAlbumsAsync(RecentAlbumFetchLimit, cancellationToken);
+            var podcastsTask = FetchRecentPodcastsAsync(RecentPodcastFetchLimit, cancellationToken);
 
             try
             {
@@ -1499,6 +1514,20 @@ namespace YTPlayer
                 }
             }
             _recentAlbumCount = _recentAlbumsCache.Count;
+
+            try
+            {
+                _recentPodcastsCache = await podcastsTask;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[RecentSummary] 获取最近播客失败: {ex}");
+                if (forceRefresh)
+                {
+                    _recentPodcastsCache = new List<PodcastRadioInfo>();
+                }
+            }
+            _recentPodcastCount = _recentPodcastsCache.Count;
 
             _recentSummaryLastUpdatedUtc = DateTime.UtcNow;
         }
@@ -2504,6 +2533,7 @@ namespace YTPlayer
                 int userPlaylistCount = 0;
                 int userAlbumCount = 0;
                 int artistFavoritesCount = 0;
+                int podcastFavoritesCount = 0;
                 PlaylistInfo? likedPlaylist = null;
                 const int highQualityDisplayCount = 50;
                 const int newSongSubCategoryCount = 5;
@@ -2566,6 +2596,19 @@ namespace YTPlayer
                             {
                                 System.Diagnostics.Debug.WriteLine($"[HomePage] 获取收藏歌手数量失败: {artistEx.Message}");
                             }
+
+                            // 获取收藏播客数量
+                            try
+                            {
+                                var (_, podcastCount) = await _apiClient.GetSubscribedPodcastsAsync(limit: 1, offset: 0);
+                                ThrowIfHomeLoadCancelled();
+                                podcastFavoritesCount = podcastCount;
+                                System.Diagnostics.Debug.WriteLine($"[HomePage] 收藏播客数量: {podcastFavoritesCount}");
+                            }
+                            catch (Exception podcastEx)
+                            {
+                                System.Diagnostics.Debug.WriteLine($"[HomePage] 获取收藏播客数量失败: {podcastEx.Message}");
+                            }
                         }
                     }
                     catch (Exception ex)
@@ -2579,9 +2622,11 @@ namespace YTPlayer
                     _recentSongsCache.Clear();
                     _recentPlaylistsCache.Clear();
                     _recentAlbumsCache.Clear();
+                    _recentPodcastsCache.Clear();
                     _recentPlayCount = 0;
                     _recentPlaylistCount = 0;
                     _recentAlbumCount = 0;
+                    _recentPodcastCount = 0;
                 }
 
                 try
@@ -2682,7 +2727,18 @@ namespace YTPlayer
                         ItemUnit = "位"
                     });
 
-                    // 3.6 云盘
+                    // 3.6 收藏的电台
+                    homeItems.Add(new ListItemInfo
+                    {
+                        Type = ListItemType.Category,
+                        CategoryId = "user_podcasts",
+                        CategoryName = "收藏的电台",
+                        CategoryDescription = "您收藏的电台",
+                        ItemCount = podcastFavoritesCount,
+                        ItemUnit = "个"
+                    });
+
+                    // 3.7 云盘
                     homeItems.Add(new ListItemInfo
                     {
                         Type = ListItemType.Category,
@@ -3067,6 +3123,10 @@ namespace YTPlayer
                     await LoadUserAlbums();
                     break;
 
+                case "user_podcasts":
+                    await LoadUserPodcasts();
+                    break;
+
                 case "user_cloud":
                     _cloudPage = 1;
                     await LoadCloudSongsAsync();
@@ -3086,6 +3146,10 @@ namespace YTPlayer
 
                 case "recent_albums":
                     await LoadRecentAlbumsAsync();
+                    break;
+
+                case RecentPodcastsCategoryId:
+                    await LoadRecentPodcastsAsync();
                     break;
 
                 case "daily_recommend":
@@ -3821,6 +3885,73 @@ namespace YTPlayer
                 throw;
             }
         }
+
+        private async Task LoadUserPodcasts(bool preserveSelection = false)
+        {
+            try
+            {
+                var (podcasts, totalCount) = await _apiClient.GetSubscribedPodcastsAsync(limit: 300, offset: 0);
+                if (podcasts == null || podcasts.Count == 0)
+                {
+                    MessageBox.Show("您还没有收藏电台", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                DisplayPodcasts(
+                    podcasts,
+                    preserveSelection: preserveSelection,
+                    viewSource: "user_podcasts",
+                    accessibleName: "收藏的电台");
+                UpdateStatusBar($"加载完成，共 {totalCount} 个电台");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[LoadUserPodcasts] 异常: {ex}");
+                throw;
+            }
+        }
+
+        private async Task LoadRecentPodcastsAsync()
+        {
+            if (!IsUserLoggedIn())
+            {
+                MessageBox.Show("请先登录网易云账号以查看最近播客。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                await LoadHomePageAsync(skipSave: true, showErrorDialog: false);
+                return;
+            }
+
+            try
+            {
+                UpdateStatusBar("正在加载最近播客...");
+                var list = await FetchRecentPodcastsAsync(RecentPodcastFetchLimit);
+                _recentPodcastsCache = new List<PodcastRadioInfo>(list);
+                _recentPodcastCount = list.Count;
+
+                if (list.Count == 0)
+                {
+                    MessageBox.Show("暂时没有最近播放的播客。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    DisplayPodcasts(
+                        list,
+                        viewSource: RecentPodcastsCategoryId,
+                        accessibleName: "最近播客");
+                    UpdateStatusBar("暂无最近播放的播客");
+                    return;
+                }
+
+                DisplayPodcasts(
+                    list,
+                    viewSource: RecentPodcastsCategoryId,
+                    accessibleName: "最近播客");
+                UpdateStatusBar($"最近播客，共 {list.Count} 个");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[LoadRecentPodcasts] 异常: {ex}");
+                MessageBox.Show($"加载最近播客失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                throw;
+            }
+        }
+
 
         private async Task OpenPodcastRadioAsync(PodcastRadioInfo podcast, bool skipSave = false)
         {
@@ -4672,33 +4803,40 @@ namespace YTPlayer
                     Type = ListItemType.Category,
                     CategoryId = "recent_play",
                     CategoryName = "最近歌曲",
-                    CategoryDescription = $"最近听过的歌曲 | {_recentPlayCount} 首"
+                    CategoryDescription = $"{_recentPlayCount} 首"
                 },
                 new ListItemInfo
                 {
                     Type = ListItemType.Category,
                     CategoryId = "recent_playlists",
                     CategoryName = "最近歌单",
-                    CategoryDescription = $"最近播放的歌单 | {_recentPlaylistCount} 个"
+                    CategoryDescription = $"{_recentPlaylistCount} 个"
                 },
                 new ListItemInfo
                 {
                     Type = ListItemType.Category,
                     CategoryId = "recent_albums",
                     CategoryName = "最近专辑",
-                    CategoryDescription = $"最近播放的专辑 | {_recentAlbumCount} 张"
+                    CategoryDescription = $"{_recentAlbumCount} 张"
+                },
+                new ListItemInfo
+                {
+                    Type = ListItemType.Category,
+                    CategoryId = RecentPodcastsCategoryId,
+                    CategoryName = "最近播客",
+                    CategoryDescription = $"{_recentPodcastCount} 个"
                 }
             };
         }
 
         private string BuildRecentListenedDescription()
         {
-            return $"歌曲 {_recentPlayCount} 首 | 歌单 {_recentPlaylistCount} 个 | 专辑 {_recentAlbumCount} 张";
+            return $"歌曲 {_recentPlayCount} 首 | 歌单 {_recentPlaylistCount} 个 | 专辑 {_recentAlbumCount} 张 | 播客 {_recentPodcastCount} 个";
         }
 
         private string BuildRecentListenedStatus()
         {
-            return $"最近听过：歌曲 {_recentPlayCount} 首 / 歌单 {_recentPlaylistCount} 个 / 专辑 {_recentAlbumCount} 张";
+            return $"最近听过：歌曲 {_recentPlayCount} 首 / 歌单 {_recentPlaylistCount} 个 / 专辑 {_recentAlbumCount} 张 / 播客 {_recentPodcastCount} 个";
         }
 
         private static (string ArtistLabel, string TrackLabel, string DescriptionLabel) BuildAlbumDisplayLabels(AlbumInfo? album)
@@ -9840,9 +9978,12 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             }
 
             bool isPodcastEpisodeView = IsPodcastEpisodeView();
-            if (isPodcastEpisodeView)
+            bool canSortPodcastEpisodes = isPodcastEpisodeView &&
+                !string.IsNullOrWhiteSpace(_currentViewSource) &&
+                _currentViewSource.StartsWith("podcast:", StringComparison.OrdinalIgnoreCase);
+            podcastSortMenuItem.Visible = canSortPodcastEpisodes;
+            if (canSortPodcastEpisodes)
             {
-                podcastSortMenuItem.Visible = true;
                 UpdatePodcastSortMenuChecks();
             }
 
@@ -10673,8 +10814,12 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
 
         private bool IsPodcastEpisodeView()
         {
-            return !string.IsNullOrWhiteSpace(_currentViewSource) &&
-                   _currentViewSource.StartsWith("podcast:", StringComparison.OrdinalIgnoreCase);
+            if (string.IsNullOrWhiteSpace(_currentViewSource))
+            {
+                return false;
+            }
+
+            return _currentViewSource.StartsWith("podcast:", StringComparison.OrdinalIgnoreCase);
         }
 
         private PodcastEpisodeInfo? GetPodcastEpisodeBySelectedIndex()
@@ -11516,6 +11661,7 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                     MessageBox.Show($"已收藏播客：{podcast.Name}", "成功",
                         MessageBoxButtons.OK, MessageBoxIcon.Information);
                     UpdateStatusBar("播客收藏成功");
+                    await RefreshUserPodcastsIfActiveAsync();
                 }
                 else
                 {
@@ -11561,6 +11707,7 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                     MessageBox.Show($"已取消收藏播客：{podcast.Name}", "成功",
                         MessageBoxButtons.OK, MessageBoxIcon.Information);
                     UpdateStatusBar("取消收藏播客成功");
+                    await RefreshUserPodcastsIfActiveAsync();
                 }
                 else
                 {
@@ -11641,6 +11788,14 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             if (string.Equals(_currentViewSource, "user_albums", StringComparison.OrdinalIgnoreCase))
             {
                 await LoadUserAlbums(preserveSelection: true);
+            }
+        }
+
+        private async Task RefreshUserPodcastsIfActiveAsync()
+        {
+            if (string.Equals(_currentViewSource, "user_podcasts", StringComparison.OrdinalIgnoreCase))
+            {
+                await LoadUserPodcasts(preserveSelection: true);
             }
         }
 

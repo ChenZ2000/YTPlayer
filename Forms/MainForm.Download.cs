@@ -1058,6 +1058,22 @@ namespace YTPlayer
                             }, quality);
                             break;
 
+                        case "user_podcasts":
+                            MessageBox.Show(
+                                "请在“收藏的电台”列表中选择播客，使用右键菜单下载其节目。",
+                                "提示",
+                                MessageBoxButtons.OK,
+                                MessageBoxIcon.Information);
+                            return;
+
+                        case RecentPodcastsCategoryId:
+                            MessageBox.Show(
+                                "请进入播客详情页，使用右键菜单中的“下载播客全部节目”来下载具体播客内容。",
+                                "提示",
+                                MessageBoxButtons.OK,
+                                MessageBoxIcon.Information);
+                            return;
+
                         case RecentListenedCategoryId:
                             await DownloadMixedCategory(categoryName, BuildRecentListenedEntries, quality);
                             return;

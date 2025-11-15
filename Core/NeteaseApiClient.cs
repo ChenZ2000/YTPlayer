@@ -6050,8 +6050,15 @@ namespace YTPlayer.Core
                 }
 
                 var songs = new List<SongInfo>();
+                int skippedNonSongEntries = 0;
                 foreach (var item in data)
                 {
+                    if (IsRecentSongEntryPodcastOrVoice(item))
+                    {
+                        skippedNonSongEntries++;
+                        continue;
+                    }
+
                     // 提取歌曲数据（可能在 data 或 song 字段中）
                     var songData = item["data"] ?? item["song"] ?? item;
 
@@ -6106,6 +6113,11 @@ namespace YTPlayer.Core
                     songs.Add(song);
                 }
 
+                if (skippedNonSongEntries > 0)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[API] 最近播放歌曲过滤掉 {skippedNonSongEntries} 个播客/声音条目");
+                }
+
                 System.Diagnostics.Debug.WriteLine($"[API] 成功获取 {songs.Count} 首最近播放歌曲");
                 return songs;
             }
@@ -6114,6 +6126,119 @@ namespace YTPlayer.Core
                 System.Diagnostics.Debug.WriteLine($"[API] 获取最近播放歌曲异常: {ex.Message}");
                 return new List<SongInfo>();
             }
+        }
+
+        private static bool IsRecentSongEntryPodcastOrVoice(JToken? entry)
+        {
+            if (entry == null)
+            {
+                return false;
+            }
+
+            var entryResourceType = entry["resourceType"]?.Value<string>();
+            if (IsNonSongResourceType(entryResourceType))
+            {
+                return true;
+            }
+
+            var dataToken = entry["data"] ?? entry["song"];
+            if (dataToken == null)
+            {
+                return false;
+            }
+
+            if (IsNonSongResourceType(dataToken["resourceType"]?.Value<string>()))
+            {
+                return true;
+            }
+
+            if (HasPodcastIndicators(dataToken))
+            {
+                return true;
+            }
+
+            if (dataToken["song"] is JObject nestedSong && HasPodcastIndicators(nestedSong))
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool HasPodcastIndicators(JToken? token)
+        {
+            if (token == null)
+            {
+                return false;
+            }
+
+            string[] indicatorProperties =
+            {
+                "program",
+                "programId",
+                "programInfo",
+                "djProgram",
+                "djRadio",
+                "radioProgram",
+                "mainProgram",
+                "sound",
+                "soundId",
+                "voiceId",
+                "voiceInfo",
+                "podcast",
+                "radio",
+                "radioId"
+            };
+
+            foreach (var property in indicatorProperties)
+            {
+                if (token[property] != null && token[property]?.Type != JTokenType.Null)
+                {
+                    return true;
+                }
+            }
+
+            var typeValue = token["type"];
+            if (typeValue != null)
+            {
+                if (typeValue.Type == JTokenType.String && IsNonSongResourceType(typeValue.Value<string>()))
+                {
+                    return true;
+                }
+
+                if (typeValue.Type == JTokenType.Integer)
+                {
+                    var numericType = typeValue.Value<int>();
+                    if (numericType == 2000 || numericType == 2001)
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private static bool IsNonSongResourceType(string? resourceType)
+        {
+            if (string.IsNullOrWhiteSpace(resourceType))
+            {
+                return false;
+            }
+
+            var normalized = resourceType.Trim().ToLowerInvariant();
+            if (normalized.Contains("song") || normalized.Contains("music"))
+            {
+                return false;
+            }
+
+            string[] podcastIndicators = { "voice", "sound", "program", "dj", "radio", "podcast" };
+            if (podcastIndicators.Any(indicator => normalized.Contains(indicator)))
+            {
+                return true;
+            }
+
+            return false;
         }
 
         public async Task<bool> SendPlaybackLogsAsync(IEnumerable<Dictionary<string, object>> logEntries, CancellationToken cancellationToken = default)
@@ -6210,6 +6335,47 @@ namespace YTPlayer.Core
             }
 
             return (result, totalCount);
+        }
+
+        /// <summary>
+        /// 获取用户收藏的播客列表
+        /// 参考: NeteaseCloudMusicApi/module/dj_sublist.js
+        /// </summary>
+        public async Task<(List<PodcastRadioInfo>, int)> GetSubscribedPodcastsAsync(int limit = 30, int offset = 0)
+        {
+            try
+            {
+                var payload = new Dictionary<string, object>
+                {
+                    { "limit", limit },
+                    { "offset", offset },
+                    { "total", true }
+                };
+
+                var response = await PostWeApiAsync<JObject>("/weapi/djradio/get/subed", payload);
+
+                if (response["code"]?.Value<int>() != 200)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[API] 获取收藏播客失败: {response["message"]}");
+                    return (new List<PodcastRadioInfo>(), 0);
+                }
+
+                var list = response["djRadios"] as JArray
+                           ?? response["data"]?["djRadios"] as JArray
+                           ?? response["data"] as JArray;
+                int totalCount = response["count"]?.Value<int>()
+                                 ?? response["total"]?.Value<int>()
+                                 ?? list?.Count
+                                 ?? 0;
+
+                var radios = ParsePodcastRadioList(list);
+                return (radios, totalCount);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[API] 获取收藏播客异常: {ex.Message}");
+                return (new List<PodcastRadioInfo>(), 0);
+            }
         }
 
         /// <summary>
@@ -7397,6 +7563,68 @@ namespace YTPlayer.Core
                 return new List<AlbumInfo>();
             }
         }
+
+        /// <summary>
+        /// 获取最近播放的播客
+        /// 参考: NeteaseCloudMusicApi/module/record_recent_dj.js
+        /// </summary>
+        public async Task<List<PodcastRadioInfo>> GetRecentPodcastsAsync(int limit = 100)
+        {
+            try
+            {
+                System.Diagnostics.Debug.WriteLine($"[GetRecentPodcasts] limit={limit}");
+
+                var payload = new Dictionary<string, object>
+                {
+                    { "limit", limit }
+                };
+
+                var response = await PostWeApiAsync<JObject>(
+                    "/api/play-record/djradio/list",
+                    payload,
+                    autoConvertApiSegment: true);
+
+                if (response["code"]?.Value<int>() != 200)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[API] 获取最近播放播客失败: {response["message"]}");
+                    return new List<PodcastRadioInfo>();
+                }
+
+                var list = response["data"]?["list"] as JArray
+                           ?? response["list"] as JArray
+                           ?? response["data"] as JArray;
+                if (list == null)
+                {
+                    System.Diagnostics.Debug.WriteLine("[API] 最近播放播客数据为空");
+                    return new List<PodcastRadioInfo>();
+                }
+
+                var result = new List<PodcastRadioInfo>();
+                foreach (var item in list)
+                {
+                    var radioToken = item["data"]?["radio"]
+                                     ?? item["data"]
+                                     ?? item["radio"]
+                                     ?? item["djRadio"]
+                                     ?? item;
+
+                    var radio = ParsePodcastRadio(radioToken);
+                    if (radio != null)
+                    {
+                        result.Add(radio);
+                    }
+                }
+
+                System.Diagnostics.Debug.WriteLine($"[API] 成功获取 {result.Count} 个最近播放播客");
+                return result;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[API] 获取最近播放播客异常: {ex.Message}");
+                return new List<PodcastRadioInfo>();
+            }
+        }
+
 
         /// <summary>
         /// 获取分类歌单
@@ -8874,6 +9102,7 @@ namespace YTPlayer.Core
 
             return episode;
         }
+
 
         private CommentFloorResult ParseCommentFloor(JObject commentData, string parentCommentId)
         {
