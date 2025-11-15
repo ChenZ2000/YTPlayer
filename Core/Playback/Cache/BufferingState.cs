@@ -1,4 +1,4 @@
-﻿namespace YTPlayer.Core.Playback.Cache
+namespace YTPlayer.Core.Playback.Cache
 {
     /// <summary>
     /// 缓冲状态枚举，兼容旧版事件。

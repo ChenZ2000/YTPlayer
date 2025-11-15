@@ -1,4 +1,4 @@
-﻿namespace YTPlayer
+namespace YTPlayer
 {
     partial class MainForm
     {
@@ -96,6 +96,8 @@
             this.createPlaylistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.subscribeAlbumMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.unsubscribeAlbumMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.subscribePodcastMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.unsubscribePodcastMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.toolStripSeparatorView = new System.Windows.Forms.ToolStripSeparator();
             this.viewSongArtistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.viewSongAlbumMenuItem = new System.Windows.Forms.ToolStripMenuItem();
@@ -104,6 +106,13 @@
             this.shareSongDirectMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.sharePlaylistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.shareAlbumMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.sharePodcastMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.sharePodcastEpisodeMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.sharePodcastEpisodeWebMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.sharePodcastEpisodeDirectMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.podcastSortMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.podcastSortLatestMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.podcastSortSerialMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.commentMenuSeparator = new System.Windows.Forms.ToolStripSeparator();
             this.commentMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.toolStripSeparatorArtist = new System.Windows.Forms.ToolStripSeparator();
@@ -115,6 +124,7 @@
             this.downloadLyricsMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.downloadPlaylistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.downloadAlbumMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.downloadPodcastMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.batchDownloadMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.downloadCategoryMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.batchDownloadPlaylistsMenuItem = new System.Windows.Forms.ToolStripMenuItem();
@@ -470,7 +480,8 @@ this.hideMenuItem.Click += new System.EventHandler(this.hideMenuItem_Click);
             "歌曲",
             "歌单",
             "专辑",
-            "歌手"});
+            "歌手",
+            "播客"});
             this.searchTypeComboBox.Location = new System.Drawing.Point(620, 40);
             this.searchTypeComboBox.Name = "searchTypeComboBox";
             this.searchTypeComboBox.Size = new System.Drawing.Size(240, 31);
@@ -719,12 +730,17 @@ this.hideMenuItem.Click += new System.EventHandler(this.hideMenuItem_Click);
             this.createPlaylistMenuItem,
             this.subscribeAlbumMenuItem,
             this.unsubscribeAlbumMenuItem,
+            this.subscribePodcastMenuItem,
+            this.unsubscribePodcastMenuItem,
             this.toolStripSeparatorView,
             this.viewSongArtistMenuItem,
             this.viewSongAlbumMenuItem,
             this.shareSongMenuItem,
             this.sharePlaylistMenuItem,
             this.shareAlbumMenuItem,
+            this.sharePodcastMenuItem,
+            this.sharePodcastEpisodeMenuItem,
+            this.podcastSortMenuItem,
             this.commentMenuSeparator,
             this.commentMenuItem,
             this.toolStripSeparatorArtist,
@@ -736,6 +752,7 @@ this.hideMenuItem.Click += new System.EventHandler(this.hideMenuItem_Click);
             this.downloadLyricsMenuItem,
             this.downloadPlaylistMenuItem,
             this.downloadAlbumMenuItem,
+            this.downloadPodcastMenuItem,
             this.batchDownloadMenuItem,
             this.downloadCategoryMenuItem,
             this.batchDownloadPlaylistsMenuItem});
@@ -841,6 +858,20 @@ this.hideMenuItem.Click += new System.EventHandler(this.hideMenuItem_Click);
             this.unsubscribeAlbumMenuItem.Text = "取消收藏专辑(&R)";
             this.unsubscribeAlbumMenuItem.Click += new System.EventHandler(this.unsubscribeAlbumMenuItem_Click);
             //
+            // subscribePodcastMenuItem
+            //
+            this.subscribePodcastMenuItem.Name = "subscribePodcastMenuItem";
+            this.subscribePodcastMenuItem.Size = new System.Drawing.Size(210, 24);
+            this.subscribePodcastMenuItem.Text = "收藏播客(&O)";
+            this.subscribePodcastMenuItem.Click += new System.EventHandler(this.subscribePodcastMenuItem_Click);
+            //
+            // unsubscribePodcastMenuItem
+            //
+            this.unsubscribePodcastMenuItem.Name = "unsubscribePodcastMenuItem";
+            this.unsubscribePodcastMenuItem.Size = new System.Drawing.Size(210, 24);
+            this.unsubscribePodcastMenuItem.Text = "取消收藏播客(&C)";
+            this.unsubscribePodcastMenuItem.Click += new System.EventHandler(this.unsubscribePodcastMenuItem_Click);
+            //
             // toolStripSeparatorView
             //
             this.toolStripSeparatorView.Name = "toolStripSeparatorView";
@@ -907,6 +938,62 @@ this.hideMenuItem.Click += new System.EventHandler(this.hideMenuItem_Click);
             this.shareAlbumMenuItem.Text = "分享专辑(&K)";
             this.shareAlbumMenuItem.Visible = false;
             this.shareAlbumMenuItem.Click += new System.EventHandler(this.shareAlbumMenuItem_Click);
+            //
+            // sharePodcastMenuItem
+            //
+            this.sharePodcastMenuItem.Name = "sharePodcastMenuItem";
+            this.sharePodcastMenuItem.Size = new System.Drawing.Size(210, 24);
+            this.sharePodcastMenuItem.Text = "分享播客(&P)";
+            this.sharePodcastMenuItem.Visible = false;
+            this.sharePodcastMenuItem.Click += new System.EventHandler(this.sharePodcastMenuItem_Click);
+            //
+            // sharePodcastEpisodeMenuItem
+            //
+            this.sharePodcastEpisodeMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
+            this.sharePodcastEpisodeWebMenuItem,
+            this.sharePodcastEpisodeDirectMenuItem});
+            this.sharePodcastEpisodeMenuItem.Name = "sharePodcastEpisodeMenuItem";
+            this.sharePodcastEpisodeMenuItem.Size = new System.Drawing.Size(210, 24);
+            this.sharePodcastEpisodeMenuItem.Text = "分享节目(&E)";
+            this.sharePodcastEpisodeMenuItem.Visible = false;
+            //
+            // sharePodcastEpisodeWebMenuItem
+            //
+            this.sharePodcastEpisodeWebMenuItem.Name = "sharePodcastEpisodeWebMenuItem";
+            this.sharePodcastEpisodeWebMenuItem.Size = new System.Drawing.Size(210, 26);
+            this.sharePodcastEpisodeWebMenuItem.Text = "分享网页(&W)";
+            this.sharePodcastEpisodeWebMenuItem.Click += new System.EventHandler(this.sharePodcastEpisodeWebMenuItem_Click);
+            //
+            // sharePodcastEpisodeDirectMenuItem
+            //
+            this.sharePodcastEpisodeDirectMenuItem.Name = "sharePodcastEpisodeDirectMenuItem";
+            this.sharePodcastEpisodeDirectMenuItem.Size = new System.Drawing.Size(210, 26);
+            this.sharePodcastEpisodeDirectMenuItem.Text = "分享直链(&L)";
+            this.sharePodcastEpisodeDirectMenuItem.Click += new System.EventHandler(this.sharePodcastEpisodeDirectMenuItem_Click);
+            //
+            // podcastSortMenuItem
+            //
+            this.podcastSortMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
+            this.podcastSortLatestMenuItem,
+            this.podcastSortSerialMenuItem});
+            this.podcastSortMenuItem.Name = "podcastSortMenuItem";
+            this.podcastSortMenuItem.Size = new System.Drawing.Size(210, 24);
+            this.podcastSortMenuItem.Text = "排序(&T)";
+            this.podcastSortMenuItem.Visible = false;
+            //
+            // podcastSortLatestMenuItem
+            //
+            this.podcastSortLatestMenuItem.Name = "podcastSortLatestMenuItem";
+            this.podcastSortLatestMenuItem.Size = new System.Drawing.Size(210, 26);
+            this.podcastSortLatestMenuItem.Text = "按最新排序(&N)";
+            this.podcastSortLatestMenuItem.Click += new System.EventHandler(this.podcastSortLatestMenuItem_Click);
+            //
+            // podcastSortSerialMenuItem
+            //
+            this.podcastSortSerialMenuItem.Name = "podcastSortSerialMenuItem";
+            this.podcastSortSerialMenuItem.Size = new System.Drawing.Size(210, 26);
+            this.podcastSortSerialMenuItem.Text = "按节目顺序排序(&S)";
+            this.podcastSortSerialMenuItem.Click += new System.EventHandler(this.podcastSortSerialMenuItem_Click);
             //
             // commentMenuSeparator
             //
@@ -978,6 +1065,13 @@ this.hideMenuItem.Click += new System.EventHandler(this.hideMenuItem_Click);
             this.downloadAlbumMenuItem.Size = new System.Drawing.Size(210, 24);
             this.downloadAlbumMenuItem.Text = "下载专辑(&D)";
             this.downloadAlbumMenuItem.Click += new System.EventHandler(this.DownloadAlbum_Click);
+            //
+            // downloadPodcastMenuItem
+            //
+            this.downloadPodcastMenuItem.Name = "downloadPodcastMenuItem";
+            this.downloadPodcastMenuItem.Size = new System.Drawing.Size(210, 24);
+            this.downloadPodcastMenuItem.Text = "下载播客全部节目(&R)...";
+            this.downloadPodcastMenuItem.Click += new System.EventHandler(this.DownloadPodcast_Click);
             //
             // batchDownloadMenuItem
             //
@@ -1161,6 +1255,8 @@ this.hideMenuItem.Click += new System.EventHandler(this.hideMenuItem_Click);
         private System.Windows.Forms.ToolStripMenuItem createPlaylistMenuItem;
         private System.Windows.Forms.ToolStripMenuItem subscribeAlbumMenuItem;
         private System.Windows.Forms.ToolStripMenuItem unsubscribeAlbumMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem subscribePodcastMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem unsubscribePodcastMenuItem;
         private System.Windows.Forms.ToolStripSeparator toolStripSeparatorView;
         private System.Windows.Forms.ToolStripMenuItem viewSongArtistMenuItem;
         private System.Windows.Forms.ToolStripMenuItem viewSongAlbumMenuItem;
@@ -1170,6 +1266,13 @@ this.hideMenuItem.Click += new System.EventHandler(this.hideMenuItem_Click);
         private System.Windows.Forms.ToolStripMenuItem shareSongDirectMenuItem;
         private System.Windows.Forms.ToolStripMenuItem sharePlaylistMenuItem;
         private System.Windows.Forms.ToolStripMenuItem shareAlbumMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem sharePodcastMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem sharePodcastEpisodeMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem sharePodcastEpisodeWebMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem sharePodcastEpisodeDirectMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem podcastSortMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem podcastSortLatestMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem podcastSortSerialMenuItem;
         private System.Windows.Forms.ToolStripSeparator commentMenuSeparator;
         private System.Windows.Forms.ToolStripMenuItem commentMenuItem;
         private System.Windows.Forms.ToolStripMenuItem shareArtistMenuItem;
@@ -1180,6 +1283,7 @@ this.hideMenuItem.Click += new System.EventHandler(this.hideMenuItem_Click);
         private System.Windows.Forms.ToolStripMenuItem downloadLyricsMenuItem;
         private System.Windows.Forms.ToolStripMenuItem downloadPlaylistMenuItem;
         private System.Windows.Forms.ToolStripMenuItem downloadAlbumMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem downloadPodcastMenuItem;
         private System.Windows.Forms.ToolStripMenuItem batchDownloadMenuItem;
         private System.Windows.Forms.ToolStripMenuItem downloadCategoryMenuItem;
         private System.Windows.Forms.ToolStripMenuItem batchDownloadPlaylistsMenuItem;

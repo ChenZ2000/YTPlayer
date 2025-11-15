@@ -209,6 +209,46 @@ namespace YTPlayer.Models
         public bool RequiresVip { get; set; }
 
         /// <summary>
+        /// 是否为播客节目。
+        /// </summary>
+        public bool IsPodcastEpisode { get; set; }
+
+        /// <summary>
+        /// 播客节目 ID。
+        /// </summary>
+        public long PodcastProgramId { get; set; }
+
+        /// <summary>
+        /// 播客电台 ID。
+        /// </summary>
+        public long PodcastRadioId { get; set; }
+
+        /// <summary>
+        /// 播客电台名称。
+        /// </summary>
+        public string PodcastRadioName { get; set; } = string.Empty;
+
+        /// <summary>
+        /// 播客主持人名称。
+        /// </summary>
+        public string PodcastDjName { get; set; } = string.Empty;
+
+        /// <summary>
+        /// 播客节目发布时间。
+        /// </summary>
+        public DateTime? PodcastPublishTime { get; set; }
+
+        /// <summary>
+        /// 播客节目简介。
+        /// </summary>
+        public string PodcastEpisodeDescription { get; set; } = string.Empty;
+
+        /// <summary>
+        /// 播客节目序号。
+        /// </summary>
+        public int PodcastSerialNumber { get; set; }
+
+        /// <summary>
         /// 设置特定音质的URL信息
         /// </summary>
         public void SetQualityUrl(string level, string url, long size, bool isAvailable, bool isTrial = false, long trialStart = 0, long trialEnd = 0)

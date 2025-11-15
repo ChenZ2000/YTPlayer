@@ -1,4 +1,4 @@
-﻿namespace YTPlayer.Forms
+namespace YTPlayer.Forms
 {
     partial class UserInfoForm
     {

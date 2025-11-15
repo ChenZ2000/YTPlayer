@@ -17,6 +17,10 @@ namespace YTPlayer.Models
         Album,
         /// <summary>歌手</summary>
         Artist,
+        /// <summary>播客/电台</summary>
+        Podcast,
+        /// <summary>播客节目</summary>
+        PodcastEpisode,
         /// <summary>分类入口（用于主页）</summary>
         Category
     }
@@ -40,6 +44,12 @@ namespace YTPlayer.Models
 
         /// <summary>歌手信息。</summary>
         public ArtistInfo? Artist { get; set; }
+
+        /// <summary>播客电台信息。</summary>
+        public PodcastRadioInfo? Podcast { get; set; }
+
+        /// <summary>播客节目信息。</summary>
+        public PodcastEpisodeInfo? PodcastEpisode { get; set; }
 
         /// <summary>分类ID。</summary>
         public string? CategoryId { get; set; }
@@ -69,6 +79,8 @@ namespace YTPlayer.Models
                     ListItemType.Playlist => Playlist?.Id,
                     ListItemType.Album => Album?.Id,
                     ListItemType.Artist => Artist?.Id.ToString(),
+                    ListItemType.Podcast => Podcast?.Id.ToString(),
+                    ListItemType.PodcastEpisode => PodcastEpisode?.ProgramId.ToString(),
                     ListItemType.Category => CategoryId,
                     _ => null
                 };
@@ -88,6 +100,8 @@ namespace YTPlayer.Models
                     ListItemType.Playlist => Playlist?.Name ?? string.Empty,
                     ListItemType.Album => Album?.Name ?? string.Empty,
                     ListItemType.Artist => Artist?.Name ?? string.Empty,
+                    ListItemType.Podcast => Podcast?.Name ?? string.Empty,
+                    ListItemType.PodcastEpisode => PodcastEpisode?.Name ?? string.Empty,
                     ListItemType.Category => CategoryName ?? string.Empty,
                     _ => string.Empty
                 };
@@ -107,6 +121,10 @@ namespace YTPlayer.Models
                     ListItemType.Playlist => Playlist?.Creator ?? string.Empty,
                     ListItemType.Album => Album?.Artist ?? string.Empty,
                     ListItemType.Artist => string.Empty,
+                    ListItemType.Podcast => Podcast?.DjName ?? string.Empty,
+                    ListItemType.PodcastEpisode => string.IsNullOrWhiteSpace(PodcastEpisode?.DjName)
+                        ? PodcastEpisode?.RadioName ?? string.Empty
+                        : PodcastEpisode!.DjName,
                     ListItemType.Category => string.Empty,
                     _ => string.Empty
                 };
@@ -126,6 +144,10 @@ namespace YTPlayer.Models
                     ListItemType.Playlist => FormatCount(Playlist?.TrackCount),
                     ListItemType.Album => FormatCount(Album?.TrackCount),
                     ListItemType.Artist => BuildArtistExtraInfo(),
+                    ListItemType.Podcast => Podcast != null && Podcast.ProgramCount > 0
+                        ? $"{Podcast.ProgramCount} 个节目"
+                        : string.Empty,
+                    ListItemType.PodcastEpisode => BuildPodcastEpisodeExtraInfo(),
                     ListItemType.Category => BuildCategoryExtraInfo(),
                     _ => string.Empty
                 };
@@ -147,6 +169,8 @@ namespace YTPlayer.Models
                     ListItemType.Artist => !string.IsNullOrWhiteSpace(Artist?.Description)
                         ? Artist!.Description
                         : Artist?.BriefDesc ?? string.Empty,
+                    ListItemType.Podcast => Podcast?.Description ?? string.Empty,
+                    ListItemType.PodcastEpisode => BuildPodcastEpisodeDescription(),
                     ListItemType.Song => Song?.FormattedDuration ?? string.Empty,
                     _ => string.Empty
                 };
@@ -203,6 +227,63 @@ namespace YTPlayer.Models
             }
 
             return $"{count.Value} 首";
+        }
+
+        private string BuildPodcastEpisodeExtraInfo()
+        {
+            if (PodcastEpisode == null)
+            {
+                return string.Empty;
+            }
+
+            var parts = new List<string>();
+            if (PodcastEpisode.PublishTime.HasValue)
+            {
+                parts.Add(PodcastEpisode.PublishTime.Value.ToString("yyyy-MM-dd"));
+            }
+
+            if (PodcastEpisode.Duration > TimeSpan.Zero)
+            {
+                parts.Add($"{PodcastEpisode.Duration:mm\\:ss}");
+            }
+
+            if (parts.Count == 0 && PodcastEpisode.ListenerCount > 0)
+            {
+                parts.Add($"收听 {PodcastEpisode.ListenerCount}");
+            }
+
+            return string.Join(" | ", parts);
+        }
+
+        private string BuildPodcastEpisodeDescription()
+        {
+            if (PodcastEpisode == null)
+            {
+                return string.Empty;
+            }
+
+            if (!string.IsNullOrWhiteSpace(PodcastEpisode.Description))
+            {
+                return PodcastEpisode.Description;
+            }
+
+            if (PodcastEpisode.ListenerCount > 0 || PodcastEpisode.LikedCount > 0)
+            {
+                var parts = new List<string>();
+                if (PodcastEpisode.ListenerCount > 0)
+                {
+                    parts.Add($"收听 {PodcastEpisode.ListenerCount}");
+                }
+
+                if (PodcastEpisode.LikedCount > 0)
+                {
+                    parts.Add($"赞 {PodcastEpisode.LikedCount}");
+                }
+
+                return string.Join(" / ", parts);
+            }
+
+            return string.Empty;
         }
     }
 }

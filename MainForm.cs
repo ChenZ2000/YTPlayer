@@ -39,8 +39,29 @@ namespace YTPlayer
         private PlaylistInfo? _currentPlaylist = null;  // 当前打开的歌单
         private PlaylistInfo? _userLikedPlaylist = null;  // 缓存的"喜欢的音乐"歌单对象
         private List<AlbumInfo> _currentAlbums = new List<AlbumInfo>();
+        private List<PodcastRadioInfo> _currentPodcasts = new List<PodcastRadioInfo>();
+        private List<PodcastEpisodeInfo> _currentPodcastSounds = new List<PodcastEpisodeInfo>();
+        private PodcastRadioInfo? _currentPodcast = null;
+        private int _currentPodcastSoundOffset = 0;
+        private bool _currentPodcastHasMore = false;
         private List<ListItemInfo> _currentListItems = new List<ListItemInfo>(); // 统一的列表项
+        private const string RecentListenedCategoryId = "recent_listened";
+        private const string RecentPodcastsCategoryId = "recent_podcasts";
+        private const string RecentSoundsCategoryId = "recent_sounds";
+        private const string DownloadSongMenuText = "下载歌曲(&D)";
+        private const string DownloadSoundMenuText = "下载声音(&D)";
         private int _recentPlayCount = 0;
+        private int _recentPlaylistCount = 0;
+        private int _recentAlbumCount = 0;
+        private int _recentPodcastCount = 0;
+        private int _recentSoundCount = 0;
+        private List<SongInfo> _recentSongsCache = new List<SongInfo>();
+        private List<PlaylistInfo> _recentPlaylistsCache = new List<PlaylistInfo>();
+        private List<AlbumInfo> _recentAlbumsCache = new List<AlbumInfo>();
+        private List<PodcastRadioInfo> _recentPodcastsCache = new List<PodcastRadioInfo>();
+        private List<PodcastEpisodeInfo> _recentSoundsCache = new List<PodcastEpisodeInfo>();
+        private DateTime _recentSummaryLastUpdatedUtc = DateTime.MinValue;
+        private bool _currentPodcastSortAscending = false;
         private List<LyricLine> _currentLyrics = new List<LyricLine>();  // 保留用于向后兼容
         private PlaybackReportingService? _playbackReportingService;
 
@@ -176,6 +197,9 @@ namespace YTPlayer
         private const int MAX_RETRY_DELAY_MS = 5000;
         private const int SONG_URL_CACHE_MINUTES = 30; // URL缓存时间延长到30分钟
         private const int RecentPlayFetchLimit = 300;
+        private const int RecentPlaylistFetchLimit = 100;
+        private const int RecentAlbumFetchLimit = 100;
+        private const int PodcastSoundPageSize = 50;
 
         #endregion
 
@@ -1356,9 +1380,127 @@ namespace YTPlayer
                     return "专辑";
                 case NeteaseUrlType.Artist:
                     return "歌手";
+                case NeteaseUrlType.Podcast:
+                    return "播客";
+                case NeteaseUrlType.PodcastEpisode:
+                    return "播客节目";
                 default:
                     return "歌曲";
             }
+        }
+
+        private async Task<List<SongInfo>> FetchRecentSongsAsync(int limit, CancellationToken cancellationToken = default)
+        {
+            return await ExecuteWithRetryAsync(
+                async () =>
+                {
+                    var songs = await _apiClient.GetRecentPlayedSongsAsync(limit);
+                    return songs ?? new List<SongInfo>();
+                },
+                maxAttempts: 3,
+                initialDelayMs: 600,
+                operationName: "RecentSongs",
+                cancellationToken: cancellationToken);
+        }
+
+        private async Task<List<PlaylistInfo>> FetchRecentPlaylistsAsync(int limit, CancellationToken cancellationToken = default)
+        {
+            return await ExecuteWithRetryAsync(
+                async () =>
+                {
+                    var playlists = await _apiClient.GetRecentPlaylistsAsync(limit);
+                    return playlists ?? new List<PlaylistInfo>();
+                },
+                maxAttempts: 3,
+                initialDelayMs: 600,
+                operationName: "RecentPlaylists",
+                cancellationToken: cancellationToken);
+        }
+
+        private async Task<List<AlbumInfo>> FetchRecentAlbumsAsync(int limit, CancellationToken cancellationToken = default)
+        {
+            return await ExecuteWithRetryAsync(
+                async () =>
+                {
+                    var albums = await _apiClient.GetRecentAlbumsAsync(limit);
+                    return albums ?? new List<AlbumInfo>();
+                },
+                maxAttempts: 3,
+                initialDelayMs: 600,
+                operationName: "RecentAlbums",
+                cancellationToken: cancellationToken);
+        }
+
+        private async Task RefreshRecentSummariesAsync(bool forceRefresh, CancellationToken cancellationToken = default)
+        {
+            if (!IsUserLoggedIn())
+            {
+                _recentSongsCache.Clear();
+                _recentPlaylistsCache.Clear();
+                _recentAlbumsCache.Clear();
+                _recentPlayCount = 0;
+                _recentPlaylistCount = 0;
+                _recentAlbumCount = 0;
+                _recentSummaryLastUpdatedUtc = DateTime.MinValue;
+                return;
+            }
+
+            bool shouldRefresh = forceRefresh
+                || _recentSummaryLastUpdatedUtc == DateTime.MinValue
+                || (DateTime.UtcNow - _recentSummaryLastUpdatedUtc) > TimeSpan.FromSeconds(30);
+
+            if (!shouldRefresh)
+            {
+                return;
+            }
+
+            var songsTask = FetchRecentSongsAsync(RecentPlayFetchLimit, cancellationToken);
+            var playlistsTask = FetchRecentPlaylistsAsync(RecentPlaylistFetchLimit, cancellationToken);
+            var albumsTask = FetchRecentAlbumsAsync(RecentAlbumFetchLimit, cancellationToken);
+
+            try
+            {
+                _recentSongsCache = await songsTask;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[RecentSummary] 获取最近歌曲失败: {ex}");
+                if (forceRefresh)
+                {
+                    _recentSongsCache = new List<SongInfo>();
+                }
+            }
+            _recentPlayCount = _recentSongsCache.Count;
+
+            try
+            {
+                _recentPlaylistsCache = await playlistsTask;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[RecentSummary] 获取最近歌单失败: {ex}");
+                if (forceRefresh)
+                {
+                    _recentPlaylistsCache = new List<PlaylistInfo>();
+                }
+            }
+            _recentPlaylistCount = _recentPlaylistsCache.Count;
+
+            try
+            {
+                _recentAlbumsCache = await albumsTask;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[RecentSummary] 获取最近专辑失败: {ex}");
+                if (forceRefresh)
+                {
+                    _recentAlbumsCache = new List<AlbumInfo>();
+                }
+            }
+            _recentAlbumCount = _recentAlbumsCache.Count;
+
+            _recentSummaryLastUpdatedUtc = DateTime.UtcNow;
         }
 
         private readonly struct NormalizedUrlMatch
@@ -1692,6 +1834,49 @@ namespace YTPlayer
                         UpdateStatusBar($"第 {_currentPage}/{_maxPage} 页，本页 {_currentArtists.Count} 位 / 总 {totalCount} 位");
                     }
                 }
+                else if (searchType == "播客")
+                {
+                    int offset = (_currentPage - 1) * _resultsPerPage;
+                    var podcastResult = await _apiClient.SearchPodcastsAsync(keyword, _resultsPerPage, offset);
+                    ThrowIfSearchCancelled();
+
+                    _currentPodcasts = podcastResult?.Items ?? new List<PodcastRadioInfo>();
+
+                    int totalCount = podcastResult?.TotalCount ?? _currentPodcasts.Count;
+                    _maxPage = Math.Max(1, (int)Math.Ceiling(totalCount / (double)Math.Max(1, _resultsPerPage)));
+                    _hasNextSearchPage = podcastResult?.HasMore ?? false;
+
+                    string viewSource = $"search:podcast:{keyword}:page{_currentPage}";
+                    int startIndex = offset + 1;
+
+                    if (_currentPodcasts.Count == 0)
+                    {
+                        ThrowIfSearchCancelled();
+                        DisplayPodcasts(
+                            _currentPodcasts,
+                            viewSource: viewSource,
+                            accessibleName: $"搜索播客: {keyword}");
+
+                        if (_currentPage == 1)
+                        {
+                            MessageBox.Show($"未找到相关播客: {keyword}", "搜索结果",
+                                MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        }
+                        UpdateStatusBar("未找到结果");
+                    }
+                    else
+                    {
+                        ThrowIfSearchCancelled();
+                        DisplayPodcasts(
+                            _currentPodcasts,
+                            viewSource: viewSource,
+                            accessibleName: $"搜索播客: {keyword}",
+                            startIndex: startIndex,
+                            showPagination: true,
+                            hasNextPage: _hasNextSearchPage);
+                        UpdateStatusBar($"第 {_currentPage}/{_maxPage} 页，本页 {_currentPodcasts.Count} 个 / 总 {totalCount} 个");
+                    }
+                }
 
                 _lastKeyword = keyword;
             }
@@ -1738,6 +1923,12 @@ namespace YTPlayer
                     break;
                 case NeteaseUrlType.Artist:
                     await HandleArtistUrlAsync(match, throwIfCancelled);
+                    break;
+                case NeteaseUrlType.Podcast:
+                    await HandlePodcastUrlAsync(match, throwIfCancelled);
+                    break;
+                case NeteaseUrlType.PodcastEpisode:
+                    await HandlePodcastEpisodeUrlAsync(match, throwIfCancelled);
                     break;
                 default:
                     MessageBox.Show("暂不支持该链接类型。", "提示",
@@ -1911,6 +2102,59 @@ namespace YTPlayer
             };
 
             await OpenArtistAsync(artist);
+        }
+
+        private async Task HandlePodcastUrlAsync(
+            NeteaseUrlMatch match,
+            Action throwIfCancelled)
+        {
+            if (!TryValidateNeteaseResourceId(match.ResourceId, "播客", out var podcastId))
+            {
+                return;
+            }
+
+            var podcast = await _apiClient.GetPodcastRadioDetailAsync(podcastId);
+            throwIfCancelled();
+            if (podcast == null)
+            {
+                MessageBox.Show("未能找到该播客。", "提示",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                UpdateStatusBar("未找到播客");
+                return;
+            }
+
+            await OpenPodcastRadioAsync(podcast);
+        }
+
+        private async Task HandlePodcastEpisodeUrlAsync(
+            NeteaseUrlMatch match,
+            Action throwIfCancelled)
+        {
+            if (!TryValidateNeteaseResourceId(match.ResourceId, "播客节目", out var programId))
+            {
+                return;
+            }
+
+            var episode = await _apiClient.GetPodcastEpisodeDetailAsync(programId);
+            throwIfCancelled();
+            if (episode == null)
+            {
+                MessageBox.Show("未能找到该播客节目。", "提示",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                UpdateStatusBar("未找到播客节目");
+                return;
+            }
+
+            if (episode.Song != null)
+            {
+                await PlaySong(episode.Song);
+            }
+            else
+            {
+                MessageBox.Show("该播客节目暂无可播放的音频。", "提示",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                UpdateStatusBar("无法播放播客节目");
+            }
         }
 
         private async Task HandleMultipleNeteaseUrlSearchAsync(
@@ -2095,6 +2339,44 @@ namespace YTPlayer
                         }
                         break;
 
+                    case NeteaseUrlType.Podcast:
+                        var podcastDetail = await _apiClient.GetPodcastRadioDetailAsync(normalized.NumericId);
+                        throwIfCancelled?.Invoke();
+                        if (podcastDetail != null)
+                        {
+                            listItems.Add(new ListItemInfo
+                            {
+                                Type = ListItemType.Podcast,
+                                Podcast = podcastDetail
+                            });
+                        }
+                        else
+                        {
+                            failures.Add($"{normalized.EntityName}（{normalized.IdText}）");
+                        }
+                        break;
+
+                    case NeteaseUrlType.PodcastEpisode:
+                        var episodeDetail = await _apiClient.GetPodcastEpisodeDetailAsync(normalized.NumericId);
+                        throwIfCancelled?.Invoke();
+                        if (episodeDetail != null)
+                        {
+                            listItems.Add(new ListItemInfo
+                            {
+                                Type = ListItemType.PodcastEpisode,
+                                PodcastEpisode = episodeDetail
+                            });
+                            if (episodeDetail.Song != null)
+                            {
+                                aggregatedSongs.Add(episodeDetail.Song);
+                            }
+                        }
+                        else
+                        {
+                            failures.Add($"{normalized.EntityName}（{normalized.IdText}）");
+                        }
+                        break;
+
                     default:
                         failures.Add($"{normalized.EntityName}（{normalized.IdText}）");
                         break;
@@ -2161,6 +2443,9 @@ namespace YTPlayer
                     return "专辑";
                 case NeteaseUrlType.Artist:
                     return "歌手";
+                case NeteaseUrlType.Podcast:
+                case NeteaseUrlType.PodcastEpisode:
+                    return "播客";
                 default:
                     return "歌曲";
             }
@@ -2228,7 +2513,6 @@ namespace YTPlayer
                 var newAlbumsTask = _apiClient.GetNewAlbumsAsync();
                 int toplistCount = 0;
                 int newAlbumCount = 0;
-
                 if (isLoggedIn)
                 {
                     try
@@ -2292,6 +2576,12 @@ namespace YTPlayer
                 else
                 {
                     _loggedInUserId = 0;
+                    _recentSongsCache.Clear();
+                    _recentPlaylistsCache.Clear();
+                    _recentAlbumsCache.Clear();
+                    _recentPlayCount = 0;
+                    _recentPlaylistCount = 0;
+                    _recentAlbumCount = 0;
                 }
 
                 try
@@ -2317,6 +2607,7 @@ namespace YTPlayer
                 }
 
                 _userLikedPlaylist = likedPlaylist;
+                await RefreshRecentSummariesAsync(forceRefresh: isLoggedIn, cancellationToken);
 
                 // 如果已登录，添加个人资源分类（在前面）
                 if (isLoggedIn)
@@ -2353,11 +2644,9 @@ namespace YTPlayer
                     homeItems.Add(new ListItemInfo
                     {
                         Type = ListItemType.Category,
-                        CategoryId = "recent_play",
-                        CategoryName = "最近播放",
-                        CategoryDescription = "最近听过的歌曲",
-                        ItemCount = _recentPlayCount,
-                        ItemUnit = "首"
+                        CategoryId = RecentListenedCategoryId,
+                        CategoryName = "最近听过",
+                        CategoryDescription = BuildRecentListenedDescription()
                     });
 
                     // 2. 我的歌单
@@ -2640,6 +2929,20 @@ namespace YTPlayer
                     }
                     break;
 
+                case ListItemType.Podcast:
+                    if (listItem.Podcast != null)
+                    {
+                        await OpenPodcastRadioAsync(listItem.Podcast);
+                    }
+                    break;
+
+                case ListItemType.PodcastEpisode:
+                    if (listItem.PodcastEpisode?.Song != null)
+                    {
+                        await PlaySong(listItem.PodcastEpisode.Song);
+                    }
+                    break;
+
                 case ListItemType.Category:
                     // 加载分类内容
                     await LoadCategoryContent(listItem.CategoryId);
@@ -2771,6 +3074,18 @@ namespace YTPlayer
 
                 case "recent_play":
                     await LoadRecentPlayedSongsAsync();
+                    break;
+
+                case RecentListenedCategoryId:
+                    await LoadRecentListenedCategoryAsync(skipSave);
+                    break;
+
+                case "recent_playlists":
+                    await LoadRecentPlaylistsAsync();
+                    break;
+
+                case "recent_albums":
+                    await LoadRecentAlbumsAsync();
                     break;
 
                 case "daily_recommend":
@@ -3428,6 +3743,42 @@ namespace YTPlayer
             }
         }
 
+        private async Task LoadRecentListenedCategoryAsync(bool skipSave = false)
+        {
+            if (!IsUserLoggedIn())
+            {
+                MessageBox.Show("请先登录网易云账号以查看最近听过内容。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                await LoadHomePageAsync(skipSave: true, showErrorDialog: false);
+                return;
+            }
+
+            try
+            {
+                UpdateStatusBar("正在加载最近听过...");
+
+                if (!skipSave)
+                {
+                    SaveNavigationState();
+                }
+
+                await RefreshRecentSummariesAsync(forceRefresh: false);
+
+                var items = BuildRecentListenedEntries();
+                DisplayListItems(
+                    items,
+                    viewSource: RecentListenedCategoryId,
+                    accessibleName: "最近听过");
+
+                UpdateStatusBar(BuildRecentListenedStatus());
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[RecentListened] 加载失败: {ex}");
+                MessageBox.Show($"加载最近听过失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("加载最近听过失败");
+            }
+        }
+
         /// <summary>
         /// 加载最近播放的歌曲（只读）
         /// </summary>
@@ -3443,9 +3794,9 @@ namespace YTPlayer
             try
             {
                 UpdateStatusBar("正在加载最近播放...");
-                var songs = await _apiClient.GetRecentPlayedSongsAsync(RecentPlayFetchLimit);
-                var list = songs ?? new List<SongInfo>();
+                var list = await FetchRecentSongsAsync(RecentPlayFetchLimit);
                 _recentPlayCount = list.Count;
+                _recentSongsCache = new List<SongInfo>(list);
 
                 if (list.Count == 0)
                 {
@@ -3467,6 +3818,227 @@ namespace YTPlayer
             {
                 System.Diagnostics.Debug.WriteLine($"[LoadRecentPlayedSongs] 异常: {ex}");
                 MessageBox.Show($"加载最近播放失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                throw;
+            }
+        }
+
+        private async Task OpenPodcastRadioAsync(PodcastRadioInfo podcast, bool skipSave = false)
+        {
+            if (podcast == null)
+            {
+                MessageBox.Show("无法打开播客，缺少有效信息。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            await LoadPodcastEpisodesAsync(podcast.Id, offset: 0, skipSave: skipSave, podcastInfo: podcast);
+        }
+
+        private async Task LoadPodcastEpisodesAsync(
+            long radioId,
+            int offset,
+            bool skipSave = false,
+            PodcastRadioInfo? podcastInfo = null,
+            bool? sortAscendingOverride = null)
+        {
+            if (radioId <= 0)
+            {
+                MessageBox.Show("无法加载播客节目，缺少电台标识。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            try
+            {
+                UpdateStatusBar("正在加载播客...");
+
+                if (!skipSave)
+                {
+                    SaveNavigationState();
+                }
+
+                bool isDifferentRadio = _currentPodcast == null || _currentPodcast.Id != radioId;
+
+                if (podcastInfo != null)
+                {
+                    _currentPodcast = podcastInfo;
+                }
+                else if (_currentPodcast == null || _currentPodcast.Id != radioId)
+                {
+                    var detail = await _apiClient.GetPodcastRadioDetailAsync(radioId);
+                    if (detail != null)
+                    {
+                        _currentPodcast = detail;
+                    }
+                }
+
+                if (isDifferentRadio && !sortAscendingOverride.HasValue)
+                {
+                    _currentPodcastSortAscending = false;
+                }
+
+                if (sortAscendingOverride.HasValue)
+                {
+                    _currentPodcastSortAscending = sortAscendingOverride.Value;
+                }
+
+                var isAscending = _currentPodcastSortAscending;
+                var (episodes, hasMore, totalCount) = await _apiClient.GetPodcastEpisodesAsync(
+                    radioId,
+                    PodcastSoundPageSize,
+                    Math.Max(0, offset),
+                    asc: isAscending);
+
+                string accessibleName = _currentPodcast?.Name ?? "播客节目";
+                string viewSource = $"podcast:{radioId}:offset{Math.Max(0, offset)}";
+                if (isAscending)
+                {
+                    viewSource += ":asc1";
+                }
+
+                _currentPodcastSoundOffset = Math.Max(0, offset);
+                _currentPodcastHasMore = hasMore;
+
+                DisplayPodcastEpisodes(
+                    episodes,
+                    showPagination: _currentPodcastSoundOffset > 0 || hasMore,
+                    hasNextPage: hasMore,
+                    startIndex: _currentPodcastSoundOffset + 1,
+                    viewSource: viewSource,
+                    accessibleName: accessibleName);
+
+                if (episodes == null || episodes.Count == 0)
+                {
+                    UpdateStatusBar($"{accessibleName}，暂无节目");
+                }
+                else
+                {
+                    int currentPage = _currentPodcastSoundOffset / PodcastSoundPageSize + 1;
+                    int totalPages = Math.Max(1, (int)Math.Ceiling(totalCount / (double)PodcastSoundPageSize));
+                    UpdateStatusBar($"{accessibleName}：第 {currentPage}/{totalPages} 页，本页 {episodes.Count} 个节目");
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[Podcast] 加载播客失败: {ex}");
+                MessageBox.Show($"加载播客失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("加载播客失败");
+            }
+        }
+
+        private static void ParsePodcastViewSource(string? viewSource, out long radioId, out int offset, out bool ascending)
+        {
+            radioId = 0;
+            offset = 0;
+            ascending = false;
+
+            if (string.IsNullOrWhiteSpace(viewSource) ||
+                !viewSource.StartsWith("podcast:", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            var parts = viewSource.Split(new[] { ':' }, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length >= 2)
+            {
+                long.TryParse(parts[1], out radioId);
+            }
+
+            foreach (var part in parts.Skip(2))
+            {
+                if (part.StartsWith("offset", StringComparison.OrdinalIgnoreCase) &&
+                    int.TryParse(part.Substring("offset".Length), out var parsedOffset))
+                {
+                    offset = parsedOffset;
+                }
+                else if (part.StartsWith("asc", StringComparison.OrdinalIgnoreCase))
+                {
+                    var suffix = part.Substring("asc".Length);
+                    if (string.IsNullOrEmpty(suffix))
+                    {
+                        ascending = true;
+                    }
+                    else if (int.TryParse(suffix, out var ascValue))
+                    {
+                        ascending = ascValue != 0;
+                    }
+                }
+            }
+        }
+
+        private async Task LoadRecentPlaylistsAsync()
+        {
+            if (!IsUserLoggedIn())
+            {
+                MessageBox.Show("请先登录网易云账号以查看最近播放的歌单。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                await LoadHomePageAsync(skipSave: true, showErrorDialog: false);
+                return;
+            }
+
+            try
+            {
+                UpdateStatusBar("正在加载最近歌单...");
+                var list = await FetchRecentPlaylistsAsync(RecentPlaylistFetchLimit);
+                _recentPlaylistsCache = new List<PlaylistInfo>(list);
+                _recentPlaylistCount = list.Count;
+
+                if (list.Count == 0)
+                {
+                    MessageBox.Show("暂时没有最近播放的歌单。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    DisplayPlaylists(list, viewSource: "recent_playlists", accessibleName: "最近歌单");
+                    UpdateStatusBar("暂无最近播放的歌单");
+                    return;
+                }
+
+                DisplayPlaylists(
+                    list,
+                    viewSource: "recent_playlists",
+                    accessibleName: "最近歌单");
+                UpdateStatusBar($"最近歌单，共 {list.Count} 个");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[LoadRecentPlaylists] 异常: {ex}");
+                MessageBox.Show($"加载最近歌单失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                throw;
+            }
+        }
+
+        private async Task LoadRecentAlbumsAsync()
+        {
+            if (!IsUserLoggedIn())
+            {
+                MessageBox.Show("请先登录网易云账号以查看最近播放的专辑。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                await LoadHomePageAsync(skipSave: true, showErrorDialog: false);
+                return;
+            }
+
+            try
+            {
+                UpdateStatusBar("正在加载最近专辑...");
+                var list = await FetchRecentAlbumsAsync(RecentAlbumFetchLimit);
+                _recentAlbumsCache = new List<AlbumInfo>(list);
+                _recentAlbumCount = list.Count;
+
+                if (list.Count == 0)
+                {
+                    MessageBox.Show("暂时没有最近播放的专辑。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    DisplayAlbums(
+                        list,
+                        viewSource: "recent_albums",
+                        accessibleName: "最近专辑");
+                    UpdateStatusBar("暂无最近播放的专辑");
+                    return;
+                }
+
+                DisplayAlbums(
+                    list,
+                    viewSource: "recent_albums",
+                    accessibleName: "最近专辑");
+                UpdateStatusBar($"最近专辑，共 {list.Count} 张");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[LoadRecentAlbums] 异常: {ex}");
+                MessageBox.Show($"加载最近专辑失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 throw;
             }
         }
@@ -3714,6 +4286,10 @@ namespace YTPlayer
             _currentAlbums.Clear();
             _currentArtists.Clear();
             _currentListItems.Clear();
+            _currentPodcasts.Clear();
+            _currentPodcastSounds.Clear();
+            _currentPodcast = null;
+            _currentPodcast = null;
 
             resultListView.BeginUpdate();
             resultListView.Items.Clear();
@@ -3894,6 +4470,8 @@ namespace YTPlayer
             _currentAlbums.Clear();
             _currentArtists.Clear();
             _currentListItems.Clear();
+            _currentPodcasts.Clear();
+            _currentPodcastSounds.Clear();
 
             resultListView.BeginUpdate();
             resultListView.Items.Clear();
@@ -3976,6 +4554,9 @@ namespace YTPlayer
             _currentAlbums.Clear();
             _currentArtists.Clear();
             _currentListItems = items ?? new List<ListItemInfo>();
+            _currentPodcasts.Clear();
+            _currentPodcastSounds.Clear();
+            _currentPodcast = null;
 
             resultListView.BeginUpdate();
             resultListView.Items.Clear();
@@ -4025,6 +4606,30 @@ namespace YTPlayer
                             description = listItem.Artist.Description ?? listItem.Artist.BriefDesc;
                         }
                         break;
+                    case ListItemType.Podcast:
+                        creator = listItem.Podcast?.DjName ?? creator;
+                        extra = listItem.Podcast?.ProgramCount > 0
+                            ? $"{listItem.Podcast.ProgramCount} 个节目"
+                            : extra;
+                        description = string.IsNullOrWhiteSpace(description)
+                            ? listItem.Podcast?.Description ?? string.Empty
+                            : description;
+                        break;
+                    case ListItemType.PodcastEpisode:
+                        creator = string.IsNullOrWhiteSpace(creator)
+                            ? (string.IsNullOrWhiteSpace(listItem.PodcastEpisode?.DjName)
+                                ? listItem.PodcastEpisode?.RadioName ?? string.Empty
+                                : $"{listItem.PodcastEpisode.RadioName} / {listItem.PodcastEpisode.DjName}")
+                            : creator;
+                        if (listItem.PodcastEpisode?.PublishTime != null)
+                        {
+                            extra = listItem.PodcastEpisode.PublishTime.Value.ToString("yyyy-MM-dd");
+                        }
+                        if (string.IsNullOrWhiteSpace(description))
+                        {
+                            description = listItem.PodcastEpisode?.Description ?? string.Empty;
+                        }
+                        break;
                 }
 
                 var item = new ListViewItem(new[]
@@ -4056,6 +4661,44 @@ namespace YTPlayer
             }
 
             SetViewContext(viewSource, defaultAccessibleName);
+        }
+
+        private List<ListItemInfo> BuildRecentListenedEntries()
+        {
+            return new List<ListItemInfo>
+            {
+                new ListItemInfo
+                {
+                    Type = ListItemType.Category,
+                    CategoryId = "recent_play",
+                    CategoryName = "最近歌曲",
+                    CategoryDescription = $"最近听过的歌曲 | {_recentPlayCount} 首"
+                },
+                new ListItemInfo
+                {
+                    Type = ListItemType.Category,
+                    CategoryId = "recent_playlists",
+                    CategoryName = "最近歌单",
+                    CategoryDescription = $"最近播放的歌单 | {_recentPlaylistCount} 个"
+                },
+                new ListItemInfo
+                {
+                    Type = ListItemType.Category,
+                    CategoryId = "recent_albums",
+                    CategoryName = "最近专辑",
+                    CategoryDescription = $"最近播放的专辑 | {_recentAlbumCount} 张"
+                }
+            };
+        }
+
+        private string BuildRecentListenedDescription()
+        {
+            return $"歌曲 {_recentPlayCount} 首 | 歌单 {_recentPlaylistCount} 个 | 专辑 {_recentAlbumCount} 张";
+        }
+
+        private string BuildRecentListenedStatus()
+        {
+            return $"最近听过：歌曲 {_recentPlayCount} 首 / 歌单 {_recentPlaylistCount} 个 / 专辑 {_recentAlbumCount} 张";
         }
 
         private static (string ArtistLabel, string TrackLabel, string DescriptionLabel) BuildAlbumDisplayLabels(AlbumInfo? album)
@@ -4103,6 +4746,9 @@ namespace YTPlayer
             _currentAlbums = albums ?? new List<AlbumInfo>();
             _currentArtists.Clear();
             _currentListItems.Clear();
+            _currentPodcasts.Clear();
+            _currentPodcastSounds.Clear();
+            _currentPodcast = null;
 
             resultListView.BeginUpdate();
             resultListView.Items.Clear();
@@ -4166,6 +4812,245 @@ namespace YTPlayer
             }
         }
 
+        private void ConfigureListViewForPodcasts()
+        {
+            columnHeader1.Text = "#";
+            columnHeader2.Text = "播客";
+            columnHeader3.Text = "主播/分类";
+            columnHeader4.Text = "节目数量";
+            columnHeader5.Text = "简介";
+        }
+
+        private void ConfigureListViewForPodcastEpisodes()
+        {
+            columnHeader1.Text = "#";
+            columnHeader2.Text = "节目";
+            columnHeader3.Text = "电台/主播";
+            columnHeader4.Text = "发布时间";
+            columnHeader5.Text = "简介";
+        }
+
+        private void DisplayPodcasts(
+            List<PodcastRadioInfo> podcasts,
+            bool showPagination = false,
+            bool hasNextPage = false,
+            int startIndex = 1,
+            bool preserveSelection = false,
+            string? viewSource = null,
+            string? accessibleName = null)
+        {
+            ConfigureListViewForPodcasts();
+
+            int previousSelectedIndex = -1;
+            if (preserveSelection && resultListView.SelectedIndices.Count > 0)
+            {
+                previousSelectedIndex = resultListView.SelectedIndices[0];
+            }
+
+            _currentSongs.Clear();
+            _currentPlaylists.Clear();
+            _currentAlbums.Clear();
+            _currentArtists.Clear();
+            _currentListItems.Clear();
+            _currentPodcasts = podcasts ?? new List<PodcastRadioInfo>();
+            _currentPodcastSounds.Clear();
+            _currentPodcast = null;
+
+            resultListView.BeginUpdate();
+            resultListView.Items.Clear();
+
+            if (_currentPodcasts.Count == 0)
+            {
+                resultListView.EndUpdate();
+                SetViewContext(viewSource, accessibleName ?? "播客列表");
+                return;
+            }
+
+            int displayNumber = startIndex;
+            foreach (var podcast in _currentPodcasts)
+            {
+                string hostInfo = podcast?.DjName ?? string.Empty;
+                if (!string.IsNullOrWhiteSpace(podcast?.SecondCategory))
+                {
+                    hostInfo = string.IsNullOrWhiteSpace(hostInfo)
+                        ? podcast.SecondCategory
+                        : $"{hostInfo} / {podcast.SecondCategory}";
+                }
+                else if (!string.IsNullOrWhiteSpace(podcast?.Category))
+                {
+                    hostInfo = string.IsNullOrWhiteSpace(hostInfo)
+                        ? podcast.Category
+                        : $"{hostInfo} / {podcast.Category}";
+                }
+
+                string programCount = podcast?.ProgramCount > 0
+                    ? $"{podcast.ProgramCount} 个节目"
+                    : string.Empty;
+
+                var item = new ListViewItem(new[]
+                {
+                    displayNumber.ToString(),
+                    podcast?.Name ?? "未知",
+                    hostInfo,
+                    programCount,
+                    podcast?.Description ?? string.Empty
+                })
+                {
+                    Tag = podcast
+                };
+
+                resultListView.Items.Add(item);
+                displayNumber++;
+            }
+
+            if (showPagination)
+            {
+                if (startIndex > 1)
+                {
+                    var prevItem = resultListView.Items.Add("上一页");
+                    prevItem.Tag = -2;
+                }
+
+                if (hasNextPage)
+                {
+                    var nextItem = resultListView.Items.Add("下一页");
+                    nextItem.Tag = -3;
+                }
+            }
+
+            resultListView.EndUpdate();
+
+            SetViewContext(viewSource, accessibleName ?? "播客列表");
+
+            if (!IsListAutoFocusSuppressed && resultListView.Items.Count > 0)
+            {
+                int targetIndex = previousSelectedIndex >= 0
+                    ? Math.Min(previousSelectedIndex, resultListView.Items.Count - 1)
+                    : 0;
+
+                RestoreListViewFocus(targetIndex);
+            }
+        }
+
+        private void DisplayPodcastEpisodes(
+            List<PodcastEpisodeInfo> episodes,
+            bool showPagination = false,
+            bool hasNextPage = false,
+            int startIndex = 1,
+            bool preserveSelection = false,
+            string? viewSource = null,
+            string? accessibleName = null)
+        {
+            ConfigureListViewForPodcastEpisodes();
+
+            int previousSelectedIndex = -1;
+            if (preserveSelection && resultListView.SelectedIndices.Count > 0)
+            {
+                previousSelectedIndex = resultListView.SelectedIndices[0];
+            }
+
+            var normalizedEpisodes = new List<PodcastEpisodeInfo>();
+            if (episodes != null)
+            {
+                foreach (var ep in episodes)
+                {
+                    if (ep == null)
+                    {
+                        continue;
+                    }
+
+                    EnsurePodcastEpisodeSong(ep);
+                    normalizedEpisodes.Add(ep);
+                }
+            }
+
+            _currentPodcastSounds = normalizedEpisodes;
+            _currentSongs = _currentPodcastSounds.Select(e => e.Song ?? new SongInfo()).ToList();
+            _currentPlaylists.Clear();
+            _currentAlbums.Clear();
+            _currentArtists.Clear();
+            _currentListItems.Clear();
+            _currentPodcasts.Clear();
+
+            resultListView.BeginUpdate();
+            resultListView.Items.Clear();
+
+            if (_currentPodcastSounds.Count == 0)
+            {
+                resultListView.EndUpdate();
+                SetViewContext(viewSource, accessibleName ?? "播客节目");
+                return;
+            }
+
+            int displayNumber = startIndex;
+            foreach (var episode in _currentPodcastSounds)
+            {
+                string hostInfo = string.Empty;
+                if (!string.IsNullOrWhiteSpace(episode.RadioName))
+                {
+                    hostInfo = episode.RadioName;
+                }
+                if (!string.IsNullOrWhiteSpace(episode.DjName))
+                {
+                    hostInfo = string.IsNullOrWhiteSpace(hostInfo)
+                        ? episode.DjName
+                        : $"{hostInfo} / {episode.DjName}";
+                }
+
+                string publishLabel = episode.PublishTime?.ToString("yyyy-MM-dd") ?? string.Empty;
+                if (episode.Duration > TimeSpan.Zero)
+                {
+                    string durationLabel = $"{episode.Duration:mm\\:ss}";
+                    publishLabel = string.IsNullOrEmpty(publishLabel)
+                        ? durationLabel
+                        : $"{publishLabel} | {durationLabel}";
+                }
+
+                var item = new ListViewItem(new[]
+                {
+                    displayNumber.ToString(),
+                    episode.Name ?? "未知",
+                    hostInfo,
+                    publishLabel,
+                    episode.Description ?? string.Empty
+                })
+                {
+                    Tag = episode
+                };
+
+                resultListView.Items.Add(item);
+                displayNumber++;
+            }
+
+            if (showPagination)
+            {
+                if (startIndex > 1)
+                {
+                    var prevItem = resultListView.Items.Add("上一页");
+                    prevItem.Tag = -2;
+                }
+
+                if (hasNextPage)
+                {
+                    var nextItem = resultListView.Items.Add("下一页");
+                    nextItem.Tag = -3;
+                }
+            }
+
+            resultListView.EndUpdate();
+
+            SetViewContext(viewSource, accessibleName ?? "播客节目");
+
+            if (!IsListAutoFocusSuppressed && resultListView.Items.Count > 0)
+            {
+                int targetIndex = previousSelectedIndex >= 0
+                    ? Math.Min(previousSelectedIndex, resultListView.Items.Count - 1)
+                    : 0;
+
+                RestoreListViewFocus(targetIndex);
+            }
+        }
+
         /// <summary>
         /// 列表项激活事件（双击或回车）
         /// </summary>
@@ -4198,6 +5083,19 @@ namespace YTPlayer
             else if (item.Tag is ArtistInfo artist)
             {
                 await OpenArtistAsync(artist);
+                return;
+            }
+            else if (item.Tag is PodcastRadioInfo podcast)
+            {
+                await OpenPodcastRadioAsync(podcast);
+                return;
+            }
+            else if (item.Tag is PodcastEpisodeInfo episodeInfo)
+            {
+                if (episodeInfo?.Song != null)
+                {
+                    await PlaySong(episodeInfo.Song);
+                }
                 return;
             }
 
@@ -4257,6 +5155,19 @@ namespace YTPlayer
             {
                 System.Diagnostics.Debug.WriteLine($"[MainForm] 双击打开歌手: {artist.Name}");
                 await OpenArtistAsync(artist);
+                return;
+            }
+            else if (item.Tag is PodcastRadioInfo podcast)
+            {
+                await OpenPodcastRadioAsync(podcast);
+                return;
+            }
+            else if (item.Tag is PodcastEpisodeInfo episode)
+            {
+                if (episode?.Song != null)
+                {
+                    await PlaySong(episode.Song);
+                }
                 return;
             }
 
@@ -4341,6 +5252,27 @@ namespace YTPlayer
 
                 int newOffset = Math.Max(0, offset - ArtistSongsPageSize);
                 await LoadArtistsByCategoryAsync(typeCode, areaCode, newOffset, skipSave: true);
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(_currentViewSource) &&
+                _currentViewSource.StartsWith("podcast:", StringComparison.OrdinalIgnoreCase))
+            {
+                ParsePodcastViewSource(_currentViewSource, out var podcastId, out var offset, out var ascending);
+                if (podcastId <= 0)
+                {
+                    UpdateStatusBar("无法定位播客页码");
+                    return;
+                }
+
+                if (offset <= 0)
+                {
+                    UpdateStatusBar("已经是第一页");
+                    return;
+                }
+
+                int newOffset = Math.Max(0, offset - PodcastSoundPageSize);
+                await LoadPodcastEpisodesAsync(podcastId, newOffset, skipSave: true, sortAscendingOverride: ascending);
                 return;
             }
 
@@ -4430,6 +5362,21 @@ namespace YTPlayer
                 ParseArtistCategoryListViewSource(_currentViewSource, out var typeCode, out var areaCode, out var offset);
                 int newOffset = offset + ArtistSongsPageSize;
                 await LoadArtistsByCategoryAsync(typeCode, areaCode, newOffset, skipSave: true);
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(_currentViewSource) &&
+                _currentViewSource.StartsWith("podcast:", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!_currentPodcastHasMore)
+                {
+                    UpdateStatusBar("已经是最后一页");
+                    return;
+                }
+
+                ParsePodcastViewSource(_currentViewSource, out var podcastId, out var offset, out var ascending);
+                int newOffset = offset + PodcastSoundPageSize;
+                await LoadPodcastEpisodesAsync(podcastId, newOffset, skipSave: true, sortAscendingOverride: ascending);
                 return;
             }
 
@@ -8147,6 +9094,27 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                     _maxPage = totalPages;
                     UpdateStatusBar($"第 {page}/{totalPages} 页，本页 {_currentArtists.Count} 位 / 总 {totalCount} 位");
                 }
+                else if (normalizedSearchType == "播客")
+                {
+                    int offset = (page - 1) * _resultsPerPage;
+                    var podcastResult = await _apiClient.SearchPodcastsAsync(keyword, _resultsPerPage, offset);
+                    _currentPodcasts = podcastResult?.Items ?? new List<PodcastRadioInfo>();
+                    _hasNextSearchPage = podcastResult?.HasMore ?? false;
+                    int totalCount = podcastResult?.TotalCount ?? _currentPodcasts.Count;
+
+                    string podcastViewSource = $"search:podcast:{keyword}:page{page}";
+                    DisplayPodcasts(
+                        _currentPodcasts,
+                        showPagination: true,
+                        hasNextPage: _hasNextSearchPage,
+                        startIndex: offset + 1,
+                        viewSource: podcastViewSource,
+                        accessibleName: $"搜索播客: {keyword}");
+
+                    int totalPages = Math.Max(1, (int)Math.Ceiling(totalCount / (double)Math.Max(1, _resultsPerPage)));
+                    _maxPage = totalPages;
+                    UpdateStatusBar($"第 {page}/{totalPages} 页，本页 {_currentPodcasts.Count} 个 / 总 {totalCount} 个");
+                }
             }
             catch (Exception ex)
             {
@@ -8168,9 +9136,13 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             }
 
             // 只有当当前有内容时才保存
-            if (_currentSongs.Count == 0 && _currentPlaylists.Count == 0 &&
-                _currentAlbums.Count == 0 && _currentListItems.Count == 0 &&
-                _currentArtists.Count == 0)
+            if (_currentSongs.Count == 0 &&
+                _currentPlaylists.Count == 0 &&
+                _currentAlbums.Count == 0 &&
+                _currentListItems.Count == 0 &&
+                _currentArtists.Count == 0 &&
+                _currentPodcasts.Count == 0 &&
+                _currentPodcastSounds.Count == 0)
             {
                 return;
             }
@@ -8275,6 +9247,15 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 state.ArtistArea = areaCode;
                 state.ArtistOffset = offset;
             }
+            else if (_currentViewSource.StartsWith("podcast:", StringComparison.OrdinalIgnoreCase))
+            {
+                state.PageType = "podcast";
+                ParsePodcastViewSource(_currentViewSource, out var podcastId, out var podcastOffset, out var podcastAsc);
+                state.PodcastRadioId = podcastId;
+                state.PodcastOffset = podcastOffset;
+                state.PodcastRadioName = _currentPodcast?.Name ?? string.Empty;
+                state.PodcastAscending = podcastAsc;
+            }
             else if (_currentViewSource.StartsWith("url:mixed", StringComparison.OrdinalIgnoreCase))
             {
                 state.PageType = "url_mixed";
@@ -8334,12 +9315,18 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 typeToken = "playlist";
                 working = working.Substring("playlist:".Length);
             }
+            else if (working.StartsWith("podcast:", StringComparison.OrdinalIgnoreCase))
+            {
+                typeToken = "podcast";
+                working = working.Substring("podcast:".Length);
+            }
 
             searchType = typeToken switch
             {
                 "artist" => "歌手",
                 "album" => "专辑",
                 "playlist" => "歌单",
+                "podcast" => "播客",
                 _ => "歌曲"
             };
 
@@ -8396,6 +9383,10 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                     return a.ArtistType == b.ArtistType;
                 case "artist_category_list":
                     return a.ArtistType == b.ArtistType && a.ArtistArea == b.ArtistArea && a.ArtistOffset == b.ArtistOffset;
+                case "podcast":
+                    return a.PodcastRadioId == b.PodcastRadioId &&
+                           a.PodcastOffset == b.PodcastOffset &&
+                           a.PodcastAscending == b.PodcastAscending;
                 case "url_song":
                     return string.Equals(a.SongId, b.SongId, StringComparison.OrdinalIgnoreCase);
                 case "url_mixed":
@@ -8565,6 +9556,21 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                     await LoadArtistsByCategoryAsync(state.ArtistType, state.ArtistArea, state.ArtistOffset, skipSave: true);
                     break;
 
+                case "podcast":
+                    if (state.PodcastRadioId > 0)
+                    {
+                        await LoadPodcastEpisodesAsync(
+                            state.PodcastRadioId,
+                            state.PodcastOffset,
+                            skipSave: true,
+                            sortAscendingOverride: state.PodcastAscending);
+                    }
+                    else
+                    {
+                        return false;
+                    }
+                    break;
+
                     default:
                         System.Diagnostics.Debug.WriteLine($"[Navigation] 未知的页面类型: {state.PageType}");
                         UpdateStatusBar("无法恢复页面");
@@ -8665,6 +9671,11 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                     return string.Equals(_currentViewSource,
                         $"artist_category_list:{state.ArtistType}:{state.ArtistArea}:offset{state.ArtistOffset}",
                         StringComparison.OrdinalIgnoreCase);
+                case "podcast":
+                    ParsePodcastViewSource(_currentViewSource, out var podcastsId, out var podcastOffset, out var podcastAsc);
+                    return podcastsId == state.PodcastRadioId &&
+                           podcastOffset == state.PodcastOffset &&
+                           podcastAsc == state.PodcastAscending;
                 case "url_song":
                     return string.Equals(_currentViewSource, $"url:song:{state.SongId}", StringComparison.OrdinalIgnoreCase);
                 case "url_mixed":
@@ -8672,6 +9683,54 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 default:
                     return string.Equals(_currentViewSource, state.ViewSource, StringComparison.OrdinalIgnoreCase);
             }
+        }
+
+        private async Task<T> ExecuteWithRetryAsync<T>(
+            Func<Task<T>> operation,
+            int maxAttempts = 3,
+            int initialDelayMs = 500,
+            string? operationName = null,
+            CancellationToken cancellationToken = default)
+        {
+            if (maxAttempts <= 0)
+            {
+                maxAttempts = 1;
+            }
+
+            Exception? lastException = null;
+            for (int attempt = 1; attempt <= maxAttempts; attempt++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    return await operation();
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    lastException = ex;
+                    System.Diagnostics.Debug.WriteLine($"[Retry] {(operationName ?? "操作")} 第 {attempt}/{maxAttempts} 次失败: {ex.Message}");
+                    if (attempt >= maxAttempts)
+                    {
+                        break;
+                    }
+
+                    int delay = initialDelayMs <= 0 ? 300 : (int)(initialDelayMs * Math.Pow(1.5, attempt - 1));
+                    try
+                    {
+                        await Task.Delay(delay, cancellationToken);
+                    }
+                    catch (TaskCanceledException)
+                    {
+                        throw;
+                    }
+                }
+            }
+
+            throw lastException ?? new Exception("操作失败");
         }
 
         #endregion
@@ -8705,6 +9764,12 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             createPlaylistMenuItem.Visible = false;
             subscribeAlbumMenuItem.Visible = false;
             unsubscribeAlbumMenuItem.Visible = false;
+            subscribePodcastMenuItem.Visible = false;
+            subscribePodcastMenuItem.Enabled = true;
+            subscribePodcastMenuItem.Tag = null;
+            unsubscribePodcastMenuItem.Visible = false;
+            unsubscribePodcastMenuItem.Enabled = true;
+            unsubscribePodcastMenuItem.Tag = null;
             likeSongMenuItem.Visible = false;
             likeSongMenuItem.Tag = null;
             unlikeSongMenuItem.Visible = false;
@@ -8719,11 +9784,14 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             // 默认隐藏所有下载菜单项
             downloadSongMenuItem.Visible = false;
             downloadSongMenuItem.Tag = null;
+            downloadSongMenuItem.Text = DownloadSongMenuText;
             downloadPlaylistMenuItem.Visible = false;
             downloadAlbumMenuItem.Visible = false;
             batchDownloadMenuItem.Visible = false;
             downloadCategoryMenuItem.Visible = false;
             batchDownloadPlaylistsMenuItem.Visible = false;
+            downloadPodcastMenuItem.Visible = false;
+            downloadPodcastMenuItem.Tag = null;
             downloadLyricsMenuItem.Visible = false;
             downloadLyricsMenuItem.Tag = null;
             cloudMenuSeparator.Visible = false;
@@ -8749,6 +9817,13 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             sharePlaylistMenuItem.Tag = null;
             shareAlbumMenuItem.Visible = false;
             shareAlbumMenuItem.Tag = null;
+            sharePodcastMenuItem.Visible = false;
+            sharePodcastMenuItem.Tag = null;
+            sharePodcastEpisodeMenuItem.Visible = false;
+            sharePodcastEpisodeMenuItem.Tag = null;
+            sharePodcastEpisodeWebMenuItem.Tag = null;
+            sharePodcastEpisodeDirectMenuItem.Tag = null;
+            podcastSortMenuItem.Visible = false;
 
             // ⭐ 检查登录状态 - 未登录时收藏相关菜单项保持隐藏
             bool isLoggedIn = IsUserLoggedIn();
@@ -8764,9 +9839,22 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 cloudMenuSeparator.Visible = true;
             }
 
+            bool isPodcastEpisodeView = IsPodcastEpisodeView();
+            if (isPodcastEpisodeView)
+            {
+                podcastSortMenuItem.Visible = true;
+                UpdatePodcastSortMenuChecks();
+            }
+
             var selectedItem = resultListView.SelectedItems.Count > 0 ? resultListView.SelectedItems[0] : null;
             if (selectedItem == null && !_isCurrentPlayingMenuActive)
             {
+                return;
+            }
+
+            if (isPodcastEpisodeView && selectedItem != null && selectedItem.Tag is int pagerTag && pagerTag < 0)
+            {
+                e.Cancel = true;
                 return;
             }
 
@@ -8777,6 +9865,8 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             PlaylistInfo? playlistFromListItem = null;
             AlbumInfo? albumFromListItem = null;
             SongInfo? songFromListItem = null;
+            PodcastRadioInfo? podcastFromListItem = null;
+            PodcastEpisodeInfo? podcastEpisodeFromListItem = null;
             CommentTarget? contextCommentTarget = null;
 
             // 根据Tag类型决定显示哪些菜单项
@@ -8814,10 +9904,31 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 {
                     songFromListItem = listItem.Song;
                 }
+                else if (listItem.Type == ListItemType.Podcast && listItem.Podcast != null)
+                {
+                    podcastFromListItem = listItem.Podcast;
+                }
+                else if (listItem.Type == ListItemType.PodcastEpisode && listItem.PodcastEpisode != null)
+                {
+                    podcastEpisodeFromListItem = listItem.PodcastEpisode;
+                    if (listItem.PodcastEpisode.Song != null)
+                    {
+                        songFromListItem = listItem.PodcastEpisode.Song;
+                    }
+                }
             }
             var playlist = _isCurrentPlayingMenuActive ? null : selectedItem?.Tag as PlaylistInfo ?? playlistFromListItem;
             var album = _isCurrentPlayingMenuActive ? null : selectedItem?.Tag as AlbumInfo ?? albumFromListItem;
             var resolvedSongFromListItem = songFromListItem;
+            var podcast = _isCurrentPlayingMenuActive ? null : selectedItem?.Tag as PodcastRadioInfo ?? podcastFromListItem;
+            var podcastEpisode = _isCurrentPlayingMenuActive ? null : selectedItem?.Tag as PodcastEpisodeInfo ?? podcastEpisodeFromListItem;
+            if (podcastEpisode == null && isPodcastEpisodeView)
+            {
+                podcastEpisode = GetPodcastEpisodeBySelectedIndex();
+            }
+            PodcastRadioInfo? contextPodcastForEpisode = null;
+            PodcastEpisodeInfo? effectiveEpisode = null;
+            bool isPodcastEpisodeContext = false;
 
             if (playlist != null)
             {
@@ -8874,6 +9985,15 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                         album.Artist);
                 }
             }
+            else if (podcast != null)
+            {
+                insertPlayMenuItem.Visible = false;
+                ConfigurePodcastMenuItems(podcast, isLoggedIn);
+                if (sharePodcastMenuItem.Visible)
+                {
+                    showViewSection = true;
+                }
+            }
             else
             {
                 // 歌曲：显示插播、收藏和下载功能
@@ -8897,9 +10017,37 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                     currentSong = resolvedSongFromListItem;
                 }
 
+                var activePodcastEpisode = podcastEpisode;
+                if (currentSong == null && activePodcastEpisode?.Song != null)
+                {
+                    currentSong = activePodcastEpisode.Song;
+                }
+
+                if (currentSong == null && activePodcastEpisode != null)
+                {
+                    currentSong = EnsurePodcastEpisodeSong(activePodcastEpisode);
+                }
+
+                if (activePodcastEpisode != null)
+                {
+                    effectiveEpisode = activePodcastEpisode;
+                    isPodcastEpisodeContext = true;
+                }
+                else if (currentSong?.IsPodcastEpisode == true)
+                {
+                    isPodcastEpisodeContext = true;
+                    effectiveEpisode = ResolvePodcastEpisodeFromSong(currentSong);
+                }
+
+                if (effectiveEpisode != null)
+                {
+                    contextPodcastForEpisode = ResolvePodcastFromEpisode(effectiveEpisode);
+                    currentSong = EnsurePodcastEpisodeSong(effectiveEpisode);
+                }
+
                 insertPlayMenuItem.Tag = currentSong;
 
-                if (currentSong != null && !string.IsNullOrWhiteSpace(currentSong.Id) && !currentSong.IsCloudSong)
+                if (currentSong != null && !string.IsNullOrWhiteSpace(currentSong.Id) && !currentSong.IsCloudSong && !isPodcastEpisodeContext)
                 {
                     contextCommentTarget = new CommentTarget(
                         currentSong.Id,
@@ -8909,7 +10057,7 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 }
 
                 bool isCloudSong = isCloudView && currentSong != null && currentSong.IsCloudSong;
-                bool canUseLibraryFeatures = CanSongUseLibraryFeatures(currentSong);
+                bool canUseLibraryFeatures = !isPodcastEpisodeContext && CanSongUseLibraryFeatures(currentSong);
 
                 if (isCloudSong)
                 {
@@ -8973,8 +10121,10 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
 
                 downloadSongMenuItem.Visible = !isCloudSong;
                 downloadSongMenuItem.Tag = currentSong;
-                downloadLyricsMenuItem.Visible = !isCloudSong;
-                downloadLyricsMenuItem.Tag = currentSong;
+                downloadSongMenuItem.Text = isPodcastEpisodeContext ? DownloadSoundMenuText : DownloadSongMenuText;
+                bool allowLyricsDownload = !isCloudSong && !isPodcastEpisodeContext;
+                downloadLyricsMenuItem.Visible = allowLyricsDownload;
+                downloadLyricsMenuItem.Tag = allowLyricsDownload ? currentSong : null;
                 batchDownloadMenuItem.Visible = !isCloudSong && !_isCurrentPlayingMenuActive;
 
                 bool showArtistMenu = currentSong != null &&
@@ -8982,6 +10132,13 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 bool showAlbumMenu = currentSong != null &&
                     (!currentSong.IsCloudSong || !string.IsNullOrWhiteSpace(currentSong?.Album));
                 bool showShareMenu = currentSong != null && canUseLibraryFeatures;
+
+                if (isPodcastEpisodeContext)
+                {
+                    showArtistMenu = false;
+                    showAlbumMenu = false;
+                    showShareMenu = false;
+                }
 
                 viewSongArtistMenuItem.Visible = showArtistMenu;
                 viewSongArtistMenuItem.Tag = showArtistMenu ? currentSong : null;
@@ -9003,14 +10160,41 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                     shareSongDirectMenuItem.Tag = null;
                 }
 
-                showViewSection = showViewSection || showArtistMenu || showAlbumMenu || showShareMenu;
+                if (contextPodcastForEpisode == null && effectiveEpisode == null && currentSong?.IsPodcastEpisode == true)
+                {
+                    contextPodcastForEpisode = ResolvePodcastFromSong(currentSong);
+                }
+
+                if (isPodcastEpisodeContext)
+                {
+                    ConfigurePodcastEpisodeShareMenu(effectiveEpisode ?? ResolvePodcastEpisodeFromSong(currentSong));
+                }
+                else
+                {
+                    ConfigurePodcastEpisodeShareMenu(null);
+                }
+
+                bool sharePodcastVisible = sharePodcastMenuItem.Visible;
+                bool sharePodcastEpisodeVisible = sharePodcastEpisodeMenuItem.Visible;
+
+                showViewSection = showViewSection ||
+                                  showArtistMenu ||
+                                  showAlbumMenu ||
+                                  showShareMenu ||
+                                  sharePodcastVisible ||
+                                  sharePodcastEpisodeVisible;
             }
 
-            if (contextCommentTarget != null)
+            if (contextCommentTarget != null && !isPodcastEpisodeContext)
             {
                 commentMenuItem.Visible = true;
                 commentMenuItem.Tag = contextCommentTarget;
                 commentMenuSeparator.Visible = true;
+            }
+
+            if (podcastSortMenuItem.Visible)
+            {
+                showViewSection = true;
             }
 
             toolStripSeparatorView.Visible = showViewSection;
@@ -9073,9 +10257,22 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 return directSong;
             }
 
-            if (selectedItem.Tag is ListItemInfo listItem && listItem.Type == ListItemType.Song)
+            if (selectedItem.Tag is ListItemInfo listItem)
             {
-                return listItem.Song;
+                if (listItem.Type == ListItemType.Song)
+                {
+                    return listItem.Song;
+                }
+
+                if (listItem.Type == ListItemType.PodcastEpisode)
+                {
+                    return listItem.PodcastEpisode?.Song;
+                }
+            }
+
+            if (selectedItem.Tag is PodcastEpisodeInfo episodeInfo)
+            {
+                return episodeInfo.Song;
             }
 
             return null;
@@ -9147,6 +10344,370 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             }
 
             return null;
+        }
+
+        private PodcastRadioInfo? GetSelectedPodcastFromContextMenu(object? sender = null)
+        {
+            if (sender is ToolStripItem menuItem && menuItem.Tag is PodcastRadioInfo taggedPodcast)
+            {
+                return taggedPodcast;
+            }
+
+            if (_isCurrentPlayingMenuActive && _currentPlayingMenuSong?.IsPodcastEpisode == true)
+            {
+                var podcastFromSong = ResolvePodcastFromSong(_currentPlayingMenuSong);
+                if (podcastFromSong != null)
+                {
+                    return podcastFromSong;
+                }
+            }
+
+            if (resultListView.SelectedItems.Count > 0)
+            {
+                var selectedItem = resultListView.SelectedItems[0];
+
+                if (selectedItem.Tag is PodcastRadioInfo podcast)
+                {
+                    return podcast;
+                }
+
+                if (selectedItem.Tag is PodcastEpisodeInfo episodeInfo)
+                {
+                    var resolved = ResolvePodcastFromEpisode(episodeInfo);
+                    if (resolved != null)
+                    {
+                        return resolved;
+                    }
+                }
+
+                if (selectedItem.Tag is ListItemInfo listItem)
+                {
+                    if (listItem.Type == ListItemType.Podcast && listItem.Podcast != null)
+                    {
+                        return listItem.Podcast;
+                    }
+
+                    if (listItem.Type == ListItemType.PodcastEpisode && listItem.PodcastEpisode != null)
+                    {
+                        var resolved = ResolvePodcastFromEpisode(listItem.PodcastEpisode);
+                        if (resolved != null)
+                        {
+                            return resolved;
+                        }
+                    }
+                }
+
+                if (selectedItem.Tag is SongInfo song && song.IsPodcastEpisode)
+                {
+                    var resolved = ResolvePodcastFromSong(song);
+                    if (resolved != null)
+                    {
+                        return resolved;
+                    }
+                }
+
+                if (selectedItem.Tag is int songIndex &&
+                    songIndex >= 0 &&
+                    songIndex < _currentSongs.Count)
+                {
+                    var candidateSong = _currentSongs[songIndex];
+                    if (candidateSong?.IsPodcastEpisode == true)
+                    {
+                        var resolved = ResolvePodcastFromSong(candidateSong);
+                        if (resolved != null)
+                        {
+                            return resolved;
+                        }
+                    }
+                }
+            }
+
+            if (_currentPodcast != null)
+            {
+                return _currentPodcast;
+            }
+
+            return null;
+        }
+
+        private PodcastEpisodeInfo? GetSelectedPodcastEpisodeFromContextMenu(object? sender = null)
+        {
+            if (sender is ToolStripItem menuItem && menuItem.Tag is PodcastEpisodeInfo taggedEpisode)
+            {
+                return taggedEpisode;
+            }
+
+            if (_isCurrentPlayingMenuActive && _currentPlayingMenuSong?.IsPodcastEpisode == true)
+            {
+                return ResolvePodcastEpisodeFromSong(_currentPlayingMenuSong);
+            }
+
+            if (resultListView.SelectedItems.Count == 0)
+            {
+                return null;
+            }
+
+            var selectedItem = resultListView.SelectedItems[0];
+
+            if (selectedItem.Tag is PodcastEpisodeInfo episode)
+            {
+                return episode;
+            }
+
+            if (selectedItem.Tag is ListItemInfo listItem)
+            {
+                if (listItem.Type == ListItemType.PodcastEpisode && listItem.PodcastEpisode != null)
+                {
+                    return listItem.PodcastEpisode;
+                }
+
+                if (listItem.Type == ListItemType.Song && listItem.Song?.IsPodcastEpisode == true)
+                {
+                    return ResolvePodcastEpisodeFromSong(listItem.Song);
+                }
+            }
+
+            if (selectedItem.Tag is SongInfo song && song.IsPodcastEpisode)
+            {
+                return ResolvePodcastEpisodeFromSong(song);
+            }
+
+            if (selectedItem.Tag is int songIndex &&
+                songIndex >= 0 &&
+                songIndex < _currentSongs.Count)
+            {
+                var candidateSong = _currentSongs[songIndex];
+                if (candidateSong?.IsPodcastEpisode == true)
+                {
+                    return ResolvePodcastEpisodeFromSong(candidateSong);
+                }
+            }
+
+            return GetPodcastEpisodeBySelectedIndex();
+        }
+
+        private void ConfigurePodcastMenuItems(PodcastRadioInfo? podcast, bool isLoggedIn, bool allowShare = true)
+        {
+            if (podcast == null)
+            {
+                return;
+            }
+
+            bool hasPodcastId = podcast.Id > 0;
+            if (hasPodcastId)
+            {
+                downloadPodcastMenuItem.Visible = true;
+                downloadPodcastMenuItem.Tag = podcast;
+                sharePodcastMenuItem.Visible = allowShare;
+                sharePodcastMenuItem.Tag = allowShare ? podcast : null;
+            }
+            else
+            {
+                sharePodcastMenuItem.Visible = false;
+                sharePodcastMenuItem.Tag = null;
+            }
+
+            if (!isLoggedIn || !hasPodcastId)
+            {
+                return;
+            }
+
+            subscribePodcastMenuItem.Visible = true;
+            unsubscribePodcastMenuItem.Visible = true;
+            subscribePodcastMenuItem.Tag = podcast;
+            unsubscribePodcastMenuItem.Tag = podcast;
+
+            bool subscribed = ResolvePodcastSubscriptionState(podcast);
+            subscribePodcastMenuItem.Enabled = !subscribed;
+            unsubscribePodcastMenuItem.Enabled = true;
+        }
+
+        private bool ResolvePodcastSubscriptionState(PodcastRadioInfo? podcast)
+        {
+            if (podcast == null)
+            {
+                return false;
+            }
+
+            if (podcast.Subscribed)
+            {
+                return true;
+            }
+
+            if (_currentPodcast != null && _currentPodcast.Id == podcast.Id)
+            {
+                return _currentPodcast.Subscribed;
+            }
+
+            return false;
+        }
+
+        private void ConfigurePodcastEpisodeShareMenu(PodcastEpisodeInfo? episode)
+        {
+            if (episode == null || episode.ProgramId <= 0)
+            {
+                sharePodcastEpisodeMenuItem.Visible = false;
+                sharePodcastEpisodeMenuItem.Tag = null;
+                sharePodcastEpisodeWebMenuItem.Tag = null;
+                sharePodcastEpisodeDirectMenuItem.Tag = null;
+                return;
+            }
+
+            sharePodcastEpisodeMenuItem.Visible = true;
+            sharePodcastEpisodeMenuItem.Tag = episode;
+            sharePodcastEpisodeWebMenuItem.Tag = episode;
+            sharePodcastEpisodeDirectMenuItem.Tag = episode;
+        }
+
+        private PodcastRadioInfo? ResolvePodcastFromEpisode(PodcastEpisodeInfo? episode)
+        {
+            if (episode == null || episode.RadioId <= 0)
+            {
+                return null;
+            }
+
+            if (_currentPodcast != null && _currentPodcast.Id == episode.RadioId)
+            {
+                return _currentPodcast;
+            }
+
+            return new PodcastRadioInfo
+            {
+                Id = episode.RadioId,
+                Name = string.IsNullOrWhiteSpace(episode.RadioName) ? $"播客 {episode.RadioId}" : episode.RadioName,
+                DjName = episode.DjName,
+                DjUserId = episode.DjUserId
+            };
+        }
+
+        private PodcastRadioInfo? ResolvePodcastFromSong(SongInfo? song)
+        {
+            if (song == null || song.PodcastRadioId <= 0)
+            {
+                return null;
+            }
+
+            if (_currentPodcast != null && _currentPodcast.Id == song.PodcastRadioId)
+            {
+                return _currentPodcast;
+            }
+
+            return new PodcastRadioInfo
+            {
+                Id = song.PodcastRadioId,
+                Name = string.IsNullOrWhiteSpace(song.PodcastRadioName) ? $"播客 {song.PodcastRadioId}" : song.PodcastRadioName,
+                DjName = song.PodcastDjName
+            };
+        }
+
+        private PodcastEpisodeInfo? ResolvePodcastEpisodeFromSong(SongInfo? song)
+        {
+            if (song == null || song.PodcastProgramId <= 0)
+            {
+                return null;
+            }
+
+            var existing = _currentPodcastSounds.FirstOrDefault(e => e.ProgramId == song.PodcastProgramId);
+            if (existing != null)
+            {
+                if (existing.Song == null)
+                {
+                    existing.Song = song;
+                }
+
+                return existing;
+            }
+
+            return new PodcastEpisodeInfo
+            {
+                ProgramId = song.PodcastProgramId,
+                Name = string.IsNullOrWhiteSpace(song.Name) ? $"节目 {song.PodcastProgramId}" : song.Name,
+                RadioId = song.PodcastRadioId,
+                RadioName = song.PodcastRadioName,
+                DjName = song.PodcastDjName,
+                Song = song
+            };
+        }
+
+        private SongInfo? EnsurePodcastEpisodeSong(PodcastEpisodeInfo? episode)
+        {
+            if (episode == null)
+            {
+                return null;
+            }
+
+            if (episode.Song != null)
+            {
+                return episode.Song;
+            }
+
+            if (episode.ProgramId <= 0)
+            {
+                return null;
+            }
+
+            var song = new SongInfo
+            {
+                Id = episode.ProgramId.ToString(CultureInfo.InvariantCulture),
+                Name = string.IsNullOrWhiteSpace(episode.Name) ? $"节目 {episode.ProgramId}" : episode.Name,
+                Artist = string.IsNullOrWhiteSpace(episode.DjName) ? (episode.RadioName ?? string.Empty) : episode.DjName,
+                Album = string.IsNullOrWhiteSpace(episode.RadioName)
+                    ? (episode.DjName ?? string.Empty)
+                    : (episode.RadioName ?? string.Empty),
+                PicUrl = episode.CoverUrl,
+                Duration = episode.Duration > TimeSpan.Zero ? (int)episode.Duration.TotalSeconds : 0,
+                IsAvailable = true,
+                IsPodcastEpisode = true,
+                PodcastProgramId = episode.ProgramId,
+                PodcastRadioId = episode.RadioId,
+                PodcastRadioName = episode.RadioName ?? string.Empty,
+                PodcastDjName = episode.DjName ?? string.Empty,
+                PodcastPublishTime = episode.PublishTime,
+                PodcastEpisodeDescription = episode.Description,
+                PodcastSerialNumber = episode.SerialNumber
+            };
+
+            episode.Song = song;
+            return song;
+        }
+
+        private bool IsPodcastEpisodeView()
+        {
+            return !string.IsNullOrWhiteSpace(_currentViewSource) &&
+                   _currentViewSource.StartsWith("podcast:", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private PodcastEpisodeInfo? GetPodcastEpisodeBySelectedIndex()
+        {
+            if (!IsPodcastEpisodeView() || resultListView.SelectedItems.Count == 0)
+            {
+                return null;
+            }
+
+            var selectedItem = resultListView.SelectedItems[0];
+            if (selectedItem.Tag is int sentinel && sentinel < 0)
+            {
+                return null;
+            }
+
+            int selectedIndex = selectedItem.Index;
+            if (selectedIndex >= 0 && selectedIndex < _currentPodcastSounds.Count)
+            {
+                return _currentPodcastSounds[selectedIndex];
+            }
+
+            return null;
+        }
+
+        private void UpdatePodcastSortMenuChecks()
+        {
+            if (podcastSortLatestMenuItem == null || podcastSortSerialMenuItem == null)
+            {
+                return;
+            }
+
+            podcastSortLatestMenuItem.Checked = !_currentPodcastSortAscending;
+            podcastSortSerialMenuItem.Checked = _currentPodcastSortAscending;
         }
 
         /// <summary>
@@ -9798,6 +11359,224 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             }
         }
 
+        private void sharePodcastMenuItem_Click(object sender, EventArgs e)
+        {
+            var podcast = GetSelectedPodcastFromContextMenu(sender);
+            if (podcast == null || podcast.Id <= 0)
+            {
+                MessageBox.Show("无法获取播客信息，无法分享。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            try
+            {
+                string url = $"https://music.163.com/#/djradio?id={podcast.Id}";
+                Clipboard.SetText(url);
+                UpdateStatusBar("播客链接已复制到剪贴板");
+            }
+            catch (ExternalException ex)
+            {
+                MessageBox.Show($"复制链接失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("复制链接失败");
+            }
+        }
+
+        private void sharePodcastEpisodeWebMenuItem_Click(object sender, EventArgs e)
+        {
+            var episode = GetSelectedPodcastEpisodeFromContextMenu(sender);
+            if (episode == null || episode.ProgramId <= 0)
+            {
+                MessageBox.Show("无法获取节目详情，无法分享。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            try
+            {
+                string url = $"https://music.163.com/#/program?id={episode.ProgramId}";
+                Clipboard.SetText(url);
+                UpdateStatusBar("节目网页链接已复制到剪贴板");
+            }
+            catch (ExternalException ex)
+            {
+                MessageBox.Show($"复制链接失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("复制链接失败");
+            }
+        }
+
+        private async void sharePodcastEpisodeDirectMenuItem_Click(object sender, EventArgs e)
+        {
+            var episode = GetSelectedPodcastEpisodeFromContextMenu(sender);
+            if (episode == null || episode.ProgramId <= 0)
+            {
+                MessageBox.Show("无法获取节目详情，无法分享。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            var song = EnsurePodcastEpisodeSong(episode);
+            if (song == null || string.IsNullOrWhiteSpace(song.Id))
+            {
+                MessageBox.Show("该节目缺少可用的音频资源，无法分享直链。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            try
+            {
+                UpdateStatusBar("正在生成节目直链...");
+                if (!await EnsureSongAvailabilityAsync(song))
+                {
+                    MessageBox.Show("该节目资源不可用，无法分享直链。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    UpdateStatusBar("节目资源不可用");
+                    return;
+                }
+
+                var urlMap = await FetchSongUrlsInBatchesAsync(new[] { song.Id });
+                if (!urlMap.TryGetValue(song.Id, out var urlInfo) || string.IsNullOrWhiteSpace(urlInfo.Url))
+                {
+                    MessageBox.Show("未能获取节目直链，可能需要登录或稍后重试。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    UpdateStatusBar("获取直链失败");
+                    return;
+                }
+
+                Clipboard.SetText(urlInfo.Url);
+                UpdateStatusBar("节目直链已复制到剪贴板");
+            }
+            catch (ExternalException ex)
+            {
+                MessageBox.Show($"复制链接失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("复制链接失败");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"分享节目直链失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("节目分享失败");
+            }
+        }
+
+        private async void podcastSortLatestMenuItem_Click(object sender, EventArgs e)
+        {
+            await ChangePodcastEpisodeSortAsync(ascending: false);
+        }
+
+        private async void podcastSortSerialMenuItem_Click(object sender, EventArgs e)
+        {
+            await ChangePodcastEpisodeSortAsync(ascending: true);
+        }
+
+        private async Task ChangePodcastEpisodeSortAsync(bool ascending)
+        {
+            if (string.IsNullOrWhiteSpace(_currentViewSource) ||
+                !_currentViewSource.StartsWith("podcast:", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            ParsePodcastViewSource(_currentViewSource, out var podcastId, out _, out var currentAscending);
+            if (podcastId <= 0)
+            {
+                return;
+            }
+
+            if (_currentPodcastSortAscending == ascending && currentAscending == ascending)
+            {
+                UpdatePodcastSortMenuChecks();
+                return;
+            }
+
+            _currentPodcastSortAscending = ascending;
+            await LoadPodcastEpisodesAsync(podcastId, 0, skipSave: true, podcastInfo: _currentPodcast, sortAscendingOverride: ascending);
+            UpdatePodcastSortMenuChecks();
+        }
+
+        /// <summary>
+        /// 收藏播客
+        /// </summary>
+        private async void subscribePodcastMenuItem_Click(object sender, EventArgs e)
+        {
+            var podcast = GetSelectedPodcastFromContextMenu(sender);
+            if (podcast == null || podcast.Id <= 0)
+            {
+                MessageBox.Show("无法识别播客信息，收藏操作已取消。", "提示",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                UpdateStatusBar("收藏播客失败");
+                return;
+            }
+
+            try
+            {
+                UpdateStatusBar("正在收藏播客...");
+                bool success = await _apiClient.SubscribePodcastAsync(podcast.Id);
+                if (success)
+                {
+                    podcast.Subscribed = true;
+                    if (_currentPodcast != null && _currentPodcast.Id == podcast.Id)
+                    {
+                        _currentPodcast.Subscribed = true;
+                    }
+
+                    MessageBox.Show($"已收藏播客：{podcast.Name}", "成功",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    UpdateStatusBar("播客收藏成功");
+                }
+                else
+                {
+                    MessageBox.Show("收藏播客失败，请稍后重试。", "失败",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    UpdateStatusBar("收藏播客失败");
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"收藏播客失败: {ex.Message}", "错误",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("收藏播客失败");
+            }
+        }
+
+        /// <summary>
+        /// 取消收藏播客
+        /// </summary>
+        private async void unsubscribePodcastMenuItem_Click(object sender, EventArgs e)
+        {
+            var podcast = GetSelectedPodcastFromContextMenu(sender);
+            if (podcast == null || podcast.Id <= 0)
+            {
+                MessageBox.Show("无法识别播客信息，取消收藏操作已取消。", "提示",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                UpdateStatusBar("取消收藏播客失败");
+                return;
+            }
+
+            try
+            {
+                UpdateStatusBar("正在取消收藏播客...");
+                bool success = await _apiClient.UnsubscribePodcastAsync(podcast.Id);
+                if (success)
+                {
+                    podcast.Subscribed = false;
+                    if (_currentPodcast != null && _currentPodcast.Id == podcast.Id)
+                    {
+                        _currentPodcast.Subscribed = false;
+                    }
+
+                    MessageBox.Show($"已取消收藏播客：{podcast.Name}", "成功",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    UpdateStatusBar("取消收藏播客成功");
+                }
+                else
+                {
+                    MessageBox.Show("取消收藏播客失败，请稍后重试。", "失败",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    UpdateStatusBar("取消收藏播客失败");
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"取消收藏播客失败: {ex.Message}", "错误",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("取消收藏播客失败");
+            }
+        }
+
         /// <summary>
         /// 取消收藏专辑
         /// </summary>
@@ -10133,9 +11912,26 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
         /// 歌手地区筛选（分类视图使用）
         /// </summary>
         public int ArtistArea { get; set; } = -1;
+
+        /// <summary>
+        /// 播客电台 ID。
+        /// </summary>
+        public long PodcastRadioId { get; set; }
+
+        /// <summary>
+        /// 播客电台名称。
+        /// </summary>
+        public string PodcastRadioName { get; set; } = string.Empty;
+
+        /// <summary>
+        /// 播客节目偏移量。
+        /// </summary>
+        public int PodcastOffset { get; set; }
+
+        /// <summary>
+        /// 播客节目是否按正序排列。
+        /// </summary>
+        public bool PodcastAscending { get; set; }
     }
 }
-
-
-
 

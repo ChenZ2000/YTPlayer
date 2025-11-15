@@ -10,7 +10,9 @@ namespace YTPlayer.Utils
         Song,
         Playlist,
         Album,
-        Artist
+        Artist,
+        Podcast,
+        PodcastEpisode
     }
 
     internal sealed class NeteaseUrlMatch
@@ -184,6 +186,11 @@ namespace YTPlayer.Utils
                     case "artist":
                     case "ar":
                         return NeteaseUrlType.Artist;
+                    case "djradio":
+                    case "dj":
+                        return NeteaseUrlType.Podcast;
+                    case "program":
+                        return NeteaseUrlType.PodcastEpisode;
                 }
             }
 

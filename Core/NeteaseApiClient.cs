@@ -3157,6 +3157,34 @@ namespace YTPlayer.Core
         }
 
         /// <summary>
+        /// 搜索播客/电台。
+        /// </summary>
+        public async Task<SearchResult<PodcastRadioInfo>> SearchPodcastsAsync(string keyword, int limit = 30, int offset = 0)
+        {
+            System.Diagnostics.Debug.WriteLine($"[API] 搜索播客: {keyword}, limit={limit}, offset={offset}");
+
+            var result = await ExecuteSearchRequestAsync(keyword, SearchResourceType.Radio, limit, offset);
+            var radiosToken = result?["djRadios"] as JArray
+                               ?? result?["djRadioes"] as JArray
+                               ?? (result?["djRadioResult"]?["djRadios"] as JArray)
+                               ?? result?["radios"] as JArray;
+
+            if (radiosToken == null)
+            {
+                var nested = result?["djRadios"];
+                if (nested is JObject nestedObj && nestedObj.TryGetValue("items", out var itemsToken) && itemsToken is JArray nestedArray)
+                {
+                    radiosToken = nestedArray;
+                }
+            }
+
+            var radios = ParsePodcastRadioList(radiosToken);
+            int totalCount = ResolveTotalCount(result, SearchResourceType.Radio, offset, radios.Count);
+
+            return new SearchResult<PodcastRadioInfo>(radios, totalCount, offset, limit, result);
+        }
+
+        /// <summary>
         /// 调用搜索接口，自动处理简化API与官方API切换。
         /// </summary>
         private async Task<JObject> ExecuteSearchRequestAsync(string keyword, SearchResourceType resourceType, int limit, int offset)
@@ -3311,6 +3339,157 @@ namespace YTPlayer.Core
             yield return "totalCount";
             yield return "total";
             yield return "count";
+        }
+
+        #endregion
+
+        #region 播客/电台
+
+        /// <summary>
+        /// 获取播客/电台详情。
+        /// </summary>
+        public async Task<PodcastRadioInfo?> GetPodcastRadioDetailAsync(long radioId)
+        {
+            if (radioId <= 0)
+            {
+                return null;
+            }
+
+            var payload = new Dictionary<string, object>
+            {
+                { "id", radioId }
+            };
+
+            var response = await PostWeApiAsync<JObject>(
+                "/api/djradio/v2/get",
+                payload,
+                autoConvertApiSegment: true);
+
+            if (response["code"]?.Value<int>() != 200)
+            {
+                System.Diagnostics.Debug.WriteLine($"[API] 获取播客详情失败: {response}");
+                return null;
+            }
+
+            var radioToken = response["djRadio"] as JObject
+                             ?? response["data"]?["djRadio"] as JObject
+                             ?? response["data"] as JObject;
+
+            return ParsePodcastRadio(radioToken);
+        }
+
+        /// <summary>
+        /// 获取指定播客的节目列表。
+        /// </summary>
+        public async Task<(List<PodcastEpisodeInfo> Episodes, bool HasMore, int TotalCount)> GetPodcastEpisodesAsync(long radioId, int limit = 50, int offset = 0, bool asc = false)
+        {
+            if (radioId <= 0)
+            {
+                return (new List<PodcastEpisodeInfo>(), false, 0);
+            }
+
+            limit = Math.Max(1, Math.Min(100, limit));
+            offset = Math.Max(0, offset);
+
+            var payload = new Dictionary<string, object>
+            {
+                { "radioId", radioId },
+                { "limit", limit },
+                { "offset", offset },
+                { "asc", asc }
+            };
+
+            var response = await PostWeApiAsync<JObject>(
+                "/weapi/dj/program/byradio",
+                payload);
+
+            if (response["code"]?.Value<int>() != 200)
+            {
+                System.Diagnostics.Debug.WriteLine($"[API] 获取播客节目失败: {response}");
+                return (new List<PodcastEpisodeInfo>(), false, 0);
+            }
+
+            var programs = response["programs"] as JArray ?? response["program"] as JArray;
+            var episodes = ParsePodcastEpisodeList(programs);
+            bool hasMore = response["hasMore"]?.Value<bool>() ?? false;
+            int total = response["count"]?.Value<int>() ?? (offset + episodes.Count);
+
+            if (!hasMore && total > offset + episodes.Count)
+            {
+                hasMore = true;
+            }
+
+            return (episodes, hasMore, total);
+        }
+
+        /// <summary>
+        /// 获取单个播客节目的详情。
+        /// </summary>
+        public async Task<PodcastEpisodeInfo?> GetPodcastEpisodeDetailAsync(long programId)
+        {
+            if (programId <= 0)
+            {
+                return null;
+            }
+
+            var payload = new Dictionary<string, object>
+            {
+                { "id", programId }
+            };
+
+            var response = await PostWeApiAsync<JObject>(
+                "/api/dj/program/detail",
+                payload,
+                autoConvertApiSegment: true);
+
+            if (response["code"]?.Value<int>() != 200)
+            {
+                System.Diagnostics.Debug.WriteLine($"[API] 获取播客节目详情失败: {response}");
+                return null;
+            }
+
+            var program = response["program"] as JObject ?? response["data"] as JObject;
+            if (program == null)
+            {
+                return null;
+            }
+
+            var episodes = ParsePodcastEpisodeList(new JArray(program));
+            return episodes.FirstOrDefault();
+        }
+
+        /// <summary>
+        /// 收藏播客/电台。
+        /// </summary>
+        public Task<bool> SubscribePodcastAsync(long radioId)
+        {
+            return SetPodcastSubscriptionAsync(radioId, subscribe: true);
+        }
+
+        /// <summary>
+        /// 取消收藏播客/电台。
+        /// </summary>
+        public Task<bool> UnsubscribePodcastAsync(long radioId)
+        {
+            return SetPodcastSubscriptionAsync(radioId, subscribe: false);
+        }
+
+        private async Task<bool> SetPodcastSubscriptionAsync(long radioId, bool subscribe)
+        {
+            if (radioId <= 0)
+            {
+                return false;
+            }
+
+            var payload = new Dictionary<string, object>
+            {
+                { "id", radioId }
+            };
+
+            string path = subscribe ? "/weapi/djradio/sub" : "/weapi/djradio/unsub";
+            var response = await PostWeApiAsync<JObject>(path, payload);
+
+            return response["code"]?.Value<int>() == 200;
         }
 
         #endregion
@@ -8537,6 +8716,163 @@ namespace YTPlayer.Core
             }
 
             return result;
+        }
+
+        private List<PodcastRadioInfo> ParsePodcastRadioList(JArray? radios)
+        {
+            var result = new List<PodcastRadioInfo>();
+            if (radios == null)
+            {
+                return result;
+            }
+
+            foreach (var radioToken in radios)
+            {
+                var radio = ParsePodcastRadio(radioToken);
+                if (radio != null)
+                {
+                    result.Add(radio);
+                }
+            }
+
+            return result;
+        }
+
+        private PodcastRadioInfo? ParsePodcastRadio(JToken? radioToken)
+        {
+            if (radioToken == null || radioToken.Type != JTokenType.Object)
+            {
+                return null;
+            }
+
+            var obj = (JObject)radioToken;
+            var radio = new PodcastRadioInfo
+            {
+                Id = obj["id"]?.Value<long>() ?? obj["id"]?.Value<int>() ?? 0,
+                Name = obj["name"]?.Value<string>() ?? string.Empty,
+                DjName = obj["dj"]?["nickname"]?.Value<string>() ?? obj["dj"]?["name"]?.Value<string>() ?? string.Empty,
+                DjUserId = obj["dj"]?["userId"]?.Value<long>() ?? obj["dj"]?["id"]?.Value<long>() ?? 0,
+                Category = obj["category"]?.Value<string>() ?? obj["categoryId"]?.Value<string>() ?? string.Empty,
+                SecondCategory = obj["secondCategory"]?.Value<string>() ?? obj["secondCategoryId"]?.Value<string>() ?? string.Empty,
+                Description = obj["desc"]?.Value<string>() ?? obj["description"]?.Value<string>() ?? string.Empty,
+                CoverUrl = obj["picUrl"]?.Value<string>() ?? obj["coverUrl"]?.Value<string>() ?? string.Empty,
+                ProgramCount = obj["programCount"]?.Value<int>() ?? 0,
+                SubscriberCount = obj["subCount"]?.Value<int>() ?? 0,
+                ShareCount = obj["shareCount"]?.Value<int>() ?? 0,
+                LikedCount = obj["likedCount"]?.Value<int>() ?? 0,
+                CommentCount = obj["commentCount"]?.Value<int>() ?? 0,
+                RadioFeeType = obj["radioFeeType"]?.Value<int>() ?? obj["feeType"]?.Value<int>() ?? 0,
+                Subscribed = obj["subed"]?.Value<bool>() ?? (obj["subed"]?.Value<int>() == 1)
+            };
+
+            long createTime = obj["createTime"]?.Value<long>() ?? 0;
+            if (createTime > 0)
+            {
+                radio.CreateTime = DateTimeOffset.FromUnixTimeMilliseconds(createTime).LocalDateTime;
+            }
+
+            return radio;
+        }
+
+        private List<PodcastEpisodeInfo> ParsePodcastEpisodeList(JArray? programs)
+        {
+            var list = new List<PodcastEpisodeInfo>();
+            if (programs == null)
+            {
+                return list;
+            }
+
+            foreach (var token in programs)
+            {
+                if (token is JObject programObj)
+                {
+                    var episode = ParsePodcastEpisode(programObj);
+                    if (episode != null)
+                    {
+                        list.Add(episode);
+                    }
+                }
+            }
+
+            return list;
+        }
+
+        private PodcastEpisodeInfo? ParsePodcastEpisode(JObject program)
+        {
+            long programId = program["id"]?.Value<long>() ?? program["programId"]?.Value<long>() ?? 0;
+            var episode = new PodcastEpisodeInfo
+            {
+                ProgramId = programId,
+                Name = program["name"]?.Value<string>() ?? "节目",
+                Description = program["description"]?.Value<string>() ?? program["intro"]?.Value<string>() ?? string.Empty,
+                RadioId = program["radioId"]?.Value<long>() ?? program["radio"]?["id"]?.Value<long>() ?? 0,
+                RadioName = program["radio"]?["name"]?.Value<string>() ?? program["radioName"]?.Value<string>() ?? string.Empty,
+                DjUserId = program["dj"]?["userId"]?.Value<long>() ?? program["dj"]?["id"]?.Value<long>() ?? 0,
+                DjName = program["dj"]?["nickname"]?.Value<string>() ?? program["dj"]?["name"]?.Value<string>() ?? string.Empty,
+                ListenerCount = program["listenerCount"]?.Value<int>() ?? program["adjustedPlayCount"]?.Value<int>() ?? 0,
+                LikedCount = program["likedCount"]?.Value<int>() ?? 0,
+                CommentCount = program["commentCount"]?.Value<int>() ?? 0,
+                ShareCount = program["shareCount"]?.Value<int>() ?? 0,
+                SerialNumber = program["serialNum"]?.Value<int>() ?? program["serialNo"]?.Value<int>() ?? 0,
+                IsPaid = program["programFeeType"]?.Value<int>() == 1 || program["fee"]?.Value<int>() == 1,
+                CoverUrl = program["coverUrl"]?.Value<string>() ?? program["blurCoverUrl"]?.Value<string>() ?? string.Empty
+            };
+
+            long publishTime = program["createTime"]?.Value<long>() ?? program["pubTime"]?.Value<long>() ?? 0;
+            if (publishTime > 0)
+            {
+                episode.PublishTime = DateTimeOffset.FromUnixTimeMilliseconds(publishTime).LocalDateTime;
+            }
+
+            long durationMs = program["duration"]?.Value<long>() ?? program["trackTime"]?.Value<long>() ?? 0;
+            if (durationMs > 0)
+            {
+                episode.Duration = TimeSpan.FromMilliseconds(durationMs);
+            }
+
+            var mainSong = program["mainSong"] as JObject ?? program["song"] as JObject;
+            SongInfo? song = null;
+            if (mainSong != null)
+            {
+                var songs = ParseSongList(new JArray(mainSong));
+                song = songs.FirstOrDefault();
+            }
+
+            if (song == null)
+            {
+                song = new SongInfo
+                {
+                    Id = episode.ProgramId > 0 ? $"program_{episode.ProgramId}" : Guid.NewGuid().ToString("N"),
+                    Name = episode.Name,
+                    Artist = string.IsNullOrWhiteSpace(episode.DjName) ? episode.RadioName : episode.DjName,
+                    Album = episode.RadioName,
+                    Duration = episode.Duration.TotalSeconds > 0 ? (int)episode.Duration.TotalSeconds : 0,
+                    PicUrl = episode.CoverUrl,
+                    IsAvailable = true
+                };
+            }
+            else if (song.Duration <= 0 && episode.Duration.TotalSeconds > 0)
+            {
+                song.Duration = (int)episode.Duration.TotalSeconds;
+            }
+
+            if (string.IsNullOrWhiteSpace(song.PicUrl) && !string.IsNullOrWhiteSpace(episode.CoverUrl))
+            {
+                song.PicUrl = episode.CoverUrl;
+            }
+
+            song.IsPodcastEpisode = true;
+            song.PodcastProgramId = episode.ProgramId;
+            song.PodcastRadioId = episode.RadioId;
+            song.PodcastRadioName = episode.RadioName;
+            song.PodcastDjName = episode.DjName;
+            song.PodcastPublishTime = episode.PublishTime;
+            song.PodcastEpisodeDescription = episode.Description;
+            song.PodcastSerialNumber = episode.SerialNumber;
+
+            episode.Song = song;
+
+            return episode;
         }
 
         private CommentFloorResult ParseCommentFloor(JObject commentData, string parentCommentId)

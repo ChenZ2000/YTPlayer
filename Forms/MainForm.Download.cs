@@ -470,6 +470,131 @@ namespace YTPlayer
             }
         }
 
+        /// <summary>
+        /// 下载播客的全部节目（从上下文菜单）
+        /// </summary>
+        internal async void DownloadPodcast_Click(object? sender, EventArgs e)
+        {
+            var podcast = GetSelectedPodcastFromContextMenu(sender);
+            if (podcast == null || podcast.Id <= 0)
+            {
+                MessageBox.Show("请选择要下载的播客。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            try
+            {
+                var originalCursor = Cursor.Current;
+                Cursor.Current = Cursors.WaitCursor;
+
+                try
+                {
+                    var episodes = await FetchAllPodcastEpisodesAsync(podcast.Id);
+                    if (episodes == null || episodes.Count == 0)
+                    {
+                        MessageBox.Show("该播客暂无可下载的节目。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        return;
+                    }
+
+                    var displayNames = new List<string>();
+                    for (int i = 0; i < episodes.Count; i++)
+                    {
+                        var episode = episodes[i];
+                        string meta = string.Empty;
+                        if (episode.PublishTime.HasValue)
+                        {
+                            meta = episode.PublishTime.Value.ToString("yyyy-MM-dd");
+                        }
+                        if (episode.Duration > TimeSpan.Zero)
+                        {
+                            string durationLabel = $"{episode.Duration:mm\\:ss}";
+                            meta = string.IsNullOrEmpty(meta) ? durationLabel : $"{meta} | {durationLabel}";
+                        }
+
+                        string hostLabel = string.Empty;
+                        if (!string.IsNullOrWhiteSpace(episode.RadioName))
+                        {
+                            hostLabel = episode.RadioName;
+                        }
+                        if (!string.IsNullOrWhiteSpace(episode.DjName))
+                        {
+                            hostLabel = string.IsNullOrWhiteSpace(hostLabel)
+                                ? episode.DjName
+                                : $"{hostLabel} / {episode.DjName}";
+                        }
+
+                        string line = $"{i + 1}. {episode.Name}";
+                        if (!string.IsNullOrWhiteSpace(meta))
+                        {
+                            line += $" ({meta})";
+                        }
+                        if (!string.IsNullOrWhiteSpace(hostLabel))
+                        {
+                            line += $" - {hostLabel}";
+                        }
+
+                        displayNames.Add(line);
+                    }
+
+                    string safeName = string.IsNullOrWhiteSpace(podcast.Name)
+                        ? $"播客_{podcast.Id}"
+                        : podcast.Name;
+                    var dialog = new BatchDownloadDialog(displayNames, $"下载播客 - {safeName}");
+                    if (dialog.ShowDialog() != DialogResult.OK || dialog.SelectedIndices.Count == 0)
+                    {
+                        return;
+                    }
+
+                    var selectedIndices = dialog.SelectedIndices;
+                    var selectedSongs = new List<SongInfo>();
+                    var originalIndices = new List<int>();
+                    foreach (int index in selectedIndices)
+                    {
+                        if (index < 0 || index >= episodes.Count)
+                        {
+                            continue;
+                        }
+
+                        var song = episodes[index].Song;
+                        if (song != null)
+                        {
+                            selectedSongs.Add(song);
+                            originalIndices.Add(index + 1);
+                        }
+                    }
+
+                    if (selectedSongs.Count == 0)
+                    {
+                        MessageBox.Show("选中的节目缺少可下载的音频信息。", "提示",
+                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+
+                    var quality = GetCurrentQuality();
+                    var tasks = await _downloadManager!.AddBatchDownloadAsync(
+                        selectedSongs,
+                        quality,
+                        sourceList: $"播客 - {safeName}",
+                        subDirectory: safeName,
+                        originalIndices: originalIndices);
+
+                    MessageBox.Show(
+                        $"已添加 {tasks.Count}/{selectedSongs.Count} 个下载任务\n播客：{safeName}",
+                        "提示",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information);
+                }
+                finally
+                {
+                    Cursor.Current = originalCursor;
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"下载播客失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
         #endregion
 
         #region 辅助方法 - 下载
@@ -932,6 +1057,10 @@ namespace YTPlayer
                                 return albums;
                             }, quality);
                             break;
+
+                        case RecentListenedCategoryId:
+                            await DownloadMixedCategory(categoryName, BuildRecentListenedEntries, quality);
+                            return;
 
                         // 歌单分类（混合分类：10个常用分类）
                         case "playlist_category":
@@ -1669,6 +1798,37 @@ namespace YTPlayer
             {
                 MessageBox.Show($"批量下载失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+        }
+
+        private async Task<List<PodcastEpisodeInfo>> FetchAllPodcastEpisodesAsync(long podcastId)
+        {
+            var result = new List<PodcastEpisodeInfo>();
+            if (podcastId <= 0)
+            {
+                return result;
+            }
+
+            int offset = 0;
+            const int FetchLimit = 100;
+
+            while (true)
+            {
+                var (episodes, hasMore, totalCount) = await _apiClient.GetPodcastEpisodesAsync(podcastId, FetchLimit, offset);
+                if (episodes == null || episodes.Count == 0)
+                {
+                    break;
+                }
+
+                result.AddRange(episodes);
+                offset += episodes.Count;
+
+                if (!hasMore || offset >= totalCount)
+                {
+                    break;
+                }
+            }
+
+            return result;
         }
 
         #endregion

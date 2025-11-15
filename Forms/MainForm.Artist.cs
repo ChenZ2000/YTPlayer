@@ -66,6 +66,9 @@ namespace YTPlayer
             _currentPlaylists.Clear();
             _currentAlbums.Clear();
             _currentListItems.Clear();
+            _currentPodcasts.Clear();
+            _currentPodcastSounds.Clear();
+            _currentPodcast = null;
 
             resultListView.BeginUpdate();
             resultListView.Items.Clear();

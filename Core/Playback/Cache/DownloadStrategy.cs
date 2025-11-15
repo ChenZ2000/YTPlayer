@@ -1,4 +1,4 @@
-﻿namespace YTPlayer.Core.Playback.Cache
+namespace YTPlayer.Core.Playback.Cache
 {
     /// <summary>
     /// 智能缓存可采用的下载策略。
