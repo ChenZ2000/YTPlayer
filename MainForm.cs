@@ -49,6 +49,7 @@ namespace YTPlayer
         private const string RecentPodcastsCategoryId = "recent_podcasts";
         private const string DownloadSongMenuText = "下载歌曲(&D)";
         private const string DownloadSoundMenuText = "下载声音(&D)";
+        private const string CurrentPlayingMenuContextTag = "current_playing_context";
         private int _recentPlayCount = 0;
         private int _recentPlaylistCount = 0;
         private int _recentAlbumCount = 0;
@@ -58,7 +59,13 @@ namespace YTPlayer
         private List<AlbumInfo> _recentAlbumsCache = new List<AlbumInfo>();
         private List<PodcastRadioInfo> _recentPodcastsCache = new List<PodcastRadioInfo>();
         private DateTime _recentSummaryLastUpdatedUtc = DateTime.MinValue;
-        private bool _currentPodcastSortAscending = false;
+        private SortState<bool> _podcastSortState = new SortState<bool>(
+            false,
+            new Dictionary<bool, string>
+            {
+                { false, "当前排序：按最新" },
+                { true, "当前排序：节目顺序" }
+            });
         private List<LyricLine> _currentLyrics = new List<LyricLine>();  // 保留用于向后兼容
         private PlaybackReportingService? _playbackReportingService;
 
@@ -339,6 +346,12 @@ namespace YTPlayer
         {
             InitializeComponent();
             UpdateWindowTitle(null);
+            if (songContextMenu != null)
+            {
+                // 启用勾选区域，便于显示排序等选中的状态
+                songContextMenu.ShowCheckMargin = true;
+            }
+            EnsureSortMenuCheckMargins();
             InitializeServices();
             SetupEventHandlers();
             LoadConfig();
@@ -2862,7 +2875,7 @@ namespace YTPlayer
                         CategoryId = "playlist_category",
                         CategoryName = "歌单分类",
                         ItemCount = playlistCategoryCount,
-                        ItemUnit = "类"
+                        ItemUnit = "个"
                     });
 
                     // 4. 歌手分类
@@ -2872,7 +2885,7 @@ namespace YTPlayer
                         CategoryId = "artist_categories",
                         CategoryName = "歌手分类",
                         ItemCount = artistCategoryTypeCount,
-                        ItemUnit = "类型"
+                        ItemUnit = "个"
                     });
 
                     // 5. 新碟上架
@@ -3249,12 +3262,12 @@ namespace YTPlayer
                     else if (categoryId.StartsWith("artist_songs_", StringComparison.OrdinalIgnoreCase) &&
                              long.TryParse(categoryId.Substring("artist_songs_".Length), out var artistSongsId))
                     {
-                        await LoadArtistSongsAsync(artistSongsId, skipSave: true);
+                        await LoadArtistSongsAsync(artistSongsId, skipSave: true, orderOverride: ArtistSongSortOption.Hot);
                     }
                     else if (categoryId.StartsWith("artist_albums_", StringComparison.OrdinalIgnoreCase) &&
                              long.TryParse(categoryId.Substring("artist_albums_".Length), out var artistAlbumsId))
                     {
-                        await LoadArtistAlbumsAsync(artistAlbumsId, skipSave: true);
+                        await LoadArtistAlbumsAsync(artistAlbumsId, skipSave: true, sortOverride: ArtistAlbumSortOption.Latest);
                     }
                     else if (categoryId.StartsWith("artist_type_", StringComparison.OrdinalIgnoreCase) &&
                              int.TryParse(categoryId.Substring("artist_type_".Length), out var typeCode))
@@ -4003,15 +4016,15 @@ namespace YTPlayer
 
                 if (isDifferentRadio && !sortAscendingOverride.HasValue)
                 {
-                    _currentPodcastSortAscending = false;
+                    _podcastSortState.SetOption(false);
                 }
 
                 if (sortAscendingOverride.HasValue)
                 {
-                    _currentPodcastSortAscending = sortAscendingOverride.Value;
+                    _podcastSortState.SetOption(sortAscendingOverride.Value);
                 }
 
-                var isAscending = _currentPodcastSortAscending;
+                var isAscending = _podcastSortState.CurrentOption;
                 var (episodes, hasMore, totalCount) = await _apiClient.GetPodcastEpisodesAsync(
                     radioId,
                     PodcastSoundPageSize,
@@ -4035,6 +4048,7 @@ namespace YTPlayer
                     startIndex: _currentPodcastSoundOffset + 1,
                     viewSource: viewSource,
                     accessibleName: accessibleName);
+                UpdatePodcastSortMenuChecks();
 
                 if (episodes == null || episodes.Count == 0)
                 {
@@ -4850,7 +4864,11 @@ namespace YTPlayer
             }
 
             string artistName = string.IsNullOrWhiteSpace(album.Artist) ? "未知" : album.Artist.Trim();
-            string trackValue = album.TrackCount > 0 ? $"{album.TrackCount} 首" : "未知";
+            string trackValue = AlbumDisplayHelper.BuildTrackAndYearLabel(album);
+            if (string.IsNullOrWhiteSpace(trackValue))
+            {
+                trackValue = album.TrackCount > 0 ? $"{album.TrackCount} 首" : "未知";
+            }
             string descriptionLabel = string.IsNullOrWhiteSpace(album.Description)
                 ? string.Empty
                 : $"{album.Description}";
@@ -5351,7 +5369,7 @@ namespace YTPlayer
             if (!string.IsNullOrEmpty(_currentViewSource) &&
                 _currentViewSource.StartsWith("artist_songs:", StringComparison.OrdinalIgnoreCase))
             {
-                ParseArtistListViewSource(_currentViewSource, out var artistId, out var offset);
+                ParseArtistListViewSource(_currentViewSource, out var artistId, out var offset, out var order);
                 if (offset <= 0)
                 {
                     UpdateStatusBar("已经是第一页");
@@ -5359,14 +5377,14 @@ namespace YTPlayer
                 }
 
                 int newOffset = Math.Max(0, offset - ArtistSongsPageSize);
-                await LoadArtistSongsAsync(artistId, newOffset, skipSave: true);
+                await LoadArtistSongsAsync(artistId, newOffset, skipSave: true, orderOverride: ResolveArtistSongsOrder(order));
                 return;
             }
 
             if (!string.IsNullOrEmpty(_currentViewSource) &&
                 _currentViewSource.StartsWith("artist_albums:", StringComparison.OrdinalIgnoreCase))
             {
-                ParseArtistListViewSource(_currentViewSource, out var artistId, out var offset);
+                ParseArtistListViewSource(_currentViewSource, out var artistId, out var offset, out var order, defaultOrder: "latest");
                 if (offset <= 0)
                 {
                     UpdateStatusBar("已经是第一页");
@@ -5374,7 +5392,7 @@ namespace YTPlayer
                 }
 
                 int newOffset = Math.Max(0, offset - ArtistAlbumsPageSize);
-                await LoadArtistAlbumsAsync(artistId, newOffset, skipSave: true);
+                await LoadArtistAlbumsAsync(artistId, newOffset, skipSave: true, sortOverride: ResolveArtistAlbumSort(order));
                 return;
             }
 
@@ -5467,9 +5485,9 @@ namespace YTPlayer
                     return;
                 }
 
-                ParseArtistListViewSource(_currentViewSource, out var artistId, out var offset);
+                ParseArtistListViewSource(_currentViewSource, out var artistId, out var offset, out var order);
                 int newOffset = offset + ArtistSongsPageSize;
-                await LoadArtistSongsAsync(artistId, newOffset, skipSave: true);
+                await LoadArtistSongsAsync(artistId, newOffset, skipSave: true, orderOverride: ResolveArtistSongsOrder(order));
                 return;
             }
 
@@ -5482,9 +5500,9 @@ namespace YTPlayer
                     return;
                 }
 
-                ParseArtistListViewSource(_currentViewSource, out var artistId, out var offset);
+                ParseArtistListViewSource(_currentViewSource, out var artistId, out var offset, out var order, defaultOrder: "latest");
                 int newOffset = offset + ArtistAlbumsPageSize;
-                await LoadArtistAlbumsAsync(artistId, newOffset, skipSave: true);
+                await LoadArtistAlbumsAsync(artistId, newOffset, skipSave: true, sortOverride: ResolveArtistAlbumSort(order));
                 return;
             }
 
@@ -8455,25 +8473,10 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
         /// </summary>
         private void UpdatePlaybackOrderMenuCheck()
         {
-            // 顺序播放
-            bool isSequential = (_config.PlaybackOrder == "顺序播放");
-            sequentialMenuItem.Checked = isSequential;
-            sequentialMenuItem.AccessibleName = isSequential ? "顺序播放 已选中" : "顺序播放";
-
-            // 列表循环
-            bool isLoop = (_config.PlaybackOrder == "列表循环");
-            loopMenuItem.Checked = isLoop;
-            loopMenuItem.AccessibleName = isLoop ? "列表循环 已选中" : "列表循环";
-
-            // 单曲循环
-            bool isLoopOne = (_config.PlaybackOrder == "单曲循环");
-            loopOneMenuItem.Checked = isLoopOne;
-            loopOneMenuItem.AccessibleName = isLoopOne ? "单曲循环 已选中" : "单曲循环";
-
-            // 随机播放
-            bool isRandom = (_config.PlaybackOrder == "随机播放");
-            randomMenuItem.Checked = isRandom;
-            randomMenuItem.AccessibleName = isRandom ? "随机播放 已选中" : "随机播放";
+            SetMenuItemCheckedState(sequentialMenuItem, _config.PlaybackOrder == "顺序播放", "顺序播放");
+            SetMenuItemCheckedState(loopMenuItem, _config.PlaybackOrder == "列表循环", "列表循环");
+            SetMenuItemCheckedState(loopOneMenuItem, _config.PlaybackOrder == "单曲循环", "单曲循环");
+            SetMenuItemCheckedState(randomMenuItem, _config.PlaybackOrder == "随机播放", "随机播放");
         }
 
         /// <summary>
@@ -8482,41 +8485,13 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
         private void UpdateQualityMenuCheck()
         {
             string currentQuality = _config.DefaultQuality;
-
-            // 标准音质
-            bool isStandard = (currentQuality == "标准音质");
-            standardQualityMenuItem.Checked = isStandard;
-            standardQualityMenuItem.AccessibleName = isStandard ? "标准音质 已选中" : "标准音质";
-
-            // 极高音质
-            bool isHigh = (currentQuality == "极高音质");
-            highQualityMenuItem.Checked = isHigh;
-            highQualityMenuItem.AccessibleName = isHigh ? "极高音质 已选中" : "极高音质";
-
-            // 无损音质
-            bool isLossless = (currentQuality == "无损音质");
-            losslessQualityMenuItem.Checked = isLossless;
-            losslessQualityMenuItem.AccessibleName = isLossless ? "无损音质 已选中" : "无损音质";
-
-            // Hi-Res音质
-            bool isHiRes = (currentQuality == "Hi-Res音质");
-            hiresQualityMenuItem.Checked = isHiRes;
-            hiresQualityMenuItem.AccessibleName = isHiRes ? "Hi-Res音质 已选中" : "Hi-Res音质";
-
-            // 高清环绕声
-            bool isSurroundHD = (currentQuality == "高清环绕声");
-            surroundHDQualityMenuItem.Checked = isSurroundHD;
-            surroundHDQualityMenuItem.AccessibleName = isSurroundHD ? "高清环绕声 已选中" : "高清环绕声";
-
-            // 沉浸环绕声
-            bool isDolby = (currentQuality == "沉浸环绕声");
-            dolbyQualityMenuItem.Checked = isDolby;
-            dolbyQualityMenuItem.AccessibleName = isDolby ? "沉浸环绕声 已选中" : "沉浸环绕声";
-
-            // 超清母带
-            bool isMaster = (currentQuality == "超清母带");
-            masterQualityMenuItem.Checked = isMaster;
-            masterQualityMenuItem.AccessibleName = isMaster ? "超清母带 已选中" : "超清母带";
+            SetMenuItemCheckedState(standardQualityMenuItem, currentQuality == "标准音质", "标准音质");
+            SetMenuItemCheckedState(highQualityMenuItem, currentQuality == "极高音质", "极高音质");
+            SetMenuItemCheckedState(losslessQualityMenuItem, currentQuality == "无损音质", "无损音质");
+            SetMenuItemCheckedState(hiresQualityMenuItem, currentQuality == "Hi-Res音质", "Hi-Res音质");
+            SetMenuItemCheckedState(surroundHDQualityMenuItem, currentQuality == "高清环绕声", "高清环绕声");
+            SetMenuItemCheckedState(dolbyQualityMenuItem, currentQuality == "沉浸环绕声", "沉浸环绕声");
+            SetMenuItemCheckedState(masterQualityMenuItem, currentQuality == "超清母带", "超清母带");
         }
 
         /// <summary>
@@ -9382,17 +9357,19 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             else if (_currentViewSource.StartsWith("artist_songs:", StringComparison.OrdinalIgnoreCase))
             {
                 state.PageType = "artist_songs";
-                ParseArtistListViewSource(_currentViewSource, out var artistId, out var offset);
+                ParseArtistListViewSource(_currentViewSource, out var artistId, out var offset, out var order);
                 state.ArtistId = artistId;
                 state.ArtistOffset = offset;
+                state.ArtistOrder = order;
                 state.ArtistName = _currentArtist?.Name ?? _currentArtistDetail?.Name ?? string.Empty;
             }
             else if (_currentViewSource.StartsWith("artist_albums:", StringComparison.OrdinalIgnoreCase))
             {
                 state.PageType = "artist_albums";
-                ParseArtistListViewSource(_currentViewSource, out var artistId, out var offset);
+                ParseArtistListViewSource(_currentViewSource, out var artistId, out var offset, out var order, defaultOrder: "latest");
                 state.ArtistId = artistId;
                 state.ArtistOffset = offset;
+                state.ArtistAlbumSort = order;
                 state.ArtistName = _currentArtist?.Name ?? _currentArtistDetail?.Name ?? string.Empty;
             }
             else if (string.Equals(_currentViewSource, "artist_favorites", StringComparison.OrdinalIgnoreCase))
@@ -9543,8 +9520,13 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 case "artist_top":
                     return a.ArtistId == b.ArtistId;
                 case "artist_songs":
+                    return a.ArtistId == b.ArtistId &&
+                           a.ArtistOffset == b.ArtistOffset &&
+                           string.Equals(a.ArtistOrder, b.ArtistOrder, StringComparison.OrdinalIgnoreCase);
                 case "artist_albums":
-                    return a.ArtistId == b.ArtistId && a.ArtistOffset == b.ArtistOffset;
+                    return a.ArtistId == b.ArtistId &&
+                           a.ArtistOffset == b.ArtistOffset &&
+                           string.Equals(a.ArtistAlbumSort, b.ArtistAlbumSort, StringComparison.OrdinalIgnoreCase);
                 case "artist_favorites":
                 case "artist_category_types":
                     return true;
@@ -9698,14 +9680,16 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 case "artist_songs":
                     if (state.ArtistId > 0)
                     {
-                        await LoadArtistSongsAsync(state.ArtistId, state.ArtistOffset, skipSave: true);
+                        var orderOption = ResolveArtistSongsOrder(state.ArtistOrder);
+                        await LoadArtistSongsAsync(state.ArtistId, state.ArtistOffset, skipSave: true, orderOverride: orderOption);
                     }
                     break;
 
                 case "artist_albums":
                     if (state.ArtistId > 0)
                     {
-                        await LoadArtistAlbumsAsync(state.ArtistId, state.ArtistOffset, skipSave: true);
+                        var albumSort = ResolveArtistAlbumSort(state.ArtistAlbumSort);
+                        await LoadArtistAlbumsAsync(state.ArtistId, state.ArtistOffset, skipSave: true, sortOverride: albumSort);
                     }
                     break;
 
@@ -9825,11 +9809,31 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                     return state.ArtistId > 0 &&
                            (_currentViewSource ?? string.Empty).IndexOf(state.ArtistId.ToString(), StringComparison.OrdinalIgnoreCase) >= 0;
                 case "artist_songs":
-                    return state.ArtistId > 0 &&
-                           string.Equals(_currentViewSource, $"artist_songs:{state.ArtistId}:offset{state.ArtistOffset}", StringComparison.OrdinalIgnoreCase);
+                    if (state.ArtistId <= 0)
+                    {
+                        return false;
+                    }
+
+                    string expectedSongsSource = $"artist_songs:{state.ArtistId}:order{state.ArtistOrder}:offset{state.ArtistOffset}";
+                    if (string.Equals(_currentViewSource, expectedSongsSource, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+
+                    return string.Equals(_currentViewSource, $"artist_songs:{state.ArtistId}:offset{state.ArtistOffset}", StringComparison.OrdinalIgnoreCase);
                 case "artist_albums":
-                    return state.ArtistId > 0 &&
-                           string.Equals(_currentViewSource, $"artist_albums:{state.ArtistId}:offset{state.ArtistOffset}", StringComparison.OrdinalIgnoreCase);
+                    if (state.ArtistId <= 0)
+                    {
+                        return false;
+                    }
+
+            string expectedAlbumsSource = $"artist_albums:{state.ArtistId}:order{state.ArtistAlbumSort}:offset{state.ArtistOffset}";
+            if (string.Equals(_currentViewSource, expectedAlbumsSource, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return string.Equals(_currentViewSource, $"artist_albums:{state.ArtistId}:offset{state.ArtistOffset}", StringComparison.OrdinalIgnoreCase);
                 case "artist_favorites":
                     return string.Equals(_currentViewSource, "artist_favorites", StringComparison.OrdinalIgnoreCase);
                 case "artist_category_types":
@@ -9919,6 +9923,10 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
 
             _isCurrentPlayingMenuActive = true;
             _currentPlayingMenuSong = song;
+            if (songContextMenu != null)
+            {
+                songContextMenu.Tag = CurrentPlayingMenuContextTag;
+            }
         }
 
         /// <summary>
@@ -9926,435 +9934,96 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
         /// </summary>
         private void songContextMenu_Opening(object sender, System.ComponentModel.CancelEventArgs e)
         {
-            // 默认隐藏所有收藏菜单项
-            subscribePlaylistMenuItem.Visible = false;
-            unsubscribePlaylistMenuItem.Visible = false;
-            deletePlaylistMenuItem.Visible = false;
-            createPlaylistMenuItem.Visible = false;
-            subscribeAlbumMenuItem.Visible = false;
-            unsubscribeAlbumMenuItem.Visible = false;
-            subscribePodcastMenuItem.Visible = false;
-            subscribePodcastMenuItem.Enabled = true;
-            subscribePodcastMenuItem.Tag = null;
-            unsubscribePodcastMenuItem.Visible = false;
-            unsubscribePodcastMenuItem.Enabled = true;
-            unsubscribePodcastMenuItem.Tag = null;
-            likeSongMenuItem.Visible = false;
-            likeSongMenuItem.Tag = null;
-            unlikeSongMenuItem.Visible = false;
-            unlikeSongMenuItem.Tag = null;
-            addToPlaylistMenuItem.Visible = false;
-            addToPlaylistMenuItem.Tag = null;
-            removeFromPlaylistMenuItem.Visible = false;
-            removeFromPlaylistMenuItem.Tag = null;
-            insertPlayMenuItem.Visible = true;
-            insertPlayMenuItem.Tag = null;
-
-            // 默认隐藏所有下载菜单项
-            downloadSongMenuItem.Visible = false;
-            downloadSongMenuItem.Tag = null;
-            downloadSongMenuItem.Text = DownloadSongMenuText;
-            downloadPlaylistMenuItem.Visible = false;
-            downloadAlbumMenuItem.Visible = false;
-            batchDownloadMenuItem.Visible = false;
-            downloadCategoryMenuItem.Visible = false;
-            batchDownloadPlaylistsMenuItem.Visible = false;
-            downloadPodcastMenuItem.Visible = false;
-            downloadPodcastMenuItem.Tag = null;
-            downloadLyricsMenuItem.Visible = false;
-            downloadLyricsMenuItem.Tag = null;
-            cloudMenuSeparator.Visible = false;
-            uploadToCloudMenuItem.Visible = false;
-            deleteFromCloudMenuItem.Visible = false;
-            toolStripSeparatorArtist.Visible = false;
-            shareArtistMenuItem.Visible = false;
-            subscribeArtistMenuItem.Visible = false;
-            unsubscribeArtistMenuItem.Visible = false;
-            toolStripSeparatorView.Visible = false;
-            commentMenuItem.Visible = false;
-            commentMenuItem.Tag = null;
-            commentMenuSeparator.Visible = false;
-            viewSongArtistMenuItem.Visible = false;
-            viewSongArtistMenuItem.Tag = null;
-            viewSongAlbumMenuItem.Visible = false;
-            viewSongAlbumMenuItem.Tag = null;
-            shareSongMenuItem.Visible = false;
-            shareSongMenuItem.Tag = null;
-            shareSongWebMenuItem.Tag = null;
-            shareSongDirectMenuItem.Tag = null;
-            sharePlaylistMenuItem.Visible = false;
-            sharePlaylistMenuItem.Tag = null;
-            shareAlbumMenuItem.Visible = false;
-            shareAlbumMenuItem.Tag = null;
-            sharePodcastMenuItem.Visible = false;
-            sharePodcastMenuItem.Tag = null;
-            sharePodcastEpisodeMenuItem.Visible = false;
-            sharePodcastEpisodeMenuItem.Tag = null;
-            sharePodcastEpisodeWebMenuItem.Tag = null;
-            sharePodcastEpisodeDirectMenuItem.Tag = null;
-            podcastSortMenuItem.Visible = false;
-
-            // ⭐ 检查登录状态 - 未登录时收藏相关菜单项保持隐藏
-            bool isLoggedIn = IsUserLoggedIn();
-            if (!isLoggedIn)
+            // 确保排序菜单能显示勾选标记（部分主题默认隐藏 CheckMargin）
+            if (songContextMenu != null && !songContextMenu.ShowCheckMargin)
             {
-                System.Diagnostics.Debug.WriteLine("[ContextMenu] 用户未登录，所有收藏/取消收藏菜单项保持隐藏");
+                songContextMenu.ShowCheckMargin = true;
             }
+            EnsureSortMenuCheckMargins();
 
-            bool isCloudView = string.Equals(_currentViewSource, "user_cloud", StringComparison.OrdinalIgnoreCase);
-            if (isCloudView)
-            {
-                uploadToCloudMenuItem.Visible = true;
-                cloudMenuSeparator.Visible = true;
-            }
+            bool isCurrentPlayingRequest = ReferenceEquals(songContextMenu?.OwnerItem, currentPlayingMenuItem) ||
+                                           string.Equals(songContextMenu?.Tag as string, CurrentPlayingMenuContextTag, StringComparison.Ordinal);
 
-            bool isPodcastEpisodeView = IsPodcastEpisodeView();
-            bool canSortPodcastEpisodes = isPodcastEpisodeView &&
-                !string.IsNullOrWhiteSpace(_currentViewSource) &&
-                _currentViewSource.StartsWith("podcast:", StringComparison.OrdinalIgnoreCase);
-            podcastSortMenuItem.Visible = canSortPodcastEpisodes;
-            if (canSortPodcastEpisodes)
+            var snapshot = BuildMenuContextSnapshot(isCurrentPlayingRequest);
+            if (!snapshot.IsValid)
             {
-                UpdatePodcastSortMenuChecks();
-            }
+                if (songContextMenu != null)
+                {
+                    songContextMenu.Tag = null;
+                }
 
-            var selectedItem = resultListView.SelectedItems.Count > 0 ? resultListView.SelectedItems[0] : null;
-            if (selectedItem == null && !_isCurrentPlayingMenuActive)
-            {
-                return;
-            }
+                if (isCurrentPlayingRequest)
+                {
+                    _isCurrentPlayingMenuActive = false;
+                    _currentPlayingMenuSong = null;
+                    if (currentPlayingMenuItem != null)
+                    {
+                        currentPlayingMenuItem.Visible = false;
+                    }
+                }
 
-            if (isPodcastEpisodeView && selectedItem != null && selectedItem.Tag is int pagerTag && pagerTag < 0)
-            {
                 e.Cancel = true;
                 return;
             }
 
-            bool isMyPlaylistsView = string.Equals(_currentViewSource, "user_playlists", StringComparison.OrdinalIgnoreCase);
-            bool isUserAlbumsView = string.Equals(_currentViewSource, "user_albums", StringComparison.OrdinalIgnoreCase);
-            createPlaylistMenuItem.Visible = isMyPlaylistsView && isLoggedIn;
+            _isCurrentPlayingMenuActive = snapshot.IsCurrentPlayback;
+            if (!snapshot.IsCurrentPlayback)
+            {
+                if (songContextMenu != null && string.Equals(songContextMenu.Tag as string, CurrentPlayingMenuContextTag, StringComparison.Ordinal))
+                {
+                    songContextMenu.Tag = null;
+                }
+            }
+            else if (songContextMenu != null)
+            {
+                songContextMenu.Tag = CurrentPlayingMenuContextTag;
+            }
+
+            ResetSongContextMenuState();
+
             bool showViewSection = false;
-            PlaylistInfo? playlistFromListItem = null;
-            AlbumInfo? albumFromListItem = null;
-            SongInfo? songFromListItem = null;
-            PodcastRadioInfo? podcastFromListItem = null;
-            PodcastEpisodeInfo? podcastEpisodeFromListItem = null;
             CommentTarget? contextCommentTarget = null;
-
-            // 根据Tag类型决定显示哪些菜单项
-            if (!_isCurrentPlayingMenuActive && selectedItem?.Tag is ArtistInfo directArtist)
-            {
-                ConfigureArtistContextMenu(directArtist);
-                return;
-            }
-
-            if (!_isCurrentPlayingMenuActive && selectedItem?.Tag is ListItemInfo listItem)
-            {
-                if (listItem.Type == ListItemType.Artist && listItem.Artist != null)
-                {
-                    ConfigureArtistContextMenu(listItem.Artist);
-                    return;
-                }
-
-                if (listItem.Type == ListItemType.Category)
-                {
-                    // 分类：不支持插播，只显示下载分类
-                    insertPlayMenuItem.Visible = false;
-                    downloadCategoryMenuItem.Visible = true;
-                    return;
-                }
-
-                if (listItem.Type == ListItemType.Playlist && listItem.Playlist != null)
-                {
-                    playlistFromListItem = listItem.Playlist;
-                }
-                else if (listItem.Type == ListItemType.Album && listItem.Album != null)
-                {
-                    albumFromListItem = listItem.Album;
-                }
-                else if (listItem.Type == ListItemType.Song && listItem.Song != null)
-                {
-                    songFromListItem = listItem.Song;
-                }
-                else if (listItem.Type == ListItemType.Podcast && listItem.Podcast != null)
-                {
-                    podcastFromListItem = listItem.Podcast;
-                }
-                else if (listItem.Type == ListItemType.PodcastEpisode && listItem.PodcastEpisode != null)
-                {
-                    podcastEpisodeFromListItem = listItem.PodcastEpisode;
-                    if (listItem.PodcastEpisode.Song != null)
-                    {
-                        songFromListItem = listItem.PodcastEpisode.Song;
-                    }
-                }
-            }
-            var playlist = _isCurrentPlayingMenuActive ? null : selectedItem?.Tag as PlaylistInfo ?? playlistFromListItem;
-            var album = _isCurrentPlayingMenuActive ? null : selectedItem?.Tag as AlbumInfo ?? albumFromListItem;
-            var resolvedSongFromListItem = songFromListItem;
-            var podcast = _isCurrentPlayingMenuActive ? null : selectedItem?.Tag as PodcastRadioInfo ?? podcastFromListItem;
-            var podcastEpisode = _isCurrentPlayingMenuActive ? null : selectedItem?.Tag as PodcastEpisodeInfo ?? podcastEpisodeFromListItem;
-            if (podcastEpisode == null && isPodcastEpisodeView)
-            {
-                podcastEpisode = GetPodcastEpisodeBySelectedIndex();
-            }
             PodcastRadioInfo? contextPodcastForEpisode = null;
             PodcastEpisodeInfo? effectiveEpisode = null;
             bool isPodcastEpisodeContext = false;
 
-            if (playlist != null)
+            ApplyViewContextFlags(snapshot, ref showViewSection);
+
+            if (!snapshot.IsCurrentPlayback && snapshot.PrimaryEntity == MenuEntityKind.Artist && snapshot.Artist != null)
             {
-                // 歌单：显示收藏/取消收藏歌单（仅在登录时）
-                bool isCreatedByCurrentUser = isMyPlaylistsView && IsPlaylistCreatedByCurrentUser(playlist);
-
-                if (isLoggedIn)
-                {
-                    subscribePlaylistMenuItem.Visible = !isMyPlaylistsView;
-                    unsubscribePlaylistMenuItem.Visible = !isCreatedByCurrentUser;
-                    deletePlaylistMenuItem.Visible = isCreatedByCurrentUser;
-                }
-                insertPlayMenuItem.Visible = false; // 歌单项不支持插播
-
-                // 显示下载歌单和批量下载（当视图包含多个歌单时）
-                downloadPlaylistMenuItem.Visible = true;
-                batchDownloadPlaylistsMenuItem.Visible = true;
-
-                sharePlaylistMenuItem.Visible = true;
-                sharePlaylistMenuItem.Tag = playlist;
-                showViewSection = true;
-                if (!string.IsNullOrWhiteSpace(playlist.Id))
-                {
-                    contextCommentTarget = new CommentTarget(
-                        playlist.Id!,
-                        CommentType.Playlist,
-                        string.IsNullOrWhiteSpace(playlist.Name) ? "歌单" : playlist.Name,
-                        playlist.Creator);
-                }
+                ConfigureArtistContextMenu(snapshot.Artist);
+                return;
             }
-            else if (album != null)
+
+            if (!snapshot.IsCurrentPlayback && snapshot.PrimaryEntity == MenuEntityKind.Category)
             {
-                // 专辑：显示收藏/取消收藏专辑（仅在登录时）
-                if (isLoggedIn)
-                {
-                    subscribeAlbumMenuItem.Visible = !isUserAlbumsView;
-                    unsubscribeAlbumMenuItem.Visible = true;
-                }
-                insertPlayMenuItem.Visible = false; // 专辑项不支持插播
-
-                // 显示下载专辑和批量下载（当视图包含多个专辑时）
-                downloadAlbumMenuItem.Visible = true;
-                batchDownloadPlaylistsMenuItem.Visible = true;
-
-                shareAlbumMenuItem.Visible = true;
-                shareAlbumMenuItem.Tag = album;
-                showViewSection = true;
-                if (!string.IsNullOrWhiteSpace(album.Id))
-                {
-                    contextCommentTarget = new CommentTarget(
-                        album.Id!,
-                        CommentType.Album,
-                        string.IsNullOrWhiteSpace(album.Name) ? "专辑" : album.Name,
-                        album.Artist);
-                }
+                ConfigureCategoryMenu();
+                return;
             }
-            else if (podcast != null)
+
+            switch (snapshot.PrimaryEntity)
             {
-                insertPlayMenuItem.Visible = false;
-                ConfigurePodcastMenuItems(podcast, isLoggedIn);
-                if (sharePodcastMenuItem.Visible)
-                {
-                    showViewSection = true;
-                }
-            }
-            else
-            {
-                // 歌曲：显示插播、收藏和下载功能
-                insertPlayMenuItem.Visible = true;
-
-                SongInfo? currentSong = null;
-                if (_isCurrentPlayingMenuActive)
-                {
-                    currentSong = _currentPlayingMenuSong;
-                }
-                else if (selectedItem?.Tag is int songIndex && songIndex >= 0 && songIndex < _currentSongs.Count)
-                {
-                    currentSong = _currentSongs[songIndex];
-                }
-                else if (selectedItem?.Tag is SongInfo directSong)
-                {
-                    currentSong = directSong;
-                }
-                else if (resolvedSongFromListItem != null)
-                {
-                    currentSong = resolvedSongFromListItem;
-                }
-
-                var activePodcastEpisode = podcastEpisode;
-                if (currentSong == null && activePodcastEpisode?.Song != null)
-                {
-                    currentSong = activePodcastEpisode.Song;
-                }
-
-                if (currentSong == null && activePodcastEpisode != null)
-                {
-                    currentSong = EnsurePodcastEpisodeSong(activePodcastEpisode);
-                }
-
-                if (activePodcastEpisode != null)
-                {
-                    effectiveEpisode = activePodcastEpisode;
-                    isPodcastEpisodeContext = true;
-                }
-                else if (currentSong?.IsPodcastEpisode == true)
-                {
-                    isPodcastEpisodeContext = true;
-                    effectiveEpisode = ResolvePodcastEpisodeFromSong(currentSong);
-                }
-
-                if (effectiveEpisode != null)
-                {
-                    contextPodcastForEpisode = ResolvePodcastFromEpisode(effectiveEpisode);
-                    currentSong = EnsurePodcastEpisodeSong(effectiveEpisode);
-                }
-
-                insertPlayMenuItem.Tag = currentSong;
-
-                if (currentSong != null && !string.IsNullOrWhiteSpace(currentSong.Id) && !currentSong.IsCloudSong && !isPodcastEpisodeContext)
-                {
-                    contextCommentTarget = new CommentTarget(
-                        currentSong.Id,
-                        CommentType.Song,
-                        string.IsNullOrWhiteSpace(currentSong.Name) ? "歌曲" : currentSong.Name,
-                        currentSong.Artist);
-                }
-
-                bool isCloudSong = isCloudView && currentSong != null && currentSong.IsCloudSong;
-                bool canUseLibraryFeatures = !isPodcastEpisodeContext && CanSongUseLibraryFeatures(currentSong);
-
-                if (isCloudSong)
-                {
-                    deleteFromCloudMenuItem.Visible = true;
-                    cloudMenuSeparator.Visible = true;
-                }
-                else
-                {
-                    deleteFromCloudMenuItem.Visible = false;
-                }
-
-                if (isLoggedIn)
-                {
-                    bool isLikedSongsView = IsCurrentLikedSongsView();
-
-                    if (canUseLibraryFeatures)
+                case MenuEntityKind.Playlist:
+                    ConfigurePlaylistMenu(snapshot, snapshot.IsLoggedIn, ref showViewSection, ref contextCommentTarget);
+                    break;
+                case MenuEntityKind.Album:
+                    ConfigureAlbumMenu(snapshot, snapshot.IsLoggedIn, ref showViewSection, ref contextCommentTarget);
+                    break;
+                case MenuEntityKind.Podcast:
+                    ConfigurePodcastMenu(snapshot, snapshot.IsLoggedIn, ref showViewSection);
+                    break;
+                case MenuEntityKind.Song:
+                case MenuEntityKind.PodcastEpisode:
+                    ConfigureSongOrEpisodeMenu(snapshot, snapshot.IsLoggedIn, snapshot.IsCloudView,
+                        ref showViewSection, ref contextCommentTarget, ref contextPodcastForEpisode,
+                        ref effectiveEpisode, ref isPodcastEpisodeContext);
+                    break;
+                default:
+                    if (!snapshot.IsCurrentPlayback)
                     {
-                        likeSongMenuItem.Visible = !isLikedSongsView;
-                        unlikeSongMenuItem.Visible = false;
+                        e.Cancel = true;
                     }
-                    else
-                    {
-                        likeSongMenuItem.Visible = false;
-                        unlikeSongMenuItem.Visible = false;
-                    }
-
-                    likeSongMenuItem.Tag = canUseLibraryFeatures ? currentSong : null;
-                    unlikeSongMenuItem.Tag = canUseLibraryFeatures ? currentSong : null;
-                    addToPlaylistMenuItem.Visible = canUseLibraryFeatures;
-                    addToPlaylistMenuItem.Tag = canUseLibraryFeatures ? currentSong : null;
-
-                    bool isInUserPlaylist = _currentViewSource.StartsWith("playlist:", StringComparison.OrdinalIgnoreCase) &&
-                                            _currentPlaylist != null &&
-                                            IsPlaylistCreatedByCurrentUser(_currentPlaylist);
-
-                    if (isLikedSongsView)
-                    {
-                        removeFromPlaylistMenuItem.Text = "取消收藏(&R)";
-                        removeFromPlaylistMenuItem.Visible = canUseLibraryFeatures;
-                        removeFromPlaylistMenuItem.Tag = canUseLibraryFeatures ? currentSong : null;
-                    }
-                    else
-                    {
-                        removeFromPlaylistMenuItem.Text = "从歌单中移除(&R)";
-                        removeFromPlaylistMenuItem.Visible = canUseLibraryFeatures && isInUserPlaylist;
-                        removeFromPlaylistMenuItem.Tag = removeFromPlaylistMenuItem.Visible ? currentSong : null;
-                    }
-                }
-                else
-                {
-                    likeSongMenuItem.Visible = false;
-                    unlikeSongMenuItem.Visible = false;
-                    addToPlaylistMenuItem.Visible = false;
-                    removeFromPlaylistMenuItem.Visible = false;
-                    removeFromPlaylistMenuItem.Text = "从歌单中移除(&R)";
-                    likeSongMenuItem.Tag = null;
-                    unlikeSongMenuItem.Tag = null;
-                    addToPlaylistMenuItem.Tag = null;
-                    removeFromPlaylistMenuItem.Tag = null;
-                }
-
-                downloadSongMenuItem.Visible = !isCloudSong;
-                downloadSongMenuItem.Tag = currentSong;
-                downloadSongMenuItem.Text = isPodcastEpisodeContext ? DownloadSoundMenuText : DownloadSongMenuText;
-                bool allowLyricsDownload = !isCloudSong && !isPodcastEpisodeContext;
-                downloadLyricsMenuItem.Visible = allowLyricsDownload;
-                downloadLyricsMenuItem.Tag = allowLyricsDownload ? currentSong : null;
-                batchDownloadMenuItem.Visible = !isCloudSong && !_isCurrentPlayingMenuActive;
-
-                bool showArtistMenu = currentSong != null &&
-                    (!currentSong.IsCloudSong || !string.IsNullOrWhiteSpace(currentSong?.Artist));
-                bool showAlbumMenu = currentSong != null &&
-                    (!currentSong.IsCloudSong || !string.IsNullOrWhiteSpace(currentSong?.Album));
-                bool showShareMenu = currentSong != null && canUseLibraryFeatures;
-
-                if (isPodcastEpisodeContext)
-                {
-                    showArtistMenu = false;
-                    showAlbumMenu = false;
-                    showShareMenu = false;
-                }
-
-                viewSongArtistMenuItem.Visible = showArtistMenu;
-                viewSongArtistMenuItem.Tag = showArtistMenu ? currentSong : null;
-
-                viewSongAlbumMenuItem.Visible = showAlbumMenu;
-                viewSongAlbumMenuItem.Tag = showAlbumMenu ? currentSong : null;
-
-                shareSongMenuItem.Visible = showShareMenu;
-                if (showShareMenu)
-                {
-                    shareSongMenuItem.Tag = currentSong;
-                    shareSongWebMenuItem.Tag = currentSong;
-                    shareSongDirectMenuItem.Tag = currentSong;
-                }
-                else
-                {
-                    shareSongMenuItem.Tag = null;
-                    shareSongWebMenuItem.Tag = null;
-                    shareSongDirectMenuItem.Tag = null;
-                }
-
-                if (contextPodcastForEpisode == null && effectiveEpisode == null && currentSong?.IsPodcastEpisode == true)
-                {
-                    contextPodcastForEpisode = ResolvePodcastFromSong(currentSong);
-                }
-
-                if (isPodcastEpisodeContext)
-                {
-                    ConfigurePodcastEpisodeShareMenu(effectiveEpisode ?? ResolvePodcastEpisodeFromSong(currentSong));
-                }
-                else
-                {
-                    ConfigurePodcastEpisodeShareMenu(null);
-                }
-
-                bool sharePodcastVisible = sharePodcastMenuItem.Visible;
-                bool sharePodcastEpisodeVisible = sharePodcastEpisodeMenuItem.Visible;
-
-                showViewSection = showViewSection ||
-                                  showArtistMenu ||
-                                  showAlbumMenu ||
-                                  showShareMenu ||
-                                  sharePodcastVisible ||
-                                  sharePodcastEpisodeVisible;
+                    return;
             }
 
             if (contextCommentTarget != null && !isPodcastEpisodeContext)
@@ -10364,7 +10033,9 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 commentMenuSeparator.Visible = true;
             }
 
-            if (podcastSortMenuItem.Visible)
+            if (podcastSortMenuItem.Visible ||
+                (artistSongsSortMenuItem?.Visible ?? false) ||
+                (artistAlbumsSortMenuItem?.Visible ?? false))
             {
                 showViewSection = true;
             }
@@ -10372,10 +10043,15 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             toolStripSeparatorView.Visible = showViewSection;
         }
 
+
         private void songContextMenu_Closed(object sender, System.Windows.Forms.ToolStripDropDownClosedEventArgs e)
         {
             _isCurrentPlayingMenuActive = false;
             _currentPlayingMenuSong = null;
+            if (songContextMenu != null && string.Equals(songContextMenu.Tag as string, CurrentPlayingMenuContextTag, StringComparison.Ordinal))
+            {
+                songContextMenu.Tag = null;
+            }
         }
 
         private void commentMenuItem_Click(object sender, EventArgs e)
@@ -10882,8 +10558,80 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 return;
             }
 
-            podcastSortLatestMenuItem.Checked = !_currentPodcastSortAscending;
-            podcastSortSerialMenuItem.Checked = _currentPodcastSortAscending;
+            SetMenuItemCheckedState(podcastSortLatestMenuItem, !_podcastSortState.CurrentOption, "按最新排序");
+            SetMenuItemCheckedState(podcastSortSerialMenuItem, _podcastSortState.CurrentOption, "按节目顺序排序");
+            if (podcastSortMenuItem != null)
+            {
+                string modeLabel = _podcastSortState.CurrentOption ? "节目顺序" : "按最新";
+                podcastSortMenuItem.Text = $"排序（{modeLabel}）";
+                podcastSortMenuItem.AccessibleDescription = _podcastSortState.AccessibleDescription;
+            }
+        }
+
+        private void EnsureSortMenuCheckMargins()
+        {
+            EnsureSortMenuCheckMargin(artistSongsSortMenuItem);
+            EnsureSortMenuCheckMargin(artistAlbumsSortMenuItem);
+            EnsureSortMenuCheckMargin(podcastSortMenuItem);
+        }
+
+        private void EnsureSortMenuCheckMargin(ToolStripMenuItem? menuItem)
+        {
+            if (menuItem?.DropDown is ToolStripDropDownMenu dropDown && !dropDown.ShowCheckMargin)
+            {
+                dropDown.ShowCheckMargin = true;
+            }
+        }
+
+        private void UpdateArtistSongsSortMenuChecks()
+        {
+            if (artistSongsSortHotMenuItem == null || artistSongsSortTimeMenuItem == null)
+            {
+                return;
+            }
+
+            SetMenuItemCheckedState(artistSongsSortHotMenuItem, _artistSongSortState.EqualsOption(ArtistSongSortOption.Hot), "按热门排序");
+            SetMenuItemCheckedState(artistSongsSortTimeMenuItem, _artistSongSortState.EqualsOption(ArtistSongSortOption.Time), "按发布时间排序");
+            if (artistSongsSortMenuItem != null)
+            {
+                string label = _artistSongSortState.EqualsOption(ArtistSongSortOption.Hot) ? "按热门" : "按发布时间";
+                artistSongsSortMenuItem.Text = $"单曲排序（{label}）";
+                artistSongsSortMenuItem.AccessibleDescription = _artistSongSortState.AccessibleDescription;
+            }
+        }
+
+        private void UpdateArtistAlbumsSortMenuChecks()
+        {
+            if (artistAlbumsSortLatestMenuItem == null || artistAlbumsSortOldestMenuItem == null)
+            {
+                return;
+            }
+
+            SetMenuItemCheckedState(artistAlbumsSortLatestMenuItem, _artistAlbumSortState.EqualsOption(ArtistAlbumSortOption.Latest), "按最新发布排序");
+            SetMenuItemCheckedState(artistAlbumsSortOldestMenuItem, _artistAlbumSortState.EqualsOption(ArtistAlbumSortOption.Oldest), "按最早发布排序");
+            if (artistAlbumsSortMenuItem != null)
+            {
+                string label = _artistAlbumSortState.EqualsOption(ArtistAlbumSortOption.Latest) ? "按最新" : "按最早";
+                artistAlbumsSortMenuItem.Text = $"专辑排序（{label}）";
+                artistAlbumsSortMenuItem.AccessibleDescription = _artistAlbumSortState.AccessibleDescription;
+            }
+        }
+
+        private static void SetMenuItemCheckedState(ToolStripMenuItem? menuItem, bool isChecked, string baseAccessibleName)
+        {
+            if (menuItem == null)
+            {
+                return;
+            }
+
+            menuItem.Checked = isChecked;
+            menuItem.CheckState = isChecked ? CheckState.Checked : CheckState.Unchecked;
+            if (!string.IsNullOrWhiteSpace(baseAccessibleName))
+            {
+                menuItem.AccessibleName = isChecked
+                    ? $"{baseAccessibleName} 已选中"
+                    : baseAccessibleName;
+            }
         }
 
         /// <summary>
@@ -11628,6 +11376,68 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             }
         }
 
+        private async void artistSongsSortHotMenuItem_Click(object sender, EventArgs e)
+        {
+            await ChangeArtistSongsSortAsync(ArtistSongSortOption.Hot);
+        }
+
+        private async void artistSongsSortTimeMenuItem_Click(object sender, EventArgs e)
+        {
+            await ChangeArtistSongsSortAsync(ArtistSongSortOption.Time);
+        }
+
+        private async void artistAlbumsSortLatestMenuItem_Click(object sender, EventArgs e)
+        {
+            await ChangeArtistAlbumsSortAsync(ArtistAlbumSortOption.Latest);
+        }
+
+        private async void artistAlbumsSortOldestMenuItem_Click(object sender, EventArgs e)
+        {
+            await ChangeArtistAlbumsSortAsync(ArtistAlbumSortOption.Oldest);
+        }
+
+        private async Task ChangeArtistAlbumsSortAsync(ArtistAlbumSortOption targetSort)
+        {
+            if (string.IsNullOrWhiteSpace(_currentViewSource) ||
+                !_currentViewSource.StartsWith("artist_albums:", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            ParseArtistListViewSource(_currentViewSource, out var artistId, out _, out var currentOrderToken, defaultOrder: "latest");
+            var currentSort = ResolveArtistAlbumSort(currentOrderToken);
+            if (_artistAlbumSortState.EqualsOption(targetSort) && currentSort == targetSort)
+            {
+                UpdateArtistAlbumsSortMenuChecks();
+                return;
+            }
+
+            _artistAlbumSortState.SetOption(targetSort);
+            await LoadArtistAlbumsAsync(artistId, 0, skipSave: true, sortOverride: targetSort);
+            UpdateArtistAlbumsSortMenuChecks();
+        }
+
+        private async Task ChangeArtistSongsSortAsync(ArtistSongSortOption targetOrder)
+        {
+            if (string.IsNullOrWhiteSpace(_currentViewSource) ||
+                !_currentViewSource.StartsWith("artist_songs:", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            ParseArtistListViewSource(_currentViewSource, out var artistId, out _, out var currentOrderToken);
+            var currentOrder = ResolveArtistSongsOrder(currentOrderToken);
+            if (_artistSongSortState.EqualsOption(targetOrder) && currentOrder == targetOrder)
+            {
+                UpdateArtistSongsSortMenuChecks();
+                return;
+            }
+
+            _artistSongSortState.SetOption(targetOrder);
+            await LoadArtistSongsAsync(artistId, 0, skipSave: true, orderOverride: targetOrder);
+            UpdateArtistSongsSortMenuChecks();
+        }
+
         private async void podcastSortLatestMenuItem_Click(object sender, EventArgs e)
         {
             await ChangePodcastEpisodeSortAsync(ascending: false);
@@ -11652,13 +11462,13 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 return;
             }
 
-            if (_currentPodcastSortAscending == ascending && currentAscending == ascending)
+            if (_podcastSortState.EqualsOption(ascending) && currentAscending == ascending)
             {
                 UpdatePodcastSortMenuChecks();
                 return;
             }
 
-            _currentPodcastSortAscending = ascending;
+            _podcastSortState.SetOption(ascending);
             await LoadPodcastEpisodesAsync(podcastId, 0, skipSave: true, podcastInfo: _currentPodcast, sortAscendingOverride: ascending);
             UpdatePodcastSortMenuChecks();
         }
@@ -12088,6 +11898,16 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
         /// 歌手列表偏移量（用于分页恢复）
         /// </summary>
         public int ArtistOffset { get; set; }
+
+        /// <summary>
+        /// 歌手单曲列表排序。
+        /// </summary>
+        public string ArtistOrder { get; set; } = "hot";
+
+        /// <summary>
+        /// 歌手专辑列表排序。
+        /// </summary>
+        public string ArtistAlbumSort { get; set; } = "latest";
 
         /// <summary>
         /// 歌手类型筛选（分类视图使用）

@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using YTPlayer.Core;
 using YTPlayer.Models;
 using YTPlayer.Utils;
 
@@ -18,6 +19,24 @@ namespace YTPlayer
         private bool _currentArtistSongsHasMore;
         private int _currentArtistAlbumsOffset;
         private bool _currentArtistAlbumsHasMore;
+        private int _currentArtistAlbumsTotalCount;
+        private SortState<ArtistSongSortOption> _artistSongSortState = new SortState<ArtistSongSortOption>(
+            ArtistSongSortOption.Hot,
+            new Dictionary<ArtistSongSortOption, string>
+            {
+                { ArtistSongSortOption.Hot, "当前排序：按热门" },
+                { ArtistSongSortOption.Time, "当前排序：按发布时间" }
+            });
+
+        private SortState<ArtistAlbumSortOption> _artistAlbumSortState = new SortState<ArtistAlbumSortOption>(
+            ArtistAlbumSortOption.Latest,
+            new Dictionary<ArtistAlbumSortOption, string>
+            {
+                { ArtistAlbumSortOption.Latest, "当前排序：按最新发布" },
+                { ArtistAlbumSortOption.Oldest, "当前排序：按最早发布" }
+            });
+        private readonly Dictionary<long, List<AlbumInfo>> _artistAlbumsAscendingCache = new Dictionary<long, List<AlbumInfo>>();
+        private const int ArtistAlbumsAscendingCacheLimit = 4;
         private int _currentArtistTypeFilter = -1;
         private int _currentArtistAreaFilter = -1;
         private bool _currentArtistCategoryHasMore;
@@ -174,10 +193,14 @@ namespace YTPlayer
                 }
 
                 _currentArtist = artist;
+                _artistSongSortState.SetOption(ArtistSongSortOption.Hot);
+                _artistAlbumSortState.SetOption(ArtistAlbumSortOption.Latest);
                 _currentArtistSongsOffset = 0;
                 _currentArtistAlbumsOffset = 0;
                 _currentArtistSongsHasMore = false;
                 _currentArtistAlbumsHasMore = false;
+                _currentArtistAlbumsTotalCount = 0;
+                ClearArtistAlbumsAscendingCache(artist.Id);
 
                 _currentArtistDetail = await _apiClient.GetArtistDetailAsync(artist.Id, includeIntroduction: true);
                 if (_currentArtistDetail != null)
@@ -291,7 +314,11 @@ namespace YTPlayer
             }
         }
 
-        private async Task LoadArtistSongsAsync(long artistId, int offset = 0, bool skipSave = false)
+        private async Task LoadArtistSongsAsync(
+            long artistId,
+            int offset = 0,
+            bool skipSave = false,
+            ArtistSongSortOption? orderOverride = null)
         {
             try
             {
@@ -302,7 +329,13 @@ namespace YTPlayer
                     SaveNavigationState();
                 }
 
-                var (songs, hasMore, total) = await _apiClient.GetArtistSongsAsync(artistId, ArtistSongsPageSize, offset);
+                if (orderOverride.HasValue)
+                {
+                    _artistSongSortState.SetOption(orderOverride.Value);
+                }
+
+                string orderToken = MapArtistSongsOrder(_artistSongSortState.CurrentOption);
+                var (songs, hasMore, total) = await _apiClient.GetArtistSongsAsync(artistId, ArtistSongsPageSize, offset, orderToken);
 
                 _currentArtistSongsOffset = offset;
                 _currentArtistSongsHasMore = hasMore;
@@ -312,8 +345,9 @@ namespace YTPlayer
                     hasNextPage: hasMore,
                     startIndex: offset + 1,
                     preserveSelection: false,
-                    viewSource: $"artist_songs:{artistId}:offset{offset}",
+                    viewSource: $"artist_songs:{artistId}:order{orderToken}:offset{offset}",
                     accessibleName: "歌手单曲列表");
+                UpdateArtistSongsSortMenuChecks();
 
                 UpdateStatusBar($"已加载单曲（{offset + 1}-{offset + songs.Count} / {total}）");
             }
@@ -325,7 +359,11 @@ namespace YTPlayer
             }
         }
 
-        private async Task LoadArtistAlbumsAsync(long artistId, int offset = 0, bool skipSave = false)
+        private async Task LoadArtistAlbumsAsync(
+            long artistId,
+            int offset = 0,
+            bool skipSave = false,
+            ArtistAlbumSortOption? sortOverride = null)
         {
             try
             {
@@ -336,20 +374,46 @@ namespace YTPlayer
                     SaveNavigationState();
                 }
 
-                var (albums, hasMore, total) = await _apiClient.GetArtistAlbumsAsync(artistId, ArtistAlbumsPageSize, offset);
+                if (sortOverride.HasValue)
+                {
+                    _artistAlbumSortState.SetOption(sortOverride.Value);
+                }
 
-                _currentArtistAlbumsOffset = offset;
-                _currentArtistAlbumsHasMore = hasMore;
+                List<AlbumInfo> albumsToDisplay;
+                bool viewHasMore;
+                int totalCount;
+                int appliedOffset = offset;
 
-                DisplayAlbums(albums,
+                if (_artistAlbumSortState.CurrentOption == ArtistAlbumSortOption.Oldest)
+                {
+                    var ascendingResult = await LoadArtistAlbumsAscendingPageAsync(artistId, offset);
+                    albumsToDisplay = ascendingResult.Albums;
+                    appliedOffset = ascendingResult.NormalizedOffset;
+                    totalCount = _currentArtistAlbumsTotalCount;
+                    viewHasMore = ascendingResult.HasMore;
+                }
+                else
+                {
+                var result = await _apiClient.GetArtistAlbumsAsync(artistId, ArtistAlbumsPageSize, offset);
+                albumsToDisplay = result.Albums ?? new List<AlbumInfo>();
+                totalCount = result.TotalCount;
+                _currentArtistAlbumsTotalCount = totalCount;
+                viewHasMore = result.HasMore;
+                }
+
+                _currentArtistAlbumsOffset = appliedOffset;
+                _currentArtistAlbumsHasMore = viewHasMore;
+
+                DisplayAlbums(albumsToDisplay,
                     preserveSelection: false,
-                    viewSource: $"artist_albums:{artistId}:offset{offset}",
+                viewSource: $"artist_albums:{artistId}:order{MapArtistAlbumSort(_artistAlbumSortState.CurrentOption)}:offset{appliedOffset}",
                     accessibleName: "歌手专辑列表",
-                    startIndex: offset + 1,
+                    startIndex: appliedOffset + 1,
                     showPagination: true,
-                    hasNextPage: hasMore);
+                    hasNextPage: viewHasMore);
+                UpdateArtistAlbumsSortMenuChecks();
 
-                UpdateStatusBar($"已加载专辑（{offset + 1}-{offset + albums.Count} / {total}）");
+                UpdateStatusBar($"已加载专辑（{appliedOffset + 1}-{appliedOffset + albumsToDisplay.Count} / {totalCount}）");
             }
             catch (Exception ex)
             {
@@ -844,11 +908,11 @@ namespace YTPlayer
                 }
                 else if (_currentViewSource != null && _currentViewSource.StartsWith("artist_songs:", StringComparison.OrdinalIgnoreCase))
                 {
-                    await LoadArtistSongsAsync(artistId, _currentArtistSongsOffset, skipSave: true);
+                    await LoadArtistSongsAsync(artistId, _currentArtistSongsOffset, skipSave: true, orderOverride: _artistSongSortState.CurrentOption);
                 }
                 else if (_currentViewSource != null && _currentViewSource.StartsWith("artist_albums:", StringComparison.OrdinalIgnoreCase))
                 {
-                    await LoadArtistAlbumsAsync(artistId, _currentArtistAlbumsOffset, skipSave: true);
+                    await LoadArtistAlbumsAsync(artistId, _currentArtistAlbumsOffset, skipSave: true, sortOverride: _artistAlbumSortState.CurrentOption);
                 }
             }
             catch (Exception ex)
@@ -874,10 +938,11 @@ namespace YTPlayer
             return long.TryParse(slice, out var value) ? value : 0;
         }
 
-        private static void ParseArtistListViewSource(string source, out long artistId, out int offset)
+        private static void ParseArtistListViewSource(string source, out long artistId, out int offset, out string order, string defaultOrder = "hot")
         {
             artistId = 0;
             offset = 0;
+            order = defaultOrder;
 
             var parts = source.Split(':');
             if (parts.Length >= 2)
@@ -889,6 +954,24 @@ namespace YTPlayer
             if (!string.IsNullOrEmpty(offsetPart))
             {
                 int.TryParse(offsetPart.Substring("offset".Length), out offset);
+            }
+
+            for (int i = 0; i < parts.Length; i++)
+            {
+                var part = parts[i];
+                if (part.StartsWith("order", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (part.Length > "order".Length)
+                    {
+                        order = part.Substring("order".Length);
+                        break;
+                    }
+                    else if (i + 1 < parts.Length)
+                    {
+                        order = parts[i + 1];
+                        break;
+                    }
+                }
             }
         }
 
@@ -911,5 +994,136 @@ namespace YTPlayer
                 int.TryParse(offsetPart.Substring("offset".Length), out offset);
             }
         }
+
+        private static string MapArtistSongsOrder(ArtistSongSortOption order)
+        {
+            return order == ArtistSongSortOption.Time ? "time" : "hot";
+        }
+
+        private static ArtistSongSortOption ResolveArtistSongsOrder(string? order)
+        {
+            return string.Equals(order, "time", StringComparison.OrdinalIgnoreCase)
+                ? ArtistSongSortOption.Time
+                : ArtistSongSortOption.Hot;
+        }
+
+        private static string MapArtistAlbumSort(ArtistAlbumSortOption sort)
+        {
+            return sort == ArtistAlbumSortOption.Oldest ? "oldest" : "latest";
+        }
+
+        private static ArtistAlbumSortOption ResolveArtistAlbumSort(string? sort)
+        {
+            return string.Equals(sort, "oldest", StringComparison.OrdinalIgnoreCase)
+                ? ArtistAlbumSortOption.Oldest
+                : ArtistAlbumSortOption.Latest;
+        }
+
+        private async Task EnsureArtistAlbumsTotalCountAsync(long artistId)
+        {
+            if (_currentArtistAlbumsTotalCount > 0)
+            {
+                return;
+            }
+
+            var (_, _, totalCount) = await _apiClient.GetArtistAlbumsAsync(artistId, 1, 0);
+            _currentArtistAlbumsTotalCount = totalCount;
+        }
+
+        private void ClearArtistAlbumsAscendingCache(long? artistId = null)
+        {
+            if (artistId.HasValue)
+            {
+                _artistAlbumsAscendingCache.Remove(artistId.Value);
+            }
+            else
+            {
+                _artistAlbumsAscendingCache.Clear();
+            }
+        }
+
+        private void TrimArtistAlbumsAscendingCache()
+        {
+            while (_artistAlbumsAscendingCache.Count > ArtistAlbumsAscendingCacheLimit)
+            {
+                var keyToRemove = _artistAlbumsAscendingCache.Keys.FirstOrDefault();
+                if (keyToRemove != 0)
+                {
+                    _artistAlbumsAscendingCache.Remove(keyToRemove);
+                }
+                else
+                {
+                    break;
+                }
+            }
+        }
+
+        private async Task<List<AlbumInfo>> LoadArtistAlbumsAscendingListAsync(long artistId)
+        {
+            var allAlbums = new List<AlbumInfo>();
+            int offset = 0;
+            bool hasMore = true;
+            int safety = 0;
+            while (hasMore && safety < 200)
+            {
+                var (albums, more, total) = await _apiClient.GetArtistAlbumsAsync(artistId, ArtistAlbumsPageSize, offset);
+                if (albums == null || albums.Count == 0)
+                {
+                    break;
+                }
+
+                allAlbums.AddRange(albums);
+                offset += albums.Count;
+                hasMore = more;
+                _currentArtistAlbumsTotalCount = total;
+                safety++;
+            }
+
+            allAlbums.Reverse();
+            return allAlbums;
+        }
+
+        private async Task<(List<AlbumInfo> Albums, int NormalizedOffset, bool HasMore)> LoadArtistAlbumsAscendingPageAsync(long artistId, int offset)
+        {
+            if (!_artistAlbumsAscendingCache.TryGetValue(artistId, out var cachedAlbums))
+            {
+                var fullResult = await LoadArtistAlbumsAscendingListAsync(artistId);
+                cachedAlbums = fullResult;
+                _artistAlbumsAscendingCache[artistId] = cachedAlbums;
+                TrimArtistAlbumsAscendingCache();
+            }
+
+            int totalCount = cachedAlbums.Count;
+            if (totalCount == 0)
+            {
+                return (new List<AlbumInfo>(), 0, false);
+            }
+
+            int normalizedOffset = Math.Max(0, Math.Min(offset, Math.Max(0, totalCount - 1)));
+            int remaining = Math.Max(0, totalCount - normalizedOffset);
+            int takeCount = Math.Min(ArtistAlbumsPageSize, remaining);
+            if (takeCount <= 0)
+            {
+                return (new List<AlbumInfo>(), normalizedOffset, false);
+            }
+
+            var page = cachedAlbums.Skip(normalizedOffset).Take(takeCount).ToList();
+            bool hasMore = normalizedOffset + takeCount < totalCount;
+            return (page, normalizedOffset, hasMore);
+        }
+
+
+    }
+
+    internal enum ArtistSongSortOption
+    {
+        Hot,
+        Time
+    }
+
+    internal enum ArtistAlbumSortOption
+    {
+        Latest,
+        Oldest
     }
 }

@@ -21,7 +21,7 @@ namespace YTPlayer.Core.Playback
             Source = string.IsNullOrWhiteSpace(source) ? "list" : source!.Trim();
             if (!string.IsNullOrWhiteSpace(sourceId))
             {
-                SourceId = sourceId.Trim();
+                SourceId = sourceId!.Trim();
                 if (long.TryParse(SourceId, out var parsed))
                 {
                     SourceIdLong = parsed;

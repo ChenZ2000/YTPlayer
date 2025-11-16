@@ -110,6 +110,12 @@ namespace YTPlayer
             this.sharePodcastEpisodeMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.sharePodcastEpisodeWebMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.sharePodcastEpisodeDirectMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.artistSongsSortMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.artistSongsSortHotMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.artistSongsSortTimeMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.artistAlbumsSortMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.artistAlbumsSortLatestMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.artistAlbumsSortOldestMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.podcastSortMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.podcastSortLatestMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.podcastSortSerialMenuItem = new System.Windows.Forms.ToolStripMenuItem();
@@ -740,6 +746,8 @@ this.hideMenuItem.Click += new System.EventHandler(this.hideMenuItem_Click);
             this.shareAlbumMenuItem,
             this.sharePodcastMenuItem,
             this.sharePodcastEpisodeMenuItem,
+            this.artistSongsSortMenuItem,
+            this.artistAlbumsSortMenuItem,
             this.podcastSortMenuItem,
             this.commentMenuSeparator,
             this.commentMenuItem,
@@ -971,6 +979,58 @@ this.hideMenuItem.Click += new System.EventHandler(this.hideMenuItem_Click);
             this.sharePodcastEpisodeDirectMenuItem.Text = "分享直链(&L)";
             this.sharePodcastEpisodeDirectMenuItem.Click += new System.EventHandler(this.sharePodcastEpisodeDirectMenuItem_Click);
             //
+            // artistSongsSortMenuItem
+            //
+            this.artistSongsSortMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
+            this.artistSongsSortHotMenuItem,
+            this.artistSongsSortTimeMenuItem});
+            this.artistSongsSortMenuItem.Name = "artistSongsSortMenuItem";
+            this.artistSongsSortMenuItem.Size = new System.Drawing.Size(210, 24);
+            this.artistSongsSortMenuItem.Text = "单曲排序(&S)";
+            this.artistSongsSortMenuItem.Visible = false;
+            //
+            // artistSongsSortHotMenuItem
+            //
+            this.artistSongsSortHotMenuItem.Name = "artistSongsSortHotMenuItem";
+            this.artistSongsSortHotMenuItem.Size = new System.Drawing.Size(250, 26);
+            this.artistSongsSortHotMenuItem.Text = "按热门排序(&H)";
+            this.artistSongsSortHotMenuItem.CheckOnClick = true;
+            this.artistSongsSortHotMenuItem.Click += new System.EventHandler(this.artistSongsSortHotMenuItem_Click);
+            //
+            // artistSongsSortTimeMenuItem
+            //
+            this.artistSongsSortTimeMenuItem.Name = "artistSongsSortTimeMenuItem";
+            this.artistSongsSortTimeMenuItem.Size = new System.Drawing.Size(250, 26);
+            this.artistSongsSortTimeMenuItem.Text = "按发布时间排序(&T)";
+            this.artistSongsSortTimeMenuItem.CheckOnClick = true;
+            this.artistSongsSortTimeMenuItem.Click += new System.EventHandler(this.artistSongsSortTimeMenuItem_Click);
+            //
+            // artistAlbumsSortMenuItem
+            //
+            this.artistAlbumsSortMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
+            this.artistAlbumsSortLatestMenuItem,
+            this.artistAlbumsSortOldestMenuItem});
+            this.artistAlbumsSortMenuItem.Name = "artistAlbumsSortMenuItem";
+            this.artistAlbumsSortMenuItem.Size = new System.Drawing.Size(210, 24);
+            this.artistAlbumsSortMenuItem.Text = "专辑排序(&B)";
+            this.artistAlbumsSortMenuItem.Visible = false;
+            //
+            // artistAlbumsSortLatestMenuItem
+            //
+            this.artistAlbumsSortLatestMenuItem.Name = "artistAlbumsSortLatestMenuItem";
+            this.artistAlbumsSortLatestMenuItem.Size = new System.Drawing.Size(240, 26);
+            this.artistAlbumsSortLatestMenuItem.Text = "按最新发布排序(&N)";
+            this.artistAlbumsSortLatestMenuItem.CheckOnClick = true;
+            this.artistAlbumsSortLatestMenuItem.Click += new System.EventHandler(this.artistAlbumsSortLatestMenuItem_Click);
+            //
+            // artistAlbumsSortOldestMenuItem
+            //
+            this.artistAlbumsSortOldestMenuItem.Name = "artistAlbumsSortOldestMenuItem";
+            this.artistAlbumsSortOldestMenuItem.Size = new System.Drawing.Size(240, 26);
+            this.artistAlbumsSortOldestMenuItem.Text = "按最早发布排序(&O)";
+            this.artistAlbumsSortOldestMenuItem.CheckOnClick = true;
+            this.artistAlbumsSortOldestMenuItem.Click += new System.EventHandler(this.artistAlbumsSortOldestMenuItem_Click);
+            //
             // podcastSortMenuItem
             //
             this.podcastSortMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
@@ -986,6 +1046,7 @@ this.hideMenuItem.Click += new System.EventHandler(this.hideMenuItem_Click);
             this.podcastSortLatestMenuItem.Name = "podcastSortLatestMenuItem";
             this.podcastSortLatestMenuItem.Size = new System.Drawing.Size(210, 26);
             this.podcastSortLatestMenuItem.Text = "按最新排序(&N)";
+            this.podcastSortLatestMenuItem.CheckOnClick = true;
             this.podcastSortLatestMenuItem.Click += new System.EventHandler(this.podcastSortLatestMenuItem_Click);
             //
             // podcastSortSerialMenuItem
@@ -993,6 +1054,7 @@ this.hideMenuItem.Click += new System.EventHandler(this.hideMenuItem_Click);
             this.podcastSortSerialMenuItem.Name = "podcastSortSerialMenuItem";
             this.podcastSortSerialMenuItem.Size = new System.Drawing.Size(210, 26);
             this.podcastSortSerialMenuItem.Text = "按节目顺序排序(&S)";
+            this.podcastSortSerialMenuItem.CheckOnClick = true;
             this.podcastSortSerialMenuItem.Click += new System.EventHandler(this.podcastSortSerialMenuItem_Click);
             //
             // commentMenuSeparator
@@ -1270,6 +1332,12 @@ this.hideMenuItem.Click += new System.EventHandler(this.hideMenuItem_Click);
         private System.Windows.Forms.ToolStripMenuItem sharePodcastEpisodeMenuItem;
         private System.Windows.Forms.ToolStripMenuItem sharePodcastEpisodeWebMenuItem;
         private System.Windows.Forms.ToolStripMenuItem sharePodcastEpisodeDirectMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem artistSongsSortMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem artistSongsSortHotMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem artistSongsSortTimeMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem artistAlbumsSortMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem artistAlbumsSortLatestMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem artistAlbumsSortOldestMenuItem;
         private System.Windows.Forms.ToolStripMenuItem podcastSortMenuItem;
         private System.Windows.Forms.ToolStripMenuItem podcastSortLatestMenuItem;
         private System.Windows.Forms.ToolStripMenuItem podcastSortSerialMenuItem;

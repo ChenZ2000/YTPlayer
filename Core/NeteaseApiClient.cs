@@ -4771,7 +4771,7 @@ namespace YTPlayer.Core
                     Name = albumToken["name"]?.Value<string>() ?? $"专辑 {albumId}",
                     Artist = ResolveAlbumArtistName(albumToken),
                     PicUrl = albumToken["picUrl"]?.Value<string>() ?? string.Empty,
-                    PublishTime = FormatAlbumPublishDate(albumToken["publishTime"]?.Value<long>()),
+                    PublishTime = FormatAlbumPublishDate(albumToken["publishTime"]),
                     TrackCount = ResolveAlbumTrackCount(albumToken),
                     Description = ResolveAlbumDescription(albumToken)
                 };
@@ -6074,7 +6074,7 @@ namespace YTPlayer.Core
                         Album = (songData["album"] ?? songData["al"])?["name"]?.Value<string>() ?? "未知专辑",
                         AlbumId = (songData["album"] ?? songData["al"])?["id"]?.Value<string>()
                             ?? (songData["album"] ?? songData["al"])?["id"]?.Value<long>().ToString(),
-                        Duration = (int)(songData["duration"]?.Value<long>() ?? songData["dt"]?.Value<long>() ?? 0),
+                        Duration = SanitizeDurationSeconds(songData["duration"]?.Value<long>() ?? songData["dt"]?.Value<long>()),
                         PicUrl = (songData["album"] ?? songData["al"])?["picUrl"]?.Value<string>() ?? ""
                     };
 
@@ -6320,21 +6320,81 @@ namespace YTPlayer.Core
             var result = new List<AlbumInfo>();
             foreach (var item in data)
             {
+                // album_sublist 返回的专辑对象有时被包裹在 album 字段中，也可能直接位于根节点
+                var albumToken = item["album"] as JObject ?? item as JObject;
+                if (albumToken == null)
+                {
+                    continue;
+                }
+
+                // 兼容字段缺失的情况，优先使用专辑对象上的 publishTime，回退到根节点
+                var publishTimeToken = albumToken["publishTime"] ?? item["publishTime"];
+
                 var album = new AlbumInfo
                 {
-                    Id = item["id"]?.Value<string>(),
-                    Name = item["name"]?.Value<string>(),
-                    Artist = ResolveAlbumArtistName(item),
-                    PicUrl = item["picUrl"]?.Value<string>(),
-                    PublishTime = FormatAlbumPublishDate(item["publishTime"]?.Value<long>()),
-                    TrackCount = ResolveAlbumTrackCount(item),
-                    Description = ResolveAlbumDescription(item)
+                    Id = albumToken["id"]?.Value<string>() ?? albumToken["id"]?.Value<long>().ToString(),
+                    Name = albumToken["name"]?.Value<string>() ?? "未知专辑",
+                    Artist = ResolveAlbumArtistName(albumToken),
+                    PicUrl = albumToken["picUrl"]?.Value<string>() ?? string.Empty,
+                    PublishTime = FormatAlbumPublishDate(publishTimeToken),
+                    TrackCount = ResolveAlbumTrackCount(albumToken),
+                    Description = ResolveAlbumDescription(albumToken)
                 };
 
                 result.Add(album);
             }
 
+            await FillAlbumDetailsAsync(result);
             return (result, totalCount);
+        }
+
+        /// <summary>
+        /// 补全专辑缺失的发布日期和曲目数（收藏列表部分字段可能缺失）。
+        /// </summary>
+        private async Task FillAlbumDetailsAsync(List<AlbumInfo> albums, int batchSize = 50)
+        {
+            if (albums == null || albums.Count == 0)
+            {
+                return;
+            }
+
+            if (batchSize < 1)
+            {
+                batchSize = 12;
+            }
+
+            // 仅对缺失关键信息的专辑做额外请求
+            var needFetch = albums
+                .Where(a =>
+                    !string.IsNullOrWhiteSpace(a.Id) &&
+                    (string.IsNullOrWhiteSpace(a.PublishTime) || a.TrackCount <= 0))
+                .ToList();
+
+            for (int i = 0; i < needFetch.Count; i += batchSize)
+            {
+                var batch = needFetch.Skip(i).Take(batchSize).ToList();
+                var detailTasks = batch.Select(a => GetAlbumDetailAsync(a.Id!)).ToList();
+
+                for (int j = 0; j < detailTasks.Count; j++)
+                {
+                    var detail = await detailTasks[j];
+                    if (detail == null || detail.Id == null)
+                    {
+                        continue;
+                    }
+
+                    var album = batch[j];
+                    if (string.IsNullOrWhiteSpace(album.PublishTime) && !string.IsNullOrWhiteSpace(detail.PublishTime))
+                    {
+                        album.PublishTime = detail.PublishTime;
+                    }
+
+                    if (album.TrackCount <= 0 && detail.TrackCount > 0)
+                    {
+                        album.TrackCount = detail.TrackCount;
+                    }
+                }
+            }
         }
 
         /// <summary>
@@ -7173,7 +7233,7 @@ namespace YTPlayer.Core
                               entry["duration"]?.Value<long>() ?? 0;
             if (durationMs > 0)
             {
-                song.Duration = (int)(durationMs / 1000);
+                song.Duration = SanitizeDurationSeconds(durationMs);
             }
 
             return song;
@@ -7277,7 +7337,7 @@ namespace YTPlayer.Core
                         Album = (songData["al"] ?? songData["album"])?["name"]?.Value<string>() ?? "未知专辑",
                         AlbumId = (songData["al"] ?? songData["album"])?["id"]?.Value<string>()
                             ?? (songData["al"] ?? songData["album"])?["id"]?.Value<long>().ToString(),
-                        Duration = (int)(songData["dt"]?.Value<long>() ?? songData["duration"]?.Value<long>() ?? 0),
+                        Duration = SanitizeDurationSeconds(songData["dt"]?.Value<long>() ?? songData["duration"]?.Value<long>()),
                         PicUrl = (songData["al"] ?? songData["album"])?["picUrl"]?.Value<string>() ?? ""
                     };
                     if (songData is JObject playRecordSong)
@@ -7546,7 +7606,7 @@ namespace YTPlayer.Core
                         Name = albumData["name"]?.Value<string>() ?? "未知专辑",
                         Artist = ResolveAlbumArtistName(albumData),
                         PicUrl = albumData["picUrl"]?.Value<string>() ?? "",
-                        PublishTime = FormatAlbumPublishDate(albumData["publishTime"]?.Value<long>()),
+                        PublishTime = FormatAlbumPublishDate(albumData["publishTime"]),
                         TrackCount = ResolveAlbumTrackCount(albumData),
                         Description = ResolveAlbumDescription(albumData)
                     };
@@ -7724,7 +7784,7 @@ namespace YTPlayer.Core
                         Name = album["name"]?.Value<string>() ?? "未知专辑",
                         Artist = ResolveAlbumArtistName(album),
                         PicUrl = album["picUrl"]?.Value<string>() ?? "",
-                        PublishTime = FormatAlbumPublishDate(album["publishTime"]?.Value<long>()),
+                        PublishTime = FormatAlbumPublishDate(album["publishTime"]),
                         TrackCount = ResolveAlbumTrackCount(album),
                         Description = ResolveAlbumDescription(album)
                     };
@@ -8204,7 +8264,7 @@ namespace YTPlayer.Core
                     {
                         Id = id,
                         Name = name,
-                        Duration = (song["dt"]?.Value<int>() ?? song["duration"]?.Value<int>() ?? 0) / 1000,
+                        Duration = SanitizeDurationSeconds(song["dt"]?.Value<long>() ?? song["duration"]?.Value<long>()),
                         Album = albumName,
                         AlbumId = albumId,
                         PicUrl = albumPic,
@@ -8623,20 +8683,93 @@ namespace YTPlayer.Core
 
         private static string FormatAlbumPublishDate(long? publishTime)
         {
-            if (!publishTime.HasValue || publishTime.Value <= 0)
+            if (!publishTime.HasValue)
             {
                 return string.Empty;
             }
 
-            try
-            {
-                return DateTimeOffset.FromUnixTimeMilliseconds(publishTime.Value)
-                    .DateTime.ToString("yyyy-MM-dd");
-            }
-            catch
+            return FormatAlbumPublishDate(new Newtonsoft.Json.Linq.JValue(publishTime.Value));
+        }
+
+        private static string FormatAlbumPublishDate(JToken? publishToken)
+        {
+            if (publishToken == null || publishToken.Type == JTokenType.Null)
             {
                 return string.Empty;
             }
+
+            if (publishToken.Type == JTokenType.Integer || publishToken.Type == JTokenType.Float)
+            {
+                try
+                {
+                    long value = publishToken.Value<long>();
+                    if (value <= 0)
+                    {
+                        return string.Empty;
+                    }
+
+                    return DateTimeOffset.FromUnixTimeMilliseconds(value).DateTime.ToString("yyyy-MM-dd");
+                }
+                catch
+                {
+                    return string.Empty;
+                }
+            }
+
+            var text = publishToken.Value<string>();
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return string.Empty;
+            }
+
+            if (DateTime.TryParse(text, out var parsed))
+            {
+                return parsed.ToString("yyyy-MM-dd");
+            }
+
+            text = text.Trim();
+            if (long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var numericValue))
+            {
+                if (numericValue > 0)
+                {
+                    try
+                    {
+                        // 10 位时间戳按秒处理，其他情况按毫秒处理
+                        return (text.Length == 10
+                                ? DateTimeOffset.FromUnixTimeSeconds(numericValue)
+                                : DateTimeOffset.FromUnixTimeMilliseconds(numericValue))
+                            .DateTime.ToString("yyyy-MM-dd");
+                    }
+                    catch
+                    {
+                        // ignore and fall back to partial year parsing
+                    }
+                }
+            }
+            return text.Length >= 4 ? text.Substring(0, 4) : string.Empty;
+        }
+
+        private static int SanitizeDurationSeconds(long? durationValue)
+        {
+            if (!durationValue.HasValue)
+            {
+                return 0;
+            }
+
+            long raw = durationValue.Value;
+            if (raw <= 0)
+            {
+                return 0;
+            }
+
+            // 大多数接口返回毫秒，若数值较大则按毫秒处理，否则视为秒数
+            if (raw > 1000)
+            {
+                long seconds = raw / 1000;
+                return (int)Math.Max(1, seconds);
+            }
+
+            return (int)raw;
         }
 
         /// <summary>
@@ -8661,8 +8794,7 @@ namespace YTPlayer.Core
                         Description = ResolveAlbumDescription(album)
                     };
 
-                    var publishTime = album["publishTime"]?.Value<long>();
-                    albumInfo.PublishTime = FormatAlbumPublishDate(publishTime);
+                    albumInfo.PublishTime = FormatAlbumPublishDate(album["publishTime"]);
 
                     result.Add(albumInfo);
                 }

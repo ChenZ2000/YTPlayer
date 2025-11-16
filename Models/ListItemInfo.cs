@@ -142,7 +142,7 @@ namespace YTPlayer.Models
                 {
                     ListItemType.Song => Song?.Album ?? string.Empty,
                     ListItemType.Playlist => FormatCount(Playlist?.TrackCount),
-                    ListItemType.Album => FormatCount(Album?.TrackCount),
+                    ListItemType.Album => AlbumDisplayHelper.BuildTrackAndYearLabel(Album),
                     ListItemType.Artist => BuildArtistExtraInfo(),
                     ListItemType.Podcast => Podcast != null && Podcast.ProgramCount > 0
                         ? $"{Podcast.ProgramCount} 个节目"

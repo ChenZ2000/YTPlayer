@@ -198,6 +198,7 @@
     <Compile Include="Models\ConfigModel.cs" />
     <Compile Include="Models\AudioOutputDeviceInfo.cs" />
     <Compile Include="Models\AudioDeviceSwitchResult.cs" />
+    <Compile Include="Models\AlbumDisplayHelper.cs" />
     <Compile Include="Models\ListItemInfo.cs" />
     <Compile Include="Models\SearchResult.cs" />
     <Compile Include="Models\UserAccountInfo.cs" />
@@ -208,6 +209,8 @@
     <Compile Include="Models\Download\ConflictResolution.cs" />
     <Compile Include="Models\Download\DownloadContentType.cs" />
     <Compile Include="Models\Upload\UploadTask.cs" />
+    <Compile Include="Forms\MainForm.MenuContext.cs" />
+    <Compile Include="Forms\MainForm.SortState.cs" />
     <Compile Include="Forms\LoginForm.cs">
       <SubType>Form</SubType>
     </Compile>
