@@ -61,6 +61,7 @@ namespace YTPlayer.Utils
         private static bool _ttsInitialized = false;
         private static int _ttsType = -1; // -1: 未初始化, 0: NVDA, 1: 争渡, 2: 阳光
         private static readonly object _lock = new object();
+        private static bool _globalInterruptSuppressed = false;
         private const string NvdaDllName = "nvdaControllerClient.dll";
         private const string ZdsrDllName = "ZDSRAPI.dll";
         private const string BoyCtrlDllName = "BoyCtrl.dll";
@@ -74,7 +75,7 @@ namespace YTPlayer.Utils
         /// </summary>
         /// <param name="text">要朗读的文本</param>
         /// <returns>是否成功朗读</returns>
-        public static bool SpeakText(string text, bool interrupt = true)
+        public static bool SpeakText(string text, bool interrupt = true, bool suppressGlobalInterrupt = false)
         {
             if (string.IsNullOrWhiteSpace(text))
             {
@@ -85,11 +86,20 @@ namespace YTPlayer.Utils
             {
                 try
                 {
-                    System.Diagnostics.Debug.WriteLine($"[TTS] 尝试朗读文本: '{text}' (已初始化={_ttsInitialized}, 类型={_ttsType}, interrupt={interrupt})");
+                    System.Diagnostics.Debug.WriteLine($"[TTS] 尝试朗读文本: '{text}' (已初始化={_ttsInitialized}, 类型={_ttsType}, interrupt={interrupt}, suppressGlobal={suppressGlobalInterrupt})");
+
+                    if (suppressGlobalInterrupt)
+                    {
+                        _globalInterruptSuppressed = true;
+                    }
+                    else
+                    {
+                        _globalInterruptSuppressed = false;
+                    }
 
                     if (interrupt)
                     {
-                        CancelActiveSpeech(_ttsInitialized && _ttsType >= 0 ? _ttsType : null);
+                        CancelActiveSpeech(_ttsInitialized && _ttsType >= 0 ? _ttsType : null, suppressGlobalInterrupt);
                     }
 
                     // 如果已初始化，先尝试使用上次成功的TTS类型
@@ -155,7 +165,11 @@ namespace YTPlayer.Utils
         {
             lock (_lock)
             {
-                CancelActiveSpeech(_ttsInitialized && _ttsType >= 0 ? _ttsType : null);
+                if (_globalInterruptSuppressed)
+                {
+                    return;
+                }
+                CancelActiveSpeech(_ttsInitialized && _ttsType >= 0 ? _ttsType : null, suppressGlobal: false);
             }
         }
 
@@ -215,7 +229,7 @@ namespace YTPlayer.Utils
             }
         }
 
-        private static void CancelActiveSpeech(int? preferredType)
+        private static void CancelActiveSpeech(int? preferredType, bool suppressGlobal = false)
         {
             int[] engines;
             if (preferredType.HasValue)
@@ -256,8 +270,8 @@ namespace YTPlayer.Utils
                             }
                             break;
                     }
-                }
-                catch (DllNotFoundException)
+                    }
+                    catch (DllNotFoundException)
                 {
                 }
                 catch (EntryPointNotFoundException)
@@ -317,7 +331,7 @@ namespace YTPlayer.Utils
 
                 if (interrupt)
                 {
-                    CancelActiveSpeech(0);
+                    CancelActiveSpeech(0, suppressGlobal: false);
                 }
 
                 // ⭐ 队列模式：直接朗读新内容（不打断当前朗读）

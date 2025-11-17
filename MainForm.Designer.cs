@@ -86,6 +86,7 @@ namespace YTPlayer
             this.unlikeSongMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.addToPlaylistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.removeFromPlaylistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.refreshMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.cloudMenuSeparator = new System.Windows.Forms.ToolStripSeparator();
             this.uploadToCloudMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.deleteFromCloudMenuItem = new System.Windows.Forms.ToolStripMenuItem();
@@ -101,6 +102,7 @@ namespace YTPlayer
             this.toolStripSeparatorView = new System.Windows.Forms.ToolStripSeparator();
             this.viewSongArtistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.viewSongAlbumMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.viewPodcastMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.shareSongMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.shareSongWebMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.shareSongDirectMenuItem = new System.Windows.Forms.ToolStripMenuItem();
@@ -110,6 +112,7 @@ namespace YTPlayer
             this.sharePodcastEpisodeMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.sharePodcastEpisodeWebMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.sharePodcastEpisodeDirectMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.viewPodcastMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.artistSongsSortMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.artistSongsSortHotMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.artistSongsSortTimeMenuItem = new System.Windows.Forms.ToolStripMenuItem();
@@ -395,7 +398,7 @@ this.hideMenuItem.Click += new System.EventHandler(this.hideMenuItem_Click);
             // prevMenuItem
             //
             this.prevMenuItem.Name = "prevMenuItem";
-            this.prevMenuItem.ShortcutKeys = System.Windows.Forms.Keys.F5;
+            this.prevMenuItem.ShortcutKeys = System.Windows.Forms.Keys.F1;
             this.prevMenuItem.Size = new System.Drawing.Size(180, 26);
             this.prevMenuItem.Text = "上一曲";
             this.prevMenuItem.Click += new System.EventHandler(this.prevMenuItem_Click);
@@ -403,7 +406,7 @@ this.hideMenuItem.Click += new System.EventHandler(this.hideMenuItem_Click);
             // nextMenuItem
             //
             this.nextMenuItem.Name = "nextMenuItem";
-            this.nextMenuItem.ShortcutKeys = System.Windows.Forms.Keys.F6;
+            this.nextMenuItem.ShortcutKeys = System.Windows.Forms.Keys.F2;
             this.nextMenuItem.Size = new System.Drawing.Size(180, 26);
             this.nextMenuItem.Text = "下一曲";
             this.nextMenuItem.Click += new System.EventHandler(this.nextMenuItem_Click);
@@ -726,6 +729,7 @@ this.hideMenuItem.Click += new System.EventHandler(this.hideMenuItem_Click);
             this.unlikeSongMenuItem,
             this.addToPlaylistMenuItem,
             this.removeFromPlaylistMenuItem,
+            this.refreshMenuItem,
             this.cloudMenuSeparator,
             this.uploadToCloudMenuItem,
             this.deleteFromCloudMenuItem,
@@ -741,6 +745,7 @@ this.hideMenuItem.Click += new System.EventHandler(this.hideMenuItem_Click);
             this.toolStripSeparatorView,
             this.viewSongArtistMenuItem,
             this.viewSongAlbumMenuItem,
+            this.viewPodcastMenuItem,
             this.shareSongMenuItem,
             this.sharePlaylistMenuItem,
             this.shareAlbumMenuItem,
@@ -804,6 +809,14 @@ this.hideMenuItem.Click += new System.EventHandler(this.hideMenuItem_Click);
             this.removeFromPlaylistMenuItem.Size = new System.Drawing.Size(210, 24);
             this.removeFromPlaylistMenuItem.Text = "从歌单中移除(&R)";
             this.removeFromPlaylistMenuItem.Click += new System.EventHandler(this.removeFromPlaylistMenuItem_Click);
+            //
+            // refreshMenuItem
+            //
+            this.refreshMenuItem.Name = "refreshMenuItem";
+            this.refreshMenuItem.ShortcutKeys = System.Windows.Forms.Keys.F5;
+            this.refreshMenuItem.Size = new System.Drawing.Size(210, 24);
+            this.refreshMenuItem.Text = "刷新(&F5)";
+            this.refreshMenuItem.Click += new System.EventHandler(this.refreshMenuItem_Click);
             this.cloudMenuSeparator.Name = "cloudMenuSeparator";
             this.cloudMenuSeparator.Size = new System.Drawing.Size(207, 6);
             this.cloudMenuSeparator.Visible = false;
@@ -901,6 +914,14 @@ this.hideMenuItem.Click += new System.EventHandler(this.hideMenuItem_Click);
             this.viewSongAlbumMenuItem.Text = "查看专辑(&B)";
             this.viewSongAlbumMenuItem.Visible = false;
             this.viewSongAlbumMenuItem.Click += new System.EventHandler(this.viewSongAlbumMenuItem_Click);
+            //
+            // viewPodcastMenuItem
+            //
+            this.viewPodcastMenuItem.Name = "viewPodcastMenuItem";
+            this.viewPodcastMenuItem.Size = new System.Drawing.Size(210, 24);
+            this.viewPodcastMenuItem.Text = "查看播客(&P)";
+            this.viewPodcastMenuItem.Visible = false;
+            this.viewPodcastMenuItem.Click += new System.EventHandler(this.viewPodcastMenuItem_Click);
             //
             // toolStripSeparatorArtist
             //
@@ -1310,6 +1331,7 @@ this.hideMenuItem.Click += new System.EventHandler(this.hideMenuItem_Click);
         private System.Windows.Forms.ToolStripMenuItem unlikeSongMenuItem;
         private System.Windows.Forms.ToolStripMenuItem addToPlaylistMenuItem;
         private System.Windows.Forms.ToolStripMenuItem removeFromPlaylistMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem refreshMenuItem;
         private System.Windows.Forms.ToolStripSeparator toolStripSeparatorCollection;
         private System.Windows.Forms.ToolStripMenuItem subscribePlaylistMenuItem;
         private System.Windows.Forms.ToolStripMenuItem unsubscribePlaylistMenuItem;
@@ -1322,6 +1344,7 @@ this.hideMenuItem.Click += new System.EventHandler(this.hideMenuItem_Click);
         private System.Windows.Forms.ToolStripSeparator toolStripSeparatorView;
         private System.Windows.Forms.ToolStripMenuItem viewSongArtistMenuItem;
         private System.Windows.Forms.ToolStripMenuItem viewSongAlbumMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem viewPodcastMenuItem;
         private System.Windows.Forms.ToolStripSeparator toolStripSeparatorArtist;
         private System.Windows.Forms.ToolStripMenuItem shareSongMenuItem;
         private System.Windows.Forms.ToolStripMenuItem shareSongWebMenuItem;

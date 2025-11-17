@@ -300,6 +300,31 @@ namespace YTPlayer.Core.Auth
             }
         }
 
+        internal FingerprintSnapshot GetFingerprintSnapshot()
+        {
+            var state = CurrentAccountState;
+            EnsureFingerprintInitialized();
+            return new FingerprintSnapshot
+            {
+                DeviceId = state.DeviceId ?? EncryptionHelper.GenerateDeviceId(),
+                SDeviceId = state.SDeviceId,
+                NmtId = state.NmtId,
+                NtesNuid = state.NtesNuid,
+                WnmCid = state.WnmCid,
+                MusicA = state.MusicA,
+                DeviceOs = state.DeviceOs ?? "pc",
+                DeviceOsVersion = state.DeviceOsVersion ?? _resolvedOsVersion,
+                DeviceAppVersion = state.DeviceAppVersion ?? AuthConstants.DesktopAppVersion,
+                DeviceBuildVersion = state.DeviceBuildVersion,
+                DeviceVersionCode = state.DeviceVersionCode,
+                DeviceChannel = state.DeviceChannel ?? "netease",
+                DeviceMobileName = state.DeviceMobileName ?? "PC",
+                DeviceResolution = state.DeviceResolution ?? "1920x1080",
+                DesktopUserAgent = state.DesktopUserAgent ?? AuthConstants.DesktopUserAgent,
+                DeviceUserAgent = state.DeviceUserAgent
+            };
+        }
+
         internal void UpdateAccountState(AccountState state)
         {
             if (state == null)
@@ -1045,6 +1070,26 @@ namespace YTPlayer.Core.Auth
                 }
             }
         }
+    }
+
+    internal sealed class FingerprintSnapshot
+    {
+        public string DeviceId { get; set; } = EncryptionHelper.GenerateDeviceId();
+        public string? SDeviceId { get; set; }
+        public string? NmtId { get; set; }
+        public string? NtesNuid { get; set; }
+        public string? WnmCid { get; set; }
+        public string? MusicA { get; set; }
+        public string? DeviceOs { get; set; }
+        public string? DeviceOsVersion { get; set; }
+        public string? DeviceAppVersion { get; set; }
+        public string? DeviceBuildVersion { get; set; }
+        public string? DeviceVersionCode { get; set; }
+        public string? DeviceChannel { get; set; }
+        public string? DeviceMobileName { get; set; }
+        public string? DeviceResolution { get; set; }
+        public string? DesktopUserAgent { get; set; }
+        public string? DeviceUserAgent { get; set; }
     }
 }
 

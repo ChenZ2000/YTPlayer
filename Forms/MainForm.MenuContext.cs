@@ -220,6 +220,11 @@ namespace YTPlayer
             removeFromPlaylistMenuItem.Tag = null;
             insertPlayMenuItem.Visible = true;
             insertPlayMenuItem.Tag = null;
+            if (refreshMenuItem != null)
+            {
+                refreshMenuItem.Visible = true;
+                refreshMenuItem.Enabled = true;
+            }
 
             downloadSongMenuItem.Visible = false;
             downloadSongMenuItem.Tag = null;
@@ -252,6 +257,11 @@ namespace YTPlayer
             viewSongArtistMenuItem.Tag = null;
             viewSongAlbumMenuItem.Visible = false;
             viewSongAlbumMenuItem.Tag = null;
+            if (viewPodcastMenuItem != null)
+            {
+                viewPodcastMenuItem.Visible = false;
+                viewPodcastMenuItem.Tag = null;
+            }
 
             shareSongMenuItem.Visible = false;
             shareSongMenuItem.Tag = null;
@@ -354,13 +364,20 @@ namespace YTPlayer
                 return;
             }
 
-            bool isCreatedByCurrentUser = snapshot.IsMyPlaylistsView && IsPlaylistCreatedByCurrentUser(playlist);
+            bool isCreatedByCurrentUser = IsPlaylistCreatedByCurrentUser(playlist);
+            bool isSubscribed = !isCreatedByCurrentUser && IsPlaylistSubscribed(playlist);
 
             if (isLoggedIn)
             {
-                subscribePlaylistMenuItem.Visible = !snapshot.IsMyPlaylistsView;
-                unsubscribePlaylistMenuItem.Visible = !isCreatedByCurrentUser;
+                subscribePlaylistMenuItem.Visible = !isCreatedByCurrentUser && !isSubscribed;
+                unsubscribePlaylistMenuItem.Visible = !isCreatedByCurrentUser && isSubscribed;
                 deletePlaylistMenuItem.Visible = isCreatedByCurrentUser;
+            }
+            else
+            {
+                subscribePlaylistMenuItem.Visible = false;
+                unsubscribePlaylistMenuItem.Visible = false;
+                deletePlaylistMenuItem.Visible = false;
             }
 
             insertPlayMenuItem.Visible = false;
@@ -395,8 +412,14 @@ namespace YTPlayer
 
             if (isLoggedIn)
             {
-                subscribeAlbumMenuItem.Visible = !snapshot.IsUserAlbumsView;
-                unsubscribeAlbumMenuItem.Visible = true;
+                bool isSubscribed = IsAlbumSubscribed(album);
+                subscribeAlbumMenuItem.Visible = !isSubscribed;
+                unsubscribeAlbumMenuItem.Visible = isSubscribed;
+            }
+            else
+            {
+                subscribeAlbumMenuItem.Visible = false;
+                unsubscribeAlbumMenuItem.Visible = false;
             }
 
             insertPlayMenuItem.Visible = false;
@@ -509,16 +532,14 @@ namespace YTPlayer
             {
                 bool isLikedSongsView = IsCurrentLikedSongsView();
 
-                if (canUseLibraryFeatures)
+                bool isLiked = isLikedSongsView;
+                if (canUseLibraryFeatures && currentSong != null && !isLiked)
                 {
-                    likeSongMenuItem.Visible = !isLikedSongsView;
-                    unlikeSongMenuItem.Visible = false;
+                    isLiked = IsSongLiked(currentSong);
                 }
-                else
-                {
-                    likeSongMenuItem.Visible = false;
-                    unlikeSongMenuItem.Visible = false;
-                }
+
+                likeSongMenuItem.Visible = canUseLibraryFeatures && !isLiked;
+                unlikeSongMenuItem.Visible = canUseLibraryFeatures && isLiked;
 
                 likeSongMenuItem.Tag = canUseLibraryFeatures ? currentSong : null;
                 unlikeSongMenuItem.Tag = canUseLibraryFeatures ? currentSong : null;
@@ -611,6 +632,15 @@ namespace YTPlayer
                 ConfigurePodcastEpisodeShareMenu(null);
             }
 
+            bool showPodcastViewMenu = false;
+            if (viewPodcastMenuItem != null)
+            {
+                bool canViewPodcast = contextPodcastForEpisode != null && contextPodcastForEpisode.Id > 0;
+                viewPodcastMenuItem.Visible = canViewPodcast;
+                viewPodcastMenuItem.Tag = canViewPodcast ? contextPodcastForEpisode : null;
+                showPodcastViewMenu = canViewPodcast;
+            }
+
             bool sharePodcastVisible = sharePodcastMenuItem.Visible;
             bool sharePodcastEpisodeVisible = sharePodcastEpisodeMenuItem.Visible;
 
@@ -618,6 +648,7 @@ namespace YTPlayer
                               showArtistMenu ||
                               showAlbumMenu ||
                               showShareMenu ||
+                              showPodcastViewMenu ||
                               sharePodcastVisible ||
                               sharePodcastEpisodeVisible;
         }

@@ -513,7 +513,7 @@ namespace YTPlayer
                 {
                     _ = System.Threading.Tasks.Task.Run(() =>
                     {
-                        bool success = Utils.TtsHelper.SpeakText("[试听片段 30 秒]");
+                        bool success = Utils.TtsHelper.SpeakText("[试听片段 30 秒]", interrupt: true, suppressGlobalInterrupt: true);
                         System.Diagnostics.Debug.WriteLine($"[TTS] 试听提示: {(success ? "成功" : "失败")}");
                     });
                 }

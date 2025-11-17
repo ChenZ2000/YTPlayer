@@ -209,6 +209,11 @@ namespace YTPlayer.Models
         public bool RequiresVip { get; set; }
 
         /// <summary>
+        /// 当前登录用户是否已收藏（“我喜欢的音乐”）。
+        /// </summary>
+        public bool IsLiked { get; set; }
+
+        /// <summary>
         /// 是否为播客节目。
         /// </summary>
         public bool IsPodcastEpisode { get; set; }

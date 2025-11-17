@@ -1,0 +1,3 @@
+Core\NeteaseApiClient.cs(5941,20): CS8619
+MainForm.cs(11249,13): CS0162
+MainForm.Designer.cs(1322,56): CS0649

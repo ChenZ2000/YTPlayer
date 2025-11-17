@@ -410,6 +410,14 @@ namespace YTPlayer.Utils
         }
 
         /// <summary>
+        /// 生成随机 _ntes_nuid（32位十六进制）
+        /// </summary>
+        public static string GenerateRandomNuid()
+        {
+            return GenerateRandomHex(32);
+        }
+
+        /// <summary>
         /// 生成WNMCID格式（格式：abcdef.timestamp.01.0）
         /// </summary>
         public static string GenerateWNMCID()

@@ -79,6 +79,17 @@ namespace YTPlayer.Core
         private readonly string? _deviceId;
         private readonly string? _desktopUserAgent;
 
+        private static readonly (uint Start, uint End)[] ChineseIpRanges = new (uint, uint)[]
+        {
+            (607649792u, 608174079u),      // 36.56.0.0 - 36.63.255.255
+            (1038614528u, 1039007743u),    // 61.232.0.0 - 61.237.255.255
+            (1783627776u, 1784676351u),    // 106.80.0.0 - 106.95.255.255
+            (2035023872u, 2035154943u),    // 121.76.0.0 - 121.77.255.255
+            (2078801920u, 2079064063u),    // 123.232.0.0 - 123.235.255.255
+            (2079064064u, 2079598335u),    // 123.236.0.0 - 123.243.255.255
+            (3054197760u, 3054263295u)     // 182.80.0.0 - 182.87.255.255
+        };
+
         // 默认示范 Cookie（参考 Python 版本 Netease-music.py:410）
         // 这是一个公开的示范 Cookie，用于获取高音质歌曲
         private const string DEFAULT_MUSIC_U = "";  // 待填入示范 Cookie
@@ -1287,85 +1298,80 @@ namespace YTPlayer.Core
                     }
                 }
 
-                // 发送请求
-                var response = await _httpClient.PostAsync(url, content, cancellationToken).ConfigureAwait(false);
-
-                // 读取响应（二进制 -> 自动探测编码解码）
-                byte[] rawBytes = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
-                string responseText = DecodeResponseContent(response, rawBytes);
-
-                // 调试：输出请求和响应信息
-                System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] Request URL: {url}");
-                System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] Response Status: {response.StatusCode}");
-                System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] Response Headers: {string.Join(", ", response.Headers.Select(h => $"{h.Key}={string.Join(",", h.Value)}"))}");
-                System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] Response Length(bytes): {rawBytes?.Length ?? 0}, TextLength: {responseText.Length}");
-                if (!string.IsNullOrEmpty(responseText))
+                using (var requestMessage = new HttpRequestMessage(HttpMethod.Post, url))
                 {
-                    System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] Response Preview: {responseText.Substring(0, Math.Min(200, responseText.Length))}");
-                }
-                else
-                {
-                    System.Diagnostics.Debug.WriteLine("[DEBUG WEAPI] Response Preview: <empty>");
-                }
+                    requestMessage.Content = content;
+                    ApplyFingerprintHeaders(requestMessage);
 
-                // 如果响应不是JSON，保存到文件以便检查
-                if (!responseText.TrimStart().StartsWith("{") && !responseText.TrimStart().StartsWith("["))
-                {
+                    var response = await _httpClient.SendAsync(requestMessage, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+
+                    byte[] rawBytes = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+                    string responseText = DecodeResponseContent(response, rawBytes);
+
+                    System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] Request URL: {url}");
+                    System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] Response Status: {response.StatusCode}");
+                    System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] Response Headers: {string.Join(", ", response.Headers.Select(h => $"{h.Key}={string.Join(",", h.Value)}"))}");
+                    System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] Response Length(bytes): {rawBytes?.Length ?? 0}, TextLength: {responseText.Length}");
+                    if (!string.IsNullOrEmpty(responseText))
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] Response Preview: {responseText.Substring(0, Math.Min(200, responseText.Length))}");
+                    }
+                    else
+                    {
+                        System.Diagnostics.Debug.WriteLine("[DEBUG WEAPI] Response Preview: <empty>");
+                    }
+
+                    if (!responseText.TrimStart().StartsWith("{") && !responseText.TrimStart().StartsWith("["))
+                    {
+                        try
+                        {
+                            string debugFile = System.IO.Path.Combine(
+                                System.IO.Path.GetTempPath(),
+                                $"netease_debug_response_{DateTime.Now:yyyyMMdd_HHmmss}.html"
+                            );
+                            System.IO.File.WriteAllText(debugFile, $"URL: {url}\n\nStatus: {response.StatusCode}\n\n{responseText}");
+                            System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] !!!响应不是JSON!!! 已保存到: {debugFile}");
+                        }
+                        catch { }
+
+                        throw new Exception($"服务器返回非JSON响应（状态码: {response.StatusCode}），可能是网络问题或API限流");
+                    }
+
+                    JObject json;
                     try
                     {
-                        string debugFile = System.IO.Path.Combine(
-                            System.IO.Path.GetTempPath(),
-                            $"netease_debug_response_{DateTime.Now:yyyyMMdd_HHmmss}.html"
-                        );
-                        System.IO.File.WriteAllText(debugFile, $"URL: {url}\n\nStatus: {response.StatusCode}\n\n{responseText}");
-                        System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] !!!响应不是JSON!!! 已保存到: {debugFile}");
+                        string cleanedResponse = CleanJsonResponse(responseText);
+                        json = JObject.Parse(cleanedResponse);
                     }
-                    catch { }
-
-                    // 直接抛出异常，避免尝试解析HTML
-                    throw new Exception($"服务器返回非JSON响应（状态码: {response.StatusCode}），可能是网络问题或API限流");
-                }
-
-                // 解析响应（添加try-catch避免JSON解析异常）
-                JObject json;
-                try
-                {
-                    // ⭐ 修复：清理响应文本，处理可能的多余内容
-                    string cleanedResponse = CleanJsonResponse(responseText);
-                    json = JObject.Parse(cleanedResponse);
-                }
-                catch (JsonReaderException ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] JSON解析失败: {ex.Message}");
-                    System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] 响应原文: {responseText}");
-
-                    // 保存错误响应到文件以便调试
-                    try
+                    catch (JsonReaderException ex)
                     {
-                        string debugFile = System.IO.Path.Combine(
-                            System.IO.Path.GetTempPath(),
-                            $"netease_json_error_{DateTime.Now:yyyyMMdd_HHmmss}.txt"
-                        );
-                        System.IO.File.WriteAllText(debugFile, $"URL: {url}\n\nError: {ex.Message}\n\nResponse:\n{responseText}");
-                        System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] 错误响应已保存到: {debugFile}");
+                        System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] JSON解析失败: {ex.Message}");
+                        System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] 响应原文: {responseText}");
+
+                        try
+                        {
+                            string debugFile = System.IO.Path.Combine(
+                                System.IO.Path.GetTempPath(),
+                                $"netease_json_error_{DateTime.Now:yyyyMMdd_HHmmss}.txt"
+                            );
+                            System.IO.File.WriteAllText(debugFile, $"URL: {url}\n\nError: {ex.Message}\n\nResponse:\n{responseText}");
+                            System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] 错误响应已保存到: {debugFile}");
+                        }
+                        catch { }
+
+                        throw new Exception($"JSON解析失败: {ex.Message}，响应内容可能已损坏");
                     }
-                    catch { }
 
-                    throw new Exception($"JSON解析失败: {ex.Message}，响应内容可能已损坏");
+                    int code = json["code"]?.Value<int>() ?? -1;
+                    string message = json["message"]?.Value<string>() ?? json["msg"]?.Value<string>() ?? "Unknown error";
+
+                    if (!skipErrorHandling)
+                    {
+                        HandleApiError(code, message);
+                    }
+
+                    return json.ToObject<T>();
                 }
-
-                int code = json["code"]?.Value<int>() ?? -1;
-                string message = json["message"]?.Value<string>() ?? json["msg"]?.Value<string>() ?? "Unknown error";
-
-                // ⭐ 修复：对于二维码登录，跳过错误处理（800-803 都是正常状态码）
-                if (!skipErrorHandling)
-                {
-                    // 处理错误
-                    HandleApiError(code, message);
-                }
-
-                // 返回结果
-                return json.ToObject<T>();
             }
             catch (Exception ex) when (retryCount < MAX_RETRY_COUNT && !(ex is UnauthorizedAccessException))
             {
@@ -1752,6 +1758,7 @@ namespace YTPlayer.Core
                 using (var request = new HttpRequestMessage(HttpMethod.Post, url))
                 {
                     request.Content = content;
+                    ApplyFingerprintHeaders(request);
 
                     System.Diagnostics.Debug.WriteLine($"[DEBUG EAPI] Cookie Length: {(string.IsNullOrEmpty(cookieHeader) ? 0 : cookieHeader.Length)}");
                     if (requestHeaders.TryGetValue("User-Agent", out var resolvedUa))
@@ -2460,6 +2467,7 @@ namespace YTPlayer.Core
 
         private string BuildEapiCookieHeader(IDictionary<string, object> headerMap)
         {
+            var fingerprint = _authContext?.GetFingerprintSnapshot() ?? new FingerprintSnapshot();
             var cookieMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
             if (_authContext != null)
@@ -2493,13 +2501,46 @@ namespace YTPlayer.Core
                 }
             }
 
+            // 基础指纹
+            if (!cookieMap.ContainsKey("deviceId") && !string.IsNullOrEmpty(fingerprint.DeviceId))
+            {
+                cookieMap["deviceId"] = fingerprint.DeviceId;
+            }
+            if (!cookieMap.ContainsKey("os") && !string.IsNullOrEmpty(fingerprint.DeviceOs))
+            {
+                cookieMap["os"] = fingerprint.DeviceOs;
+            }
+            if (!cookieMap.ContainsKey("osver") && !string.IsNullOrEmpty(fingerprint.DeviceOsVersion))
+            {
+                cookieMap["osver"] = fingerprint.DeviceOsVersion;
+            }
+            if (!cookieMap.ContainsKey("appver") && !string.IsNullOrEmpty(fingerprint.DeviceAppVersion))
+            {
+                cookieMap["appver"] = fingerprint.DeviceAppVersion;
+            }
+
+            // 访客/指纹 ID
+            if (!cookieMap.ContainsKey("_ntes_nuid") && !string.IsNullOrEmpty(fingerprint.NtesNuid))
+            {
+                cookieMap["_ntes_nuid"] = fingerprint.NtesNuid;
+            }
+            if (!cookieMap.ContainsKey("NMTID") && !string.IsNullOrEmpty(fingerprint.NmtId))
+            {
+                cookieMap["NMTID"] = fingerprint.NmtId;
+            }
+            if (!cookieMap.ContainsKey("WNMCID") && !string.IsNullOrEmpty(fingerprint.WnmCid))
+            {
+                cookieMap["WNMCID"] = fingerprint.WnmCid;
+            }
+
+            // 登录/匿名凭证
             if (!string.IsNullOrEmpty(_musicU))
             {
                 cookieMap["MUSIC_U"] = _musicU;
             }
-            else if (_authContext?.CurrentAccountState?.MusicA != null)
+            else if (!cookieMap.ContainsKey("MUSIC_A") && !string.IsNullOrEmpty(fingerprint.MusicA))
             {
-                cookieMap["MUSIC_A"] = _authContext.CurrentAccountState.MusicA;
+                cookieMap["MUSIC_A"] = fingerprint.MusicA;
             }
 
             if (!string.IsNullOrEmpty(_csrfToken))
@@ -2514,6 +2555,61 @@ namespace YTPlayer.Core
             return cookieMap.Count == 0
                 ? string.Empty
                 : string.Join("; ", cookieMap.Select(kvp => $"{kvp.Key}={Uri.EscapeDataString(kvp.Value)}"));
+        }
+
+        private void ApplyFingerprintHeaders(HttpRequestMessage request)
+        {
+            if (request == null)
+            {
+                return;
+            }
+
+            string ip = GenerateRandomChineseIp();
+            if (!string.IsNullOrEmpty(ip))
+            {
+                request.Headers.Remove("X-Real-IP");
+                request.Headers.Remove("X-Forwarded-For");
+                request.Headers.TryAddWithoutValidation("X-Real-IP", ip);
+                request.Headers.TryAddWithoutValidation("X-Forwarded-For", ip);
+            }
+
+            if (!request.Headers.Contains("Accept-Encoding"))
+            {
+                request.Headers.TryAddWithoutValidation("Accept-Encoding", "gzip, deflate, br");
+            }
+
+            if (!request.Headers.Contains("Accept"))
+            {
+                request.Headers.TryAddWithoutValidation("Accept", "*/*");
+            }
+
+            if (!request.Headers.Contains("Connection"))
+            {
+                request.Headers.TryAddWithoutValidation("Connection", "keep-alive");
+            }
+        }
+
+        private string GenerateRandomChineseIp()
+        {
+            if (ChineseIpRanges.Length == 0)
+            {
+                return "39.144.0.1";
+            }
+
+            (uint Start, uint End) range;
+            lock (_random)
+            {
+                range = ChineseIpRanges[_random.Next(ChineseIpRanges.Length)];
+            }
+
+            uint span = range.End > range.Start ? range.End - range.Start : 1;
+            uint offset;
+            lock (_random)
+            {
+                offset = (uint)_random.Next((int)Math.Max(1, Math.Min(span, int.MaxValue)));
+            }
+            uint addr = range.Start + offset;
+            return $"{(addr >> 24) & 255}.{(addr >> 16) & 255}.{(addr >> 8) & 255}.{addr & 255}";
         }
 
         /// <summary>
@@ -3557,8 +3653,9 @@ namespace YTPlayer.Core
             string[] qualityOrder = { "jymaster", "sky", "jyeffect", "hires", "lossless", "exhigh", "standard" };
             var missingSongIds = new HashSet<string>(StringComparer.Ordinal);
 
-            // ⭐ 如果已通过批量预检，跳过可用性检查以加快播放速度
-            if (!skipAvailabilityCheck)
+            // ⭐ 可用性预检：未登录时跳过强校验，避免误判
+            bool shouldPrecheck = !skipAvailabilityCheck && UsePersonalCookie;
+            if (shouldPrecheck)
             {
                 var checkStart = DateTime.UtcNow;
                 try
@@ -3588,7 +3685,7 @@ namespace YTPlayer.Core
             }
             else
             {
-                System.Diagnostics.Debug.WriteLine($"[SongUrl] 跳过可用性检查（已通过批量预检）");
+                System.Diagnostics.Debug.WriteLine($"[SongUrl] 跳过可用性检查（未登录或已通过批量预检）");
             }
 
             int startIndex = Array.IndexOf(qualityOrder, requestedLevel);
@@ -3690,15 +3787,8 @@ namespace YTPlayer.Core
                     string message = response["message"]?.Value<string>() ?? response["msg"]?.Value<string>() ?? "unknown";
                     if (code == 404 || (!string.IsNullOrEmpty(message) && message.Contains("不存在")))
                     {
-                        System.Diagnostics.Debug.WriteLine($"[EAPI] 官方接口返回资源不存在 (code={code}, message={message})，停止降级。");
-                        foreach (var missingId in ids)
-                        {
-                            if (!string.IsNullOrEmpty(missingId))
-                            {
-                                missingSongIds.Add(missingId);
-                            }
-                        }
-                        break;
+                        System.Diagnostics.Debug.WriteLine($"[EAPI] 官方接口返回资源不存在 (code={code}, message={message})，尝试降级。");
+                        continue;
                     }
 
                     if (code != 200)
@@ -3735,9 +3825,9 @@ namespace YTPlayer.Core
 
                         if (itemMissing)
                         {
-                            System.Diagnostics.Debug.WriteLine($"[EAPI] 歌曲{id} 官方不存在 (itemCode={itemCode}, message={itemMessage})。");
-                            missingSongIds.Add(id);
-                            continue;
+                            System.Diagnostics.Debug.WriteLine($"[EAPI] 歌曲{id} 在音质 {currentLevel} 下不可用，尝试降级。");
+                            fallbackToLowerQuality = true;
+                            break;
                         }
 
                         string url = item["url"]?.Value<string>();
@@ -3788,14 +3878,9 @@ namespace YTPlayer.Core
                         System.Diagnostics.Debug.WriteLine($"[EAPI] ✓ 歌曲{id}: level={result[id].Level}, br={result[id].Br}, fee={result[id].Fee}{trialIndicator}, URL={url.Substring(0, Math.Min(50, url.Length))}...");
                     }
 
-                    if (missingSongIds.Count > 0)
+                    if (fallbackToLowerQuality || result.Count == 0)
                     {
-                        System.Diagnostics.Debug.WriteLine("[EAPI] 检测到官方缺失的歌曲，停止进一步降级。");
-                        break;
-                    }
-
-                    if (fallbackToLowerQuality)
-                    {
+                        System.Diagnostics.Debug.WriteLine("[EAPI] 当前音质返回为空或不可用，尝试下一档。");
                         continue;
                     }
 
@@ -5569,14 +5654,14 @@ namespace YTPlayer.Core
                 System.Diagnostics.Debug.WriteLine($"[GetUserAccountAsync] VIP类型(从profile): {vipType}");
             }
 
-            // 单独获取用户等级（参考 Python: /weapi/user/level）
+            // 单独获取用户等级（EAPI 优先）
             int level = 0;
             try
             {
-                var levelResponse = await PostWeApiAsync<JObject>("/user/level", new Dictionary<string, object>());
-                if (levelResponse["code"]?.Value<int>() == 200)
+                var levelPayload = new Dictionary<string, object>();
+                var levelResponse = await PostEApiAsync<JObject>("/api/user/level", levelPayload, useIosHeaders: true, skipErrorHandling: true).ConfigureAwait(false);
+                if (levelResponse?["code"]?.Value<int>() == 200)
                 {
-                    // 尝试从 data.level 或直接从 level 获取
                     var data = levelResponse["data"];
                     if (data != null)
                     {
@@ -5586,13 +5671,12 @@ namespace YTPlayer.Core
                     {
                         level = levelResponse["level"]?.Value<int>() ?? 0;
                     }
-                    System.Diagnostics.Debug.WriteLine($"[GetUserAccountAsync] 用户等级(从/user/level): {level}");
+                    System.Diagnostics.Debug.WriteLine($"[GetUserAccountAsync] 用户等级(从/api/user/level): {level}");
                 }
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[GetUserAccountAsync] 获取用户等级失败: {ex.Message}");
-                // 如果失败，尝试从 profile 获取
                 level = profile["level"]?.Value<int>() ?? 0;
             }
 
@@ -5920,7 +6004,25 @@ namespace YTPlayer.Core
                 System.Diagnostics.Debug.WriteLine($"[API] 用户歌单数量(从列表计算): {totalCount}");
             }
 
-            return (ParsePlaylistList(playlists), totalCount);
+            var parsed = ParsePlaylistList(playlists) ?? new List<PlaylistInfo>();
+            if (parsed.Count > 0)
+            {
+                foreach (var playlist in parsed)
+                {
+                    if (playlist == null)
+                    {
+                        continue;
+                    }
+
+                    bool isOwned = playlist.CreatorId == userId || playlist.OwnerUserId == userId;
+                    if (!isOwned && !playlist.IsSubscribed)
+                    {
+                        playlist.IsSubscribed = true;
+                    }
+                }
+            }
+
+            return (parsed, totalCount);
         }
 
         /// <summary>
@@ -6338,7 +6440,8 @@ namespace YTPlayer.Core
                     PicUrl = albumToken["picUrl"]?.Value<string>() ?? string.Empty,
                     PublishTime = FormatAlbumPublishDate(publishTimeToken),
                     TrackCount = ResolveAlbumTrackCount(albumToken),
-                    Description = ResolveAlbumDescription(albumToken)
+                    Description = ResolveAlbumDescription(albumToken),
+                    IsSubscribed = true
                 };
 
                 result.Add(album);
@@ -6395,6 +6498,86 @@ namespace YTPlayer.Core
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// EAPI 版本的播放日志上报（/eapi/feedback/weblog）
+        /// </summary>
+        public async Task<bool> SendPlaybackLogsEapiAsync(IEnumerable<Dictionary<string, object>> logEntries, CancellationToken cancellationToken = default)
+        {
+            if (logEntries == null)
+            {
+                return false;
+            }
+
+            var entries = new List<Dictionary<string, object>>();
+            foreach (var entry in logEntries)
+            {
+                if (entry != null && entry.Count > 0)
+                {
+                    entries.Add(entry);
+                }
+            }
+
+            if (entries.Count == 0)
+            {
+                return false;
+            }
+
+            var payload = new Dictionary<string, object>
+            {
+                { "logs", JsonConvert.SerializeObject(entries, Formatting.None) }
+            };
+
+            try
+            {
+                // 使用 EAPI 客户端，路径以 /api/ 开头，由 PostEApiAsync 自动替换为 /eapi/
+                var response = await PostEApiAsync<JObject>("/api/feedback/weblog", payload, useIosHeaders: true).ConfigureAwait(false);
+                int code = response["code"]?.Value<int>() ?? -1;
+                if (code != 200)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[PlaybackReporting][EAPI] weblog 返回异常: code={code}, msg={response["message"]}");
+                    return false;
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[PlaybackReporting][EAPI] weblog 请求失败: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// EAPI 版本的 scrobble 封装（基于 feedback/weblog）
+        /// </summary>
+        public Task<bool> SendScrobbleEapiAsync(long songId, long sourceId, int timeSeconds, string endReason = "playend", CancellationToken cancellationToken = default)
+        {
+            var logs = new List<Dictionary<string, object>>
+            {
+                new Dictionary<string, object>
+                {
+                    { "action", "play" },
+                    {
+                        "json", new Dictionary<string, object>
+                        {
+                            { "download", 0 },
+                            { "end", endReason },
+                            { "id", songId },
+                            { "sourceId", sourceId },
+                            { "time", timeSeconds },
+                            { "type", "song" },
+                            { "wifi", 0 },
+                            { "source", "list" },
+                            { "mainsite", 1 },
+                            { "content", string.Empty }
+                        }
+                    }
+                }
+            };
+
+            return SendPlaybackLogsEapiAsync(logs, cancellationToken);
         }
 
         /// <summary>
@@ -8402,7 +8585,10 @@ namespace YTPlayer.Core
                 CreatorId = playlistToken["creator"]?["userId"]?.Value<long?>() ?? 0,
                 OwnerUserId = playlistToken["userId"]?.Value<long?>()
                     ?? playlistToken["ownerId"]?.Value<long?>()
-                    ?? 0
+                    ?? 0,
+                IsSubscribed = playlistToken["subscribed"]?.Value<bool?>()
+                    ?? playlistToken["isSub"]?.Value<bool?>()
+                    ?? false
             };
 
             return playlistInfo;
@@ -8791,7 +8977,8 @@ namespace YTPlayer.Core
                         PicUrl = album["picUrl"]?.Value<string>(),
                         Artist = ResolveAlbumArtistName(album),
                         TrackCount = ResolveAlbumTrackCount(album),
-                        Description = ResolveAlbumDescription(album)
+                        Description = ResolveAlbumDescription(album),
+                        IsSubscribed = album["subscribed"]?.Value<bool?>() ?? album["isSub"]?.Value<bool?>() ?? false
                     };
 
                     albumInfo.PublishTime = FormatAlbumPublishDate(album["publishTime"]);
@@ -9663,6 +9850,7 @@ namespace YTPlayer.Core
         public string PublishTime { get; set; } = string.Empty;
         public int TrackCount { get; set; }
         public string Description { get; set; } = string.Empty;
+        public bool IsSubscribed { get; set; }
     }
 
     /// <summary>

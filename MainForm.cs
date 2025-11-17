@@ -12,6 +12,7 @@ using System.Windows.Forms;
 using System.Runtime.InteropServices;
 using YTPlayer.Core;
 using YTPlayer.Core.Playback;
+using YTPlayer.Core.Download;
 using YTPlayer.Core.Playback.Cache;
 using YTPlayer.Core.Lyrics;
 using YTPlayer.Models;
@@ -45,6 +46,14 @@ namespace YTPlayer
         private int _currentPodcastSoundOffset = 0;
         private bool _currentPodcastHasMore = false;
         private List<ListItemInfo> _currentListItems = new List<ListItemInfo>(); // 统一的列表项
+        private readonly HashSet<string> _likedSongIds = new HashSet<string>(StringComparer.Ordinal);
+        private readonly HashSet<string> _subscribedPlaylistIds = new HashSet<string>(StringComparer.Ordinal);
+        private readonly HashSet<string> _ownedPlaylistIds = new HashSet<string>(StringComparer.Ordinal);
+        private readonly HashSet<string> _subscribedAlbumIds = new HashSet<string>(StringComparer.Ordinal);
+        private readonly HashSet<long> _subscribedPodcastIds = new HashSet<long>();
+        private readonly HashSet<long> _subscribedArtistIds = new HashSet<long>();
+        private bool _likedSongsCacheValid;
+        private readonly object _libraryStateLock = new object();
         private const string RecentListenedCategoryId = "recent_listened";
         private const string RecentPodcastsCategoryId = "recent_podcasts";
         private const string DownloadSongMenuText = "下载歌曲(&D)";
@@ -802,6 +811,7 @@ namespace YTPlayer
         private void ClearLoginState(bool persist)
         {
             _apiClient?.ClearCookies();
+            InvalidateLibraryCaches();
 
             // Note: Account-related fields are now managed by AccountState
             // Login state clearing is handled by AccountStateStore and AuthContext
@@ -831,6 +841,10 @@ namespace YTPlayer
             _accountState = _apiClient.GetAccountStateSnapshot();
             bool shouldReapplyCookies = _accountState?.IsLoggedIn == true;
             UpdateUiFromAccountState(reapplyCookies: shouldReapplyCookies);
+            if (shouldReapplyCookies)
+            {
+                ScheduleLibraryStateRefresh();
+            }
         }
 
         private void ReloadAccountState(bool reapplyCookies = false)
@@ -867,10 +881,12 @@ namespace YTPlayer
                 }
 
                 UpdateLoginMenuItemText();
+                ScheduleLibraryStateRefresh();
             }
             else
             {
                 UpdateLoginMenuItemText();
+                InvalidateLibraryCaches();
             }
         }
         /// 保存配置
@@ -3663,6 +3679,7 @@ namespace YTPlayer
         {
             try
             {
+                await EnsureLibraryStateFreshAsync(LibraryEntityType.Songs);
                 // 优先使用缓存的歌单对象（主页加载时已获取）
                 if (_userLikedPlaylist != null)
                 {
@@ -3720,6 +3737,7 @@ namespace YTPlayer
         {
             try
             {
+                await EnsureLibraryStateFreshAsync(LibraryEntityType.Playlists);
                 var userInfo = await _apiClient.GetUserAccountAsync();
                 if (userInfo == null || userInfo.UserId <= 0)
                 {
@@ -3799,6 +3817,7 @@ namespace YTPlayer
         {
             try
             {
+                await EnsureLibraryStateFreshAsync(LibraryEntityType.Albums);
                 var (albums, totalCount) = await _apiClient.GetUserAlbumsAsync();
                 if (albums == null || albums.Count == 0)
                 {
@@ -3903,6 +3922,7 @@ namespace YTPlayer
         {
             try
             {
+                await EnsureLibraryStateFreshAsync(LibraryEntityType.Podcasts);
                 var (podcasts, totalCount) = await _apiClient.GetSubscribedPodcastsAsync(limit: 300, offset: 0);
                 if (podcasts == null || podcasts.Count == 0)
                 {
@@ -4427,6 +4447,7 @@ namespace YTPlayer
 
             // 清空所有列表（确保只有一种类型的数据）
             _currentSongs = songs ?? new List<SongInfo>();
+            ApplySongLikeStates(_currentSongs);
             _currentPlaylists.Clear();
             _currentAlbums.Clear();
             _currentArtists.Clear();
@@ -4617,6 +4638,7 @@ namespace YTPlayer
             _currentListItems.Clear();
             _currentPodcasts.Clear();
             _currentPodcastSounds.Clear();
+            ApplyPlaylistSubscriptionState(_currentPlaylists);
 
             resultListView.BeginUpdate();
             resultListView.Items.Clear();
@@ -4702,6 +4724,7 @@ namespace YTPlayer
             _currentPodcasts.Clear();
             _currentPodcastSounds.Clear();
             _currentPodcast = null;
+            ApplyListItemLibraryStates(_currentListItems);
 
             resultListView.BeginUpdate();
             resultListView.Items.Clear();
@@ -4808,6 +4831,832 @@ namespace YTPlayer
             SetViewContext(viewSource, defaultAccessibleName);
         }
 
+        #region Library State Cache Helpers
+
+        private enum LibraryEntityType
+        {
+            Songs,
+            Playlists,
+            Albums,
+            Artists,
+            Podcasts,
+            All
+        }
+
+        private readonly Dictionary<LibraryEntityType, DateTime> _libraryCacheTimestamps =
+            new Dictionary<LibraryEntityType, DateTime>
+            {
+                [LibraryEntityType.Songs] = DateTime.MinValue,
+                [LibraryEntityType.Playlists] = DateTime.MinValue,
+                [LibraryEntityType.Albums] = DateTime.MinValue,
+                [LibraryEntityType.Artists] = DateTime.MinValue,
+                [LibraryEntityType.Podcasts] = DateTime.MinValue
+            };
+
+        private static readonly TimeSpan LibraryRefreshInterval = TimeSpan.FromSeconds(35);
+
+        private void ScheduleLibraryStateRefresh(
+            bool includeLikedSongs = true,
+            bool includePlaylists = true,
+            bool includeAlbums = true,
+            bool includePodcasts = true,
+            bool includeArtists = true)
+        {
+            if (!IsUserLoggedIn() || _apiClient == null)
+            {
+                return;
+            }
+
+            var targets = new List<LibraryEntityType>();
+            if (includeLikedSongs) targets.Add(LibraryEntityType.Songs);
+            if (includePlaylists) targets.Add(LibraryEntityType.Playlists);
+            if (includeAlbums) targets.Add(LibraryEntityType.Albums);
+            if (includePodcasts) targets.Add(LibraryEntityType.Podcasts);
+            if (includeArtists) targets.Add(LibraryEntityType.Artists);
+
+            foreach (var target in targets)
+            {
+                RequestLibraryRefresh(target);
+            }
+        }
+
+        private void RequestLibraryRefresh(LibraryEntityType entity, bool forceRefresh = false)
+        {
+            if (!IsUserLoggedIn() || _apiClient == null)
+            {
+                return;
+            }
+
+            _ = Task.Run(() => RefreshLibraryStateAsync(entity, forceRefresh, CancellationToken.None));
+        }
+
+        private Task EnsureLibraryStateFreshAsync(LibraryEntityType entity, bool forceRefresh = false, CancellationToken cancellationToken = default)
+        {
+            if (!IsUserLoggedIn() || _apiClient == null)
+            {
+                return Task.CompletedTask;
+            }
+
+            if (!forceRefresh && IsLibraryCacheFresh(entity))
+            {
+                return Task.CompletedTask;
+            }
+
+            return RefreshLibraryStateAsync(entity, forceRefresh, cancellationToken);
+        }
+
+        private async Task RefreshLibraryStateAsync(
+            LibraryEntityType entity,
+            bool forceRefresh,
+            CancellationToken cancellationToken)
+        {
+            var targets = ExpandLibraryEntities(entity).ToList();
+            if (targets.Count == 0)
+            {
+                return;
+            }
+
+            double allocation = DownloadBandwidthCoordinator.Instance.GetDownloadBandwidthAllocation();
+            bool allowParallel = allocation >= 0.6;
+
+            if (allowParallel && targets.Count > 1)
+            {
+                var tasks = targets.Select(t => RefreshLibraryEntityAsync(t, forceRefresh, cancellationToken));
+                await Task.WhenAll(tasks);
+            }
+            else
+            {
+                foreach (var target in targets)
+                {
+                    await RefreshLibraryEntityAsync(target, forceRefresh, cancellationToken);
+                }
+            }
+        }
+
+        private IEnumerable<LibraryEntityType> ExpandLibraryEntities(LibraryEntityType entity)
+        {
+            if (entity == LibraryEntityType.All)
+            {
+                yield return LibraryEntityType.Songs;
+                yield return LibraryEntityType.Playlists;
+                yield return LibraryEntityType.Albums;
+                yield return LibraryEntityType.Artists;
+                yield return LibraryEntityType.Podcasts;
+                yield break;
+            }
+
+            yield return entity;
+        }
+
+        private async Task RefreshLibraryEntityAsync(
+            LibraryEntityType entity,
+            bool forceRefresh,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!forceRefresh && IsLibraryCacheFresh(entity))
+            {
+                return;
+            }
+
+            switch (entity)
+            {
+                case LibraryEntityType.Songs:
+                    await RefreshLikedSongsCacheAsync(cancellationToken);
+                    break;
+                case LibraryEntityType.Playlists:
+                    await RefreshPlaylistSubscriptionCacheAsync(cancellationToken);
+                    break;
+                case LibraryEntityType.Albums:
+                    await RefreshAlbumSubscriptionCacheAsync(cancellationToken);
+                    break;
+                case LibraryEntityType.Artists:
+                    await RefreshArtistSubscriptionCacheAsync(cancellationToken);
+                    break;
+                case LibraryEntityType.Podcasts:
+                    await RefreshPodcastSubscriptionCacheAsync(cancellationToken);
+                    break;
+            }
+
+            lock (_libraryStateLock)
+            {
+                _libraryCacheTimestamps[entity] = DateTime.UtcNow;
+            }
+        }
+
+        private bool IsLibraryCacheFresh(LibraryEntityType entity)
+        {
+            lock (_libraryStateLock)
+            {
+                return _libraryCacheTimestamps.TryGetValue(entity, out var lastRefresh) &&
+                       DateTime.UtcNow - lastRefresh < LibraryRefreshInterval;
+            }
+        }
+
+        private void InvalidateLibraryCaches()
+        {
+            lock (_libraryStateLock)
+            {
+                _likedSongIds.Clear();
+                _subscribedPlaylistIds.Clear();
+                _ownedPlaylistIds.Clear();
+                _subscribedAlbumIds.Clear();
+                _subscribedPodcastIds.Clear();
+                _subscribedArtistIds.Clear();
+                _likedSongsCacheValid = false;
+                foreach (var key in _libraryCacheTimestamps.Keys.ToList())
+                {
+                    _libraryCacheTimestamps[key] = DateTime.MinValue;
+                }
+            }
+        }
+
+        private async Task RefreshLikedSongsCacheAsync(CancellationToken cancellationToken = default)
+        {
+            long userId = GetCurrentUserId();
+            if (userId <= 0)
+            {
+                return;
+            }
+
+            try
+            {
+                var ids = await _apiClient.GetUserLikedSongsAsync(userId);
+                cancellationToken.ThrowIfCancellationRequested();
+                lock (_libraryStateLock)
+                {
+                    _likedSongIds.Clear();
+                    foreach (var id in ids)
+                    {
+                        if (!string.IsNullOrWhiteSpace(id))
+                        {
+                            _likedSongIds.Add(id);
+                        }
+                    }
+
+                    _likedSongsCacheValid = true;
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[LibraryCache] 刷新喜欢的歌曲失败: {ex}");
+            }
+        }
+
+        private async Task RefreshPlaylistSubscriptionCacheAsync(CancellationToken cancellationToken = default)
+        {
+            long userId = GetCurrentUserId();
+            if (userId <= 0)
+            {
+                return;
+            }
+
+            try
+            {
+                const int pageSize = 1000;
+                int offset = 0;
+                var aggregated = new List<PlaylistInfo>();
+
+                while (true)
+                {
+                    var (playlists, total) = await _apiClient.GetUserPlaylistsAsync(userId, pageSize, offset);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (playlists == null || playlists.Count == 0)
+                    {
+                        break;
+                    }
+
+                    aggregated.AddRange(playlists);
+                    if (playlists.Count < pageSize || aggregated.Count >= total)
+                    {
+                        break;
+                    }
+
+                    offset += playlists.Count;
+                }
+
+                lock (_libraryStateLock)
+                {
+                    _subscribedPlaylistIds.Clear();
+                    _ownedPlaylistIds.Clear();
+
+                    foreach (var playlist in aggregated)
+                    {
+                        if (playlist == null || string.IsNullOrWhiteSpace(playlist.Id))
+                        {
+                            continue;
+                        }
+
+                        bool isOwned = IsPlaylistOwnedByUser(playlist, userId);
+                        if (isOwned)
+                        {
+                            _ownedPlaylistIds.Add(playlist.Id);
+                        }
+                        else
+                        {
+                            _subscribedPlaylistIds.Add(playlist.Id);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[LibraryCache] 刷新歌单收藏状态失败: {ex}");
+            }
+        }
+
+        private async Task RefreshAlbumSubscriptionCacheAsync(CancellationToken cancellationToken = default)
+        {
+            if (!IsUserLoggedIn())
+            {
+                return;
+            }
+
+            try
+            {
+                const int pageSize = 100;
+                int offset = 0;
+                var aggregated = new List<AlbumInfo>();
+
+                while (true)
+                {
+                    var (albums, total) = await _apiClient.GetUserAlbumsAsync(pageSize, offset);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (albums == null || albums.Count == 0)
+                    {
+                        break;
+                    }
+
+                    aggregated.AddRange(albums);
+                    if (albums.Count < pageSize || aggregated.Count >= total)
+                    {
+                        break;
+                    }
+
+                    offset += albums.Count;
+                }
+
+                lock (_libraryStateLock)
+                {
+                    _subscribedAlbumIds.Clear();
+                    foreach (var album in aggregated)
+                    {
+                        if (!string.IsNullOrWhiteSpace(album?.Id))
+                        {
+                            _subscribedAlbumIds.Add(album.Id!);
+                        }
+                    }
+
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[LibraryCache] 刷新收藏专辑失败: {ex}");
+            }
+        }
+
+        private async Task RefreshPodcastSubscriptionCacheAsync(CancellationToken cancellationToken = default)
+        {
+            if (!IsUserLoggedIn())
+            {
+                return;
+            }
+
+            try
+            {
+                const int pageSize = 300;
+                int offset = 0;
+                var aggregated = new List<PodcastRadioInfo>();
+
+                while (true)
+                {
+                    var (podcasts, total) = await _apiClient.GetSubscribedPodcastsAsync(pageSize, offset);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (podcasts == null || podcasts.Count == 0)
+                    {
+                        break;
+                    }
+
+                    aggregated.AddRange(podcasts);
+                    if (podcasts.Count < pageSize || aggregated.Count >= total)
+                    {
+                        break;
+                    }
+
+                    offset += podcasts.Count;
+                }
+
+                lock (_libraryStateLock)
+                {
+                    _subscribedPodcastIds.Clear();
+                    foreach (var podcast in aggregated)
+                    {
+                        if (podcast != null && podcast.Id > 0)
+                        {
+                            _subscribedPodcastIds.Add(podcast.Id);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[LibraryCache] 刷新收藏播客失败: {ex}");
+            }
+        }
+
+        private async Task RefreshArtistSubscriptionCacheAsync(CancellationToken cancellationToken = default)
+        {
+            if (!IsUserLoggedIn())
+            {
+                return;
+            }
+
+            try
+            {
+                const int pageSize = 200;
+                int offset = 0;
+                var aggregated = new List<ArtistInfo>();
+
+                while (true)
+                {
+                    var result = await _apiClient.GetArtistSubscriptionsAsync(pageSize, offset);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (result?.Items == null || result.Items.Count == 0)
+                    {
+                        break;
+                    }
+
+                    aggregated.AddRange(result.Items);
+                    if (!result.HasMore)
+                    {
+                        break;
+                    }
+
+                    offset += result.Items.Count;
+                }
+
+                lock (_libraryStateLock)
+                {
+                    _subscribedArtistIds.Clear();
+                    foreach (var artist in aggregated)
+                    {
+                        if (artist != null && artist.Id > 0)
+                        {
+                            _subscribedArtistIds.Add(artist.Id);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[LibraryCache] 刷新收藏歌手失败: {ex}");
+            }
+        }
+
+        private void ApplySongLikeStates(IEnumerable<SongInfo?>? songs)
+        {
+            if (songs == null)
+            {
+                return;
+            }
+
+            lock (_libraryStateLock)
+            {
+                if (_likedSongIds.Count == 0 && !_likedSongsCacheValid)
+                {
+                    return;
+                }
+
+                foreach (var song in songs)
+                {
+                    if (song == null)
+                    {
+                        continue;
+                    }
+
+                    var id = ResolveSongIdForLibraryState(song);
+                    if (!string.IsNullOrEmpty(id) && _likedSongIds.Contains(id))
+                    {
+                        song.IsLiked = true;
+                    }
+                }
+            }
+        }
+
+        private void ApplyPlaylistSubscriptionState(IEnumerable<PlaylistInfo?>? playlists)
+        {
+            if (playlists == null)
+            {
+                return;
+            }
+
+            lock (_libraryStateLock)
+            {
+                foreach (var playlist in playlists)
+                {
+                    if (playlist == null || string.IsNullOrWhiteSpace(playlist.Id))
+                    {
+                        continue;
+                    }
+
+                    if (_ownedPlaylistIds.Contains(playlist.Id))
+                    {
+                        playlist.IsSubscribed = false;
+                        continue;
+                    }
+
+                    if (_subscribedPlaylistIds.Contains(playlist.Id))
+                    {
+                        playlist.IsSubscribed = true;
+                    }
+                }
+            }
+        }
+
+        private void ApplyAlbumSubscriptionState(IEnumerable<AlbumInfo?>? albums)
+        {
+            if (albums == null)
+            {
+                return;
+            }
+
+            lock (_libraryStateLock)
+            {
+                foreach (var album in albums)
+                {
+                    if (album == null || string.IsNullOrWhiteSpace(album.Id))
+                    {
+                        continue;
+                    }
+
+                    if (_subscribedAlbumIds.Contains(album.Id))
+                    {
+                        album.IsSubscribed = true;
+                    }
+                }
+            }
+        }
+
+        private void ApplyArtistSubscriptionStates(IEnumerable<ArtistInfo?>? artists)
+        {
+            if (artists == null)
+            {
+                return;
+            }
+
+            lock (_libraryStateLock)
+            {
+                foreach (var artist in artists)
+                {
+                    if (artist == null || artist.Id <= 0)
+                    {
+                        continue;
+                    }
+
+                    if (_subscribedArtistIds.Contains(artist.Id))
+                    {
+                        artist.IsSubscribed = true;
+                    }
+                }
+            }
+        }
+
+        private void ApplyPodcastSubscriptionState(IEnumerable<PodcastRadioInfo?>? podcasts)
+        {
+            if (podcasts == null)
+            {
+                return;
+            }
+
+            lock (_libraryStateLock)
+            {
+                foreach (var podcast in podcasts)
+                {
+                    if (podcast == null || podcast.Id <= 0 || podcast.Subscribed)
+                    {
+                        continue;
+                    }
+
+                    if (_subscribedPodcastIds.Contains(podcast.Id))
+                    {
+                        podcast.Subscribed = true;
+                    }
+                }
+            }
+        }
+
+        private void ApplyListItemLibraryStates(IEnumerable<ListItemInfo>? items)
+        {
+            if (items == null)
+            {
+                return;
+            }
+
+            ApplySongLikeStates(items.Where(i => i?.Song != null).Select(i => i.Song));
+            ApplyPlaylistSubscriptionState(items.Where(i => i?.Playlist != null).Select(i => i.Playlist));
+            ApplyAlbumSubscriptionState(items.Where(i => i?.Album != null).Select(i => i.Album));
+            ApplyArtistSubscriptionStates(items.Where(i => i?.Artist != null).Select(i => i.Artist));
+            ApplyPodcastSubscriptionState(items.Where(i => i?.Podcast != null).Select(i => i.Podcast));
+        }
+
+        private bool IsSongLiked(SongInfo? song)
+        {
+            if (song == null)
+            {
+                return false;
+            }
+
+            if (song.IsLiked)
+            {
+                return true;
+            }
+
+            var id = ResolveSongIdForLibraryState(song);
+            if (string.IsNullOrEmpty(id))
+            {
+                return false;
+            }
+
+            lock (_libraryStateLock)
+            {
+                if (_likedSongIds.Contains(id))
+                {
+                    song.IsLiked = true;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool IsPlaylistSubscribed(PlaylistInfo? playlist)
+        {
+            if (playlist == null || string.IsNullOrWhiteSpace(playlist.Id))
+            {
+                return false;
+            }
+
+            if (IsPlaylistOwnedByUser(playlist, GetCurrentUserId()))
+            {
+                return false;
+            }
+
+            if (playlist.IsSubscribed)
+            {
+                return true;
+            }
+
+            lock (_libraryStateLock)
+            {
+                if (_subscribedPlaylistIds.Contains(playlist.Id))
+                {
+                    playlist.IsSubscribed = true;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool IsAlbumSubscribed(AlbumInfo? album)
+        {
+            if (album == null || string.IsNullOrWhiteSpace(album.Id))
+            {
+                return false;
+            }
+
+            if (album.IsSubscribed)
+            {
+                return true;
+            }
+
+            lock (_libraryStateLock)
+            {
+                if (_subscribedAlbumIds.Contains(album.Id))
+                {
+                    album.IsSubscribed = true;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool IsArtistSubscribed(ArtistInfo? artist)
+        {
+            if (artist == null || artist.Id <= 0)
+            {
+                return false;
+            }
+
+            if (artist.IsSubscribed)
+            {
+                return true;
+            }
+
+            lock (_libraryStateLock)
+            {
+                if (_subscribedArtistIds.Contains(artist.Id))
+                {
+                    artist.IsSubscribed = true;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private void UpdateArtistSubscriptionState(long artistId, bool isSubscribed)
+        {
+            if (artistId <= 0)
+            {
+                return;
+            }
+
+            lock (_libraryStateLock)
+            {
+                if (isSubscribed)
+                {
+                    _subscribedArtistIds.Add(artistId);
+                }
+                else
+                {
+                    _subscribedArtistIds.Remove(artistId);
+                }
+            }
+        }
+
+        private static bool IsPlaylistOwnedByUser(PlaylistInfo? playlist, long userId)
+        {
+            if (playlist == null || userId <= 0)
+            {
+                return false;
+            }
+
+            if (playlist.CreatorId > 0 && playlist.CreatorId == userId)
+            {
+                return true;
+            }
+
+            if (playlist.OwnerUserId > 0 && playlist.OwnerUserId == userId)
+            {
+                return true;
+            }
+
+            return IsLikedMusicPlaylist(playlist, userId);
+        }
+
+        private void UpdateSongLikeState(SongInfo? song, bool isLiked)
+        {
+            if (song == null)
+            {
+                return;
+            }
+
+            song.IsLiked = isLiked;
+            var id = ResolveSongIdForLibraryState(song);
+            if (string.IsNullOrEmpty(id))
+            {
+                return;
+            }
+
+            lock (_libraryStateLock)
+            {
+                if (isLiked)
+                {
+                    _likedSongIds.Add(id);
+                }
+                else
+                {
+                    _likedSongIds.Remove(id);
+                }
+            }
+        }
+
+        private void UpdatePlaylistSubscriptionState(string? playlistId, bool isSubscribed)
+        {
+            if (string.IsNullOrWhiteSpace(playlistId))
+            {
+                return;
+            }
+
+            lock (_libraryStateLock)
+            {
+                if (isSubscribed)
+                {
+                    _subscribedPlaylistIds.Add(playlistId);
+                }
+                else
+                {
+                    _subscribedPlaylistIds.Remove(playlistId);
+                }
+            }
+        }
+
+        private void UpdatePlaylistOwnershipState(string? playlistId, bool isOwned)
+        {
+            if (string.IsNullOrWhiteSpace(playlistId))
+            {
+                return;
+            }
+
+            lock (_libraryStateLock)
+            {
+                if (isOwned)
+                {
+                    _ownedPlaylistIds.Add(playlistId);
+                    _subscribedPlaylistIds.Remove(playlistId);
+                }
+                else
+                {
+                    _ownedPlaylistIds.Remove(playlistId);
+                }
+            }
+        }
+
+        private void UpdateAlbumSubscriptionState(string? albumId, bool isSubscribed)
+        {
+            if (string.IsNullOrWhiteSpace(albumId))
+            {
+                return;
+            }
+
+            lock (_libraryStateLock)
+            {
+                if (isSubscribed)
+                {
+                    _subscribedAlbumIds.Add(albumId);
+                }
+                else
+                {
+                    _subscribedAlbumIds.Remove(albumId);
+                }
+            }
+        }
+
+        private void UpdatePodcastSubscriptionState(long podcastId, bool isSubscribed)
+        {
+            if (podcastId <= 0)
+            {
+                return;
+            }
+
+            lock (_libraryStateLock)
+            {
+                if (isSubscribed)
+                {
+                    _subscribedPodcastIds.Add(podcastId);
+                }
+                else
+                {
+                    _subscribedPodcastIds.Remove(podcastId);
+                }
+            }
+        }
+
+        #endregion
+
         private List<ListItemInfo> BuildRecentListenedEntries()
         {
             return new List<ListItemInfo>
@@ -4905,6 +5754,7 @@ namespace YTPlayer
             _currentPodcasts.Clear();
             _currentPodcastSounds.Clear();
             _currentPodcast = null;
+            ApplyAlbumSubscriptionState(_currentAlbums);
 
             resultListView.BeginUpdate();
             resultListView.Items.Clear();
@@ -5011,6 +5861,7 @@ namespace YTPlayer
             _currentPodcasts = podcasts ?? new List<PodcastRadioInfo>();
             _currentPodcastSounds.Clear();
             _currentPodcast = null;
+            ApplyPodcastSubscriptionState(_currentPodcasts);
 
             resultListView.BeginUpdate();
             resultListView.Items.Clear();
@@ -5624,7 +6475,7 @@ namespace YTPlayer
 
                 // 加载到显示管理器
                 _lyricsDisplayManager.LoadLyrics(lyricsData);
-                CancelPendingLyricSpeech();
+                CancelPendingLyricSpeech(stopGlobalTts: false);
 
                 // ⭐ 向后兼容：保持旧的 _currentLyrics 字段（用于旧代码）
                 if (lyricsData != null && !lyricsData.IsEmpty)
@@ -5642,14 +6493,14 @@ namespace YTPlayer
                 // 忽略取消异常
                 _lyricsDisplayManager.Clear();
                 _currentLyrics.Clear();
-                CancelPendingLyricSpeech();
+                CancelPendingLyricSpeech(stopGlobalTts: false);
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[Lyrics] 加载失败: {ex.Message}");
                 _lyricsDisplayManager.Clear();
                 _currentLyrics.Clear();
-                CancelPendingLyricSpeech();
+                CancelPendingLyricSpeech(stopGlobalTts: false);
             }
         }
 
@@ -5755,7 +6606,7 @@ private void TogglePlayPause()
         /// <summary>
         /// 上一首
         /// </summary>
-        /// <param name="isManual">是否为手动切歌（F5/菜单），手动切歌时边界不循环</param>
+        /// <param name="isManual">是否为手动切歌（快捷键/菜单），手动切歌时边界不循环</param>
         #endregion
 
         #region UI更新和事件
@@ -6521,7 +7372,7 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
             }, token);
         }
 
-        private void CancelPendingLyricSpeech(bool resetSuppression = true)
+        private void CancelPendingLyricSpeech(bool resetSuppression = true, bool stopGlobalTts = true)
         {
             lock (_lyricsSpeechLock)
             {
@@ -6533,7 +7384,10 @@ private void NotifyAccessibilityClients(System.Windows.Forms.Control control, Sy
                 }
             }
 
-            Utils.TtsHelper.StopSpeaking();
+            if (stopGlobalTts)
+            {
+                Utils.TtsHelper.StopSpeaking();
+            }
             _lastLyricSpeechAnchor = null;
             _lastLyricPlaybackPosition = null;
             if (resetSuppression)
@@ -7334,7 +8188,7 @@ private void searchTypeComboBox_Enter(object sender, System.EventArgs e)
 
         /// <summary>
         /// 窗体按键事件
-        /// </summary>
+    /// </summary>
 
 private void MainForm_KeyDown(object sender, KeyEventArgs e)
 {
@@ -7368,7 +8222,7 @@ private void MainForm_KeyDown(object sender, KeyEventArgs e)
         {
             return;  // 让这些键保持默认行为（文本编辑）
         }
-        // 其他快捷键（F5-F8 等）继续执行
+        // 其他快捷键继续执行
     }
 
     if (e.KeyCode == Keys.Space)
@@ -7389,41 +8243,43 @@ private void MainForm_KeyDown(object sender, KeyEventArgs e)
         e.SuppressKeyPress = true;
         HandleDirectionalKeyDown(isRight: true);
     }
-    else if (e.KeyCode == Keys.F5)
+    else if (e.KeyCode == Keys.F1)
     {
         e.Handled = true;
         e.SuppressKeyPress = true;
-        // 直接调用上一曲
         PlayPrevious(isManual: true);
     }
-    else if (e.KeyCode == Keys.F6)
+    else if (e.KeyCode == Keys.F2)
     {
         e.Handled = true;
         e.SuppressKeyPress = true;
-        // 直接调用下一曲
         PlayNext(isManual: true);
     }
-        else if (e.KeyCode == Keys.F7)
+        else if (e.KeyCode == Keys.F4)
         {
             e.Handled = true;
             e.SuppressKeyPress = true;
-        // 音量减
             if (volumeTrackBar.Value > 0)
             {
                 volumeTrackBar.Value = Math.Max(0, volumeTrackBar.Value - 2);
                 volumeTrackBar_Scroll(volumeTrackBar, EventArgs.Empty);
             }
         }
-        else if (e.KeyCode == Keys.F8)
+        else if (e.KeyCode == Keys.F3)
         {
             e.Handled = true;
             e.SuppressKeyPress = true;
-            // 音量加
             if (volumeTrackBar.Value < 100)
             {
                 volumeTrackBar.Value = Math.Min(100, volumeTrackBar.Value + 2);
                 volumeTrackBar_Scroll(volumeTrackBar, EventArgs.Empty);
             }
+        }
+        else if (e.KeyCode == Keys.F5)
+        {
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+            _ = RefreshCurrentViewAsync();
         }
         else if (e.KeyCode == Keys.F9)
         {
@@ -7978,6 +8834,8 @@ private void TrayIcon_MouseClick(object sender, System.Windows.Forms.MouseEventA
                     }
                 });
             }
+
+            ScheduleLibraryStateRefresh();
 
             if (_isHomePage)
             {
@@ -10360,13 +11218,12 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 return;
             }
 
-            subscribePodcastMenuItem.Visible = true;
-            unsubscribePodcastMenuItem.Visible = true;
+            bool subscribed = ResolvePodcastSubscriptionState(podcast);
+            subscribePodcastMenuItem.Visible = !subscribed;
+            unsubscribePodcastMenuItem.Visible = subscribed;
             subscribePodcastMenuItem.Tag = podcast;
             unsubscribePodcastMenuItem.Tag = podcast;
-
-            bool subscribed = ResolvePodcastSubscriptionState(podcast);
-            subscribePodcastMenuItem.Enabled = !subscribed;
+            subscribePodcastMenuItem.Enabled = true;
             unsubscribePodcastMenuItem.Enabled = true;
         }
 
@@ -10387,7 +11244,10 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 return _currentPodcast.Subscribed;
             }
 
-            return false;
+            lock (_libraryStateLock)
+            {
+                return _subscribedPodcastIds.Contains(podcast.Id);
+            }
         }
 
         private void ConfigurePodcastEpisodeShareMenu(PodcastEpisodeInfo? episode)
@@ -10926,6 +11786,32 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             }
         }
 
+        private async void viewPodcastMenuItem_Click(object sender, EventArgs e)
+        {
+            var podcast = GetSelectedPodcastFromContextMenu(sender);
+            if (podcast == null || podcast.Id <= 0)
+            {
+                MessageBox.Show("无法获取播客信息。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            try
+            {
+                var displayName = string.IsNullOrWhiteSpace(podcast.Name)
+                    ? $"播客 {podcast.Id}"
+                    : podcast.Name;
+
+                UpdateStatusBar("正在打开播客...");
+                await OpenPodcastRadioAsync(podcast);
+                UpdateStatusBar($"已打开播客：{displayName}");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"打开播客失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("打开播客失败");
+            }
+        }
+
         private async void shareSongWebMenuItem_Click(object sender, EventArgs e)
         {
             var song = GetSelectedSongFromContextMenu(sender);
@@ -11088,6 +11974,7 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 var created = await _apiClient.CreatePlaylistAsync(playlistName);
                 if (created != null && !string.IsNullOrWhiteSpace(created.Id))
                 {
+                    UpdatePlaylistOwnershipState(created.Id, true);
                     MessageBox.Show($"已新建歌单：{created.Name}", "成功",
                         MessageBoxButtons.OK, MessageBoxIcon.Information);
                     UpdateStatusBar("歌单创建成功");
@@ -11120,32 +12007,37 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
         /// </summary>
         private async void subscribePlaylistMenuItem_Click(object sender, EventArgs e)
         {
-            var selectedItem = resultListView.SelectedItems.Count > 0 ? resultListView.SelectedItems[0] : null;
-            if (selectedItem?.Tag is PlaylistInfo playlist)
+            var playlist = GetSelectedPlaylistFromContextMenu(sender);
+            if (playlist == null || string.IsNullOrWhiteSpace(playlist.Id))
             {
-                try
+                MessageBox.Show("无法获取歌单信息，无法收藏。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            try
+            {
+                UpdateStatusBar("正在收藏歌单...");
+                bool success = await _apiClient.SubscribePlaylistAsync(playlist.Id, true);
+                if (success)
                 {
-                    UpdateStatusBar("正在收藏歌单...");
-                    bool success = await _apiClient.SubscribePlaylistAsync(playlist.Id, true);
-                    if (success)
-                    {
-                        MessageBox.Show($"已收藏歌单：{playlist.Name}", "成功",
-                            MessageBoxButtons.OK, MessageBoxIcon.Information);
-                        UpdateStatusBar("歌单收藏成功");
-                    }
-                    else
-                    {
-                        MessageBox.Show("收藏歌单失败，请检查网络或稍后重试。", "失败",
-                            MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        UpdateStatusBar("歌单收藏失败");
-                    }
+                    playlist.IsSubscribed = true;
+                    UpdatePlaylistSubscriptionState(playlist.Id, true);
+                    MessageBox.Show($"已收藏歌单：{playlist.Name}", "成功",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    UpdateStatusBar("歌单收藏成功");
                 }
-                catch (Exception ex)
+                else
                 {
-                    MessageBox.Show($"收藏歌单失败: {ex.Message}", "错误",
+                    MessageBox.Show("收藏歌单失败，请检查网络或稍后重试。", "失败",
                         MessageBoxButtons.OK, MessageBoxIcon.Error);
                     UpdateStatusBar("歌单收藏失败");
                 }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"收藏歌单失败: {ex.Message}", "错误",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("歌单收藏失败");
             }
         }
 
@@ -11154,40 +12046,45 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
         /// </summary>
         private async void unsubscribePlaylistMenuItem_Click(object sender, EventArgs e)
         {
-            var selectedItem = resultListView.SelectedItems.Count > 0 ? resultListView.SelectedItems[0] : null;
-            if (selectedItem?.Tag is PlaylistInfo playlist)
+            var playlist = GetSelectedPlaylistFromContextMenu(sender);
+            if (playlist == null || string.IsNullOrWhiteSpace(playlist.Id))
             {
-                try
+                MessageBox.Show("无法获取歌单信息，无法取消收藏。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            try
+            {
+                UpdateStatusBar("正在取消收藏歌单...");
+                bool success = await _apiClient.SubscribePlaylistAsync(playlist.Id, false);
+                if (success)
                 {
-                    UpdateStatusBar("正在取消收藏歌单...");
-                    bool success = await _apiClient.SubscribePlaylistAsync(playlist.Id, false);
-                    if (success)
+                    playlist.IsSubscribed = false;
+                    UpdatePlaylistSubscriptionState(playlist.Id, false);
+                    MessageBox.Show($"已取消收藏歌单：{playlist.Name}", "成功",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    UpdateStatusBar("取消收藏成功");
+                    try
                     {
-                        MessageBox.Show($"已取消收藏歌单：{playlist.Name}", "成功",
-                            MessageBoxButtons.OK, MessageBoxIcon.Information);
-                        UpdateStatusBar("取消收藏成功");
-                        try
-                        {
-                            await RefreshUserPlaylistsIfActiveAsync();
-                        }
-                        catch (Exception refreshEx)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"[UI] 刷新我的歌单列表失败: {refreshEx}");
-                        }
+                        await RefreshUserPlaylistsIfActiveAsync();
                     }
-                    else
+                    catch (Exception refreshEx)
                     {
-                        MessageBox.Show("取消收藏失败，请检查网络或稍后重试。", "失败",
-                            MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        UpdateStatusBar("取消收藏失败");
+                        System.Diagnostics.Debug.WriteLine($"[UI] 刷新我的歌单列表失败: {refreshEx}");
                     }
                 }
-                catch (Exception ex)
+                else
                 {
-                    MessageBox.Show($"取消收藏失败: {ex.Message}", "错误",
+                    MessageBox.Show("取消收藏失败，请检查网络或稍后重试。", "失败",
                         MessageBoxButtons.OK, MessageBoxIcon.Error);
                     UpdateStatusBar("取消收藏失败");
                 }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"取消收藏失败: {ex.Message}", "错误",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("取消收藏失败");
             }
         }
 
@@ -11212,6 +12109,8 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                     bool success = await _apiClient.DeletePlaylistAsync(playlist.Id);
                     if (success)
                     {
+                        UpdatePlaylistOwnershipState(playlist.Id, false);
+                        UpdatePlaylistSubscriptionState(playlist.Id, false);
                         MessageBox.Show($"已删除歌单：{playlist.Name}", "成功",
                             MessageBoxButtons.OK, MessageBoxIcon.Information);
                         UpdateStatusBar("删除歌单成功");
@@ -11245,41 +12144,38 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
         /// </summary>
         private async void subscribeAlbumMenuItem_Click(object sender, EventArgs e)
         {
-            var selectedItem = resultListView.SelectedItems.Count > 0 ? resultListView.SelectedItems[0] : null;
-            if (selectedItem?.Tag is AlbumInfo album)
+            var album = GetSelectedAlbumFromContextMenu(sender);
+            if (album == null || string.IsNullOrWhiteSpace(album.Id))
             {
-                try
-                {
-                    UpdateStatusBar("正在收藏专辑...");
-                    if (string.IsNullOrEmpty(album.Id))
-                    {
-                        MessageBox.Show("无法识别专辑信息，收藏操作已取消。", "提示",
-                            MessageBoxButtons.OK, MessageBoxIcon.Information);
-                        UpdateStatusBar("专辑收藏失败");
-                        return;
-                    }
+                MessageBox.Show("无法识别专辑信息，收藏操作已取消。", "提示",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
 
-                    string albumId = album.Id!;
-                    bool success = await _apiClient.SubscribeAlbumAsync(albumId);
-                    if (success)
-                    {
-                        MessageBox.Show($"已收藏专辑：{album.Name}", "成功",
-                            MessageBoxButtons.OK, MessageBoxIcon.Information);
-                        UpdateStatusBar("专辑收藏成功");
-                    }
-                    else
-                    {
-                        MessageBox.Show("收藏专辑失败，请检查网络或稍后重试。", "失败",
-                            MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        UpdateStatusBar("专辑收藏失败");
-                    }
-                }
-                catch (Exception ex)
+            try
+            {
+                UpdateStatusBar("正在收藏专辑...");
+                bool success = await _apiClient.SubscribeAlbumAsync(album.Id!);
+                if (success)
                 {
-                    MessageBox.Show($"收藏专辑失败: {ex.Message}", "错误",
+                    album.IsSubscribed = true;
+                    UpdateAlbumSubscriptionState(album.Id, true);
+                    MessageBox.Show($"已收藏专辑：{album.Name}", "成功",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    UpdateStatusBar("专辑收藏成功");
+                }
+                else
+                {
+                    MessageBox.Show("收藏专辑失败，请检查网络或稍后重试。", "失败",
                         MessageBoxButtons.OK, MessageBoxIcon.Error);
                     UpdateStatusBar("专辑收藏失败");
                 }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"收藏专辑失败: {ex.Message}", "错误",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("专辑收藏失败");
             }
         }
 
@@ -11374,6 +12270,83 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 MessageBox.Show($"分享节目直链失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 UpdateStatusBar("节目分享失败");
             }
+        }
+
+        private async Task RefreshCurrentViewAsync(bool forceLibraryRefresh = true)
+        {
+            if (string.IsNullOrWhiteSpace(_currentViewSource))
+            {
+                UpdateStatusBar("当前没有可刷新的内容");
+                return;
+            }
+
+            var state = CreateCurrentState();
+            if (state == null)
+            {
+                UpdateStatusBar("当前视图不支持刷新");
+                return;
+            }
+
+            try
+            {
+                if (forceLibraryRefresh)
+                {
+                    var entity = ResolveLibraryEntityFromState(state);
+                    if (entity.HasValue)
+                    {
+                        await RefreshLibraryStateAsync(entity.Value, forceRefresh: true, CancellationToken.None);
+                    }
+                }
+
+                bool restored = await RestoreNavigationStateAsync(state);
+                if (restored)
+                {
+                    UpdateStatusBar("页面已刷新");
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[Refresh] 刷新失败: {ex}");
+                UpdateStatusBar("刷新失败");
+            }
+        }
+
+        private LibraryEntityType? ResolveLibraryEntityFromState(NavigationHistoryItem state)
+        {
+            string viewSource = state.ViewSource ?? string.Empty;
+
+            if (string.Equals(viewSource, "user_liked_songs", StringComparison.OrdinalIgnoreCase))
+            {
+                return LibraryEntityType.Songs;
+            }
+
+            if (string.Equals(viewSource, "user_playlists", StringComparison.OrdinalIgnoreCase))
+            {
+                return LibraryEntityType.Playlists;
+            }
+
+            if (string.Equals(viewSource, "user_albums", StringComparison.OrdinalIgnoreCase))
+            {
+                return LibraryEntityType.Albums;
+            }
+
+            if (string.Equals(viewSource, "user_podcasts", StringComparison.OrdinalIgnoreCase))
+            {
+                return LibraryEntityType.Podcasts;
+            }
+
+            if (string.Equals(viewSource, "artist_favorites", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(state.PageType, "artist_favorites", StringComparison.OrdinalIgnoreCase))
+            {
+                return LibraryEntityType.Artists;
+            }
+
+            return null;
+        }
+
+        private async void refreshMenuItem_Click(object sender, EventArgs e)
+        {
+            await RefreshCurrentViewAsync();
         }
 
         private async void artistSongsSortHotMenuItem_Click(object sender, EventArgs e)
@@ -11499,6 +12472,7 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                         _currentPodcast.Subscribed = true;
                     }
 
+                    UpdatePodcastSubscriptionState(podcast.Id, true);
                     MessageBox.Show($"已收藏播客：{podcast.Name}", "成功",
                         MessageBoxButtons.OK, MessageBoxIcon.Information);
                     UpdateStatusBar("播客收藏成功");
@@ -11545,6 +12519,7 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                         _currentPodcast.Subscribed = false;
                     }
 
+                    UpdatePodcastSubscriptionState(podcast.Id, false);
                     MessageBox.Show($"已取消收藏播客：{podcast.Name}", "成功",
                         MessageBoxButtons.OK, MessageBoxIcon.Information);
                     UpdateStatusBar("取消收藏播客成功");
@@ -11570,49 +12545,46 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
         /// </summary>
         private async void unsubscribeAlbumMenuItem_Click(object sender, EventArgs e)
         {
-            var selectedItem = resultListView.SelectedItems.Count > 0 ? resultListView.SelectedItems[0] : null;
-            if (selectedItem?.Tag is AlbumInfo album)
+            var album = GetSelectedAlbumFromContextMenu(sender);
+            if (album == null || string.IsNullOrWhiteSpace(album.Id))
             {
-                try
-                {
-                    UpdateStatusBar("正在取消收藏专辑...");
-                    if (string.IsNullOrEmpty(album.Id))
-                    {
-                        MessageBox.Show("无法识别专辑信息，取消收藏操作已取消。", "提示",
-                            MessageBoxButtons.OK, MessageBoxIcon.Information);
-                        UpdateStatusBar("取消收藏失败");
-                        return;
-                    }
+                MessageBox.Show("无法识别专辑信息，取消收藏操作已取消。", "提示",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
 
-                    string albumId = album.Id!;
-                    bool success = await _apiClient.UnsubscribeAlbumAsync(albumId);
-                    if (success)
+            try
+            {
+                UpdateStatusBar("正在取消收藏专辑...");
+                bool success = await _apiClient.UnsubscribeAlbumAsync(album.Id!);
+                if (success)
+                {
+                    album.IsSubscribed = false;
+                    UpdateAlbumSubscriptionState(album.Id, false);
+                    MessageBox.Show($"已取消收藏专辑：{album.Name}", "成功",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    UpdateStatusBar("取消收藏成功");
+                    try
                     {
-                        MessageBox.Show($"已取消收藏专辑：{album.Name}", "成功",
-                            MessageBoxButtons.OK, MessageBoxIcon.Information);
-                        UpdateStatusBar("取消收藏成功");
-                        try
-                        {
-                            await RefreshUserAlbumsIfActiveAsync();
-                        }
-                        catch (Exception refreshEx)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"[UI] 刷新收藏的专辑列表失败: {refreshEx}");
-                        }
+                        await RefreshUserAlbumsIfActiveAsync();
                     }
-                    else
+                    catch (Exception refreshEx)
                     {
-                        MessageBox.Show("取消收藏失败，请检查网络或稍后重试。", "失败",
-                            MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        UpdateStatusBar("取消收藏失败");
+                        System.Diagnostics.Debug.WriteLine($"[UI] 刷新收藏的专辑列表失败: {refreshEx}");
                     }
                 }
-                catch (Exception ex)
+                else
                 {
-                    MessageBox.Show($"取消收藏失败: {ex.Message}", "错误",
+                    MessageBox.Show("取消收藏失败，请检查网络或稍后重试。", "失败",
                         MessageBoxButtons.OK, MessageBoxIcon.Error);
                     UpdateStatusBar("取消收藏失败");
                 }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"取消收藏失败: {ex.Message}", "错误",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatusBar("取消收藏失败");
             }
         }
 
@@ -11659,22 +12631,7 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
         private bool IsPlaylistCreatedByCurrentUser(PlaylistInfo playlist)
         {
             long currentUserId = GetCurrentUserId();
-            if (currentUserId <= 0 || playlist == null)
-            {
-                return false;
-            }
-
-            if (playlist.CreatorId > 0 && playlist.CreatorId == currentUserId)
-            {
-                return true;
-            }
-
-            if (playlist.OwnerUserId > 0 && playlist.OwnerUserId == currentUserId)
-            {
-                return true;
-            }
-
-            return false;
+            return IsPlaylistOwnedByUser(playlist, currentUserId);
         }
 
         private bool IsCurrentLikedSongsView()

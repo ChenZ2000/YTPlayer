@@ -47,6 +47,7 @@ namespace YTPlayer
 
                 if (success)
                 {
+                    UpdateSongLikeState(song, true);
                     MessageBox.Show($"已收藏歌曲：{song.Name} - {song.Artist}", "成功",
                         MessageBoxButtons.OK, MessageBoxIcon.Information);
                     UpdateStatusBar("歌曲收藏成功");
@@ -102,6 +103,7 @@ namespace YTPlayer
 
                 if (success)
                 {
+                    UpdateSongLikeState(song, false);
                     MessageBox.Show($"已取消收藏：{song.Name} - {song.Artist}", "成功",
                         MessageBoxButtons.OK, MessageBoxIcon.Information);
                     UpdateStatusBar("取消收藏成功");
@@ -343,6 +345,18 @@ namespace YTPlayer
                 : song.Id;
 
             return !string.IsNullOrWhiteSpace(resolvedSongId);
+        }
+
+        private string? ResolveSongIdForLibraryState(SongInfo? song)
+        {
+            if (!CanSongUseLibraryFeatures(song) || song == null)
+            {
+                return null;
+            }
+
+            return song.IsCloudSong && !string.IsNullOrWhiteSpace(song.CloudMatchedSongId)
+                ? song.CloudMatchedSongId
+                : song.Id;
         }
 
         private static bool CanSongUseLibraryFeatures(SongInfo? song)

@@ -88,6 +88,7 @@ namespace YTPlayer
             _currentPodcasts.Clear();
             _currentPodcastSounds.Clear();
             _currentPodcast = null;
+            ApplyArtistSubscriptionStates(_currentArtists);
 
             resultListView.BeginUpdate();
             resultListView.Items.Clear();
@@ -441,6 +442,7 @@ namespace YTPlayer
                     SaveNavigationState();
                 }
 
+                await EnsureLibraryStateFreshAsync(LibraryEntityType.Artists);
                 var result = await _apiClient.GetArtistSubscriptionsAsync(limit: 200, offset: 0);
                 var favoriteArtists = result?.Items ?? new List<ArtistInfo>();
                 bool hasMore = result?.HasMore ?? false;
@@ -583,8 +585,9 @@ namespace YTPlayer
 
             if (IsUserLoggedIn())
             {
-                subscribeArtistMenuItem.Visible = !artist.IsSubscribed;
-                unsubscribeArtistMenuItem.Visible = artist.IsSubscribed;
+                bool artistSubscribed = IsArtistSubscribed(artist);
+                subscribeArtistMenuItem.Visible = !artistSubscribed;
+                unsubscribeArtistMenuItem.Visible = artistSubscribed;
                 hasArtistActions |= subscribeArtistMenuItem.Visible || unsubscribeArtistMenuItem.Visible;
             }
             else
@@ -669,6 +672,7 @@ namespace YTPlayer
                 if (success)
                 {
                     artist.IsSubscribed = true;
+                    UpdateArtistSubscriptionState(artist.Id, true);
                     MessageBox.Show($"已收藏歌手：{artist.Name}", "成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     UpdateStatusBar("收藏歌手成功");
                     await RefreshArtistListAfterSubscriptionAsync(artist.Id);
@@ -707,6 +711,7 @@ namespace YTPlayer
                 if (success)
                 {
                     artist.IsSubscribed = false;
+                    UpdateArtistSubscriptionState(artist.Id, false);
                     MessageBox.Show($"已取消收藏歌手：{artist.Name}", "成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     UpdateStatusBar("取消收藏歌手成功");
                     await RefreshArtistListAfterSubscriptionAsync(artist.Id);

@@ -51,6 +51,10 @@ namespace YTPlayer.Models
         /// 歌曲数量
         /// </summary>
         public int TrackCount { get; set; }
+
+        /// <summary>
+        /// 指示当前登录用户是否已收藏该歌单。
+        /// </summary>
+        public bool IsSubscribed { get; set; }
     }
 }
-
