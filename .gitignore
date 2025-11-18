@@ -14,7 +14,6 @@ account.json.tmp
 config.json
 config.json.bak
 config.json.tmp
-node_modules
 
 # Build results
 [Dd]ebug/
