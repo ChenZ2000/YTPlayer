@@ -550,7 +550,13 @@ namespace YTPlayer
                                         _currentPlaylist != null &&
                                         IsPlaylistCreatedByCurrentUser(_currentPlaylist);
 
-                if (isLikedSongsView)
+                if (snapshot.IsCurrentPlayback)
+                {
+                    removeFromPlaylistMenuItem.Visible = false;
+                    removeFromPlaylistMenuItem.Tag = null;
+                    removeFromPlaylistMenuItem.Text = "从歌单中移除(&R)";
+                }
+                else if (isLikedSongsView)
                 {
                     removeFromPlaylistMenuItem.Text = "取消收藏(&R)";
                     removeFromPlaylistMenuItem.Visible = canUseLibraryFeatures;

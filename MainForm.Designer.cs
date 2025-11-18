@@ -35,6 +35,7 @@ namespace YTPlayer
             this.loginMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.currentPlayingMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.viewSourceMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.refreshMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.toolStripSeparatorDownload1 = new System.Windows.Forms.ToolStripSeparator();
             this.openDownloadDirMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.changeDownloadDirMenuItem = new System.Windows.Forms.ToolStripMenuItem();
@@ -87,7 +88,6 @@ namespace YTPlayer
             this.unlikeSongMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.addToPlaylistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.removeFromPlaylistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
-            this.refreshMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.cloudMenuSeparator = new System.Windows.Forms.ToolStripSeparator();
             this.uploadToCloudMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.deleteFromCloudMenuItem = new System.Windows.Forms.ToolStripMenuItem();
@@ -201,6 +201,18 @@ this.hideMenuItem.Click += new System.EventHandler(this.hideMenuItem_Click);
             this.fileMenuItem.Name = "fileMenuItem";
             this.fileMenuItem.Size = new System.Drawing.Size(98, 24);
             this.fileMenuItem.Text = "文件/操作(&F)";
+            this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
+            this.homeMenuItem,
+            this.loginMenuItem,
+            this.currentPlayingMenuItem,
+            this.refreshMenuItem,
+            this.toolStripSeparatorDownload1,
+            this.openDownloadDirMenuItem,
+            this.changeDownloadDirMenuItem,
+            this.downloadManagerMenuItem,
+            this.toolStripSeparatorDownload2,
+            this.hideMenuItem,
+            this.exitMenuItem});
             //
             // homeMenuItem
             //
@@ -225,6 +237,14 @@ this.hideMenuItem.Click += new System.EventHandler(this.hideMenuItem_Click);
             this.currentPlayingMenuItem.Text = "当前播放";
             this.currentPlayingMenuItem.Visible = false;
             this.currentPlayingMenuItem.DropDownOpening += new System.EventHandler(this.currentPlayingMenuItem_DropDownOpening);
+            //
+            // refreshMenuItem
+            //
+            this.refreshMenuItem.Name = "refreshMenuItem";
+            this.refreshMenuItem.ShortcutKeys = System.Windows.Forms.Keys.F5;
+            this.refreshMenuItem.Size = new System.Drawing.Size(200, 26);
+            this.refreshMenuItem.Text = "刷新(&F5)";
+            this.refreshMenuItem.Click += new System.EventHandler(this.refreshMenuItem_Click);
             //
             // openDownloadDirMenuItem
             //
@@ -730,8 +750,6 @@ this.hideMenuItem.Click += new System.EventHandler(this.hideMenuItem_Click);
             this.likeSongMenuItem,
             this.unlikeSongMenuItem,
             this.addToPlaylistMenuItem,
-            this.removeFromPlaylistMenuItem,
-            this.refreshMenuItem,
             this.cloudMenuSeparator,
             this.uploadToCloudMenuItem,
             this.deleteFromCloudMenuItem,
@@ -819,14 +837,6 @@ this.hideMenuItem.Click += new System.EventHandler(this.hideMenuItem_Click);
             this.removeFromPlaylistMenuItem.Size = new System.Drawing.Size(210, 24);
             this.removeFromPlaylistMenuItem.Text = "从歌单中移除(&R)";
             this.removeFromPlaylistMenuItem.Click += new System.EventHandler(this.removeFromPlaylistMenuItem_Click);
-            //
-            // refreshMenuItem
-            //
-            this.refreshMenuItem.Name = "refreshMenuItem";
-            this.refreshMenuItem.ShortcutKeys = System.Windows.Forms.Keys.F5;
-            this.refreshMenuItem.Size = new System.Drawing.Size(210, 24);
-            this.refreshMenuItem.Text = "刷新(&F5)";
-            this.refreshMenuItem.Click += new System.EventHandler(this.refreshMenuItem_Click);
             this.cloudMenuSeparator.Name = "cloudMenuSeparator";
             this.cloudMenuSeparator.Size = new System.Drawing.Size(207, 6);
             this.cloudMenuSeparator.Visible = false;
