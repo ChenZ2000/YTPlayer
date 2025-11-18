@@ -224,6 +224,15 @@ this.hideMenuItem.Click += new System.EventHandler(this.hideMenuItem_Click);
             this.currentPlayingMenuItem.Text = "当前播放";
             this.currentPlayingMenuItem.Visible = false;
             this.currentPlayingMenuItem.DropDownOpening += new System.EventHandler(this.currentPlayingMenuItem_DropDownOpening);
+            this.currentPlayingMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
+            this.viewSourceMenuItem});
+            //
+            // viewSourceMenuItem
+            //
+            this.viewSourceMenuItem.Name = "viewSourceMenuItem";
+            this.viewSourceMenuItem.Size = new System.Drawing.Size(210, 26);
+            this.viewSourceMenuItem.Text = "查看来源(&S)";
+            this.viewSourceMenuItem.Click += new System.EventHandler(this.viewSourceMenuItem_Click);
             //
             // openDownloadDirMenuItem
             //
@@ -773,7 +782,7 @@ this.hideMenuItem.Click += new System.EventHandler(this.hideMenuItem_Click);
             this.songContextMenu.Size = new System.Drawing.Size(211, 320);
             this.songContextMenu.Opening += new System.ComponentModel.CancelEventHandler(this.songContextMenu_Opening);
             this.songContextMenu.Closed += new System.Windows.Forms.ToolStripDropDownClosedEventHandler(this.songContextMenu_Closed);
-            this.currentPlayingMenuItem.DropDown = this.songContextMenu;
+                        this.currentPlayingMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] { this.viewSourceMenuItem });\n            this.currentPlayingMenuItem.DropDown = this.songContextMenu;
             //
             // insertPlayMenuItem
             //
@@ -1274,6 +1283,7 @@ this.hideMenuItem.Click += new System.EventHandler(this.hideMenuItem_Click);
         private System.Windows.Forms.ToolStripMenuItem changeDownloadDirMenuItem;
         private System.Windows.Forms.ToolStripMenuItem downloadManagerMenuItem;
         private System.Windows.Forms.ToolStripMenuItem currentPlayingMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem viewSourceMenuItem;
         private System.Windows.Forms.ToolStripSeparator toolStripSeparatorDownload2;
         private System.Windows.Forms.ToolStripMenuItem hideMenuItem;
         private System.Windows.Forms.ToolStripMenuItem exitMenuItem;
@@ -1390,3 +1400,8 @@ this.hideMenuItem.Click += new System.EventHandler(this.hideMenuItem_Click);
         private System.Windows.Forms.ToolStripMenuItem trayExitMenuItem;
     }
 }
+
+
+
+
+

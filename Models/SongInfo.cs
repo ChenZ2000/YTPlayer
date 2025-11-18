@@ -27,6 +27,16 @@ namespace YTPlayer.Models
         /// 试听片段结束时间（毫秒）
         /// </summary>
         public long TrialEnd { get; set; }
+
+        /// <summary>
+        /// 缓存键（songId+level+trial标记）
+        /// </summary>
+        public string CacheKey(string songId)
+        {
+            var trialMark = IsTrial ? "trial" : "full";
+            var lvl = string.IsNullOrWhiteSpace(Level) ? "unknown" : Level;
+            return $"{songId}:{lvl}:{trialMark}";
+        }
     }
 
     /// <summary>
@@ -150,6 +160,7 @@ namespace YTPlayer.Models
         /// Value: 该音质的URL信息
         /// </summary>
         private Dictionary<string, QualityUrlInfo> _qualityUrls = new Dictionary<string, QualityUrlInfo>();
+        private readonly HashSet<string> _qualityCacheKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
         /// 格式化的时长（MM:SS）
@@ -260,7 +271,7 @@ namespace YTPlayer.Models
         {
             if (string.IsNullOrEmpty(level)) return;
 
-            _qualityUrls[level] = new QualityUrlInfo
+            var info = new QualityUrlInfo
             {
                 Url = url,
                 Level = level,
@@ -270,6 +281,9 @@ namespace YTPlayer.Models
                 TrialStart = trialStart,
                 TrialEnd = trialEnd
             };
+
+            _qualityUrls[level] = info;
+            _qualityCacheKeys.Add(info.CacheKey(Id));
         }
 
         /// <summary>
@@ -310,6 +324,7 @@ namespace YTPlayer.Models
         public void ClearAllQualityUrls()
         {
             _qualityUrls.Clear();
+            _qualityCacheKeys.Clear();
             Url = string.Empty;
             Level = string.Empty;
             Size = 0;
