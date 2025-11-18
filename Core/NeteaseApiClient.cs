@@ -3823,6 +3823,17 @@ namespace YTPlayer.Core
                                            string.Equals(itemMessage, "not found", StringComparison.OrdinalIgnoreCase) ||
                                            (!string.IsNullOrEmpty(itemMessage) && itemMessage.Contains("不存在"));
 
+                        int fee = item["fee"]?.Value<int>() ?? 0;
+                        int payed = item["payed"]?.Value<int?>() ?? 0;
+                        bool isPaidAlbumLocked = fee == 4 && payed == 0;
+
+                        if (isPaidAlbumLocked)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[EAPI] 歌曲{id} 归属付费数字专辑且未购买，停止重试。");
+                            string safeId = id ?? string.Empty;
+                            throw new PaidAlbumNotPurchasedException(new[] { safeId }, "该歌曲属于付费数字专辑，未购买无法播放。");
+                        }
+
                         if (itemMissing)
                         {
                             System.Diagnostics.Debug.WriteLine($"[EAPI] 歌曲{id} 在音质 {currentLevel} 下不可用，尝试降级。");
@@ -3891,6 +3902,10 @@ namespace YTPlayer.Core
                         System.Diagnostics.Debug.WriteLine($"[EAPI] ✓✓✓ 成功获取音质: {actualLevel} (比特率: {actualBr / 1000} kbps)");
                         return result;
                     }
+                }
+                catch (PaidAlbumNotPurchasedException)
+                {
+                    throw;
                 }
                 catch (Exception ex)
                 {

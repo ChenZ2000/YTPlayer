@@ -136,6 +136,7 @@
     <Compile Include="Core\SeekManager.cs" />
     <Compile Include="Core\ConfigManager.cs" />
     <Compile Include="Core\Exceptions\SongResourceNotFoundException.cs" />
+    <Compile Include="Core\Exceptions\PaidAlbumNotPurchasedException.cs" />
     <Compile Include="Core\Playback\PlaybackQueueManager.cs" />
     <Compile Include="Core\Playback\PlaybackCommandQueue.cs" />
     <Compile Include="Core\Playback\PlaybackReportingService.cs" />
@@ -210,6 +211,7 @@
     <Compile Include="Models\Download\DownloadContentType.cs" />
     <Compile Include="Models\Upload\UploadTask.cs" />
     <Compile Include="Forms\MainForm.MenuContext.cs" />
+    <Compile Include="Forms\PurchaseLinkDialog.cs" />
     <Compile Include="Forms\MainForm.SortState.cs" />
     <Compile Include="Forms\LoginForm.cs">
       <SubType>Form</SubType>

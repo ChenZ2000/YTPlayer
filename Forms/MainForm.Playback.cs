@@ -6,6 +6,7 @@ using System.Windows.Forms;
 using YTPlayer.Core;
 using YTPlayer.Core.Playback;
 using YTPlayer.Core.Playback.Cache;
+using YTPlayer.Forms;
 using YTPlayer.Models;
 
 #pragma warning disable CS8600, CS8601, CS8602, CS8603, CS8604, CS8625
@@ -94,6 +95,10 @@ namespace YTPlayer
                     return await GetSongUrlWithTimeoutAsync(ids, quality, cancellationToken, skipAvailabilityCheck).ConfigureAwait(false);
                 }
                 catch (SongResourceNotFoundException)
+                {
+                    throw;
+                }
+                catch (PaidAlbumNotPurchasedException)
                 {
                     throw;
                 }
@@ -215,6 +220,53 @@ namespace YTPlayer
             }
 
             SetPlaybackLoadingState(isLoading, statusMessage);
+            UpdateStatusBar(statusMessage);
+        }
+
+        private async Task<bool> ShowPurchaseLinkDialogAsync(SongInfo song, CancellationToken cancellationToken)
+        {
+            if (song == null || string.IsNullOrWhiteSpace(song.Id))
+            {
+                return false;
+            }
+
+            string encodedSongId = Uri.EscapeDataString(song.Id);
+            string purchaseUrl = $"https://music.163.com/#/payfee?songId={encodedSongId}";
+
+            var tcs = new TaskCompletionSource<bool>();
+
+            void ShowDialog()
+            {
+                try
+                {
+                    using var dialog = new PurchaseLinkDialog(song.Name, song.Album, purchaseUrl);
+                    var result = dialog.ShowDialog(this);
+                    tcs.TrySetResult(result == DialogResult.OK && dialog.PurchaseRequested);
+                }
+                catch (Exception ex)
+                {
+                    tcs.TrySetException(ex);
+                }
+            }
+
+            if (IsDisposed)
+            {
+                return false;
+            }
+
+            if (InvokeRequired)
+            {
+                BeginInvoke((Action)ShowDialog);
+            }
+            else
+            {
+                ShowDialog();
+            }
+
+            using (cancellationToken.Register(() => tcs.TrySetCanceled()))
+            {
+                return await tcs.Task.ConfigureAwait(false);
+            }
         }
 
         private async Task PlaySongDirect(
@@ -352,6 +404,41 @@ namespace YTPlayer
                             HandleSongResourceNotFoundDuringPlayback(song, isAutoPlayback);
                             return;
                         }
+                        catch (PaidAlbumNotPurchasedException paidEx)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[MainForm] 歌曲属于付费专辑且未购买: {paidEx.Message}");
+
+                            UpdateLoadingState(false, "此歌曲属于付费数字专辑，需购买后才能播放。", playRequestVersion);
+                            loadingStateActive = false;
+
+                            bool isLoggedIn = _accountState?.IsLoggedIn == true;
+                            bool canOfferPurchase = isLoggedIn && !string.IsNullOrWhiteSpace(song.Id);
+                            if (!canOfferPurchase)
+                            {
+                                SafeInvoke(() =>
+                                {
+                                    MessageBox.Show(
+                                        this,
+                                        "该歌曲属于付费数字专辑，请在网易云音乐官方客户端购买后再试。",
+                                        "需要购买",
+                                        MessageBoxButtons.OK,
+                                        MessageBoxIcon.Information);
+                                });
+                                UpdateStatusBar("无法播放：未购买付费专辑");
+                                return;
+                            }
+
+                            bool launched = await ShowPurchaseLinkDialogAsync(song, cancellationToken).ConfigureAwait(false);
+                            if (launched)
+                            {
+                                UpdateStatusBar("已打开官方购买页面，请完成购买后重新播放。");
+                            }
+                            else
+                            {
+                                UpdateStatusBar("购买已取消");
+                            }
+                            return;
+                        }
                         catch (OperationCanceledException)
                         {
                             System.Diagnostics.Debug.WriteLine("[MainForm] 播放链接获取被取消");
@@ -364,11 +451,15 @@ namespace YTPlayer
                             System.Diagnostics.Debug.WriteLine($"[MainForm] 获取播放链接失败: {ex.Message}");
                             UpdateLoadingState(false, "获取播放链接失败", playRequestVersion);
                             loadingStateActive = false;
-                            MessageBox.Show(
-                                "无法获取播放链接，请尝试播放其他歌曲",
-                                "错误",
-                                MessageBoxButtons.OK,
-                                MessageBoxIcon.Error);
+                            SafeInvoke(() =>
+                            {
+                                MessageBox.Show(
+                                    this,
+                                    "无法获取播放链接，请尝试播放其他歌曲",
+                                    "错误",
+                                    MessageBoxButtons.OK,
+                                    MessageBoxIcon.Error);
+                            });
                             UpdateStatusBar("获取播放链接失败");
                             return;
                         }
