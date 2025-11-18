@@ -230,6 +230,11 @@ namespace YTPlayer.Models
         public bool IsPodcastEpisode { get; set; }
 
         /// <summary>
+        /// 记录歌曲被加入播放队列或插播链时的来源标识，用于“查看来源”
+        /// </summary>
+        public string ViewSource { get; set; } = string.Empty;
+
+        /// <summary>
         /// 播客节目 ID。
         /// </summary>
         public long PodcastProgramId { get; set; }

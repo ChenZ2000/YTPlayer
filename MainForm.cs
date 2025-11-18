@@ -2457,6 +2457,26 @@ namespace YTPlayer
             _currentMixedQueryKey = mixedQueryKeyOverride ?? BuildMixedQueryKey(normalizedForKey);
 
             string viewSource = $"url:mixed:{_currentMixedQueryKey}";
+            foreach (var song in aggregatedSongs)
+            {
+                if (song != null)
+                {
+                    song.ViewSource = viewSource;
+                }
+            }
+
+            foreach (var item in listItems)
+            {
+                if (item?.Song != null)
+                {
+                    item.Song.ViewSource = viewSource;
+                }
+                else if (item?.PodcastEpisode?.Song != null)
+                {
+                    item.PodcastEpisode.Song.ViewSource = viewSource;
+                }
+            }
+
             DisplayListItems(listItems, viewSource: viewSource, accessibleName: "结果");
 
             _currentSongs.Clear();
@@ -4464,6 +4484,7 @@ namespace YTPlayer
             {
                 resultListView.EndUpdate();
                 SetViewContext(viewSource, accessibleName ?? "歌曲列表");
+                AnnounceListViewHeaderIfNeeded(accessibleName ?? "歌曲列表");
                 return;
             }
 
@@ -4531,14 +4552,22 @@ namespace YTPlayer
             }
 
             SetViewContext(viewSource, defaultAccessibleName);
+            AnnounceListViewHeaderIfNeeded(defaultAccessibleName);
 
-            if (!IsListAutoFocusSuppressed && resultListView.Items.Count > 0)
+            if (resultListView.Items.Count > 0)
             {
                 int targetIndex = previousSelectedIndex >= 0
                     ? Math.Min(previousSelectedIndex, resultListView.Items.Count - 1)
                     : 0;
 
-                RestoreListViewFocus(targetIndex);
+                if (!IsListAutoFocusSuppressed)
+                {
+                    RestoreListViewFocus(targetIndex);
+                }
+                else if (resultListView.SelectedItems.Count == 0)
+                {
+                    EnsureListSelectionWithoutFocus(targetIndex);
+                }
             }
 
             if (!skipAvailabilityCheck)
@@ -4578,6 +4607,36 @@ namespace YTPlayer
             {
                 resultListView.AccessibleName = "列表内容";
             }
+        }
+
+        /// <summary>
+        /// 在列表获得焦点或即将获得焦点时，主动播报当前视图标题，便于屏幕阅读器用户感知上下文。
+        /// </summary>
+        private void AnnounceListViewHeaderIfNeeded(string? accessibleName)
+        {
+            if (resultListView == null)
+            {
+                return;
+            }
+
+            bool willFocusList = resultListView.ContainsFocus ||
+                                 (!IsListAutoFocusSuppressed && resultListView.CanFocus);
+            if (!willFocusList)
+            {
+                return;
+            }
+
+            string header = !string.IsNullOrWhiteSpace(accessibleName)
+                ? accessibleName!
+                : (!string.IsNullOrWhiteSpace(resultListView.AccessibleName) ? resultListView.AccessibleName! : string.Empty);
+
+            if (string.IsNullOrWhiteSpace(header))
+            {
+                return;
+            }
+
+            // 使用现有的 TTS helper 主动播报标题，不干扰后续焦点朗读
+            Utils.TtsHelper.SpeakText(header);
         }
 
         /// <summary>
@@ -4647,6 +4706,7 @@ namespace YTPlayer
             {
                 resultListView.EndUpdate();
                 SetViewContext(viewSource, accessibleName ?? "歌单列表");
+                AnnounceListViewHeaderIfNeeded(accessibleName ?? "歌单列表");
                 return;
             }
 
@@ -4694,14 +4754,22 @@ namespace YTPlayer
             }
 
             SetViewContext(viewSource, defaultAccessibleName);
+            AnnounceListViewHeaderIfNeeded(defaultAccessibleName);
 
-            if (!IsListAutoFocusSuppressed && resultListView.Items.Count > 0)
+            if (resultListView.Items.Count > 0)
             {
                 int targetIndex = previousSelectedIndex >= 0
                     ? Math.Min(previousSelectedIndex, resultListView.Items.Count - 1)
                     : 0;
 
-                RestoreListViewFocus(targetIndex);
+                if (!IsListAutoFocusSuppressed)
+                {
+                    RestoreListViewFocus(targetIndex);
+                }
+                else if (resultListView.SelectedItems.Count == 0)
+                {
+                    EnsureListSelectionWithoutFocus(targetIndex);
+                }
             }
         }
 
@@ -4714,6 +4782,10 @@ namespace YTPlayer
             string? accessibleName = null)
         {
             ConfigureListViewDefault();
+
+            int previousSelectedIndex = resultListView.SelectedIndices.Count > 0
+                ? resultListView.SelectedIndices[0]
+                : -1;
 
             // 清空所有列表（确保只有一种类型的数据）
             _currentSongs.Clear();
@@ -4733,6 +4805,7 @@ namespace YTPlayer
             {
                 resultListView.EndUpdate();
                 SetViewContext(viewSource, accessibleName ?? "分类列表");
+                AnnounceListViewHeaderIfNeeded(accessibleName ?? "分类列表");
                 return;
             }
 
@@ -4815,13 +4888,6 @@ namespace YTPlayer
 
             resultListView.EndUpdate();
 
-            if (!IsListAutoFocusSuppressed && resultListView.Items.Count > 0)
-            {
-                resultListView.Items[0].Selected = true;
-                resultListView.Items[0].Focused = true;
-                resultListView.Focus();
-            }
-
             string defaultAccessibleName = accessibleName;
             if (string.IsNullOrWhiteSpace(defaultAccessibleName))
             {
@@ -4829,6 +4895,23 @@ namespace YTPlayer
             }
 
             SetViewContext(viewSource, defaultAccessibleName);
+            AnnounceListViewHeaderIfNeeded(defaultAccessibleName);
+
+            if (resultListView.Items.Count > 0)
+            {
+                int targetIndex = previousSelectedIndex >= 0
+                    ? Math.Min(previousSelectedIndex, resultListView.Items.Count - 1)
+                    : 0;
+
+                if (!IsListAutoFocusSuppressed)
+                {
+                    RestoreListViewFocus(targetIndex);
+                }
+                else if (resultListView.SelectedItems.Count == 0)
+                {
+                    EnsureListSelectionWithoutFocus(targetIndex);
+                }
+            }
         }
 
         #region Library State Cache Helpers
@@ -5763,6 +5846,7 @@ namespace YTPlayer
             {
                 resultListView.EndUpdate();
                 SetViewContext(viewSource, accessibleName ?? "专辑列表");
+                AnnounceListViewHeaderIfNeeded(accessibleName ?? "专辑列表");
                 return;
             }
 
@@ -5807,6 +5891,7 @@ namespace YTPlayer
             }
 
             SetViewContext(viewSource, defaultAccessibleName);
+            AnnounceListViewHeaderIfNeeded(defaultAccessibleName);
 
             if (!IsListAutoFocusSuppressed && resultListView.Items.Count > 0)
             {
@@ -5870,6 +5955,7 @@ namespace YTPlayer
             {
                 resultListView.EndUpdate();
                 SetViewContext(viewSource, accessibleName ?? "播客列表");
+                AnnounceListViewHeaderIfNeeded(accessibleName ?? "播客列表");
                 return;
             }
 
@@ -5927,7 +6013,9 @@ namespace YTPlayer
 
             resultListView.EndUpdate();
 
-            SetViewContext(viewSource, accessibleName ?? "播客列表");
+            var podcastAccessibleName = accessibleName ?? "播客列表";
+            SetViewContext(viewSource, podcastAccessibleName);
+            AnnounceListViewHeaderIfNeeded(podcastAccessibleName);
 
             if (!IsListAutoFocusSuppressed && resultListView.Items.Count > 0)
             {
@@ -5986,6 +6074,7 @@ namespace YTPlayer
             {
                 resultListView.EndUpdate();
                 SetViewContext(viewSource, accessibleName ?? "播客节目");
+                AnnounceListViewHeaderIfNeeded(accessibleName ?? "播客节目");
                 return;
             }
 
@@ -6046,7 +6135,9 @@ namespace YTPlayer
 
             resultListView.EndUpdate();
 
-            SetViewContext(viewSource, accessibleName ?? "播客节目");
+            var podcastEpisodeAccessible = accessibleName ?? "播客节目";
+            SetViewContext(viewSource, podcastEpisodeAccessible);
+            AnnounceListViewHeaderIfNeeded(podcastEpisodeAccessible);
 
             if (!IsListAutoFocusSuppressed && resultListView.Items.Count > 0)
             {
@@ -6634,18 +6725,36 @@ private void TogglePlayPause()
         /// 恢复列表焦点到指定索引（统一焦点管理逻辑）
         /// </summary>
         /// <param name="targetIndex">目标索引，-1表示不设置焦点</param>
-        private void RestoreListViewFocus(int targetIndex)
+        private void EnsureListSelectionWithoutFocus(int targetIndex)
         {
             if (targetIndex < 0 || resultListView.Items.Count == 0)
+            {
                 return;
+            }
 
-            // 确保索引在有效范围内
             targetIndex = Math.Max(0, Math.Min(targetIndex, resultListView.Items.Count - 1));
+            resultListView.BeginUpdate();
+            try
+            {
+                resultListView.SelectedItems.Clear();
+                var item = resultListView.Items[targetIndex];
+                item.Selected = true;
+                item.Focused = true;
+                item.EnsureVisible();
+            }
+            finally
+            {
+                resultListView.EndUpdate();
+            }
+        }
 
-            resultListView.Items[targetIndex].Selected = true;
-            resultListView.Items[targetIndex].Focused = true;
-            resultListView.Items[targetIndex].EnsureVisible();
-            resultListView.Focus();
+        private void RestoreListViewFocus(int targetIndex)
+        {
+            EnsureListSelectionWithoutFocus(targetIndex);
+            if (resultListView.CanFocus)
+            {
+                resultListView.Focus();
+            }
         }
 
 /// <summary>
@@ -8259,9 +8368,9 @@ private void MainForm_KeyDown(object sender, KeyEventArgs e)
         {
             e.Handled = true;
             e.SuppressKeyPress = true;
-            if (volumeTrackBar.Value > 0)
+            if (volumeTrackBar.Value < 100)
             {
-                volumeTrackBar.Value = Math.Max(0, volumeTrackBar.Value - 2);
+                volumeTrackBar.Value = Math.Min(100, volumeTrackBar.Value + 2);
                 volumeTrackBar_Scroll(volumeTrackBar, EventArgs.Empty);
             }
         }
@@ -8269,9 +8378,9 @@ private void MainForm_KeyDown(object sender, KeyEventArgs e)
         {
             e.Handled = true;
             e.SuppressKeyPress = true;
-            if (volumeTrackBar.Value < 100)
+            if (volumeTrackBar.Value > 0)
             {
-                volumeTrackBar.Value = Math.Min(100, volumeTrackBar.Value + 2);
+                volumeTrackBar.Value = Math.Max(0, volumeTrackBar.Value - 2);
                 volumeTrackBar_Scroll(volumeTrackBar, EventArgs.Empty);
             }
         }
@@ -9950,7 +10059,9 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                     SaveNavigationState();
                 }
 
-                // 获取专辑内的歌曲
+                // 获取专辑详情与歌曲
+                var albumDetail = await _apiClient.GetAlbumDetailAsync(albumId);
+
                 var songs = await _apiClient.GetAlbumSongsAsync(albumId);
                 if (songs == null || songs.Count == 0)
                 {
@@ -9962,7 +10073,7 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
                 DisplaySongs(
                     songs,
                     viewSource: $"album:{albumId}",
-                    accessibleName: "专辑");
+                    accessibleName: albumDetail?.Name ?? $"专辑 {albumId}");
                 _isHomePage = false;
                 UpdateStatusBar($"专辑加载完成，共 {songs.Count} 首歌曲");
             }
@@ -10805,6 +10916,8 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             var snapshot = BuildMenuContextSnapshot(isCurrentPlayingRequest);
             if (!snapshot.IsValid)
             {
+                viewSourceMenuItem.Visible = false;
+                viewSourceMenuItem.Tag = null;
                 if (songContextMenu != null)
                 {
                     songContextMenu.Tag = null;
@@ -10822,6 +10935,19 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
 
                 e.Cancel = true;
                 return;
+            }
+
+            if (snapshot.IsCurrentPlayback)
+            {
+                string? source = ResolveCurrentPlayingViewSource(snapshot.Song);
+                viewSourceMenuItem.Visible = true;
+                viewSourceMenuItem.Enabled = !string.IsNullOrWhiteSpace(source);
+                viewSourceMenuItem.Tag = source;
+            }
+            else
+            {
+                viewSourceMenuItem.Visible = false;
+                viewSourceMenuItem.Tag = null;
             }
 
             _isCurrentPlayingMenuActive = snapshot.IsCurrentPlayback;
@@ -10910,6 +11036,8 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             {
                 songContextMenu.Tag = null;
             }
+            viewSourceMenuItem.Visible = false;
+            viewSourceMenuItem.Tag = null;
         }
 
         private void commentMenuItem_Click(object sender, EventArgs e)
@@ -10918,6 +11046,11 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
             {
                 ShowCommentsDialog(target);
             }
+        }
+
+        private async void viewSourceMenuItem_Click(object sender, EventArgs e)
+        {
+            await NavigateToCurrentPlayingSourceAsync();
         }
 
         private void ShowCommentsDialog(CommentTarget target)
@@ -10929,6 +11062,268 @@ private void TrayIcon_DoubleClick(object sender, EventArgs e)
 
             using var dialog = new CommentsDialog(_apiClient, target, _accountState?.UserId, IsUserLoggedIn());
             dialog.ShowDialog(this);
+        }
+
+        private async Task NavigateToCurrentPlayingSourceAsync()
+        {
+            var song = _audioEngine?.CurrentSong;
+            if (song == null)
+            {
+                UpdateStatusBar("暂无正在播放的歌曲");
+                return;
+            }
+
+            string? viewSource = viewSourceMenuItem.Tag as string;
+            if (string.IsNullOrWhiteSpace(viewSource))
+            {
+                viewSource = ResolveCurrentPlayingViewSource(song);
+            }
+
+            if (string.IsNullOrWhiteSpace(viewSource))
+            {
+                MessageBox.Show("无法确定当前歌曲的来源", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            bool navigated = await NavigateByViewSourceAsync(viewSource!, song);
+            if (!navigated)
+            {
+                UpdateStatusBar("跳转到来源失败");
+            }
+        }
+
+        private string? ResolveCurrentPlayingViewSource(SongInfo? song)
+        {
+            if (song == null)
+            {
+                return null;
+            }
+
+            if (!string.IsNullOrWhiteSpace(song.ViewSource))
+            {
+                return song.ViewSource;
+            }
+
+            var snapshot = _playbackQueue?.CaptureSnapshot();
+            if (snapshot != null && !string.IsNullOrWhiteSpace(song.Id))
+            {
+                if (snapshot.InjectionSources != null &&
+                    snapshot.InjectionSources.TryGetValue(song.Id, out var injectionSource) &&
+                    !string.IsNullOrWhiteSpace(injectionSource))
+                {
+                    return injectionSource;
+                }
+
+                if (!string.IsNullOrWhiteSpace(snapshot.QueueSource))
+                {
+                    return snapshot.QueueSource;
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(_currentViewSource))
+            {
+                return _currentViewSource;
+            }
+
+            return null;
+        }
+
+        private async Task<bool> NavigateByViewSourceAsync(string viewSource, SongInfo currentSong)
+        {
+            if (string.IsNullOrWhiteSpace(viewSource))
+            {
+                return false;
+            }
+
+            try
+            {
+                SaveNavigationState();
+
+                if (string.Equals(viewSource, "homepage", StringComparison.OrdinalIgnoreCase))
+                {
+                    await LoadHomePageAsync(skipSave: true);
+                }
+                else if (viewSource.StartsWith("playlist:", StringComparison.OrdinalIgnoreCase))
+                {
+                    await LoadPlaylistById(viewSource.Substring("playlist:".Length), skipSave: true);
+                }
+                else if (viewSource.StartsWith("album:", StringComparison.OrdinalIgnoreCase))
+                {
+                    await LoadAlbumById(viewSource.Substring("album:".Length), skipSave: true);
+                }
+                else if (viewSource.StartsWith("artist_entries:", StringComparison.OrdinalIgnoreCase))
+                {
+                    var artistId = ParseArtistIdFromViewSource(viewSource, "artist_entries:");
+                    if (artistId > 0)
+                    {
+                        await OpenArtistAsync(new ArtistInfo { Id = artistId, Name = currentSong.Artist ?? string.Empty }, skipSave: true);
+                    }
+                    else
+                    {
+                        await LoadArtistCategoryTypesAsync(skipSave: true);
+                    }
+                }
+                else if (viewSource.StartsWith("artist_songs_top:", StringComparison.OrdinalIgnoreCase) ||
+                         viewSource.StartsWith("artist_top:", StringComparison.OrdinalIgnoreCase))
+                {
+                    var artistId = ParseArtistIdFromViewSource(viewSource, viewSource.StartsWith("artist_top:", StringComparison.OrdinalIgnoreCase) ? "artist_top:" : "artist_songs_top:");
+                    if (artistId > 0)
+                    {
+                        await LoadArtistTopSongsAsync(artistId, skipSave: true);
+                    }
+                }
+                else if (viewSource.StartsWith("artist_songs:", StringComparison.OrdinalIgnoreCase))
+                {
+                    ParseArtistListViewSource(viewSource, out var artistId, out var offset, out var order);
+                    await LoadArtistSongsAsync(artistId, offset, skipSave: true, orderOverride: ResolveArtistSongsOrder(order));
+                }
+                else if (viewSource.StartsWith("artist_albums:", StringComparison.OrdinalIgnoreCase))
+                {
+                    ParseArtistListViewSource(viewSource, out var artistId, out var offset, out var order, defaultOrder: "latest");
+                    await LoadArtistAlbumsAsync(artistId, offset, skipSave: true, sortOverride: ResolveArtistAlbumSort(order));
+                }
+                else if (string.Equals(viewSource, "artist_favorites", StringComparison.OrdinalIgnoreCase))
+                {
+                    await LoadArtistFavoritesAsync(skipSave: true);
+                }
+                else if (string.Equals(viewSource, "artist_category_types", StringComparison.OrdinalIgnoreCase))
+                {
+                    await LoadArtistCategoryTypesAsync(skipSave: true);
+                }
+                else if (viewSource.StartsWith("artist_category_type:", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (int.TryParse(viewSource.Substring("artist_category_type:".Length), out var artistType))
+                    {
+                        await LoadArtistCategoryAreasAsync(artistType, skipSave: true);
+                    }
+                }
+                else if (viewSource.StartsWith("artist_category_list:", StringComparison.OrdinalIgnoreCase))
+                {
+                    var parts = viewSource.Split(':');
+                    int artistType = parts.Length > 1 && int.TryParse(parts[1], out var typeVal) ? typeVal : -1;
+                    int artistArea = parts.Length > 2 && int.TryParse(parts[2], out var areaVal) ? areaVal : -1;
+                    int offset = 0;
+                    var offsetToken = parts.FirstOrDefault(p => p.StartsWith("offset", StringComparison.OrdinalIgnoreCase));
+                    if (!string.IsNullOrWhiteSpace(offsetToken))
+                    {
+                        int.TryParse(offsetToken.Substring("offset".Length), out offset);
+                    }
+
+                    await LoadArtistsByCategoryAsync(artistType, artistArea, offset, skipSave: true);
+                }
+                else if (viewSource.StartsWith("podcast:", StringComparison.OrdinalIgnoreCase))
+                {
+                    ParsePodcastViewSource(viewSource, out var radioId, out var offset, out var ascending);
+                    if (radioId > 0)
+                    {
+                        await LoadPodcastEpisodesAsync(radioId, offset, skipSave: true, sortAscendingOverride: ascending);
+                    }
+                }
+                else if (viewSource.StartsWith("search:", StringComparison.OrdinalIgnoreCase))
+                {
+                    ParseSearchViewSource(viewSource, out var searchType, out var keyword, out var page);
+                    if (string.IsNullOrWhiteSpace(keyword))
+                    {
+                        keyword = _lastKeyword;
+                    }
+
+                    int targetPage = page > 0 ? page : _currentPage;
+                    await LoadSearchResults(keyword, searchType, targetPage <= 0 ? 1 : targetPage, skipSave: true);
+                }
+                else if (string.Equals(viewSource, "recent_play", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(viewSource, "recent_playlists", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(viewSource, "recent_albums", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(viewSource, RecentListenedCategoryId, StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(viewSource, RecentPodcastsCategoryId, StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(viewSource, "daily_recommend", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(viewSource, "personalized", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(viewSource, "toplist", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(viewSource, "daily_recommend_songs", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(viewSource, "daily_recommend_playlists", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(viewSource, "personalized_playlists", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(viewSource, "personalized_newsongs", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(viewSource, "highquality_playlists", StringComparison.OrdinalIgnoreCase) ||
+                         viewSource.StartsWith("playlist_cat_", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(viewSource, "playlist_category", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(viewSource, "new_songs", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(viewSource, "new_songs_all", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(viewSource, "new_songs_chinese", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(viewSource, "new_songs_western", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(viewSource, "new_songs_japan", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(viewSource, "new_songs_korea", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(viewSource, "new_albums", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(viewSource, "user_liked_songs", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(viewSource, "user_playlists", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(viewSource, "user_albums", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(viewSource, "user_podcasts", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(viewSource, "user_cloud", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(viewSource, "artist_favorites", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(viewSource, "artist_categories", StringComparison.OrdinalIgnoreCase) ||
+                         viewSource.StartsWith("artist_top_", StringComparison.OrdinalIgnoreCase) ||
+                         viewSource.StartsWith("artist_songs_", StringComparison.OrdinalIgnoreCase) ||
+                         viewSource.StartsWith("artist_albums_", StringComparison.OrdinalIgnoreCase) ||
+                         viewSource.StartsWith("artist_type_", StringComparison.OrdinalIgnoreCase) ||
+                         viewSource.StartsWith("artist_area_", StringComparison.OrdinalIgnoreCase))
+                {
+                    await LoadCategoryContent(viewSource, skipSave: true);
+                }
+                else if (viewSource.StartsWith("url:song:", StringComparison.OrdinalIgnoreCase))
+                {
+                    await LoadSongFromUrlAsync(viewSource.Substring("url:song:".Length), skipSave: true);
+                }
+                else if (viewSource.StartsWith("url:mixed:", StringComparison.OrdinalIgnoreCase))
+                {
+                    await RestoreMixedUrlStateAsync(viewSource.Substring("url:mixed:".Length));
+                }
+                else
+                {
+                    UpdateStatusBar("未找到匹配的来源页面");
+                    return false;
+                }
+
+                FocusSongInCurrentView(currentSong);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[ViewSource] 跳转失败: {ex}");
+                MessageBox.Show($"无法跳转到来源: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
+            }
+        }
+
+        private void FocusSongInCurrentView(SongInfo song)
+        {
+            if (song == null || resultListView == null || _currentSongs == null || _currentSongs.Count == 0)
+            {
+                return;
+            }
+
+            int index = _currentSongs.FindIndex(s => string.Equals(s.Id, song.Id, StringComparison.OrdinalIgnoreCase));
+            if (index < 0 || index >= resultListView.Items.Count)
+            {
+                return;
+            }
+
+            resultListView.BeginUpdate();
+            try
+            {
+                resultListView.SelectedItems.Clear();
+                var item = resultListView.Items[index];
+                item.Selected = true;
+                item.Focused = true;
+                item.EnsureVisible();
+                _lastListViewFocusedIndex = index;
+            }
+            finally
+            {
+                resultListView.EndUpdate();
+            }
+
+            if (resultListView.CanFocus && !IsListAutoFocusSuppressed)
+            {
+                resultListView.Focus();
+            }
         }
 
         /// <summary>

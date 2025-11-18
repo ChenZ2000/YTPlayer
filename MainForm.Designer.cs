@@ -34,6 +34,7 @@ namespace YTPlayer
             this.homeMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.loginMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.currentPlayingMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.viewSourceMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.toolStripSeparatorDownload1 = new System.Windows.Forms.ToolStripSeparator();
             this.openDownloadDirMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.changeDownloadDirMenuItem = new System.Windows.Forms.ToolStripMenuItem();
@@ -224,15 +225,6 @@ this.hideMenuItem.Click += new System.EventHandler(this.hideMenuItem_Click);
             this.currentPlayingMenuItem.Text = "当前播放";
             this.currentPlayingMenuItem.Visible = false;
             this.currentPlayingMenuItem.DropDownOpening += new System.EventHandler(this.currentPlayingMenuItem_DropDownOpening);
-            this.currentPlayingMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
-            this.viewSourceMenuItem});
-            //
-            // viewSourceMenuItem
-            //
-            this.viewSourceMenuItem.Name = "viewSourceMenuItem";
-            this.viewSourceMenuItem.Size = new System.Drawing.Size(210, 26);
-            this.viewSourceMenuItem.Text = "查看来源(&S)";
-            this.viewSourceMenuItem.Click += new System.EventHandler(this.viewSourceMenuItem_Click);
             //
             // openDownloadDirMenuItem
             //
@@ -733,6 +725,7 @@ this.hideMenuItem.Click += new System.EventHandler(this.hideMenuItem_Click);
             //
             this.songContextMenu.ImageScalingSize = new System.Drawing.Size(20, 20);
             this.songContextMenu.Items.AddRange(new System.Windows.Forms.ToolStripItem[] {
+            this.viewSourceMenuItem,
             this.insertPlayMenuItem,
             this.likeSongMenuItem,
             this.unlikeSongMenuItem,
@@ -782,7 +775,15 @@ this.hideMenuItem.Click += new System.EventHandler(this.hideMenuItem_Click);
             this.songContextMenu.Size = new System.Drawing.Size(211, 320);
             this.songContextMenu.Opening += new System.ComponentModel.CancelEventHandler(this.songContextMenu_Opening);
             this.songContextMenu.Closed += new System.Windows.Forms.ToolStripDropDownClosedEventHandler(this.songContextMenu_Closed);
-                        this.currentPlayingMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] { this.viewSourceMenuItem });\n            this.currentPlayingMenuItem.DropDown = this.songContextMenu;
+            this.currentPlayingMenuItem.DropDown = this.songContextMenu;
+            //
+            // viewSourceMenuItem
+            //
+            this.viewSourceMenuItem.Name = "viewSourceMenuItem";
+            this.viewSourceMenuItem.Size = new System.Drawing.Size(210, 24);
+            this.viewSourceMenuItem.Text = "查看来源(&S)";
+            this.viewSourceMenuItem.Visible = false;
+            this.viewSourceMenuItem.Click += new System.EventHandler(this.viewSourceMenuItem_Click);
             //
             // insertPlayMenuItem
             //

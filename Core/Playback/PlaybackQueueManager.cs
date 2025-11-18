@@ -750,9 +750,11 @@ namespace YTPlayer.Core.Playback
             }
 
             SongInfo song = _pendingInjection.Song;
+            string pendingSource = _pendingInjection.Source;
             _pendingInjection = null;
 
-            int injectionIndex = AppendInjection(song, currentViewSource);
+            string effectiveSource = string.IsNullOrWhiteSpace(pendingSource) ? currentViewSource : pendingSource;
+            int injectionIndex = AppendInjection(song, effectiveSource);
             return PlaybackMoveResult.ForInjection(song, injectionIndex, PlaybackRoute.PendingInjection);
         }
 
@@ -766,6 +768,7 @@ namespace YTPlayer.Core.Playback
                 {
                     if (item != null)
                     {
+                        AssignSongViewSource(item, viewSource);
                         _queue.Add(item);
                     }
                 }
@@ -774,7 +777,9 @@ namespace YTPlayer.Core.Playback
             if (_queue.Count == 0 && viewSongs != null && viewSongs.Count > 0)
             {
                 // 防御：至少把选中歌曲加入队列
-                _queue.Add(viewSongs[selectedIndex]);
+                var selected = viewSongs[selectedIndex];
+                AssignSongViewSource(selected, viewSource);
+                _queue.Add(selected);
             }
 
             _queueSource = viewSource ?? string.Empty;
@@ -799,6 +804,7 @@ namespace YTPlayer.Core.Playback
                 _injectionSources.Clear();
             }
 
+            AssignSongViewSource(song, viewSource);
             _injectionChain.Add(song);
             _injectionIndex = _injectionChain.Count - 1;
             UpdateInjectionSource(song, viewSource);
@@ -932,7 +938,23 @@ namespace YTPlayer.Core.Playback
                 return;
             }
 
+            if (_injectionSources.TryGetValue(song.Id, out var existing) &&
+                !string.IsNullOrWhiteSpace(existing))
+            {
+                return;
+            }
+
             _injectionSources[song.Id] = viewSource ?? string.Empty;
+        }
+
+        private static void AssignSongViewSource(SongInfo song, string viewSource)
+        {
+            if (song == null)
+            {
+                return;
+            }
+
+            song.ViewSource = string.IsNullOrWhiteSpace(viewSource) ? string.Empty : viewSource;
         }
 
         private class PendingInjectionInfo

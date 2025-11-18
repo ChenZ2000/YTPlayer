@@ -286,11 +286,56 @@ namespace YTPlayer
             return result;
         }
 
+        private async Task<string> ResolveArtistDisplayNameAsync(long artistId)
+        {
+            if (artistId <= 0)
+            {
+                return "歌手";
+            }
+
+            if (_currentArtist != null && _currentArtist.Id == artistId && !string.IsNullOrWhiteSpace(_currentArtist.Name))
+            {
+                return _currentArtist.Name!;
+            }
+
+            if (_currentArtistDetail != null && _currentArtistDetail.Id == artistId && !string.IsNullOrWhiteSpace(_currentArtistDetail.Name))
+            {
+                return _currentArtistDetail.Name!;
+            }
+
+            try
+            {
+                var detail = await _apiClient.GetArtistDetailAsync(artistId, includeIntroduction: false);
+                if (detail != null)
+                {
+                    _currentArtistDetail = detail;
+                    if (_currentArtist == null || _currentArtist.Id == artistId)
+                    {
+                        _currentArtist = new ArtistInfo
+                        {
+                            Id = artistId,
+                            Name = detail.Name,
+                            PicUrl = detail.PicUrl
+                        };
+                    }
+
+                    return string.IsNullOrWhiteSpace(detail.Name) ? $"歌手 {artistId}" : detail.Name!;
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[Artist] 获取歌手信息失败: {ex}");
+            }
+
+            return $"歌手 {artistId}";
+        }
+
         private async Task LoadArtistTopSongsAsync(long artistId, bool skipSave = false)
         {
             try
             {
-                UpdateStatusBar("正在加载热门歌曲...");
+                var artistName = await ResolveArtistDisplayNameAsync(artistId);
+                UpdateStatusBar($"正在加载 {artistName} 的热门歌曲...");
 
                 if (!skipSave)
                 {
@@ -303,9 +348,9 @@ namespace YTPlayer
                     startIndex: 1,
                     preserveSelection: false,
                     viewSource: $"artist_songs_top:{artistId}",
-                    accessibleName: "热门歌曲");
+                    accessibleName: $"{artistName} 热门 50 首");
 
-                UpdateStatusBar("热门歌曲已加载");
+                UpdateStatusBar($"{artistName} 热门歌曲已加载");
             }
             catch (Exception ex)
             {
@@ -323,7 +368,8 @@ namespace YTPlayer
         {
             try
             {
-                UpdateStatusBar("正在加载歌手单曲...");
+                var artistName = await ResolveArtistDisplayNameAsync(artistId);
+                UpdateStatusBar($"正在加载 {artistName} 的单曲...");
 
                 if (!skipSave)
                 {
@@ -347,10 +393,10 @@ namespace YTPlayer
                     startIndex: offset + 1,
                     preserveSelection: false,
                     viewSource: $"artist_songs:{artistId}:order{orderToken}:offset{offset}",
-                    accessibleName: "歌手单曲列表");
+                    accessibleName: $"{artistName} 所有歌曲");
                 UpdateArtistSongsSortMenuChecks();
 
-                UpdateStatusBar($"已加载单曲（{offset + 1}-{offset + songs.Count} / {total}）");
+                UpdateStatusBar($"已加载 {artistName} 单曲（{offset + 1}-{offset + songs.Count} / {total}）");
             }
             catch (Exception ex)
             {
@@ -368,7 +414,8 @@ namespace YTPlayer
         {
             try
             {
-                UpdateStatusBar("正在加载歌手专辑...");
+                var artistName = await ResolveArtistDisplayNameAsync(artistId);
+                UpdateStatusBar($"正在加载 {artistName} 的专辑...");
 
                 if (!skipSave)
                 {
@@ -408,13 +455,13 @@ namespace YTPlayer
                 DisplayAlbums(albumsToDisplay,
                     preserveSelection: false,
                 viewSource: $"artist_albums:{artistId}:order{MapArtistAlbumSort(_artistAlbumSortState.CurrentOption)}:offset{appliedOffset}",
-                    accessibleName: "歌手专辑列表",
+                    accessibleName: $"{artistName} 所有专辑",
                     startIndex: appliedOffset + 1,
                     showPagination: true,
                     hasNextPage: viewHasMore);
                 UpdateArtistAlbumsSortMenuChecks();
 
-                UpdateStatusBar($"已加载专辑（{appliedOffset + 1}-{appliedOffset + albumsToDisplay.Count} / {totalCount}）");
+                UpdateStatusBar($"已加载 {artistName} 专辑（{appliedOffset + 1}-{appliedOffset + albumsToDisplay.Count} / {totalCount}）");
             }
             catch (Exception ex)
             {
