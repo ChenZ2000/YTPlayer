@@ -320,6 +320,13 @@ namespace YTPlayer.Core
                 DownloadDirectory = GetDefaultDownloadPath(),
                 OutputDevice = AudioOutputDeviceInfo.WindowsDefaultId,
 
+                // 听歌识曲
+                RecognitionInputDeviceId = AudioInputDeviceInfo.WindowsDefaultId,
+                RecognitionDurationSec = 6,
+                RecognitionAutoCloseDialog = true,
+                // 识曲后端：默认指向公开可用的 api-enhanced 部署
+                RecognitionApiBaseUrl = "http://159.75.21.45:5000",
+
                 // Note: Account-related fields (Cookies, MusicU, CsrfToken, MusicA, etc.) are now managed by AccountState
                 // Note: Device fingerprint fields are now managed by AccountState
                 // Note: Window configuration fields have been removed (hardcoded defaults)
@@ -410,6 +417,47 @@ namespace YTPlayer.Core
             {
                 config.OutputDevice = AudioOutputDeviceInfo.WindowsDefaultId;
                 changed = true;
+            }
+
+            // 验证听歌识曲相关配置
+            if (string.IsNullOrWhiteSpace(config.RecognitionInputDeviceId))
+            {
+                config.RecognitionInputDeviceId = AudioInputDeviceInfo.WindowsDefaultId;
+                changed = true;
+            }
+
+            // 时长已固定为 6 秒，仅保持存储值一致
+            if (config.RecognitionDurationSec != 6)
+            {
+                config.RecognitionDurationSec = 6;
+                changed = true;
+            }
+
+            // RecognitionAutoCloseDialog 为 bool，无需额外验证
+
+            if (string.IsNullOrWhiteSpace(config.RecognitionApiBaseUrl))
+            {
+                config.RecognitionApiBaseUrl = "http://159.75.21.45:5000";
+                changed = true;
+            }
+            else
+            {
+                var trimmed = config.RecognitionApiBaseUrl.Trim();
+                bool isValid = Uri.TryCreate(trimmed, UriKind.Absolute, out var parsed) &&
+                               (parsed.Scheme == Uri.UriSchemeHttp || parsed.Scheme == Uri.UriSchemeHttps);
+                bool isLoopback = isValid && (parsed.IsLoopback || parsed.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase));
+
+                if (!isValid || isLoopback)
+                {
+                    // 防止默认写死到本地端口导致连接被拒绝
+                    config.RecognitionApiBaseUrl = "http://159.75.21.45:5000";
+                    changed = true;
+                }
+                else if (!string.Equals(trimmed, config.RecognitionApiBaseUrl, StringComparison.Ordinal))
+                {
+                    config.RecognitionApiBaseUrl = trimmed;
+                    changed = true;
+                }
             }
 
             // 验证跳转间隔

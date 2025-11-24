@@ -85,6 +85,26 @@ namespace YTPlayer.Models
         public double LastPlayingPosition { get; set; } = 0;
 
         /// <summary>
+        /// 听歌识曲默认输入设备 ID（Default / Loopback / 设备标识）。
+        /// </summary>
+        public string RecognitionInputDeviceId { get; set; } = AudioInputDeviceInfo.WindowsDefaultId;
+
+        /// <summary>
+        /// 听歌识曲录制时长（秒）。现固定 6 秒，仅为向后兼容保留。
+        /// </summary>
+        public int RecognitionDurationSec { get; set; } = 6;
+
+        /// <summary>
+        /// 识曲完成后自动关闭对话框。
+        /// </summary>
+        public bool RecognitionAutoCloseDialog { get; set; } = true;
+
+        /// <summary>
+        /// 识曲调用的后端基础地址（默认使用内置增强 API）。
+        /// </summary>
+        public string RecognitionApiBaseUrl { get; set; } = string.Empty;
+
+        /// <summary>
         /// 歌词字体大小
         /// </summary>
         public int LyricsFontSize { get; set; } = 12;

@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Net;
+using System.Net.Sockets;
 using System.Net.Http;
 using System.Text;
 using System.Threading;
@@ -42,6 +43,12 @@ namespace YTPlayer.Core
         // ⭐ iOS 端 EAPI 域名 - 参考 netease-music-simple-player
         private const string EAPI_BASE_URL = "https://interface3.music.163.com";
         private static readonly Uri EAPI_URI = new Uri(EAPI_BASE_URL);
+        private static readonly string[] DomainFallbackOrder = new[]
+        {
+            EAPI_BASE_URL.TrimEnd('/'),
+            INTERFACE_URI.ToString().TrimEnd('/'),
+            OFFICIAL_API_BASE.TrimEnd('/')
+        };
         private const bool BrotliSupported = true;
 
         // 请求头（参考 Python 版本 Netease-music.py:7600-7605）
@@ -78,6 +85,8 @@ namespace YTPlayer.Core
         private readonly Random _random = new Random();
         private readonly string? _deviceId;
         private readonly string? _desktopUserAgent;
+        private readonly object _throttleLock = new object();
+        private readonly Dictionary<string, DateTime> _lastActionTimestamps = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
 
         private static readonly (uint Start, uint End)[] ChineseIpRanges = new (uint, uint)[]
         {
@@ -952,22 +961,29 @@ namespace YTPlayer.Core
         {
             switch (code)
             {
+                case 200:
+                    return;
                 case 301:
                     throw new UnauthorizedAccessException("未登录或登录已过期");
-                case 405:
-                    throw new InvalidOperationException("请求频率过快，请稍后再试");
                 case 400:
                     throw new ArgumentException($"请求参数错误: {message}");
+                case 401:
+                case 403:
+                case -460:
+                    throw new ApiAccessRestrictedException(code, string.IsNullOrWhiteSpace(message) ? "接口暂不可用，可能需要代理或官方客户端验证" : message);
                 case 404:
-                    throw new InvalidOperationException("资源不存在");
+                case -110:
+                    throw new ApiResourceUnavailableException(code, "资源不存在或已下架");
+                case 405:
+                    throw new InvalidOperationException("请求频率过快，请稍后再试");
+                case 429:
                 case 500:
-                    throw new InvalidOperationException($"服务器错误: {message}");
+                case 502:
+                case 503:
+                case 504:
+                    throw new ApiTransientException(code, string.IsNullOrWhiteSpace(message) ? "服务器繁忙，请稍后重试" : message);
                 default:
-                    if (code != 200)
-                    {
-                        throw new InvalidOperationException($"API错误 [{code}]: {message}");
-                    }
-                    break;
+                    throw new InvalidOperationException($"API错误 [{code}]: {message}");
             }
         }
 
@@ -1240,11 +1256,7 @@ namespace YTPlayer.Core
                 System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] Content-Type: {content.Headers.ContentType}");
 
                 // 归一化基础地址和路径
-                string normalizedBaseUrl = (baseUrl ?? OFFICIAL_API_BASE).TrimEnd('/');
-                if (string.IsNullOrWhiteSpace(normalizedBaseUrl))
-                {
-                    normalizedBaseUrl = OFFICIAL_API_BASE;
-                }
+                string normalizedBaseUrl = SelectBaseUrl(baseUrl, retryCount);
 
                 string normalizedPath = path ?? string.Empty;
                 if (!normalizedPath.StartsWith("/"))
@@ -1308,9 +1320,9 @@ namespace YTPlayer.Core
                     byte[] rawBytes = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
                     string responseText = DecodeResponseContent(response, rawBytes);
 
-                    System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] Request URL: {url}");
-                    System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] Response Status: {response.StatusCode}");
-                    System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] Response Headers: {string.Join(", ", response.Headers.Select(h => $"{h.Key}={string.Join(",", h.Value)}"))}");
+                System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] Request URL: {url}");
+                System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] Response Status: {response.StatusCode}");
+                System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] Response Headers: {string.Join(", ", response.Headers.Select(h => $"{h.Key}={string.Join(",", h.Value)}"))}");
                     System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] Response Length(bytes): {rawBytes?.Length ?? 0}, TextLength: {responseText.Length}");
                     if (!string.IsNullOrEmpty(responseText))
                     {
@@ -1323,9 +1335,10 @@ namespace YTPlayer.Core
 
                     if (!responseText.TrimStart().StartsWith("{") && !responseText.TrimStart().StartsWith("["))
                     {
+                        string? debugFile = null;
                         try
                         {
-                            string debugFile = System.IO.Path.Combine(
+                            debugFile = System.IO.Path.Combine(
                                 System.IO.Path.GetTempPath(),
                                 $"netease_debug_response_{DateTime.Now:yyyyMMdd_HHmmss}.html"
                             );
@@ -1334,7 +1347,7 @@ namespace YTPlayer.Core
                         }
                         catch { }
 
-                        throw new Exception($"服务器返回非JSON响应（状态码: {response.StatusCode}），可能是网络问题或API限流");
+                        throw new ApiResponseCorruptedException(response.StatusCode, url, $"服务器返回非JSON响应（状态码: {response.StatusCode}），可能是网络问题或API限流", debugFile);
                     }
 
                     JObject json;
@@ -1348,9 +1361,10 @@ namespace YTPlayer.Core
                         System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] JSON解析失败: {ex.Message}");
                         System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] 响应原文: {responseText}");
 
+                        string? debugFile = null;
                         try
                         {
-                            string debugFile = System.IO.Path.Combine(
+                            debugFile = System.IO.Path.Combine(
                                 System.IO.Path.GetTempPath(),
                                 $"netease_json_error_{DateTime.Now:yyyyMMdd_HHmmss}.txt"
                             );
@@ -1359,7 +1373,7 @@ namespace YTPlayer.Core
                         }
                         catch { }
 
-                        throw new Exception($"JSON解析失败: {ex.Message}，响应内容可能已损坏");
+                        throw new ApiResponseCorruptedException(response.StatusCode, url, $"JSON解析失败: {ex.Message}，响应内容可能已损坏", debugFile, ex);
                     }
 
                     int code = json["code"]?.Value<int>() ?? -1;
@@ -1367,22 +1381,39 @@ namespace YTPlayer.Core
 
                     if (!skipErrorHandling)
                     {
+                        // 自动刷新（301）一次
+                        if (code == 301 && retryCount == 0)
+                        {
+                            bool refreshed = await TryAutoRefreshLoginAsync().ConfigureAwait(false);
+                            if (refreshed)
+                            {
+                                System.Diagnostics.Debug.WriteLine("[WEAPI] 检测到 301，已自动刷新登录，重试当前请求。");
+                                return await PostWeApiAsync<T>(path, payload, retryCount + 1, skipErrorHandling, cancellationToken, baseUrl, autoConvertApiSegment).ConfigureAwait(false);
+                            }
+                        }
+
                         HandleApiError(code, message);
                     }
 
                     return json.ToObject<T>();
                 }
             }
-            catch (Exception ex) when (retryCount < MAX_RETRY_COUNT && !(ex is UnauthorizedAccessException))
+            catch (Exception ex) when (retryCount < MAX_RETRY_COUNT &&
+                                       !(ex is UnauthorizedAccessException) &&
+                                       !(ex is ApiResourceUnavailableException))
             {
                 if (ex is OperationCanceledException)
                 {
                     throw;
                 }
-                // ⭐ 使用自适应延迟策略（参考 netease-music-simple-player）
-                int delayMs = GetAdaptiveRetryDelay(retryCount + 1);
-                await Task.Delay(delayMs, cancellationToken).ConfigureAwait(false);
-                return await PostWeApiAsync<T>(path, payload, retryCount + 1, skipErrorHandling, cancellationToken, baseUrl, autoConvertApiSegment);
+                if (ShouldRetry(ex))
+                {
+                    int delayMs = GetRandomRetryDelay();
+                    await Task.Delay(delayMs, cancellationToken).ConfigureAwait(false);
+                    return await PostWeApiAsync<T>(path, payload, retryCount + 1, skipErrorHandling, cancellationToken, baseUrl, autoConvertApiSegment).ConfigureAwait(false);
+                }
+
+                throw;
             }
         }
 
@@ -1902,13 +1933,13 @@ namespace YTPlayer.Core
                             catch (JsonReaderException)
                             {
                                 SaveEapiDebugArtifact(path, rawBytes, null, decryptEx);
-                                throw new Exception("EAPI 解密失败", decryptEx);
+                                throw new ApiResponseCorruptedException(response.StatusCode, url, "EAPI 解密失败", null, decryptEx);
                             }
                         }
                         else
                         {
                             SaveEapiDebugArtifact(path, rawBytes, null, decryptEx);
-                            throw new Exception("EAPI 解密失败", decryptEx);
+                            throw new ApiResponseCorruptedException(response.StatusCode, url, "EAPI 解密失败", null, decryptEx);
                         }
                     }
 
@@ -1930,7 +1961,7 @@ namespace YTPlayer.Core
                     catch (JsonReaderException ex)
                     {
                         SaveEapiDebugArtifact(path, rawBytes, string.IsNullOrEmpty(decryptedText) ? null : Encoding.UTF8.GetBytes(decryptedText), ex);
-                        throw new Exception($"EAPI JSON解析失败: {ex.Message}");
+                        throw new ApiResponseCorruptedException(response.StatusCode, url, $"EAPI JSON解析失败: {ex.Message}", null, ex);
                     }
 
                     int code = json["code"]?.Value<int>() ?? -1;
@@ -1938,22 +1969,38 @@ namespace YTPlayer.Core
 
                     if (!skipErrorHandling)
                     {
+                        if (code == 301 && retryCount == 0)
+                        {
+                            bool refreshed = await TryAutoRefreshLoginAsync().ConfigureAwait(false);
+                            if (refreshed)
+                            {
+                                System.Diagnostics.Debug.WriteLine("[EAPI] 检测到 301，已自动刷新登录，重试当前请求。");
+                                return await PostEApiAsync<T>(path, payload, useIosHeaders, retryCount + 1, skipErrorHandling).ConfigureAwait(false);
+                            }
+                        }
+
                         HandleApiError(code, message);
                     }
 
                     return json.ToObject<T>();
                 }
             }
-            catch (Exception ex) when (retryCount < MAX_RETRY_COUNT && !(ex is UnauthorizedAccessException))
+            catch (Exception ex) when (retryCount < MAX_RETRY_COUNT &&
+                                       !(ex is UnauthorizedAccessException) &&
+                                       !(ex is ApiResourceUnavailableException))
             {
                 if (ex is OperationCanceledException)
                 {
                     throw;
                 }
-                // ⭐ 使用自适应延迟策略（参考 netease-music-simple-player）
-                int delayMs = GetAdaptiveRetryDelay(retryCount + 1);
-                await Task.Delay(delayMs).ConfigureAwait(false);
-                return await PostEApiAsync<T>(path, payload, useIosHeaders, retryCount + 1, skipErrorHandling);
+                if (ShouldRetry(ex))
+                {
+                    int delayMs = GetRandomRetryDelay();
+                    await Task.Delay(delayMs).ConfigureAwait(false);
+                    return await PostEApiAsync<T>(path, payload, useIosHeaders, retryCount + 1, skipErrorHandling);
+                }
+
+                throw;
             }
         }
 
@@ -1968,6 +2015,21 @@ namespace YTPlayer.Core
                 return MIN_RETRY_DELAY_MS;
             }
             return Math.Min(retryAttempt * 100, MAX_RETRY_DELAY_MS);
+        }
+
+        private int GetRandomRetryDelay()
+        {
+            lock (_random)
+            {
+                return _random.Next(500, 1501);
+            }
+        }
+
+        private static bool ShouldRetry(Exception ex)
+        {
+            return ex is ApiTransientException
+                || ex is ApiAccessRestrictedException
+                || ex is ApiResponseCorruptedException;
         }
 
         private static bool LooksLikePlainJson(byte[] data)
@@ -2557,6 +2619,29 @@ namespace YTPlayer.Core
                 : string.Join("; ", cookieMap.Select(kvp => $"{kvp.Key}={Uri.EscapeDataString(kvp.Value)}"));
         }
 
+        private static string SelectBaseUrl(string requestedBaseUrl, int retryCount)
+        {
+            string candidate = (requestedBaseUrl ?? OFFICIAL_API_BASE).TrimEnd('/');
+            if (string.IsNullOrWhiteSpace(candidate))
+            {
+                candidate = OFFICIAL_API_BASE;
+            }
+
+            if (retryCount <= 0)
+            {
+                return candidate;
+            }
+
+            // fallback to other domains when repeated failures occur
+            int domainIndex = retryCount - 1;
+            if (domainIndex < DomainFallbackOrder.Length)
+            {
+                return DomainFallbackOrder[domainIndex];
+            }
+
+            return candidate;
+        }
+
         private void ApplyFingerprintHeaders(HttpRequestMessage request)
         {
             if (request == null)
@@ -2589,6 +2674,49 @@ namespace YTPlayer.Core
             }
         }
 
+        private async Task<bool> TryAutoRefreshLoginAsync()
+        {
+            try
+            {
+                return await RefreshLoginAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[Auth] TryAutoRefreshLoginAsync 失败: {ex.Message}");
+                return false;
+            }
+        }
+
+        private async Task EnforceThrottleAsync(string actionKey, TimeSpan minInterval)
+        {
+            if (string.IsNullOrWhiteSpace(actionKey) || minInterval <= TimeSpan.Zero)
+            {
+                return;
+            }
+
+            TimeSpan delay = TimeSpan.Zero;
+            var now = DateTime.UtcNow;
+
+            lock (_throttleLock)
+            {
+                if (_lastActionTimestamps.TryGetValue(actionKey, out var lastTime))
+                {
+                    var elapsed = now - lastTime;
+                    if (elapsed < minInterval)
+                    {
+                        delay = minInterval - elapsed;
+                    }
+                }
+
+                _lastActionTimestamps[actionKey] = now + delay;
+            }
+
+            if (delay > TimeSpan.Zero)
+            {
+                await Task.Delay(delay).ConfigureAwait(false);
+            }
+        }
+
         private string GenerateRandomChineseIp()
         {
             if (ChineseIpRanges.Length == 0)
@@ -2610,6 +2738,48 @@ namespace YTPlayer.Core
             }
             uint addr = range.Start + offset;
             return $"{(addr >> 24) & 255}.{(addr >> 16) & 255}.{(addr >> 8) & 255}.{addr & 255}";
+        }
+
+        private sealed class ApiTransientException : Exception
+        {
+            public int Code { get; }
+            public ApiTransientException(int code, string message) : base(message)
+            {
+                Code = code;
+            }
+        }
+
+        private sealed class ApiAccessRestrictedException : Exception
+        {
+            public int Code { get; }
+            public ApiAccessRestrictedException(int code, string message) : base(message)
+            {
+                Code = code;
+            }
+        }
+
+        private sealed class ApiResourceUnavailableException : Exception
+        {
+            public int Code { get; }
+            public ApiResourceUnavailableException(int code, string message) : base(message)
+            {
+                Code = code;
+            }
+        }
+
+        private sealed class ApiResponseCorruptedException : Exception
+        {
+            public HttpStatusCode StatusCode { get; }
+            public string RequestUrl { get; }
+            public string? DebugFilePath { get; }
+
+            public ApiResponseCorruptedException(HttpStatusCode statusCode, string requestUrl, string message, string? debugFilePath = null, Exception? inner = null)
+                : base(message, inner)
+            {
+                StatusCode = statusCode;
+                RequestUrl = requestUrl;
+                DebugFilePath = debugFilePath;
+            }
         }
 
         /// <summary>
@@ -3281,6 +3451,165 @@ namespace YTPlayer.Core
         }
 
         /// <summary>
+        /// 听歌识曲：调用增强 API /audio/match。
+        /// </summary>
+        public async Task<List<SongInfo>> RecognizeSongAsync(string audioFingerprint, int durationSeconds, CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(audioFingerprint))
+            {
+                throw new ArgumentException("音频指纹不能为空", nameof(audioFingerprint));
+            }
+
+            durationSeconds = Math.Max(1, Math.Min(30, durationSeconds));
+
+            // 优先使用官方 EAPI 识曲接口，避免依赖外部节点服务
+            JObject? obj = null;
+            // 尝试官方公开接口（未加密 GET，与 api-enhanced 一致）
+            try
+            {
+                var sessionId = Guid.NewGuid().ToString("N");
+                var url =
+                    $"https://interface.music.163.com/api/music/audio/match?sessionId={sessionId}&algorithmCode=shazam_v2&duration={durationSeconds}&rawdata={Uri.EscapeDataString(audioFingerprint)}&times=1&decrypt=1";
+
+                var resp = await _httpClient.GetAsync(url, cancellationToken).ConfigureAwait(false);
+                resp.EnsureSuccessStatusCode();
+                var txt = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+                obj = JsonConvert.DeserializeObject<JObject>(txt);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[Recognition] interface.music GET match failed: {ex.Message}");
+            }
+
+            try
+            {
+                if (obj == null)
+                {
+                    var eapiPayload = new Dictionary<string, object?>
+                    {
+                    { "rawdata", audioFingerprint },
+                    { "duration", durationSeconds },
+                    { "times", 1 },
+                    { "algorithmCode", "shazam_v2" },
+                    { "from", "recognize-song" },
+                    { "sessionId", Guid.NewGuid().ToString("N") },
+                    { "verifyId", 1 },
+                    { "os", "pc" }
+                    };
+
+                    obj = await PostEApiAsync<JObject>("/api/music/audio/match", eapiPayload, useIosHeaders: true, skipErrorHandling: true)
+                        .ConfigureAwait(false);
+                }
+            }
+            catch (Exception ex) when (IsConnectionRefused(ex as HttpRequestException))
+            {
+                // 忽略，尝试简化接口
+                System.Diagnostics.Debug.WriteLine($"[Recognition] EAPI match connection refused, fallback. {ex.Message}");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[Recognition] EAPI match failed: {ex.Message}");
+            }
+
+            // 备选：使用简化 API（可配置）作为兜底
+            if (obj == null)
+            {
+                string configuredBase = string.IsNullOrWhiteSpace(_config?.RecognitionApiBaseUrl)
+                    ? SIMPLIFIED_API_BASE
+                    : _config.RecognitionApiBaseUrl.TrimEnd('/');
+
+                async Task<JObject?> SendAsync(string baseUrl)
+                {
+                    string url = $"{baseUrl}/audio/match?duration={durationSeconds}&audioFP={Uri.EscapeDataString(audioFingerprint)}";
+
+                    using var request = new HttpRequestMessage(HttpMethod.Post, url);
+                    request.Headers.Referrer = MUSIC_URI;
+
+                    var response = await _simplifiedClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+                    response.EnsureSuccessStatusCode();
+                    var jsonText = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                    return JsonConvert.DeserializeObject<JObject>(jsonText);
+                }
+
+                try
+                {
+                    obj = await SendAsync(configuredBase).ConfigureAwait(false);
+                }
+                catch (HttpRequestException hre) when (IsConnectionRefused(hre) &&
+                    !string.Equals(configuredBase, SIMPLIFIED_API_BASE, StringComparison.OrdinalIgnoreCase))
+                {
+                    obj = await SendAsync(SIMPLIFIED_API_BASE).ConfigureAwait(false);
+                }
+            }
+
+            if (obj == null)
+            {
+                throw new InvalidOperationException("识曲接口无有效响应");
+            }
+
+            var resultArray = obj?["data"]?["result"] as JArray;
+            if (resultArray == null)
+            {
+                return new List<SongInfo>();
+            }
+
+            var songTokens = new JArray();
+            foreach (var item in resultArray)
+            {
+                var songObj = item?["song"];
+                if (songObj != null)
+                {
+                    songTokens.Add(songObj);
+                }
+            }
+
+            var songs = ParseSongList(songTokens);
+            int index = 0;
+            foreach (var item in resultArray)
+            {
+                if (index >= songs.Count)
+                {
+                    break;
+                }
+
+                var song = songs[index];
+                song.MatchStartMs = item?["startTime"]?.Value<long?>();
+                song.MatchScore = item?["score"]?.Value<double?>();
+                song.ViewSource = "listen-match";
+                index++;
+            }
+
+            return songs;
+        }
+
+        private static bool IsConnectionRefused(HttpRequestException ex)
+        {
+            if (ex == null) return false;
+
+            Exception? current = ex;
+            while (current != null)
+            {
+                if (current is SocketException sockEx &&
+                    sockEx.SocketErrorCode == SocketError.ConnectionRefused)
+                {
+                    return true;
+                }
+
+                if (current is WebException webEx &&
+                    webEx.Status == WebExceptionStatus.ConnectFailure &&
+                    webEx.InnerException is SocketException innerSock &&
+                    innerSock.SocketErrorCode == SocketError.ConnectionRefused)
+                {
+                    return true;
+                }
+
+                current = current.InnerException;
+            }
+
+            return false;
+        }
+
+        /// <summary>
         /// 调用搜索接口，自动处理简化API与官方API切换。
         /// </summary>
         private async Task<JObject> ExecuteSearchRequestAsync(string keyword, SearchResourceType resourceType, int limit, int offset)
@@ -3577,6 +3906,8 @@ namespace YTPlayer.Core
                 return false;
             }
 
+            await EnforceThrottleAsync($"podcast:{radioId}", TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+
             var payload = new Dictionary<string, object>
             {
                 { "id", radioId }
@@ -3654,7 +3985,8 @@ namespace YTPlayer.Core
             var missingSongIds = new HashSet<string>(StringComparer.Ordinal);
 
             // ⭐ 可用性预检：未登录时跳过强校验，避免误判
-            bool shouldPrecheck = !skipAvailabilityCheck && UsePersonalCookie;
+            // 始终进行可用性预检（登录/未登录均检测），仅在明确要求跳过时才跳过
+            bool shouldPrecheck = !skipAvailabilityCheck;
             if (shouldPrecheck)
             {
                 var checkStart = DateTime.UtcNow;
@@ -4876,6 +5208,16 @@ namespace YTPlayer.Core
                     Description = ResolveAlbumDescription(albumToken)
                 };
 
+                var songsToken = json["songs"] as JArray ?? albumToken["songs"] as JArray;
+                if (songsToken != null && songsToken.Count > 0)
+                {
+                    album.Songs = ParseSongList(songsToken);
+                    if (album.TrackCount <= 0)
+                    {
+                        album.TrackCount = album.Songs.Count;
+                    }
+                }
+
                 return album;
             }
             catch (Exception ex)
@@ -4942,6 +5284,8 @@ namespace YTPlayer.Core
         {
             try
             {
+                await EnforceThrottleAsync($"playlist:{playlistId}", TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+
                 string action = subscribe ? "subscribe" : "unsubscribe";
                 var payload = new Dictionary<string, object>
                 {
@@ -4998,6 +5342,8 @@ namespace YTPlayer.Core
         {
             try
             {
+                await EnforceThrottleAsync($"album:{albumId}", TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+
                 var payload = new Dictionary<string, object>
                 {
                     { "id", albumId },
@@ -5021,6 +5367,8 @@ namespace YTPlayer.Core
         {
             try
             {
+                await EnforceThrottleAsync($"album:{albumId}", TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+
                 var payload = new Dictionary<string, object>
                 {
                     { "id", albumId }
@@ -5183,6 +5531,8 @@ namespace YTPlayer.Core
         {
             try
             {
+                await EnforceThrottleAsync($"like:{songId}", TimeSpan.FromSeconds(1)).ConfigureAwait(false);
+
                 var payload = new Dictionary<string, object>
                 {
                     { "alg", "itembased" },
@@ -9864,6 +10214,7 @@ namespace YTPlayer.Core
         public string PicUrl { get; set; } = string.Empty;
         public string PublishTime { get; set; } = string.Empty;
         public int TrackCount { get; set; }
+        public List<SongInfo> Songs { get; set; } = new List<SongInfo>();
         public string Description { get; set; } = string.Empty;
         public bool IsSubscribed { get; set; }
     }

@@ -228,7 +228,7 @@ namespace YTPlayer.Core.Playback
                     else
                     {
                         // 没有缓存，需要获取URL
-                        bool shouldSkipCheck = nextSong.IsAvailable == true;
+                        bool shouldSkipCheck = false; // 始终执行可用性预检，确保缺失资源被及时标记
                         System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] 获取 URL: {nextSong.Name}, 音质: {qualityLevel}, IsAvailable={nextSong.IsAvailable}, skipCheck={shouldSkipCheck}");
 
                         var urlResult = await _apiClient.GetSongUrlAsync(

@@ -214,7 +214,7 @@ namespace YTPlayer.Utils
 
         private static string ResolveDllPath(string dllName)
         {
-            return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, dllName);
+            return PathHelper.ResolveFromLibsOrBase(dllName);
         }
 
         private static bool DllExists(string dllName)

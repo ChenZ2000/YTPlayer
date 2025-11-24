@@ -76,7 +76,7 @@ namespace YTPlayer.Utils
             // 一些分享链接将 ID 直接放在路径段中，如 /song/12345
             if (string.IsNullOrEmpty(resourceId))
             {
-                resourceId = ExtractIdFromSegments(segments);
+                resourceId = ExtractIdFromSegments(type, segments);
             }
 
             if (type == NeteaseUrlType.Unknown || string.IsNullOrWhiteSpace(resourceId))
@@ -228,14 +228,30 @@ namespace YTPlayer.Utils
             return null;
         }
 
-        private static string? ExtractIdFromSegments(List<string> segments)
+        private static string? ExtractIdFromSegments(NeteaseUrlType type, List<string> segments)
         {
             if (segments.Count == 0)
             {
                 return null;
             }
 
-            // 尝试解析最后一个段为数字或 ID
+            // 对 playlist 链接，优先取关键字后紧跟的 ID（兼容 /playlist/123/456 这种分享形式）
+            if (type == NeteaseUrlType.Playlist)
+            {
+                for (int i = 0; i < segments.Count - 1; i++)
+                {
+                    if (segments[i] == "playlist" || segments[i] == "pl")
+                    {
+                        string candidate = segments[i + 1];
+                        if (long.TryParse(candidate, NumberStyles.Integer, CultureInfo.InvariantCulture, out _))
+                        {
+                            return candidate;
+                        }
+                    }
+                }
+            }
+
+            // 默认策略：取最后一个可解析为数字的段
             for (int i = segments.Count - 1; i >= 0; i--)
             {
                 string segment = segments[i];

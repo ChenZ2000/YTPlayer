@@ -200,6 +200,16 @@ namespace YTPlayer.Models
         public bool? IsAvailable { get; set; }
 
         /// <summary>
+        /// 若来自听歌识曲，记录命中起始时间（毫秒）。
+        /// </summary>
+        public long? MatchStartMs { get; set; }
+
+        /// <summary>
+        /// 若接口返回匹配得分或概率，可选填充。
+        /// </summary>
+        public double? MatchScore { get; set; }
+
+        /// <summary>
         /// 是否为试听版本（非VIP用户播放VIP歌曲时）
         /// </summary>
         public bool IsTrial { get; set; }

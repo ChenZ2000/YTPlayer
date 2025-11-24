@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Runtime.InteropServices;
@@ -940,21 +941,16 @@ namespace YTPlayer.Core
         {
             try
             {
-                // 获取EXE所在目录
-                string exeDir = System.IO.Path.GetDirectoryName(
-                    System.Reflection.Assembly.GetExecutingAssembly().Location);
-
-                if (string.IsNullOrEmpty(exeDir))
-                {
-                    Debug.WriteLine("[BassAudioEngine] ❌ 无法确定EXE目录");
-                    return;
-                }
-
-                string bassflacPath = System.IO.Path.Combine(exeDir, "bassflac.dll");
+                // 优先从 libs 目录加载（新的依赖布局），找不到时回退到根目录
+                string searchRoot = Directory.Exists(PathHelper.LibsDirectory)
+                    ? PathHelper.LibsDirectory
+                    : PathHelper.BaseDirectory;
+                string bassflacPath = PathHelper.ResolveFromLibsOrBase("bassflac.dll");
                 Debug.WriteLine($"[BassAudioEngine]   查找路径: {bassflacPath}");
+                Debug.WriteLine($"[BassAudioEngine]   搜索根目录: {searchRoot}");
 
                 // 检查文件是否存在
-                if (!System.IO.File.Exists(bassflacPath))
+                if (!File.Exists(bassflacPath))
                 {
                     Debug.WriteLine("[BassAudioEngine] ⚠️ bassflac.dll 文件不存在！");
                     Debug.WriteLine("[BassAudioEngine]   FLAC格式播放将不可用");
@@ -962,12 +958,12 @@ namespace YTPlayer.Core
                 }
 
                 // 验证文件信息
-                var fileInfo = new System.IO.FileInfo(bassflacPath);
+                var fileInfo = new FileInfo(bassflacPath);
                 Debug.WriteLine($"[BassAudioEngine]   文件大小: {fileInfo.Length:N0} bytes");
                 Debug.WriteLine($"[BassAudioEngine]   修改时间: {fileInfo.LastWriteTime:yyyy-MM-dd HH:mm:ss}");
 
                 // 加载插件 (必须传递BASS_UNICODE标志，因为使用CharSet.Unicode)
-                string fullPath = System.IO.Path.GetFullPath(bassflacPath);
+                string fullPath = Path.GetFullPath(bassflacPath);
                 int pluginHandle = BASS_PluginLoad(fullPath, BASS_UNICODE);
 
                 if (pluginHandle == 0)

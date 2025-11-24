@@ -30,7 +30,7 @@
 - 文件/操作菜单下动态隐藏的“当前播放”入口，可随时执行正在播放的歌曲相关操作。
 
 ### 播放控制
-- 播放/暂停（空格）、上一曲/下一曲（F1/F2）、快退/快进（左右箭头）、音量（F3/F4）、刷新列表（F5）。
+- 播放/暂停（空格）、上一曲/下一曲（F3/F4）、快退/快进（左右箭头）、音量（F1/F2）、刷新列表（F5）。
 - 任意时间跳转（F12）支持**时:分:秒**或**百分比加%**格式。
 - 队列插播、播放次序选择（列表循环/顺序播放/单曲循环/列表随机）。
 - 屏幕阅读器歌词输出开关（F11）。
@@ -45,6 +45,10 @@
 ### 评论互动
 - 在任意歌曲 / 专辑 / 歌单的上下文菜单中打开评论对话框，树形查看楼层回复，支持快捷键导航与焦点保持。
 - 可直接在窗口底部发表顶层评论（Shift + Enter 发送），或在树节点上使用回车/上下文菜单进行回复（回复输入框同样支持 Shift + Enter 发送）、Ctrl+C 复制、Delete 删除（仅限本人评论）。
+
+### 听歌识曲
+- 支持快捷键 CTRL + L 或通过文件/操作菜单下的入口执行听歌识曲。
+- 允许聆听任意输入或输出设备的声音。
 
 ### 自动更新
 - 通过“帮助 → 检查更新”触发版本检测，有更新时列出下载包信息。
@@ -94,6 +98,7 @@ powershell -ExecutionPolicy Bypass -File .\Build-Debug.ps1
 ### 代码库
 - [Binaryify/NeteaseCloudMusicApi](https://github.com/Binaryify/NeteaseCloudMusicApi)
 - [chaunsin/netease-cloud-music](https://github.com/chaunsin/netease-cloud-music)
+- [api-enhanced](https://github.com/NeteaseCloudMusicApiEnhanced/api-enhanced)
 及本项目依赖的众多优秀第三方库
 
 ## 欢迎通过 Issue/PR 提出建议或提交改进

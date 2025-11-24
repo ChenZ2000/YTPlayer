@@ -1,8 +1,11 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
+using System.Reflection;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using System.Net;
 using Newtonsoft.Json.Linq;
 using YTPlayer.Core;
 using YTPlayer.Utils;
@@ -25,6 +28,7 @@ namespace YTPlayer
             DebugLogger.Log(DebugLogger.LogLevel.Info, "Program", "════════════════════════════════════════");
 
             // ✅ 配置网络连接池以支持高吞吐量并发下载（解决高码率无损音频卡顿）
+            ConfigurePrivateLibPath();
             ConfigureNetworkSettings();
 
             // ✅ 注册全局异常处理器
@@ -133,6 +137,7 @@ namespace YTPlayer
                 // 🔧 禁用 Nagle 算法，减少小包延迟
                 // Nagle 算法会合并小包，但对音频流式传输来说延迟比吞吐量更重要
                 System.Net.ServicePointManager.UseNagleAlgorithm = false;
+                System.Net.ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12 | SecurityProtocolType.Tls11 | SecurityProtocolType.Tls;
 
                 DebugLogger.Log(DebugLogger.LogLevel.Info, "Program",
                     "✓ 网络设置已优化: DefaultConnectionLimit=100, Expect100Continue=False, UseNagleAlgorithm=False");
@@ -144,6 +149,57 @@ namespace YTPlayer
                 DebugLogger.LogException("Program", ex, "配置网络设置失败（非致命）");
             }
         }
+
+        /// <summary>
+        /// 将 libs 目录加入依赖搜索路径（托管与本机）
+        /// </summary>
+        private static void ConfigurePrivateLibPath()
+        {
+            try
+            {
+                string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+                string libsPath = Path.Combine(baseDir, "libs");
+                if (!Directory.Exists(libsPath))
+                {
+                    return;
+                }
+
+                SetDllDirectory(libsPath);
+
+                string currentPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+                if (!currentPath.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries)
+                        .Any(p => string.Equals(p, libsPath, StringComparison.OrdinalIgnoreCase)))
+                {
+                    Environment.SetEnvironmentVariable("PATH", libsPath + ";" + currentPath);
+                }
+
+                // 托管依赖兜底解析（确保 Newtonsoft.Json 等从 libs 解析）
+                AppDomain.CurrentDomain.AssemblyResolve += (sender, args) =>
+                {
+                    try
+                    {
+                        string assemblyName = new AssemblyName(args.Name).Name + ".dll";
+                        string candidate = Path.Combine(libsPath, assemblyName);
+                        if (File.Exists(candidate))
+                        {
+                            return Assembly.LoadFrom(candidate);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        DebugLogger.LogException("Program", ex, $"AssemblyResolve 处理失败: {args.Name}");
+                    }
+                    return null;
+                };
+            }
+            catch (Exception ex)
+            {
+                DebugLogger.LogException("Program", ex, "配置依赖目录失败（非致命）");
+            }
+        }
+
+        [DllImport("kernel32", SetLastError = true)]
+        private static extern bool SetDllDirectory(string lpPathName);
 
         /// <summary>
         /// 捕获未处理的异常（非UI线程）
