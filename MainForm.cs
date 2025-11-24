@@ -10984,7 +10984,7 @@ public partial class MainForm : Form
 		{
 			return false;
 		}
-		try
+        try
         {
             string baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
             string text = Path.Combine(baseDirectory, "YTPlayer.Updater.exe");
@@ -11000,11 +11000,12 @@ public partial class MainForm : Form
             string sessionLibs = Path.Combine(text2, "libs");
             CopyUpdaterDependency("Newtonsoft.Json.dll", sessionLibs);
             CopyUpdaterDependency("Newtonsoft.Json.xml", sessionLibs);
-			string text4 = Path.Combine(text2, "update-plan.json");
-			plan.SaveTo(text4);
-			string text5 = SerializeCommandLineArguments();
-			StringBuilder stringBuilder = new StringBuilder();
-			stringBuilder.Append("--plan \"" + text4 + "\" ");
+            CopyUpdaterLibDirectory(sessionLibs);
+            string text4 = Path.Combine(text2, "update-plan.json");
+            plan.SaveTo(text4);
+            string text5 = SerializeCommandLineArguments();
+            StringBuilder stringBuilder = new StringBuilder();
+            stringBuilder.Append("--plan \"" + text4 + "\" ");
 			stringBuilder.Append("--target \"" + baseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + "\" ");
 			stringBuilder.Append("--main \"" + Application.ExecutablePath + "\" ");
 			stringBuilder.Append($"--pid {Process.GetCurrentProcess().Id} ");
@@ -11072,6 +11073,33 @@ public partial class MainForm : Form
         File.Copy(resolvedSource, destFileName, overwrite: true);
     }
 
+    /// <summary>
+    /// 将当前安装目录下的 libs 目录完整复制到临时更新会话，保证更新器在独立工作目录下也能解析所有依赖。
+    /// </summary>
+    private static void CopyUpdaterLibDirectory(string destinationLibs)
+    {
+        try
+        {
+            string sourceLibs = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "libs");
+            if (!Directory.Exists(sourceLibs))
+            {
+                return;
+            }
+
+            foreach (string sourcePath in Directory.GetFiles(sourceLibs, "*.*", SearchOption.AllDirectories))
+            {
+                string relative = sourcePath.Substring(sourceLibs.Length).TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                string destPath = Path.Combine(destinationLibs, relative);
+                Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
+                File.Copy(sourcePath, destPath, overwrite: true);
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[Updater] 复制 libs 目录失败: {ex.Message}");
+        }
+    }
+
 	private static string SerializeCommandLineArguments()
 	{
 		string[] commandLineArgs = Environment.GetCommandLineArgs();
@@ -11134,18 +11162,18 @@ public partial class MainForm : Form
 		}, token);
 	}
 
-	private async Task CheckForUpdatesSilentlyAsync(CancellationToken cancellationToken)
-	{
-		using UpdateServiceClient client = new UpdateServiceClient("https://yt.chenz.cloud/update.php", "YTPlayer", "1.7.3");
-		UpdateCheckResult result = await PollUpdateStatusSilentlyAsync(client, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-		UpdateAsset asset = UpdateFormatting.SelectPreferredAsset(result.Response.Data?.Assets);
-		if ((result.Response.Data?.UpdateAvailable ?? false) && asset != null)
-		{
-			UpdatePlan plan = UpdatePlan.FromResponse(result.Response, asset, "1.7.3");
-			string versionLabel = UpdateFormatting.FormatVersionLabel(plan, result.Response.Data?.Latest?.SemanticVersion);
-			ShowAutoUpdatePrompt(plan, versionLabel);
-		}
-	}
+    private async Task CheckForUpdatesSilentlyAsync(CancellationToken cancellationToken)
+    {
+        using UpdateServiceClient client = new UpdateServiceClient(UpdateConstants.DefaultEndpoint, "YTPlayer", VersionInfo.Version);
+        UpdateCheckResult result = await PollUpdateStatusSilentlyAsync(client, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        UpdateAsset asset = UpdateFormatting.SelectPreferredAsset(result.Response.Data?.Assets);
+        if ((result.Response.Data?.UpdateAvailable ?? false) && asset != null)
+        {
+            UpdatePlan plan = UpdatePlan.FromResponse(result.Response, asset, VersionInfo.Version);
+            string versionLabel = UpdateFormatting.FormatVersionLabel(plan, result.Response.Data?.Latest?.SemanticVersion);
+            ShowAutoUpdatePrompt(plan, versionLabel);
+        }
+    }
 
 	private void ShowAutoUpdatePrompt(UpdatePlan plan, string? versionLabel)
 	{
@@ -11166,21 +11194,21 @@ public partial class MainForm : Form
 		});
 	}
 
-	private static async Task<UpdateCheckResult> PollUpdateStatusSilentlyAsync(UpdateServiceClient client, CancellationToken cancellationToken)
-	{
-		UpdateCheckResult result;
-		while (true)
-		{
-			result = await client.CheckForUpdatesAsync("1.7.3", cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-			if (!result.ShouldPollForCompletion)
-			{
-				break;
-			}
-			int delaySeconds = NormalizeUpdatePollDelay(result.GetRecommendedPollDelaySeconds());
-			await Task.Delay(TimeSpan.FromSeconds(delaySeconds), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-		}
-		return result;
-	}
+    private static async Task<UpdateCheckResult> PollUpdateStatusSilentlyAsync(UpdateServiceClient client, CancellationToken cancellationToken)
+    {
+        UpdateCheckResult result;
+        while (true)
+        {
+            result = await client.CheckForUpdatesAsync(VersionInfo.Version, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            if (!result.ShouldPollForCompletion)
+            {
+                break;
+            }
+            int delaySeconds = NormalizeUpdatePollDelay(result.GetRecommendedPollDelaySeconds());
+            await Task.Delay(TimeSpan.FromSeconds(delaySeconds), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        }
+        return result;
+    }
 
 	private static int NormalizeUpdatePollDelay(int seconds)
 	{
