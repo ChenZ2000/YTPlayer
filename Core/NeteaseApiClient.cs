@@ -1496,6 +1496,11 @@ namespace YTPlayer.Core
                         request.Headers.TryAddWithoutValidation("Origin", ORIGIN);
                         request.Headers.TryAddWithoutValidation("Accept", "*/*");
                         request.Headers.TryAddWithoutValidation("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8");
+                        if (!sendCookies)
+                        {
+                            // 仅登录验证阶段附加桌面指纹/IP 头；验证码发送保持最简请求
+                            ApplyFingerprintHeaders(request);
+                        }
 
                         // ⭐⭐⭐ 双模式Cookie策略：
                         // 1. 验证码发送（sendCookies=true）：需要访客Cookie（MUSIC_A、NMTID等）
@@ -1686,6 +1691,7 @@ namespace YTPlayer.Core
                         request.Headers.TryAddWithoutValidation("Origin", ORIGIN);
                         request.Headers.TryAddWithoutValidation("Accept", "*/*");
                         request.Headers.TryAddWithoutValidation("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8");
+                        ApplyFingerprintHeaders(request);
 
                         System.Diagnostics.Debug.WriteLine($"[QR WEAPI] Attempt {attempt}/{maxRetries}");
                         System.Diagnostics.Debug.WriteLine($"[QR WEAPI] URL: {url}");
@@ -3079,25 +3085,27 @@ namespace YTPlayer.Core
                 var result = await PostWeApiAsync<JObject>("/w/nuser/account/get", payload, retryCount: 0, skipErrorHandling: true);
                 int code = result["code"]?.Value<int>() ?? result["data"]?["code"]?.Value<int>() ?? -1;
                 var responseData = result["data"] ?? result;
+                var profileToken = responseData["profile"];
+                var accountToken = responseData["account"];
+                bool hasProfile = profileToken != null && profileToken.Type == JTokenType.Object;
+                bool hasAccount = accountToken != null && accountToken.Type == JTokenType.Object;
+
                 var status = new LoginStatusResult
                 {
                     RawJson = result.ToString(Formatting.None),
-                    IsLoggedIn = code == 200
+                    IsLoggedIn = code == 200 && (hasProfile || hasAccount)
                 };
 
                 if (status.IsLoggedIn)
                 {
-                    var profile = responseData["profile"];
-                    var account = responseData["account"];
-
-                    if (profile != null)
+                    if (hasProfile && profileToken is JObject profile)
                     {
                         status.Nickname = profile["nickname"]?.Value<string>();
                         status.AccountId = profile["userId"]?.Value<long?>();
                         status.AvatarUrl = profile["avatarUrl"]?.Value<string>();
                         status.VipType = profile["vipType"]?.Value<int>() ?? 0;
                     }
-                    else if (account != null)
+                    else if (hasAccount && accountToken is JObject account)
                     {
                         status.AccountId = account["id"]?.Value<long?>();
                         status.VipType = account["vipType"]?.Value<int>() ?? 0;
@@ -3175,10 +3183,9 @@ namespace YTPlayer.Core
 
             System.Diagnostics.Debug.WriteLine($"[SMS] 发送验证码请求: phone={phone}, ctcode={ctcode}");
 
-            // ⭐ 核心修复：验证码发送需要访客Cookie
-            // 使用 iOS User-Agent + 访客Cookie（过滤桌面Cookie）
-            // 访客Cookie（MUSIC_A、NMTID等）是必需的，否则触发-462风控
-            var result = await PostWeApiWithiOSAsync<JObject>("/sms/captcha/sent", payload, maxRetries: 3, sendCookies: true);
+            // 改回桌面（网页）调用：使用标准 WEAPI + 桌面 UA + 自动携带当前 CookieContainer
+            // 这样避免移动端伪装导致的验证码失败
+            var result = await PostWeApiAsync<JObject>("/sms/captcha/sent", payload, retryCount: 0, skipErrorHandling: true);
 
             int code = result["code"]?.Value<int>() ?? -1;
             string message = result["message"]?.Value<string>() ?? result["msg"]?.Value<string>() ?? "未知错误";

@@ -186,7 +186,7 @@ namespace YTPlayer.Forms
         /// <summary>
         /// 退出登录
         /// </summary>
-        private void logoutButton_Click(object sender, EventArgs e)
+        private async void logoutButton_Click(object sender, EventArgs e)
         {
             var result = MessageBox.Show(
                 "确定要退出登录吗？\n\n退出后将清除所有账号信息和Cookie。",
@@ -194,31 +194,31 @@ namespace YTPlayer.Forms
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Question);
 
-            if (result == DialogResult.Yes)
+            if (result != DialogResult.Yes)
             {
-                try
+                return;
+            }
+
+            try
+            {
+                if (_apiClient != null)
                 {
-                    // Note: Account state clearing is now handled by AccountStateStore and AuthContext
-                    // The logout callback (_onLogout) will handle the proper cleanup
-
-                    // 清除API客户端的Cookie（如果有的话）
-                    _apiClient?.ClearCookies();
-
-                    MessageBox.Show("已成功退出登录。", "提示",
-                        MessageBoxButtons.OK, MessageBoxIcon.Information);
-
-                    // 调用回调函数通知MainForm
-                    _onLogout?.Invoke();
-
-                    // 关闭对话框
-                    this.Close();
+                    await _apiClient.LogoutAsync().ConfigureAwait(true);
                 }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"[UserInfoForm] 退出登录异常: {ex.Message}");
-                    MessageBox.Show($"退出登录失败: {ex.Message}", "错误",
-                        MessageBoxButtons.OK, MessageBoxIcon.Error);
-                }
+
+                MessageBox.Show("已成功退出登录。", "提示",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+                // 调用回调函数通知 MainForm 刷新本地状态
+                _onLogout?.Invoke();
+
+                this.Close();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[UserInfoForm] 退出登录异常: {ex.Message}");
+                MessageBox.Show($"退出登录失败: {ex.Message}", "错误",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 

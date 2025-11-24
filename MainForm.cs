@@ -1653,14 +1653,26 @@ public partial class MainForm : Form
 		}
 	}
 
-	private void ClearLoginState(bool persist)
+	private void ClearLoginState(bool persist, bool alreadyLoggedOut = false)
 	{
-		_apiClient?.ClearCookies();
+		if (!alreadyLoggedOut && _apiClient != null)
+		{
+			try
+			{
+				_apiClient.LogoutAsync().GetAwaiter().GetResult();
+			}
+			catch (Exception ex)
+			{
+				Debug.WriteLine("[Login] 远端退出登录失败（继续清理本地）: " + ex.Message);
+			}
+		}
+
 		InvalidateLibraryCaches();
 		if (persist)
 		{
 			SaveConfig(refreshCookieFromClient: false);
 		}
+
 		_accountState = _apiClient?.GetAccountStateSnapshot() ?? new AccountState
 		{
 			IsLoggedIn = false
@@ -10278,7 +10290,7 @@ public partial class MainForm : Form
 				using (UserInfoForm userInfoForm = new UserInfoForm(_apiClient, _configManager, delegate
 				{
 					Debug.WriteLine("[LoginMenuItem] 退出登录回调触发");
-					ClearLoginState(persist: true);
+					ClearLoginState(persist: true, alreadyLoggedOut: true);
 					EnsureConfigInitialized();
 					if (base.InvokeRequired)
 					{
