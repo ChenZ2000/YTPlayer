@@ -27,6 +27,7 @@ namespace YTPlayer.Core
         private bool _latestSeekIsPreview = false;   // 是否预览（scrub）请求
         private bool _hasNewSeekRequest = false;   // 是否有新的 Seek 请求
         private bool _isExecutingSeek = false;     // 是否正在执行 Seek
+        private bool _executingIsPreview = false;  // 当前执行的是否为预览
         private double _currentExecutingTarget = -1; // 正在执行的目标位置（避免重复触发）
         private CancellationTokenSource? _currentSeekCts = null;  // 当前 Seek 操作的取消令牌
 
@@ -231,7 +232,9 @@ namespace YTPlayer.Core
             {
                 lock (_seekLock)
                 {
-                    return _hasNewSeekRequest || _isExecutingSeek;
+                    bool pendingReal = _hasNewSeekRequest && !_latestSeekIsPreview;
+                    bool executingReal = _isExecutingSeek && !_executingIsPreview;
+                    return pendingReal || executingReal;
                 }
             }
         }
@@ -255,10 +258,21 @@ namespace YTPlayer.Core
             // 获取状态（线程安全）
             lock (_seekLock)
             {
-                // 如果正在执行 Seek，先等这一轮完成，避免重复对同一位置 Seek 两次
+                // 如果正在执行 Seek
                 if (_isExecutingSeek)
                 {
-                    return;
+                    if (_executingIsPreview)
+                    {
+                        // 预览型执行中：直接返回，避免重复
+                        return;
+                    }
+
+                    // 非预览（正式）执行中：取消旧的，启动新的（Fire-and-Forget, 可被后续请求覆盖）
+                    _currentSeekCts?.Cancel();
+                    _currentSeekCts?.Dispose();
+                    _currentSeekCts = null;
+                    _isExecutingSeek = false;
+                    _executingIsPreview = false;
                 }
 
                 // 如果没有新的请求，退出
@@ -280,6 +294,7 @@ namespace YTPlayer.Core
 
                 // 标记正在执行
                 _isExecutingSeek = true;
+                _executingIsPreview = isPreview;
                 _currentExecutingTarget = targetPosition;
                 _hasNewSeekRequest = false;
             }
@@ -296,6 +311,7 @@ namespace YTPlayer.Core
                     lock (_seekLock)
                     {
                         _isExecutingSeek = false;
+                        _executingIsPreview = false;
                         _currentExecutingTarget = -1;
 
                         // 如果有新的请求，继续启动定时器

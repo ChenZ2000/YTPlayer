@@ -14515,6 +14515,11 @@ public partial class MainForm : Form
 	private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlayback = false)
 	{
 		Debug.WriteLine($"[MainForm] PlaySongDirectWithCancellation 被调用: song={song?.Name}, isAutoPlayback={isAutoPlayback}");
+		if (_isApplicationExitRequested)
+		{
+			Debug.WriteLine("[MainForm] 退出已请求，跳过播放请求");
+			return;
+		}
 		if (_audioEngine == null || song == null)
 		{
 			Debug.WriteLine("[MainForm ERROR] _audioEngine is null or song is null");
@@ -14541,6 +14546,12 @@ public partial class MainForm : Form
 			}
 		}
 		_lastPlayRequestTime = DateTime.Now;
+		if (_isApplicationExitRequested || cancellationToken.IsCancellationRequested)
+		{
+			Debug.WriteLine("[MainForm] 退出/取消标记，跳过播放主流程");
+			return;
+		}
+
 		await PlaySongDirect(song, cancellationToken, isAutoPlayback, requestVersion).ConfigureAwait(continueOnCapturedContext: false);
 	}
 
