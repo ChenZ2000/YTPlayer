@@ -729,6 +729,63 @@ namespace YTPlayer.Core.Auth
             return map;
         }
 
+        /// <summary>
+        /// 构建移动端（iOS/Android）访客 Cookie 映射，专供短信验证码登录链路使用。
+        /// 保证 Cookie 字段与设备指纹一致，避免 UA 与 Cookie 混用导致的 -462/10004。
+        /// </summary>
+        internal IReadOnlyDictionary<string, string> BuildMobileCookieMap(bool includeAnonymousToken)
+        {
+            lock (_syncRoot)
+            {
+                bool changed = false;
+                EnsureDeviceProfileInternal(ref changed);
+                if (changed)
+                {
+                    _accountStore.Save(_accountState);
+                }
+
+                var nowSeconds = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture);
+                var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["os"] = (_accountState.DeviceOs ?? AuthConstants.MobileOs).Equals("Android", StringComparison.OrdinalIgnoreCase) ? "android" : "ios",
+                    ["osver"] = _accountState.DeviceOsVersion ?? AuthConstants.MobileOsVersion,
+                    ["appver"] = _accountState.DeviceAppVersion ?? AuthConstants.MobileAppVersion,
+                    ["buildver"] = _accountState.DeviceBuildVersion ?? nowSeconds,
+                    ["versioncode"] = _accountState.DeviceVersionCode ?? AuthConstants.DefaultMobileVersionCode,
+                    ["channel"] = _accountState.DeviceChannel ?? AuthConstants.DefaultMobileChannel,
+                    ["resolution"] = _accountState.DeviceResolution ?? AuthConstants.DefaultMobileResolution,
+                    ["deviceId"] = _accountState.DeviceId,
+                    ["sDeviceId"] = _accountState.SDeviceId ?? _accountState.DeviceId,
+                    ["mobilename"] = _accountState.DeviceMobileName ?? _accountState.DeviceMachineId ?? AuthConstants.DefaultMobileName,
+                    ["machine"] = _accountState.DeviceMachineId ?? AuthConstants.MobileMachineId
+                };
+
+                // 访客标识 & CSRF
+                if (!string.IsNullOrEmpty(_accountState.NmtId))
+                {
+                    map["NMTID"] = _accountState.NmtId;
+                }
+                if (!string.IsNullOrEmpty(_accountState.NtesNuid))
+                {
+                    map["_ntes_nuid"] = _accountState.NtesNuid;
+                }
+                if (!string.IsNullOrEmpty(_accountState.WnmCid))
+                {
+                    map["WNMCID"] = _accountState.WnmCid;
+                }
+                if (!string.IsNullOrEmpty(_accountState.CsrfToken))
+                {
+                    map["__csrf"] = _accountState.CsrfToken;
+                }
+                if (includeAnonymousToken && !string.IsNullOrEmpty(_accountState.MusicA))
+                {
+                    map["MUSIC_A"] = _accountState.MusicA;
+                }
+
+                return map;
+            }
+        }
+
         internal void SyncFromCookies(CookieCollection cookies)
         {
             if (cookies == null || cookies.Count == 0)

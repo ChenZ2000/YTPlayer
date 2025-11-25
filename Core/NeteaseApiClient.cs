@@ -1449,7 +1449,9 @@ namespace YTPlayer.Core
         /// <param name="sendCookies">是否发送访客Cookie（验证码发送需要true，登录需要false）</param>
         private async Task<T> PostWeApiWithiOSAsync<T>(string path, Dictionary<string, object> data, int maxRetries = 3, bool sendCookies = false)
         {
-            const string IOS_USER_AGENT = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 CloudMusic/0.1.1 NeteaseMusic/9.0.65";
+            string IOS_USER_AGENT = _authContext?.CurrentAccountState?.DeviceUserAgent ?? AuthConstants.MobileUserAgent;
+            string IOS_ACCEPT_LANGUAGE = "zh-Hans-CN;q=1, en-CN;q=0.9";
+            string antiCheatToken = _authContext?.GetActiveAntiCheatToken();
 
             for (int attempt = 1; attempt <= maxRetries; attempt++)
             {
@@ -1495,52 +1497,37 @@ namespace YTPlayer.Core
                         request.Headers.TryAddWithoutValidation("Referer", REFERER);
                         request.Headers.TryAddWithoutValidation("Origin", ORIGIN);
                         request.Headers.TryAddWithoutValidation("Accept", "*/*");
-                        request.Headers.TryAddWithoutValidation("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8");
-                        if (!sendCookies)
+                        request.Headers.TryAddWithoutValidation("Accept-Language", IOS_ACCEPT_LANGUAGE);
+                        if (!string.IsNullOrEmpty(antiCheatToken))
                         {
-                            // 仅登录验证阶段附加桌面指纹/IP 头；验证码发送保持最简请求
-                            ApplyFingerprintHeaders(request);
+                            request.Headers.TryAddWithoutValidation("X-antiCheatToken", antiCheatToken);
                         }
 
-                        // ⭐⭐⭐ 双模式Cookie策略：
-                        // 1. 验证码发送（sendCookies=true）：需要访客Cookie（MUSIC_A、NMTID等）
-                        //    - 服务器需要验证这是一个有效的访客会话
-                        //    - 发送桌面环境生成的访客Cookie，但过滤掉os/osver等
-                        // 2. 登录请求（sendCookies=false）：完全零Cookie
-                        //    - 模拟真实iPhone首次登录场景
-                        //    - 避免桌面Cookie与iOS UA的设备指纹不匹配
-                        string cookieHeader = "";
+                        // ??? 双模式Cookie策略（与1.7.3保持一致）
+                        // sendCookies=true  : 发送访客Cookie（用于验证码发送）
+                        // sendCookies=false : 完全零Cookie（用于手机号登录），避免 UA/设备指纹冲突触发 -462
+                        string cookieHeader = string.Empty;
 
                         if (sendCookies)
                         {
-                            // 模式1: 发送访客Cookie（用于验证码发送）
-                            var cookies = _cookieContainer.GetCookies(MUSIC_URI);
+                            // 使用纯移动端指纹生成的访客 Cookie，避免桌面指纹混入
+                            var mobileCookies = _authContext?.BuildMobileCookieMap(includeAnonymousToken: true)
+                                                ?? new Dictionary<string, string>();
                             var cookieBuilder = new StringBuilder();
-                            foreach (Cookie cookie in cookies)
+                            foreach (var kv in mobileCookies)
                             {
-                                // 过滤桌面相关Cookie，避免与iOS User-Agent冲突
-                                if (cookie.Name == "os" ||
-                                    cookie.Name == "osver" ||
-                                    cookie.Name == "channel" ||
-                                    cookie.Name == "appver" ||
-                                    cookie.Name == "buildver")
-                                {
-                                    continue;
-                                }
                                 if (cookieBuilder.Length > 0)
                                 {
                                     cookieBuilder.Append("; ");
                                 }
-                                cookieBuilder.Append($"{cookie.Name}={cookie.Value}");
+                                cookieBuilder.Append($"{kv.Key}={kv.Value}");
                             }
                             cookieHeader = cookieBuilder.ToString();
-
                             if (!string.IsNullOrEmpty(cookieHeader))
                             {
                                 request.Headers.TryAddWithoutValidation("Cookie", cookieHeader);
                             }
                         }
-                        // 模式2: sendCookies=false时，完全不发送任何Cookie（用于登录）
 
                         System.Diagnostics.Debug.WriteLine($"[iOS WEAPI] Attempt {attempt}/{maxRetries}");
                         System.Diagnostics.Debug.WriteLine($"[iOS WEAPI] URL: {url}");
@@ -1578,8 +1565,8 @@ namespace YTPlayer.Core
                                         UpdateCookies();
                                         try
                                         {
-                                            var cookies = _cookieContainer.GetCookies(MUSIC_URI);
-                                            _authContext?.SyncFromCookies(cookies);
+                                            var syncedCookies = _cookieContainer.GetCookies(MUSIC_URI);
+                                            _authContext?.SyncFromCookies(syncedCookies);
                                         }
                                         catch (Exception syncEx)
                                         {
@@ -2906,6 +2893,23 @@ namespace YTPlayer.Core
                 throw new ArgumentNullException(nameof(key));
             }
 
+            // 确保访客指纹 Cookie 存在（NMTID/_ntes_nuid/MUSIC_A），避免服务器返回空响应
+            try
+            {
+                var cookies = _cookieContainer.GetCookies(MUSIC_URI);
+                bool needBaseCookies = cookies == null || cookies.Count == 0 ||
+                                       cookies["NMTID"] == null || cookies["_ntes_nuid"] == null;
+                if (needBaseCookies)
+                {
+                    ApplyBaseCookies(includeAnonymousToken: true);
+                    UpdateCookies();
+                }
+            }
+            catch
+            {
+                // 忽略补充失败，继续流程
+            }
+
             var payload = new Dictionary<string, object>
             {
                 { "key", key },
@@ -3172,7 +3176,7 @@ namespace YTPlayer.Core
 
         /// <summary>
         /// 发送短信验证码（手机号登录）
-        /// </summary>
+        /// 1.7.3 行为：iOS UA + 访客 Cookie（过滤桌面字段）
         public async Task<bool> SendCaptchaAsync(string phone, string ctcode = "86")
         {
             var payload = new Dictionary<string, object>
@@ -3183,9 +3187,8 @@ namespace YTPlayer.Core
 
             System.Diagnostics.Debug.WriteLine($"[SMS] 发送验证码请求: phone={phone}, ctcode={ctcode}");
 
-            // 改回桌面（网页）调用：使用标准 WEAPI + 桌面 UA + 自动携带当前 CookieContainer
-            // 这样避免移动端伪装导致的验证码失败
-            var result = await PostWeApiAsync<JObject>("/sms/captcha/sent", payload, retryCount: 0, skipErrorHandling: true);
+            // 使用 iOS 通道，发送纯移动端访客 Cookie，避免桌面指纹干扰
+            var result = await PostWeApiWithiOSAsync<JObject>("/sms/captcha/sent", payload, maxRetries: 3, sendCookies: true);
 
             int code = result["code"]?.Value<int>() ?? -1;
             string message = result["message"]?.Value<string>() ?? result["msg"]?.Value<string>() ?? "未知错误";
@@ -3227,7 +3230,8 @@ namespace YTPlayer.Core
 
             // ⭐ 核心修复：登录请求使用零Cookie模式（sendCookies默认为false）
             // 模拟真实iPhone首次登录场景，避免桌面Cookie与iOS UA的设备指纹不匹配
-            var result = await PostWeApiWithiOSAsync<JObject>("/login/cellphone", payload, maxRetries: 3);
+            // 1.7.3 行为：登录阶段零 Cookie（sendCookies=false）
+            var result = await PostWeApiWithiOSAsync<JObject>("/login/cellphone", payload, maxRetries: 3, sendCookies: false);
 
             System.Diagnostics.Debug.WriteLine($"[LOGIN] 短信登录完整响应: {result.ToString(Formatting.Indented)}");
             int code = result["code"]?.Value<int>() ?? -1;

@@ -206,8 +206,7 @@ namespace YTPlayer.Forms
                     await _apiClient.LogoutAsync().ConfigureAwait(true);
                 }
 
-                MessageBox.Show("已成功退出登录。", "提示",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                ShowInfoDialog("已成功退出登录。", "提示");
 
                 // 调用回调函数通知 MainForm 刷新本地状态
                 _onLogout?.Invoke();
@@ -226,6 +225,67 @@ namespace YTPlayer.Forms
         {
             this.Close();
         }
+
+        /// <summary>
+        /// 显示自绘提示对话框。
+        /// </summary>
+        private DialogResult ShowInfoDialog(string text, string caption)
+        {
+            using (var dialog = new Form())
+            using (var iconBox = new PictureBox())
+            using (var messageLabel = new Label())
+            using (var okButton = new Button())
+            using (var layout = new TableLayoutPanel())
+            {
+                dialog.Text = caption ?? string.Empty;
+                dialog.StartPosition = FormStartPosition.CenterParent;
+                dialog.FormBorderStyle = FormBorderStyle.FixedDialog;
+                dialog.MaximizeBox = false;
+                dialog.MinimizeBox = false;
+                dialog.ShowIcon = false;
+                dialog.ShowInTaskbar = false;
+                dialog.Font = SystemFonts.MessageBoxFont;
+                dialog.AutoSize = true;
+                dialog.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+                dialog.Padding = new Padding(12, 12, 12, 12);
+
+                layout.ColumnCount = 2;
+                layout.RowCount = 2;
+                layout.AutoSize = true;
+                layout.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+                layout.Dock = DockStyle.Fill;
+                layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+                layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+                layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+                iconBox.Image = SystemIcons.Information.ToBitmap();
+                iconBox.SizeMode = PictureBoxSizeMode.CenterImage;
+                iconBox.Margin = new Padding(0, 0, 12, 0);
+                iconBox.Width = 32;
+                iconBox.Height = 32;
+
+                messageLabel.Text = text ?? string.Empty;
+                messageLabel.AutoSize = true;
+                messageLabel.MaximumSize = new Size(360, 0);
+                messageLabel.Margin = new Padding(0);
+
+                okButton.Text = "确定";
+                okButton.AutoSize = true;
+                okButton.DialogResult = DialogResult.OK;
+                okButton.Margin = new Padding(0, 12, 0, 0);
+
+                layout.Controls.Add(iconBox, 0, 0);
+                layout.SetRowSpan(iconBox, 2);
+                layout.Controls.Add(messageLabel, 1, 0);
+                layout.Controls.Add(okButton, 1, 1);
+
+                dialog.Controls.Add(layout);
+                dialog.AcceptButton = okButton;
+                dialog.CancelButton = okButton;
+
+                return dialog.ShowDialog(this);
+            }
+        }
     }
 }
-
