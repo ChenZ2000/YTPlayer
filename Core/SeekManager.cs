@@ -24,8 +24,10 @@ namespace YTPlayer.Core
         // 丢弃式 Seek 机制
         private double _latestSeekPosition = -1;  // 最新的目标位置
         private double _latestSeekOriginPosition = -1; // 最新Seek请求时的播放位置
+        private bool _latestSeekIsPreview = false;   // 是否预览（scrub）请求
         private bool _hasNewSeekRequest = false;   // 是否有新的 Seek 请求
         private bool _isExecutingSeek = false;     // 是否正在执行 Seek
+        private double _currentExecutingTarget = -1; // 正在执行的目标位置（避免重复触发）
         private CancellationTokenSource? _currentSeekCts = null;  // 当前 Seek 操作的取消令牌
 
         // 快速定时器（50ms）
@@ -132,7 +134,7 @@ namespace YTPlayer.Core
         /// 请求 Seek 到指定位置（丢弃式，新命令覆盖旧命令）
         /// </summary>
         /// <param name="targetSeconds">目标位置（秒）</param>
-        public void RequestSeek(double targetSeconds)
+        public void RequestSeek(double targetSeconds, bool isPreview = false)
         {
             if (IsDisposed)
             {
@@ -150,6 +152,7 @@ namespace YTPlayer.Core
                 // 保存最新的目标位置（丢弃旧的）
                 _latestSeekPosition = targetSeconds;
                 _latestSeekOriginPosition = _audioEngine?.GetPosition() ?? -1;
+                _latestSeekIsPreview = isPreview;
                 _hasNewSeekRequest = true;
 
                 // 如果定时器未启动，启动它
@@ -244,6 +247,7 @@ namespace YTPlayer.Core
         {
             double targetPosition;
             double originPosition;
+            bool isPreview;
             bool isUsingCache;
             SmartCacheManager? cacheManager;
             CancellationTokenSource? seekCts;
@@ -251,18 +255,10 @@ namespace YTPlayer.Core
             // 获取状态（线程安全）
             lock (_seekLock)
             {
-                // 如果正在执行 Seek，取消旧操作并启动新操作（丢弃模式）
+                // 如果正在执行 Seek，先等这一轮完成，避免重复对同一位置 Seek 两次
                 if (_isExecutingSeek)
                 {
-                    Debug.WriteLine("[SeekManager] 上一次 Seek 未完成，取消旧操作并启动新操作");
-
-                    // 取消旧的 seek 操作
-                    _currentSeekCts?.Cancel();
-                    _currentSeekCts?.Dispose();
-                    _currentSeekCts = null;
-
-                    // 重置状态以允许新操作
-                    _isExecutingSeek = false;
+                    return;
                 }
 
                 // 如果没有新的请求，退出
@@ -274,6 +270,7 @@ namespace YTPlayer.Core
                 // 获取最新的目标位置
                 targetPosition = _latestSeekPosition;
                 originPosition = _latestSeekOriginPosition;
+                isPreview = _latestSeekIsPreview;
                 isUsingCache = _isUsingCacheStream;
                 cacheManager = _cacheManager;
 
@@ -283,6 +280,7 @@ namespace YTPlayer.Core
 
                 // 标记正在执行
                 _isExecutingSeek = true;
+                _currentExecutingTarget = targetPosition;
                 _hasNewSeekRequest = false;
             }
 
@@ -291,13 +289,14 @@ namespace YTPlayer.Core
             {
                 try
                 {
-                    await ExecuteSeekAsync(targetPosition, originPosition, isUsingCache, cacheManager, seekCts.Token).ConfigureAwait(false);
+                    await ExecuteSeekAsync(targetPosition, originPosition, isPreview, isUsingCache, cacheManager, seekCts.Token).ConfigureAwait(false);
                 }
                 finally
                 {
                     lock (_seekLock)
                     {
                         _isExecutingSeek = false;
+                        _currentExecutingTarget = -1;
 
                         // 如果有新的请求，继续启动定时器
                         if (_hasNewSeekRequest)
@@ -315,6 +314,7 @@ namespace YTPlayer.Core
         private async Task ExecuteSeekAsync(
             double targetSeconds,
             double originSeconds,
+            bool isPreview,
             bool isUsingCache,
             SmartCacheManager? cacheManager,
             CancellationToken cancellationToken)
@@ -332,25 +332,33 @@ namespace YTPlayer.Core
                 bool isForwardSeek = originSeconds >= 0 && targetSeconds > originSeconds + 0.01;
                 CancellationToken effectiveToken = cancellationToken;
 
-                if (isForwardSeek)
+                if (!isPreview && isForwardSeek)
                 {
                     linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                     effectiveToken = linkedCts.Token;
                     progressMonitor = MonitorNaturalProgressAsync(targetSeconds, linkedCts);
                 }
 
-                if (isUsingCache && cacheManager != null)
+                if (isPreview)
                 {
-                    success = await _audioEngine.SetPositionWithCacheWaitAsync(
-                        targetSeconds,
-                        SEEK_CACHE_WAIT_TIMEOUT_MS,
-                        effectiveToken).ConfigureAwait(false);
+                    // 预览模式：快速跳转，不等待缓存就绪，减少卡顿感
+                    success = _audioEngine.SetPosition(targetSeconds);
                 }
                 else
                 {
-                    if (linkedCts == null || !linkedCts.IsCancellationRequested)
+                    if (isUsingCache && cacheManager != null)
                     {
-                        success = _audioEngine.SetPosition(targetSeconds);
+                        success = await _audioEngine.SetPositionWithCacheWaitAsync(
+                            targetSeconds,
+                            SEEK_CACHE_WAIT_TIMEOUT_MS,
+                            effectiveToken).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        if (linkedCts == null || !linkedCts.IsCancellationRequested)
+                        {
+                            success = _audioEngine.SetPosition(targetSeconds);
+                        }
                     }
                 }
 

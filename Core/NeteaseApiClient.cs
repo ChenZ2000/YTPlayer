@@ -2269,6 +2269,26 @@ namespace YTPlayer.Core
             return bytes;
         }
 
+        /// <summary>
+        /// 专用于海外试听兜底：在 payload/header 中注入 realIP（大陆随机），其余逻辑保持不变。
+        /// 仅在未登录/无个人 Cookie 且主请求返回失败时调用，避免影响正常会员链路。
+        /// </summary>
+        private async Task<JObject> PostEApiWithOverseasBypassAsync(string path, Dictionary<string, object> originalPayload)
+        {
+            var payload = new Dictionary<string, object>(originalPayload ?? new Dictionary<string, object>(), StringComparer.OrdinalIgnoreCase);
+            string realIp = GenerateRandomChineseIp();
+            payload["realIP"] = realIp;
+
+            if (payload.TryGetValue("header", out var headerObj))
+            {
+                var header = NormalizeEapiHeader(headerObj);
+                header["realIP"] = realIp;
+                payload["header"] = header;
+            }
+
+            return await PostEApiAsync<JObject>(path, payload, useIosHeaders: true, skipErrorHandling: true).ConfigureAwait(false);
+        }
+
         private IDictionary<string, object> EnsureEapiHeader(Dictionary<string, object> payloadDict)
         {
             if (payloadDict == null)
@@ -4106,13 +4126,13 @@ namespace YTPlayer.Core
                         header["__csrf"] = _csrfToken;
                     }
 
-                    var payload = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase)
-                    {
-                        ["ids"] = numericIds,
-                        ["level"] = currentLevel,
-                        ["encodeType"] = GetEncodeType(currentLevel),
-                        ["header"] = header
-                    };
+            var payload = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["ids"] = numericIds,
+                ["level"] = currentLevel,
+                ["encodeType"] = GetEncodeType(currentLevel),
+                ["header"] = header
+            };
 
                     if (currentLevel == "sky")
                     {
@@ -4136,8 +4156,20 @@ namespace YTPlayer.Core
 
                     if (code != 200)
                     {
-                        System.Diagnostics.Debug.WriteLine($"[EAPI] code={code}, message={message}，尝试下一个音质");
-                        continue;
+                        // 海外未登录场景尝试一次 realIP 兜底
+                        if (!UsePersonalCookie && string.IsNullOrEmpty(_musicU))
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[EAPI] code={code}，尝试海外兜底 realIP 获取试听 URL");
+                            response = await PostEApiWithOverseasBypassAsync("/api/song/enhance/player/url/v1", payload);
+                            code = response?["code"]?.Value<int>() ?? code;
+                            message = response?["message"]?.Value<string>() ?? response?["msg"]?.Value<string>() ?? message;
+                        }
+
+                        if (code != 200)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[EAPI] code={code}, message={message}，尝试下一个音质");
+                            continue;
+                        }
                     }
 
                     var data = response["data"] as JArray;
@@ -4150,14 +4182,14 @@ namespace YTPlayer.Core
                     var result = new Dictionary<string, SongUrlInfo>();
                     bool fallbackToLowerQuality = false;
 
-                    foreach (var item in data)
-                    {
-                        string id = item["id"]?.ToString();
-                        if (string.IsNullOrEmpty(id))
+                        foreach (var item in data)
                         {
-                            System.Diagnostics.Debug.WriteLine("[EAPI] 返回数据缺少歌曲ID，跳过。");
-                            fallbackToLowerQuality = true;
-                            break;
+                            string id = item["id"]?.ToString();
+                            if (string.IsNullOrEmpty(id))
+                            {
+                                System.Diagnostics.Debug.WriteLine("[EAPI] 返回数据缺少歌曲ID，跳过。");
+                                fallbackToLowerQuality = true;
+                                break;
                         }
 
                         int itemCode = item["code"]?.Value<int>() ?? 0;
@@ -4184,13 +4216,32 @@ namespace YTPlayer.Core
                             break;
                         }
 
-                        string url = item["url"]?.Value<string>();
-                        if (string.IsNullOrEmpty(url))
-                        {
-                            System.Diagnostics.Debug.WriteLine($"[EAPI] 歌曲{id} 在音质 {currentLevel} 下无可用URL，尝试降级");
-                            fallbackToLowerQuality = true;
-                            break;
-                        }
+                            string url = item["url"]?.Value<string>();
+                            if (string.IsNullOrEmpty(url) && !UsePersonalCookie && string.IsNullOrEmpty(_musicU))
+                            {
+                                // 对单曲再尝试一次 realIP 兜底获取试听 URL
+                                System.Diagnostics.Debug.WriteLine($"[EAPI] 歌曲{id} 在音质 {currentLevel} 下无URL，尝试海外兜底 realIP");
+                                var singlePayload = new Dictionary<string, object>(payload, StringComparer.OrdinalIgnoreCase)
+                                {
+                                    ["ids"] = new[] { long.Parse(id, CultureInfo.InvariantCulture) }
+                                };
+                                var fallback = await PostEApiWithOverseasBypassAsync("/api/song/enhance/player/url/v1", singlePayload);
+                                var fallbackData = fallback?["data"] as JArray;
+                                var first = fallbackData?.FirstOrDefault();
+                                if (first != null)
+                                {
+                                    url = first["url"]?.Value<string>() ?? url;
+                                    itemCode = first["code"]?.Value<int>() ?? itemCode;
+                                    itemMessage = first["message"]?.Value<string>() ?? first["msg"]?.Value<string>() ?? itemMessage;
+                                }
+                            }
+
+                            if (string.IsNullOrEmpty(url))
+                            {
+                                System.Diagnostics.Debug.WriteLine($"[EAPI] 歌曲{id} 在音质 {currentLevel} 下无可用URL，尝试降级");
+                                fallbackToLowerQuality = true;
+                                break;
+                            }
 
                         // ⭐ 获取服务器实际返回的音质级别
                         string returnedLevel = item["level"]?.Value<string>();

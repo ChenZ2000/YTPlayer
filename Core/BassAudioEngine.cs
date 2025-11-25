@@ -221,10 +221,8 @@ namespace YTPlayer.Core
 
         public BassAudioEngine(string? preferredDeviceId = null)
         {
-            _httpClient = new HttpClient
-            {
-                Timeout = TimeSpan.FromSeconds(15)
-            };
+            // 使用专为播放优化的 HttpClient（高并发/长超时/keep-alive）
+            _httpClient = Core.Streaming.OptimizedHttpClientFactory.CreateForMainPlayback(TimeSpan.FromSeconds(60));
 
             _stateMachine = new PlaybackStateMachine();
             _stateMachine.StateChanged += StateMachineOnStateChanged;
@@ -996,7 +994,7 @@ namespace YTPlayer.Core
 
         private async Task<SmartCacheManager> GetOrCreateCacheManagerAsync(SongInfo song, long totalSize, CancellationToken token)
         {
-            var manager = new SmartCacheManager(song.Id, song.Url, totalSize, _httpClient);
+            var manager = new SmartCacheManager(song.Id, song.Url, totalSize, _httpClient, PreferSequentialFull(song, totalSize));
             bool initialized = await manager.InitializeAsync(token).ConfigureAwait(false);
 
             if (!initialized)
@@ -1006,6 +1004,22 @@ namespace YTPlayer.Core
             }
 
             return manager;
+        }
+
+        private bool PreferSequentialFull(SongInfo song, long totalSize)
+        {
+            // 估算码率：size(bytes)*8 / duration(s) /1000 = kbps
+            if (song != null && song.Duration > 0 && totalSize > 0)
+            {
+                double kbps = (totalSize * 8.0) / song.Duration / 1000.0;
+                if (kbps >= 512) // 高码率或无损
+                {
+                    return true;
+                }
+            }
+
+            // 大文件也倾向顺序整流
+            return totalSize >= 12 * 1024 * 1024; // 12MB+
         }
 
         private void AttachCacheManager(SmartCacheManager manager)

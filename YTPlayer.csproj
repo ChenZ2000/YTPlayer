@@ -324,7 +324,7 @@
     <MakeDir Directories="$(OutDir)libs" />
     <ItemGroup>
       <ManagedDeps Include="$(OutDir)*.*"
-                   Exclude="$(OutDir)$(AssemblyName).exe;$(OutDir)$(AssemblyName).exe.config;$(OutDir)$(AssemblyName).dll;$(OutDir)account.json;$(OutDir)config.json;$(OutDir)WeChatQRCode.jpg;$(OutDir)libs\**\*.*;$(OutDir)app.publish\**\*.*;$(OutDir)*.manifest" />
+                   Exclude="$(OutDir)$(AssemblyName).exe;$(OutDir)$(AssemblyName).exe.config;$(OutDir)$(AssemblyName).dll;$(OutDir)YTPlayer.Updater.exe;$(OutDir)YTPlayer.Updater.exe.config;$(OutDir)account.json;$(OutDir)config.json;$(OutDir)WeChatQRCode.jpg;$(OutDir)libs\**\*.*;$(OutDir)app.publish\**\*.*;$(OutDir)*.manifest" />
     </ItemGroup>
     <Move SourceFiles="@(ManagedDeps)" DestinationFolder="$(OutDir)libs" Condition="'@(ManagedDeps)' != ''" />
   </Target>

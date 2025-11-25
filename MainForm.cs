@@ -1485,7 +1485,7 @@ public partial class MainForm : Form
 			_updateTimer.Tick += UpdateTimer_Tick;
 			_updateTimer.Start();
 			_scrubKeyTimer = new System.Windows.Forms.Timer();
-			_scrubKeyTimer.Interval = 200;
+			_scrubKeyTimer.Interval = 50; // 20 次/秒，提升长按快进/快退响应
 			_scrubKeyTimer.Tick += ScrubKeyTimer_Tick;
 			StartStateUpdateLoop();
 			InitializeCommandQueueSystem();
@@ -8965,7 +8965,7 @@ public partial class MainForm : Form
 			{
 				double num = progressTrackBar.Value;
 				Debug.WriteLine($"[MainForm] 进度条 Scroll: {num:F1}s");
-				RequestSeekAndResetLyrics(num);
+            RequestSeekAndResetLyrics(num);
 			}
 		}
 	}
@@ -9025,11 +9025,11 @@ public partial class MainForm : Form
 
 	private void StartScrubKeyTimer()
 	{
-		if (_scrubKeyTimer != null && !_scrubKeyTimer.Enabled)
-		{
-			_scrubKeyTimer.Interval = 200;
-			_scrubKeyTimer.Start();
-		}
+        if (_scrubKeyTimer != null && !_scrubKeyTimer.Enabled)
+        {
+            _scrubKeyTimer.Interval = 50; // 每秒20次，提升长按快进/快退的响应性
+            _scrubKeyTimer.Start();
+        }
 	}
 
 	private void StopScrubKeyTimerIfIdle()
@@ -9058,50 +9058,50 @@ public partial class MainForm : Form
 			{
 				if ((now - _leftKeyDownTime).TotalMilliseconds >= 350.0)
 				{
-					_leftScrubActive = true;
-					ScheduleSeek(-1.0, enableScrubbing: true);
-				}
-			}
-			else
-			{
-				ScheduleSeek(-1.0, enableScrubbing: true);
-			}
+                    _leftScrubActive = true;
+                    ScheduleSeek(-1.0, enableScrubbing: true);
+                }
+            }
+            else
+            {
+                ScheduleSeek(-1.0, enableScrubbing: true);
+            }
+        }
+        if (!_rightKeyPressed)
+        {
+            return;
 		}
-		if (!_rightKeyPressed)
-		{
-			return;
-		}
-		if (!_rightScrubActive)
-		{
-			if ((now - _rightKeyDownTime).TotalMilliseconds >= 350.0)
-			{
-				_rightScrubActive = true;
-				ScheduleSeek(1.0, enableScrubbing: true);
-			}
-		}
-		else
-		{
-			ScheduleSeek(1.0, enableScrubbing: true);
-		}
-	}
+        if (!_rightScrubActive)
+        {
+            if ((now - _rightKeyDownTime).TotalMilliseconds >= 350.0)
+            {
+                _rightScrubActive = true;
+                ScheduleSeek(1.0, enableScrubbing: true);
+            }
+        }
+        else
+        {
+            ScheduleSeek(1.0, enableScrubbing: true);
+        }
+    }
 
-	private void ScheduleSeek(double direction, bool enableScrubbing = false)
-	{
-		if (_audioEngine != null)
-		{
-			double cachedPosition = GetCachedPosition();
-			double cachedDuration = GetCachedDuration();
-			double num = ((direction > 0.0) ? Math.Min(cachedDuration, cachedPosition + Math.Abs(direction)) : Math.Max(0.0, cachedPosition + direction));
-			Debug.WriteLine($"[MainForm] 请求 Seek: {cachedPosition:F1}s → {num:F1}s (方向: {direction:+0;-0})");
-			RequestSeekAndResetLyrics(num);
-		}
-	}
+    private void ScheduleSeek(double direction, bool enableScrubbing = false)
+    {
+        if (_audioEngine != null)
+        {
+            double cachedPosition = GetCachedPosition();
+            double cachedDuration = GetCachedDuration();
+            double num = ((direction > 0.0) ? Math.Min(cachedDuration, cachedPosition + Math.Abs(direction)) : Math.Max(0.0, cachedPosition + direction));
+            Debug.WriteLine($"[MainForm] 请求 Seek: {cachedPosition:F1}s → {num:F1}s (方向: {direction:+0;-0})");
+            RequestSeekAndResetLyrics(num, preview: enableScrubbing);
+        }
+    }
 
-	private void PerformSeek(double targetPosition)
-	{
-		Debug.WriteLine($"[MainForm] 进度条拖动 Seek: {targetPosition:F1}s");
-		RequestSeekAndResetLyrics(targetPosition);
-	}
+    private void PerformSeek(double targetPosition)
+    {
+        Debug.WriteLine($"[MainForm] 进度条拖动 Seek: {targetPosition:F1}s");
+                RequestSeekAndResetLyrics(targetPosition);
+    }
 
 	private void OnSeekCompleted(object sender, bool success)
 	{
@@ -9392,19 +9392,19 @@ public partial class MainForm : Form
 		_resumeLyricSpeechAtSeconds = targetPosition;
 	}
 
-	private void RequestSeekAndResetLyrics(double targetPosition)
-	{
-		CancelPendingLyricSpeech(resetSuppression: false);
-		BeginLyricSeekSuppression(targetPosition);
-		_lastLyricPlaybackPosition = TimeSpan.FromSeconds(targetPosition);
-		if (_seekManager != null)
-		{
-			_seekManager.RequestSeek(targetPosition);
-		}
-		else
-		{
-			_audioEngine?.SetPosition(targetPosition);
-		}
+    private void RequestSeekAndResetLyrics(double targetPosition, bool preview = false)
+    {
+        CancelPendingLyricSpeech(resetSuppression: false);
+        BeginLyricSeekSuppression(targetPosition);
+        _lastLyricPlaybackPosition = TimeSpan.FromSeconds(targetPosition);
+        if (_seekManager != null)
+        {
+            _seekManager.RequestSeek(targetPosition, preview);
+        }
+        else
+        {
+            _audioEngine?.SetPosition(targetPosition);
+        }
 	}
 
 	private void AudioEngine_PlaybackStopped(object sender, EventArgs e)

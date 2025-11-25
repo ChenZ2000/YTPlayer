@@ -21,7 +21,7 @@ namespace YTPlayer.Core.Playback.Cache
         private const int PreloadBehindChunks = 2;
         private const int MinReadyChunks = 3;
         private const int MaxPreloadConcurrency = 8; // ⭐ 提高并发度以加速 SequentialFull 下载
-        private const int HealthPollDelayMs = 120;
+        private const int HealthPollDelayMs = 50; // 加快缓存就绪轮询以匹配更高的按键频率
 
         // ⭐ Strategy detection cache per domain (reduces redundant HEAD requests)
         private static readonly ConcurrentDictionary<string, DownloadStrategy> _strategyCache
@@ -34,6 +34,7 @@ namespace YTPlayer.Core.Playback.Cache
         private readonly HttpClient _httpClient;
         private readonly ConcurrentDictionary<int, byte[]> _cache;
         private readonly ChunkDownloadManager _downloader;
+        private readonly bool _preferSequentialFull;
 
         private PriorityDownloadScheduler? _scheduler;
         private CancellationTokenSource? _preloadCts;
@@ -56,17 +57,21 @@ namespace YTPlayer.Core.Playback.Cache
         private bool _isFullyCached;
         private bool _rangePreloaderStarted;
         private readonly object _downloadLock = new object();
+        private int _rangeFailureCount;
+        private const int RangeFailureThreshold = 3;
+        private bool _rangeFallbackTriggered;
 
         private readonly object _stateLock = new object();
         private readonly object _bufferingLock = new object();
         private BufferingState _bufferingState = BufferingState.Idle;
 
-        public SmartCacheManager(string songId, string url, long totalSize, HttpClient httpClient)
+        public SmartCacheManager(string songId, string url, long totalSize, HttpClient httpClient, bool preferSequentialFull = false)
         {
             _songId = songId ?? string.Empty;  // 🎯 允许空字符串（用于不需要预缓存的场景）
             _url = url ?? throw new ArgumentNullException(nameof(url));
             _totalSize = totalSize > 0 ? totalSize : throw new ArgumentOutOfRangeException(nameof(totalSize));
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+            _preferSequentialFull = preferSequentialFull;
 
             _totalChunks = (int)Math.Ceiling(totalSize / (double)ChunkSize);
             _cache = new ConcurrentDictionary<int, byte[]>();
@@ -842,6 +847,11 @@ namespace YTPlayer.Core.Playback.Cache
                     _cache.TryAdd(chunkIndex, data);
                     Interlocked.Add(ref _cachedBytes, data.Length);
                     ReportProgress();
+                    _rangeFailureCount = 0; // 成功清零
+                }
+                else
+                {
+                    HandleRangeFailure();
                 }
 
                 return data;
@@ -849,6 +859,47 @@ namespace YTPlayer.Core.Playback.Cache
             catch (OperationCanceledException)
             {
                 return null;
+            }
+            catch (Exception)
+            {
+                HandleRangeFailure();
+                throw;
+            }
+        }
+
+        private void HandleRangeFailure()
+        {
+            if (_strategy != DownloadStrategy.Range)
+            {
+                return;
+            }
+
+            int failures = Interlocked.Increment(ref _rangeFailureCount);
+            if (!_rangeFallbackTriggered && failures >= RangeFailureThreshold)
+            {
+                TriggerRangeFallback();
+            }
+        }
+
+        private void TriggerRangeFallback()
+        {
+            lock (_downloadLock)
+            {
+                if (_rangeFallbackTriggered || _strategy != DownloadStrategy.Range)
+                {
+                    return;
+                }
+
+                _rangeFallbackTriggered = true;
+                _strategy = DownloadStrategy.SequentialFull;
+
+                DebugLogger.Log(
+                    DebugLogger.LogLevel.Warning,
+                    "SmartCache",
+                    "⚠️ Range 多次失败，切换为顺序整流模式以稳定播放");
+
+                _preloadCts?.Cancel();
+                StartSequentialDownload(CancellationToken.None, preloadOnly: false);
             }
         }
 
@@ -911,6 +962,15 @@ namespace YTPlayer.Core.Playback.Cache
 
         private async Task<DownloadStrategy> DetectStrategyAsync(CancellationToken token)
         {
+            if (_preferSequentialFull)
+            {
+                DebugLogger.Log(
+                    DebugLogger.LogLevel.Info,
+                    "SmartCache",
+                    "⚙️ 启用顺序整流优先策略（高码率/大文件）");
+                return DownloadStrategy.SequentialFull;
+            }
+
             try
             {
                 var (supportsRange, _) = await HttpRangeHelper.CheckRangeSupportAsync(

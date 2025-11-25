@@ -55,6 +55,20 @@ namespace YTPlayer.Core.Playback
         private readonly Dictionary<string, PreloadedSongData> _preloadedData; // 按 SongId 存储
         private CancellationTokenSource? _preloadCts;
 
+        private bool PreferSequentialFull(SongInfo song, long totalSize)
+        {
+            if (song != null && song.Duration > 0 && totalSize > 0)
+            {
+                double kbps = (totalSize * 8.0) / song.Duration / 1000.0;
+                if (kbps >= 512)
+                {
+                    return true;
+                }
+            }
+
+            return totalSize >= 12 * 1024 * 1024;
+        }
+
         #endregion
 
         #region 构造与析构
@@ -62,10 +76,7 @@ namespace YTPlayer.Core.Playback
         public NextSongPreloader(NeteaseApiClient apiClient)
         {
             _apiClient = apiClient ?? throw new ArgumentNullException(nameof(apiClient));
-            _httpClient = new HttpClient
-            {
-                Timeout = TimeSpan.FromSeconds(15)
-            };
+            _httpClient = Core.Streaming.OptimizedHttpClientFactory.CreateForMainPlayback(TimeSpan.FromSeconds(60));
             _preloadedData = new Dictionary<string, PreloadedSongData>(StringComparer.Ordinal);
         }
 
@@ -281,7 +292,8 @@ namespace YTPlayer.Core.Playback
                     nextSong.Id,
                     nextSong.Url,
                     nextSong.Size,
-                    _httpClient);
+                    _httpClient,
+                    PreferSequentialFull(nextSong, nextSong.Size));
 
                 // 🎯 预加载场景：只需要 Chunk0，不需要最后块
                 bool initialized = await cacheManager.InitializeAsync(cancellationToken, isPreload: true).ConfigureAwait(false);
