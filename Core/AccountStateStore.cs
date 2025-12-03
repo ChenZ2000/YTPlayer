@@ -115,19 +115,19 @@ namespace YTPlayer.Core
 
                 string json = JsonConvert.SerializeObject(state, settings);
 
-                // 原子写入：先写临时文件
+                // 原子写入：先写临时文件，再覆盖，取消 .bak 生成以精简目录
                 string tempFile = _accountFilePath + ".tmp";
                 File.WriteAllText(tempFile, json);
 
-                // 备份旧文件
-                if (File.Exists(_accountFilePath))
-                {
-                    File.Copy(_accountFilePath, _accountFilePath + ".bak", true);
-                }
-
-                // 替换为新文件
                 File.Copy(tempFile, _accountFilePath, true);
                 File.Delete(tempFile);
+
+                // 确保不存在历史 .bak 残留
+                string bakFile = _accountFilePath + ".bak";
+                if (File.Exists(bakFile))
+                {
+                    File.Delete(bakFile);
+                }
 
                 if (state.IsLoggedIn)
                 {

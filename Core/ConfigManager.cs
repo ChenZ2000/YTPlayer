@@ -334,6 +334,7 @@ namespace YTPlayer.Core
                 // UI 和交互
                 FollowCursor = true,
                 SeekMinIntervalMs = 30,
+                SequenceNumberHidden = false,
 
                 // 其他设置
                 LastPlayingSongId = string.Empty,

@@ -13,6 +13,7 @@
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
     <Nullable>enable</Nullable>
     <VersionFile>version.txt</VersionFile>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <DebugSymbols>true</DebugSymbols>
@@ -112,6 +113,14 @@
       <SpecificVersion>False</SpecificVersion>
       <Private>True</Private>
     </Reference>
+    <Reference Include="Microsoft.Web.WebView2.Core, Version=1.0.2420.47, Culture=neutral, PublicKeyToken=2a8ab48044d2601e, processorArchitecture=MSIL">
+      <HintPath>packages\Microsoft.Web.WebView2.1.0.2420.47\lib\net45\Microsoft.Web.WebView2.Core.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+    <Reference Include="Microsoft.Web.WebView2.WinForms, Version=1.0.2420.47, Culture=neutral, PublicKeyToken=2a8ab48044d2601e, processorArchitecture=MSIL">
+      <HintPath>packages\Microsoft.Web.WebView2.1.0.2420.47\lib\net45\Microsoft.Web.WebView2.WinForms.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Program.cs" />
@@ -121,10 +130,18 @@
     <Compile Include="Forms\ArtistDetailDialog.cs">
       <SubType>Form</SubType>
     </Compile>
-    <Compile Include="Forms\AboutDialog.cs" />
-    <Compile Include="Forms\DonateDialog.cs" />
-    <Compile Include="Forms\KeyboardShortcutsDialog.cs" />
-    <Compile Include="Forms\SongRecognitionDialog.cs" />
+    <Compile Include="Forms\AboutDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Forms\DonateDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Forms\KeyboardShortcutsDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Forms\SongRecognitionDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Include="Forms\Update\UpdateCheckDialog.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -137,7 +154,9 @@
     <Compile Include="Forms\Update\UpdateAvailablePromptDialog.Designer.cs">
       <DependentUpon>UpdateAvailablePromptDialog.cs</DependentUpon>
     </Compile>
-    <Compile Include="Forms\OutputDeviceDialog.cs" />
+    <Compile Include="Forms\OutputDeviceDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Properties\VersionInfo.g.cs" />
     <Compile Include="Core\NeteaseApiClient.cs" />
@@ -227,7 +246,9 @@
     <Compile Include="Models\Download\ConflictResolution.cs" />
     <Compile Include="Models\Download\DownloadContentType.cs" />
     <Compile Include="Models\Upload\UploadTask.cs" />
-    <Compile Include="Forms\PurchaseLinkDialog.cs" />
+    <Compile Include="Forms\PurchaseLinkDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Include="Forms\LoginForm.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -323,8 +344,7 @@
   <Target Name="RelocateManagedDependencies" AfterTargets="CopyFilesToOutputDirectory">
     <MakeDir Directories="$(OutDir)libs" />
     <ItemGroup>
-      <ManagedDeps Include="$(OutDir)*.*"
-                   Exclude="$(OutDir)$(AssemblyName).exe;$(OutDir)$(AssemblyName).exe.config;$(OutDir)$(AssemblyName).dll;$(OutDir)YTPlayer.Updater.exe;$(OutDir)YTPlayer.Updater.exe.config;$(OutDir)account.json;$(OutDir)config.json;$(OutDir)WeChatQRCode.jpg;$(OutDir)libs\**\*.*;$(OutDir)app.publish\**\*.*;$(OutDir)*.manifest" />
+      <ManagedDeps Include="$(OutDir)*.*" Exclude="$(OutDir)$(AssemblyName).exe;$(OutDir)$(AssemblyName).exe.config;$(OutDir)$(AssemblyName).dll;$(OutDir)YTPlayer.Updater.exe;$(OutDir)YTPlayer.Updater.exe.config;$(OutDir)account.json;$(OutDir)config.json;$(OutDir)WeChatQRCode.jpg;$(OutDir)libs\**\*.*;$(OutDir)app.publish\**\*.*;$(OutDir)*.manifest" />
     </ItemGroup>
     <Move SourceFiles="@(ManagedDeps)" DestinationFolder="$(OutDir)libs" Condition="'@(ManagedDeps)' != ''" />
   </Target>

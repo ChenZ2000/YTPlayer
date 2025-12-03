@@ -129,6 +129,25 @@ namespace YTPlayer.Core
         }
 
         /// <summary>
+        /// 刷新移动端访客会话，获取最新 MUSIC_A/NMTID 等匿名令牌，降低 -462 风控概率。
+        /// </summary>
+        private async Task EnsureMobileVisitorSessionAsync()
+        {
+            try
+            {
+                var payload = new Dictionary<string, object>();
+                // 使用 iOS UA，零 Cookie，模拟手机首次启动
+                var result = await PostWeApiWithiOSAsync<JObject>("/register/anonimous", payload, maxRetries: 2, sendCookies: false).ConfigureAwait(false);
+                int code = result?["code"]?.Value<int>() ?? -1;
+                System.Diagnostics.Debug.WriteLine($"[VisitorSession] register/anonimous code={code}");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[VisitorSession] 刷新访客会话失败: {ex.Message}");
+            }
+        }
+
+        /// <summary>
         /// CSRF Token
         /// </summary>
         public string? CsrfToken
@@ -1497,11 +1516,16 @@ namespace YTPlayer.Core
                         request.Headers.TryAddWithoutValidation("Referer", REFERER);
                         request.Headers.TryAddWithoutValidation("Origin", ORIGIN);
                         request.Headers.TryAddWithoutValidation("Accept", "*/*");
+                        request.Headers.TryAddWithoutValidation("Accept-Encoding", "gzip, deflate, br");
+                        request.Headers.TryAddWithoutValidation("Connection", "keep-alive");
                         request.Headers.TryAddWithoutValidation("Accept-Language", IOS_ACCEPT_LANGUAGE);
                         if (!string.IsNullOrEmpty(antiCheatToken))
                         {
                             request.Headers.TryAddWithoutValidation("X-antiCheatToken", antiCheatToken);
                         }
+
+                        // 注入大陆IP指纹，降低 -462 风控概率
+                        ApplyFingerprintHeaders(request);
 
                         // ??? 双模式Cookie策略（与1.7.3保持一致）
                         // sendCookies=true  : 发送访客Cookie（用于验证码发送）
@@ -2798,7 +2822,7 @@ namespace YTPlayer.Core
         /// <summary>
         /// 简化API GET 请求（降级策略）
         /// </summary>
-        private async Task<T> GetSimplifiedApiAsync<T>(string endpoint, Dictionary<string, string>? parameters = null)
+        private async Task<T> GetSimplifiedApiAsync<T>(string endpoint, Dictionary<string, string>? parameters = null, CancellationToken cancellationToken = default)
         {
             if (!UseSimplifiedApi)
                 throw new InvalidOperationException("Simplified API is disabled");
@@ -2813,7 +2837,7 @@ namespace YTPlayer.Core
                 }
 
                 string url = $"{SIMPLIFIED_API_BASE}{endpoint}{queryString}";
-                var response = await _simplifiedClient.GetAsync(url);
+                var response = await _simplifiedClient.GetAsync(url, cancellationToken);
                 response.EnsureSuccessStatusCode();
 
                 string responseText = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
@@ -3231,27 +3255,36 @@ namespace YTPlayer.Core
         /// </summary>
         public async Task<LoginResult> LoginByCaptchaAsync(string phone, string captcha, string ctcode = "86")
         {
+            // 刷新移动端访客会话，确保 MUSIC_A/NMTID 最新，降低 -462
+            try
+            {
+                await EnsureMobileVisitorSessionAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[LOGIN] 获取访客会话失败（忽略继续）: {ex.Message}");
+            }
             // ⭐ 重要：不再在 Cookie 中设置 os=ios 和 appver=8.7.01
             // 因为 PostWeApiWithiOSAsync 已经使用 iOS User-Agent
             // 在 Cookie 中设置 os=ios 会与桌面系统的其他 Cookie 冲突，触发风控
 
-            // ⭐ 核心修复：完全模拟参考项目的payload，只发送3个字段
+            // ⭐ 核心修复：使用与发码阶段一致的访客指纹和 Cookie，保持会话连续性
             // 参考项目 netease-music-simple-player/Net/NetClasses.cs:2525-2530
-            // 任何额外字段（如 rememberLogin）都可能触发风控
+            // 附带 rememberLogin 与官方行为一致，避免服务端强制登出
             var payload = new Dictionary<string, object>
             {
                 { "phone", phone },
                 { "countrycode", ctcode },
-                { "captcha", captcha }
+                { "captcha", captcha },
+                { "rememberLogin", true }
             };
 
             System.Diagnostics.Debug.WriteLine($"[LOGIN] 短信登录请求: phone={phone}, captcha={captcha}, countrycode={ctcode}");
-            System.Diagnostics.Debug.WriteLine("[LOGIN] 使用 iOS User-Agent + 零Cookie模式 + 精简payload（仅3字段）");
+            System.Diagnostics.Debug.WriteLine("[LOGIN] 使用 iOS User-Agent + 移动访客Cookie模式，保持验证码链路一致");
 
-            // ⭐ 核心修复：登录请求使用零Cookie模式（sendCookies默认为false）
+            // ⭐ 核心修复：登录请求发送移动端访客Cookie（sendCookies=true）
             // 模拟真实iPhone首次登录场景，避免桌面Cookie与iOS UA的设备指纹不匹配
-            // 1.7.3 行为：登录阶段零 Cookie（sendCookies=false）
-            var result = await PostWeApiWithiOSAsync<JObject>("/login/cellphone", payload, maxRetries: 3, sendCookies: false);
+            var result = await PostWeApiWithiOSAsync<JObject>("/login/cellphone", payload, maxRetries: 3, sendCookies: true);
 
             System.Diagnostics.Debug.WriteLine($"[LOGIN] 短信登录完整响应: {result.ToString(Formatting.Indented)}");
             int code = result["code"]?.Value<int>() ?? -1;
@@ -3390,13 +3423,13 @@ namespace YTPlayer.Core
         /// <summary>
         /// 搜索歌曲（使用 NodeJS 云音乐 API 同步的 EAPI 接口）。
         /// </summary>
-        public async Task<SearchResult<SongInfo>> SearchSongsAsync(string keyword, int limit = 30, int offset = 0)
+        public async Task<SearchResult<SongInfo>> SearchSongsAsync(string keyword, int limit = 30, int offset = 0, CancellationToken cancellationToken = default)
         {
             System.Diagnostics.Debug.WriteLine($"[API] 搜索歌曲: {keyword}, limit={limit}, offset={offset}");
 
             try
             {
-                var result = await ExecuteSearchRequestAsync(keyword, SearchResourceType.Song, limit, offset);
+                var result = await ExecuteSearchRequestAsync(keyword, SearchResourceType.Song, limit, offset, cancellationToken);
                 var songs = ParseSongList(result?["songs"] as JArray);
                 int totalCount = ResolveTotalCount(result, SearchResourceType.Song, offset, songs.Count);
 
@@ -3414,11 +3447,11 @@ namespace YTPlayer.Core
         /// <summary>
         /// 搜索歌单（使用 NodeJS 云音乐 API 同步的 EAPI 接口）。
         /// </summary>
-        public async Task<SearchResult<PlaylistInfo>> SearchPlaylistsAsync(string keyword, int limit = 30, int offset = 0)
+        public async Task<SearchResult<PlaylistInfo>> SearchPlaylistsAsync(string keyword, int limit = 30, int offset = 0, CancellationToken cancellationToken = default)
         {
             System.Diagnostics.Debug.WriteLine($"[API] 搜索歌单: {keyword}, limit={limit}, offset={offset}");
 
-            var result = await ExecuteSearchRequestAsync(keyword, SearchResourceType.Playlist, limit, offset);
+            var result = await ExecuteSearchRequestAsync(keyword, SearchResourceType.Playlist, limit, offset, cancellationToken);
             var playlists = ParsePlaylistList(result?["playlists"] as JArray);
             int totalCount = ResolveTotalCount(result, SearchResourceType.Playlist, offset, playlists.Count);
 
@@ -3428,11 +3461,11 @@ namespace YTPlayer.Core
         /// <summary>
         /// 搜索专辑（使用 NodeJS 云音乐 API 同步的 EAPI 接口）。
         /// </summary>
-        public async Task<SearchResult<AlbumInfo>> SearchAlbumsAsync(string keyword, int limit = 30, int offset = 0)
+        public async Task<SearchResult<AlbumInfo>> SearchAlbumsAsync(string keyword, int limit = 30, int offset = 0, CancellationToken cancellationToken = default)
         {
             System.Diagnostics.Debug.WriteLine($"[API] 搜索专辑: {keyword}, limit={limit}, offset={offset}");
 
-            var result = await ExecuteSearchRequestAsync(keyword, SearchResourceType.Album, limit, offset);
+            var result = await ExecuteSearchRequestAsync(keyword, SearchResourceType.Album, limit, offset, cancellationToken);
             var albums = ParseAlbumList(result?["albums"] as JArray);
             int totalCount = ResolveTotalCount(result, SearchResourceType.Album, offset, albums.Count);
 
@@ -3442,11 +3475,11 @@ namespace YTPlayer.Core
         /// <summary>
         /// 搜索歌手。
         /// </summary>
-        public async Task<SearchResult<ArtistInfo>> SearchArtistsAsync(string keyword, int limit = 30, int offset = 0)
+        public async Task<SearchResult<ArtistInfo>> SearchArtistsAsync(string keyword, int limit = 30, int offset = 0, CancellationToken cancellationToken = default)
         {
             System.Diagnostics.Debug.WriteLine($"[API] 搜索歌手: {keyword}, limit={limit}, offset={offset}");
 
-            var result = await ExecuteSearchRequestAsync(keyword, SearchResourceType.Artist, limit, offset);
+            var result = await ExecuteSearchRequestAsync(keyword, SearchResourceType.Artist, limit, offset, cancellationToken);
             var artists = ParseArtistList(result?["artists"] as JArray);
             int totalCount = ResolveTotalCount(result, SearchResourceType.Artist, offset, artists.Count);
 
@@ -3456,11 +3489,11 @@ namespace YTPlayer.Core
         /// <summary>
         /// 搜索播客/电台。
         /// </summary>
-        public async Task<SearchResult<PodcastRadioInfo>> SearchPodcastsAsync(string keyword, int limit = 30, int offset = 0)
+        public async Task<SearchResult<PodcastRadioInfo>> SearchPodcastsAsync(string keyword, int limit = 30, int offset = 0, CancellationToken cancellationToken = default)
         {
             System.Diagnostics.Debug.WriteLine($"[API] 搜索播客: {keyword}, limit={limit}, offset={offset}");
 
-            var result = await ExecuteSearchRequestAsync(keyword, SearchResourceType.Radio, limit, offset);
+            var result = await ExecuteSearchRequestAsync(keyword, SearchResourceType.Radio, limit, offset, cancellationToken);
             var radiosToken = result?["djRadios"] as JArray
                                ?? result?["djRadioes"] as JArray
                                ?? (result?["djRadioResult"]?["djRadios"] as JArray)
@@ -3643,7 +3676,7 @@ namespace YTPlayer.Core
         /// <summary>
         /// 调用搜索接口，自动处理简化API与官方API切换。
         /// </summary>
-        private async Task<JObject> ExecuteSearchRequestAsync(string keyword, SearchResourceType resourceType, int limit, int offset)
+        private async Task<JObject> ExecuteSearchRequestAsync(string keyword, SearchResourceType resourceType, int limit, int offset, CancellationToken cancellationToken = default)
         {
             if (string.IsNullOrWhiteSpace(keyword))
             {
@@ -3665,7 +3698,7 @@ namespace YTPlayer.Core
                     };
 
                     System.Diagnostics.Debug.WriteLine($"[API] 通过简化接口搜索: type={typeCode}, keyword={keyword}");
-                    var simplifiedResponse = await GetSimplifiedApiAsync<JObject>("/search", simplifiedParameters);
+                    var simplifiedResponse = await GetSimplifiedApiAsync<JObject>("/search", simplifiedParameters, cancellationToken);
                     if (simplifiedResponse?["result"] is JObject simplifiedResult)
                     {
                         return simplifiedResult;
@@ -3705,7 +3738,7 @@ namespace YTPlayer.Core
                 weapiPayload["hlpretag"] = "<span class=\"s-fc7\">";
                 weapiPayload["hlposttag"] = "</span>";
 
-                var weapiResponse = await PostWeApiAsync<JObject>("/search/get", weapiPayload);
+                var weapiResponse = await PostWeApiAsync<JObject>("/search/get", weapiPayload, cancellationToken: cancellationToken);
                 if (weapiResponse?["result"] is JObject weapiResult)
                 {
                     return weapiResult;
@@ -4015,9 +4048,9 @@ namespace YTPlayer.Core
             string[] qualityOrder = { "jymaster", "sky", "jyeffect", "hires", "lossless", "exhigh", "standard" };
             var missingSongIds = new HashSet<string>(StringComparer.Ordinal);
 
-            // ⭐ 可用性预检：未登录时跳过强校验，避免误判
-            // 始终进行可用性预检（登录/未登录均检测），仅在明确要求跳过时才跳过
-            bool shouldPrecheck = !skipAvailabilityCheck;
+            // ⭐ 可用性预检：仅在登录状态下启用，未登录时跳过以避免误判
+            bool isLoggedIn = _authContext?.CurrentAccountState?.IsLoggedIn ?? false;
+            bool shouldPrecheck = isLoggedIn && !skipAvailabilityCheck;
             if (shouldPrecheck)
             {
                 var checkStart = DateTime.UtcNow;
@@ -4031,15 +4064,11 @@ namespace YTPlayer.Core
                     {
                         missingSongIds.Add(missing);
                     }
-
-                    if (missingSongIds.Count > 0)
-                    {
-                        throw new SongResourceNotFoundException("请求的歌曲资源在官方曲库中不存在或已下架。", missingSongIds);
-                    }
+                    // 仅记录缺失，不立即抛出，后续仍尝试获取/降级
                 }
                 catch (SongResourceNotFoundException)
                 {
-                    throw;
+                    // 记录但不立刻抛出，避免误判；后续获取仍会尝试
                 }
                 catch (Exception ex)
                 {
@@ -4308,7 +4337,7 @@ namespace YTPlayer.Core
                 }
             }
 
-            if (missingSongIds.Count > 0)
+            if (missingSongIds.Count > 0 && (_authContext?.CurrentAccountState?.IsLoggedIn ?? false))
             {
                 throw new SongResourceNotFoundException("请求的歌曲资源在官方曲库中不存在或已下架。", missingSongIds);
             }
@@ -10331,6 +10360,12 @@ namespace YTPlayer.Core
 }
 
 #pragma warning restore CS8600, CS8601, CS8602, CS8603, CS8604, CS8625
+
+
+
+
+
+
 
 
 

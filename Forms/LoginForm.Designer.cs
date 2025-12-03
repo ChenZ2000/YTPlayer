@@ -33,26 +33,23 @@ namespace YTPlayer.Forms
             this.refreshQrButton = new System.Windows.Forms.Button();
             this.qrStatusLabel = new System.Windows.Forms.Label();
             this.qrPictureBox = new System.Windows.Forms.PictureBox();
-            this.smsTabPage = new System.Windows.Forms.TabPage();
-            this.countryCodeLabel = new System.Windows.Forms.Label();
-            this.countryCodeTextBox = new System.Windows.Forms.TextBox();
-            this.phoneLabel = new System.Windows.Forms.Label();
-            this.phoneTextBox = new System.Windows.Forms.TextBox();
-            this.sendSmsButton = new System.Windows.Forms.Button();
-            this.captchaLabel = new System.Windows.Forms.Label();
-            this.captchaTextBox = new System.Windows.Forms.TextBox();
-            this.smsStatusLabel = new System.Windows.Forms.Label();
-            this.smsLoginButton = new System.Windows.Forms.Button();
+            this.webTabPage = new System.Windows.Forms.TabPage();
+            this.webLoginView = new Microsoft.Web.WebView2.WinForms.WebView2();
+            this.webTopPanel = new System.Windows.Forms.Panel();
+            this.webReloadButton = new System.Windows.Forms.Button();
+            this.webStatusLabel = new System.Windows.Forms.Label();
             this.loginTabControl.SuspendLayout();
             this.qrTabPage.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)(this.qrPictureBox)).BeginInit();
-            this.smsTabPage.SuspendLayout();
+            this.webTabPage.SuspendLayout();
+            ((System.ComponentModel.ISupportInitialize)(this.webLoginView)).BeginInit();
+            this.webTopPanel.SuspendLayout();
             this.SuspendLayout();
             //
             // loginTabControl
             //
             this.loginTabControl.Controls.Add(this.qrTabPage);
-            this.loginTabControl.Controls.Add(this.smsTabPage);
+            this.loginTabControl.Controls.Add(this.webTabPage);
             this.loginTabControl.Dock = System.Windows.Forms.DockStyle.Fill;
             this.loginTabControl.Location = new System.Drawing.Point(0, 0);
             this.loginTabControl.Name = "loginTabControl";
@@ -103,122 +100,61 @@ namespace YTPlayer.Forms
             this.qrPictureBox.TabIndex = 0;
             this.qrPictureBox.TabStop = false;
             //
-            // smsTabPage
+            // webTabPage
             //
-            this.smsTabPage.Controls.Add(this.countryCodeLabel);
-            this.smsTabPage.Controls.Add(this.countryCodeTextBox);
-            this.smsTabPage.Controls.Add(this.phoneLabel);
-            this.smsTabPage.Controls.Add(this.phoneTextBox);
-            this.smsTabPage.Controls.Add(this.sendSmsButton);
-            this.smsTabPage.Controls.Add(this.captchaLabel);
-            this.smsTabPage.Controls.Add(this.captchaTextBox);
-            this.smsTabPage.Controls.Add(this.smsStatusLabel);
-            this.smsTabPage.Controls.Add(this.smsLoginButton);
-            this.smsTabPage.Location = new System.Drawing.Point(4, 28);
-            this.smsTabPage.Name = "smsTabPage";
-            this.smsTabPage.Padding = new System.Windows.Forms.Padding(3);
-            this.smsTabPage.Size = new System.Drawing.Size(476, 529);
-            this.smsTabPage.TabIndex = 1;
-            this.smsTabPage.Text = "短信验证码登录";
-            this.smsTabPage.UseVisualStyleBackColor = true;
+            this.webTabPage.Controls.Add(this.webLoginView);
+            this.webTabPage.Controls.Add(this.webTopPanel);
+            this.webTabPage.Location = new System.Drawing.Point(4, 28);
+            this.webTabPage.Name = "webTabPage";
+            this.webTabPage.Padding = new System.Windows.Forms.Padding(3);
+            this.webTabPage.Size = new System.Drawing.Size(476, 529);
+            this.webTabPage.TabIndex = 2;
+            this.webTabPage.Text = "网页登录";
+            this.webTabPage.UseVisualStyleBackColor = true;
             //
-            // countryCodeLabel
+            // webLoginView
             //
-            this.countryCodeLabel.AutoSize = true;
-            this.countryCodeLabel.Font = new System.Drawing.Font("Microsoft YaHei UI", 10F);
-            this.countryCodeLabel.Location = new System.Drawing.Point(90, 60);
-            this.countryCodeLabel.Name = "countryCodeLabel";
-            this.countryCodeLabel.Size = new System.Drawing.Size(92, 27);
-            this.countryCodeLabel.TabIndex = 8;
-            this.countryCodeLabel.Text = "国家号：";
+            this.webLoginView.AllowExternalDrop = true;
+            this.webLoginView.CreationProperties = null;
+            this.webLoginView.DefaultBackgroundColor = System.Drawing.Color.White;
+            this.webLoginView.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.webLoginView.Location = new System.Drawing.Point(3, 67);
+            this.webLoginView.Name = "webLoginView";
+            this.webLoginView.Size = new System.Drawing.Size(470, 459);
+            this.webLoginView.TabIndex = 1;
+            this.webLoginView.ZoomFactor = 1D;
+            this.webLoginView.Visible = false;
             //
-            // countryCodeTextBox
+            // webTopPanel
             //
-            this.countryCodeTextBox.AccessibleDescription = "输入国家或地区代码，默认为中国大陆86";
-            this.countryCodeTextBox.AccessibleName = "国家号";
-            this.countryCodeTextBox.Font = new System.Drawing.Font("Microsoft YaHei UI", 10F);
-            this.countryCodeTextBox.Location = new System.Drawing.Point(90, 90);
-            this.countryCodeTextBox.MaxLength = 5;
-            this.countryCodeTextBox.Name = "countryCodeTextBox";
-            this.countryCodeTextBox.Size = new System.Drawing.Size(80, 34);
-            this.countryCodeTextBox.TabIndex = 0;
-            this.countryCodeTextBox.Text = "86";
+            this.webTopPanel.Controls.Add(this.webReloadButton);
+            this.webTopPanel.Controls.Add(this.webStatusLabel);
+            this.webTopPanel.Dock = System.Windows.Forms.DockStyle.Top;
+            this.webTopPanel.Location = new System.Drawing.Point(3, 3);
+            this.webTopPanel.Name = "webTopPanel";
+            this.webTopPanel.Size = new System.Drawing.Size(470, 64);
+            this.webTopPanel.TabIndex = 0;
             //
-            // phoneLabel
+            // webReloadButton
             //
-            this.phoneLabel.AutoSize = true;
-            this.phoneLabel.Font = new System.Drawing.Font("Microsoft YaHei UI", 10F);
-            this.phoneLabel.Location = new System.Drawing.Point(190, 60);
-            this.phoneLabel.Name = "phoneLabel";
-            this.phoneLabel.Size = new System.Drawing.Size(92, 27);
-            this.phoneLabel.TabIndex = 9;
-            this.phoneLabel.Text = "手机号：";
+            this.webReloadButton.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
+            this.webReloadButton.Location = new System.Drawing.Point(360, 14);
+            this.webReloadButton.Name = "webReloadButton";
+            this.webReloadButton.Size = new System.Drawing.Size(90, 36);
+            this.webReloadButton.TabIndex = 1;
+            this.webReloadButton.Text = "加载页面";
+            this.webReloadButton.UseVisualStyleBackColor = true;
+            this.webReloadButton.Click += new System.EventHandler(this.webReloadButton_Click);
             //
-            // phoneTextBox
+            // webStatusLabel
             //
-            this.phoneTextBox.AccessibleDescription = "输入手机号码";
-            this.phoneTextBox.AccessibleName = "手机号";
-            this.phoneTextBox.Font = new System.Drawing.Font("Microsoft YaHei UI", 10F);
-            this.phoneTextBox.Location = new System.Drawing.Point(190, 90);
-            this.phoneTextBox.MaxLength = 11;
-            this.phoneTextBox.Name = "phoneTextBox";
-            this.phoneTextBox.Size = new System.Drawing.Size(154, 34);
-            this.phoneTextBox.TabIndex = 1;
-            this.phoneTextBox.Text = "";
-            //
-            // sendSmsButton
-            //
-            this.sendSmsButton.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
-            this.sendSmsButton.Location = new System.Drawing.Point(90, 140);
-            this.sendSmsButton.Name = "sendSmsButton";
-            this.sendSmsButton.Size = new System.Drawing.Size(296, 35);
-            this.sendSmsButton.TabIndex = 2;
-            this.sendSmsButton.Text = "发送验证码";
-            this.sendSmsButton.UseVisualStyleBackColor = true;
-            this.sendSmsButton.Click += new System.EventHandler(this.sendSmsButton_Click);
-            //
-            // captchaLabel
-            //
-            this.captchaLabel.AutoSize = true;
-            this.captchaLabel.Font = new System.Drawing.Font("Microsoft YaHei UI", 10F);
-            this.captchaLabel.Location = new System.Drawing.Point(90, 190);
-            this.captchaLabel.Name = "captchaLabel";
-            this.captchaLabel.Size = new System.Drawing.Size(92, 27);
-            this.captchaLabel.TabIndex = 10;
-            this.captchaLabel.Text = "验证码：";
-            //
-            // captchaTextBox
-            //
-            this.captchaTextBox.AccessibleDescription = "输入手机收到的4位验证码";
-            this.captchaTextBox.AccessibleName = "验证码";
-            this.captchaTextBox.Font = new System.Drawing.Font("Microsoft YaHei UI", 10F);
-            this.captchaTextBox.Location = new System.Drawing.Point(90, 220);
-            this.captchaTextBox.MaxLength = 4;
-            this.captchaTextBox.Name = "captchaTextBox";
-            this.captchaTextBox.Size = new System.Drawing.Size(296, 34);
-            this.captchaTextBox.TabIndex = 3;
-            this.captchaTextBox.Text = "";
-            //
-            // smsStatusLabel
-            //
-            this.smsStatusLabel.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
-            this.smsStatusLabel.Location = new System.Drawing.Point(90, 270);
-            this.smsStatusLabel.Name = "smsStatusLabel";
-            this.smsStatusLabel.Size = new System.Drawing.Size(296, 30);
-            this.smsStatusLabel.TabIndex = 11;
-            this.smsStatusLabel.Text = "";
-            this.smsStatusLabel.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
-            //
-            // smsLoginButton
-            //
-            this.smsLoginButton.Font = new System.Drawing.Font("Microsoft YaHei UI", 10F);
-            this.smsLoginButton.Location = new System.Drawing.Point(90, 315);
-            this.smsLoginButton.Name = "smsLoginButton";
-            this.smsLoginButton.Size = new System.Drawing.Size(296, 45);
-            this.smsLoginButton.TabIndex = 4;
-            this.smsLoginButton.Text = "登录";
-            this.smsLoginButton.UseVisualStyleBackColor = true;
-            this.smsLoginButton.Click += new System.EventHandler(this.smsLoginButton_Click);
+            this.webStatusLabel.AutoEllipsis = true;
+            this.webStatusLabel.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
+            this.webStatusLabel.Location = new System.Drawing.Point(12, 18);
+            this.webStatusLabel.Name = "webStatusLabel";
+            this.webStatusLabel.Size = new System.Drawing.Size(230, 24);
+            this.webStatusLabel.TabIndex = 0;
+            this.webStatusLabel.Text = "点击“加载页面”以打开官方登录页";
             //
             // LoginForm
             //
@@ -231,8 +167,9 @@ namespace YTPlayer.Forms
             this.loginTabControl.ResumeLayout(false);
             this.qrTabPage.ResumeLayout(false);
             ((System.ComponentModel.ISupportInitialize)(this.qrPictureBox)).EndInit();
-            this.smsTabPage.ResumeLayout(false);
-            this.smsTabPage.PerformLayout();
+            this.webTabPage.ResumeLayout(false);
+            ((System.ComponentModel.ISupportInitialize)(this.webLoginView)).EndInit();
+            this.webTopPanel.ResumeLayout(false);
             this.ResumeLayout(false);
 
         }
@@ -244,15 +181,10 @@ namespace YTPlayer.Forms
         private System.Windows.Forms.PictureBox qrPictureBox;
         private System.Windows.Forms.Label qrStatusLabel;
         private System.Windows.Forms.Button refreshQrButton;
-        private System.Windows.Forms.TabPage smsTabPage;
-        private System.Windows.Forms.Label countryCodeLabel;
-        private System.Windows.Forms.TextBox countryCodeTextBox;
-        private System.Windows.Forms.Label phoneLabel;
-        private System.Windows.Forms.TextBox phoneTextBox;
-        private System.Windows.Forms.Button sendSmsButton;
-        private System.Windows.Forms.Label captchaLabel;
-        private System.Windows.Forms.TextBox captchaTextBox;
-        private System.Windows.Forms.Label smsStatusLabel;
-        private System.Windows.Forms.Button smsLoginButton;
+        private System.Windows.Forms.TabPage webTabPage;
+        private Microsoft.Web.WebView2.WinForms.WebView2 webLoginView;
+        private System.Windows.Forms.Panel webTopPanel;
+        private System.Windows.Forms.Label webStatusLabel;
+        private System.Windows.Forms.Button webReloadButton;
     }
 }
