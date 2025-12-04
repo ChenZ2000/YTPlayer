@@ -23,6 +23,7 @@ using YTPlayer.Core.Playback.Cache;
 using YTPlayer.Core.Recognition;
 using YTPlayer.Core.Streaming;
 using YTPlayer.Core.Upload;
+using YTPlayer.Core.Unblock;
 using YTPlayer.Forms;
 using YTPlayer.Forms.Download;
 using YTPlayer.Models;
@@ -384,6 +385,7 @@ public partial class MainForm : Form
 	}
 
 	protected NeteaseApiClient _apiClient = null;
+	private UnblockService _unblockService = null;
 
 	private BassAudioEngine _audioEngine = null;
 
@@ -827,6 +829,16 @@ private string? _playButtonTextBeforeLoading = null;
 	private string? _pendingListFocusViewSource;
 
 	private int _pendingListFocusIndex = -1;
+
+	private string? _pendingSongFocusId;
+
+	private string? _pendingSongFocusViewSource;
+
+	private bool _skipCloudRestoreOnce = false;
+
+	private bool _pendingSongFocusSatisfied = false;
+
+	private string? _pendingSongFocusSatisfiedViewSource;
 
 	private IContainer components = null;
 
@@ -1470,6 +1482,7 @@ private ToolStripMenuItem helpMenuItem;
 			_config = _configManager.Load();
 			_apiClient = new NeteaseApiClient(_config);
 			_apiClient.UseSimplifiedApi = false;
+			_unblockService = new UnblockService();
 			ApplyAccountStateOnStartup();
 			string preferredDeviceId = _config?.OutputDevice;
 			_audioEngine = new BassAudioEngine(preferredDeviceId);
@@ -6045,11 +6058,57 @@ private ToolStripMenuItem helpMenuItem;
 			{
 				AnnounceListViewHeaderIfNeeded(text2);
 			}
-			if (allowSelection && !suppressFocus && !IsListAutoFocusSuppressed && resultListView.Items.Count > 0)
+			bool matchedPendingSelection = false;
+			int pendingSelectionIndex = -1;
+			if (!string.IsNullOrWhiteSpace(_pendingSongFocusId))
 			{
-				int targetIndex = ((num >= 0) ? Math.Min(num, resultListView.Items.Count - 1) : 0);
+				pendingSelectionIndex = _currentSongs.FindIndex((SongInfo s) => s != null && string.Equals(s.Id, _pendingSongFocusId, StringComparison.OrdinalIgnoreCase));
+				if (pendingSelectionIndex < 0)
+				{
+					pendingSelectionIndex = _currentSongs.FindIndex((SongInfo s) => s != null && s.IsCloudSong && !string.IsNullOrEmpty(s.CloudSongId) && string.Equals(s.CloudSongId, _pendingSongFocusId, StringComparison.OrdinalIgnoreCase));
+				}
+				matchedPendingSelection = pendingSelectionIndex >= 0;
+			}
+			if (allowSelection && resultListView.Items.Count > 0 && (!suppressFocus || matchedPendingSelection) && !IsListAutoFocusSuppressed)
+			{
+				int targetIndex = -1;
+				bool matchedPending = matchedPendingSelection;
+				if (matchedPendingSelection)
+				{
+					targetIndex = pendingSelectionIndex;
+					_pendingListFocusIndex = -1;
+					_pendingListFocusViewSource = null;
+				}
+				if (targetIndex < 0)
+				{
+					targetIndex = ((num >= 0) ? Math.Min(num, resultListView.Items.Count - 1) : 0);
+				}
 				targetIndex = ResolvePendingListFocusIndex(targetIndex);
 				EnsureListSelectionWithoutFocus(targetIndex);
+				if (matchedPending)
+				{
+					_pendingSongFocusId = null;
+					_pendingSongFocusViewSource = null;
+					_pendingSongFocusSatisfied = true;
+					_pendingSongFocusSatisfiedViewSource = viewSource ?? _currentViewSource;
+					if (string.Equals(viewSource, "user_cloud", StringComparison.OrdinalIgnoreCase))
+					{
+						_skipCloudRestoreOnce = true;
+						if (_currentSongs != null && targetIndex >= 0 && targetIndex < _currentSongs.Count)
+						{
+							SongInfo focused = _currentSongs[targetIndex];
+							if (focused != null && focused.IsCloudSong && !string.IsNullOrEmpty(focused.CloudSongId))
+							{
+								_lastSelectedCloudSongId = focused.CloudSongId;
+								_pendingCloudFocusId = null;
+							}
+						}
+					}
+					if (resultListView != null && resultListView.CanFocus)
+					{
+						resultListView.Focus();
+					}
+				}
 			}
 			if (!skipAvailabilityCheck)
 			{
@@ -6201,7 +6260,7 @@ private ToolStripMenuItem helpMenuItem;
 				}
 				ListViewItem listViewItem2 = new ListViewItem(new string[5]
 				{
-					(startIndex + j).ToString(),
+					FormatIndex(startIndex + j),
 					text2,
 					string.IsNullOrWhiteSpace(songInfo2.Artist) ? string.Empty : songInfo2.Artist,
 					string.IsNullOrWhiteSpace(songInfo2.Album) ? string.Empty : songInfo2.Album,
@@ -6241,18 +6300,58 @@ private ToolStripMenuItem helpMenuItem;
 					};
 					resultListView.Items.Add(value2);
 				}
-			}
-			resultListView.EndUpdate();
-			if (allowSelection && resultListView.Items.Count > 0)
+		}
+		resultListView.EndUpdate();
+		if (allowSelection && resultListView.Items.Count > 0)
+		{
+			int targetIndex = -1;
+			bool matchedPending = false;
+			if (!string.IsNullOrWhiteSpace(_pendingSongFocusId))
 			{
-				int fallbackIndex = ((num >= 0) ? Math.Min(num, resultListView.Items.Count - 1) : 0);
-				fallbackIndex = ResolvePendingListFocusIndex(fallbackIndex);
-				EnsureListSelectionWithoutFocus(fallbackIndex);
+				targetIndex = _currentSongs.FindIndex((SongInfo s) => s != null && string.Equals(s.Id, _pendingSongFocusId, StringComparison.OrdinalIgnoreCase));
+				if (targetIndex < 0)
+				{
+					targetIndex = _currentSongs.FindIndex((SongInfo s) => s != null && s.IsCloudSong && !string.IsNullOrEmpty(s.CloudSongId) && string.Equals(s.CloudSongId, _pendingSongFocusId, StringComparison.OrdinalIgnoreCase));
+				}
+				matchedPending = (targetIndex >= 0);
 			}
-			if (!skipAvailabilityCheck)
+			if (targetIndex < 0)
 			{
-				ScheduleAvailabilityCheck(songsToRender);
+				targetIndex = ((num >= 0) ? Math.Min(num, resultListView.Items.Count - 1) : 0);
 			}
+			if (matchedPending)
+			{
+				_pendingListFocusIndex = -1;
+				_pendingListFocusViewSource = null;
+			}
+			targetIndex = ResolvePendingListFocusIndex(targetIndex);
+			EnsureListSelectionWithoutFocus(targetIndex);
+			if (matchedPending)
+			{
+				_pendingSongFocusId = null;
+				_pendingSongFocusViewSource = null;
+				_pendingSongFocusSatisfied = true;
+				_pendingSongFocusSatisfiedViewSource = _currentViewSource;
+				if (string.Equals(_currentViewSource, "user_cloud", StringComparison.OrdinalIgnoreCase) && targetIndex >= 0 && targetIndex < _currentSongs.Count)
+				{
+					SongInfo focused = _currentSongs[targetIndex];
+					if (focused != null && focused.IsCloudSong && !string.IsNullOrEmpty(focused.CloudSongId))
+					{
+						_lastSelectedCloudSongId = focused.CloudSongId;
+						_pendingCloudFocusId = null;
+						_skipCloudRestoreOnce = true;
+					}
+				}
+				if (resultListView != null && resultListView.CanFocus && !IsListAutoFocusSuppressed)
+				{
+					resultListView.Focus();
+				}
+			}
+		}
+		if (!skipAvailabilityCheck)
+		{
+			ScheduleAvailabilityCheck(songsToRender);
+		}
 		}
 	}
 
@@ -6260,6 +6359,11 @@ private ToolStripMenuItem helpMenuItem;
 	{
 		if (!string.IsNullOrWhiteSpace(viewSource))
 		{
+			if (!string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
+			{
+				_pendingSongFocusSatisfied = false;
+				_pendingSongFocusSatisfiedViewSource = null;
+			}
 			_currentViewSource = viewSource;
 			_isHomePage = string.Equals(viewSource, "homepage", StringComparison.OrdinalIgnoreCase);
 		}
@@ -7345,8 +7449,8 @@ private ToolStripMenuItem helpMenuItem;
 		{
 			int offset = 0;
 			List<PlaylistInfo> aggregated = new List<PlaylistInfo>();
-			while (true)
-			{
+	while (true)
+	{
 				List<PlaylistInfo> playlists;
 				int total;
 				(playlists, total) = await _apiClient.GetUserPlaylistsAsync(userId, 1000, offset);
@@ -8941,6 +9045,10 @@ private ToolStripMenuItem helpMenuItem;
 
 	private void FocusListAfterEnrich(int pendingFocusIndex)
 	{
+		if (_pendingSongFocusSatisfied && !string.IsNullOrWhiteSpace(_pendingSongFocusSatisfiedViewSource) && string.Equals(_pendingSongFocusSatisfiedViewSource, _currentViewSource, StringComparison.OrdinalIgnoreCase))
+		{
+			return;
+		}
 		if (!IsListAutoFocusSuppressed && resultListView.Items.Count != 0)
 		{
 			int targetIndex = ((pendingFocusIndex >= 0) ? pendingFocusIndex : ((resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : 0));
@@ -11785,7 +11893,7 @@ private ToolStripMenuItem helpMenuItem;
 			{
 				if (string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
 				{
-					DisplaySongs(merged, showPagination: false, hasNextPage: false, 1, preserveSelection: false, viewSource, accessibleName, skipAvailabilityCheck: true);
+					DisplaySongs(merged, showPagination: false, hasNextPage: false, 1, preserveSelection: true, viewSource, accessibleName, skipAvailabilityCheck: true);
 					UpdateStatusBar(BuildAlbumStatusText(album, merged.Count, enriched: true));
 					ScheduleAvailabilityCheck(merged);
 				}
@@ -12848,6 +12956,62 @@ private ToolStripMenuItem helpMenuItem;
 		return null;
 	}
 
+	private void RequestSongFocus(string? viewSource, SongInfo? song)
+	{
+		if (song == null || string.IsNullOrWhiteSpace(viewSource))
+		{
+			return;
+		}
+		if (!string.IsNullOrWhiteSpace(song.Id))
+		{
+			_pendingSongFocusId = song.Id;
+			_pendingSongFocusViewSource = viewSource;
+		}
+		if (song.IsCloudSong && !string.IsNullOrEmpty(song.CloudSongId) && string.Equals(viewSource, "user_cloud", StringComparison.OrdinalIgnoreCase))
+		{
+			_pendingCloudFocusId = song.CloudSongId;
+			_lastSelectedCloudSongId = song.CloudSongId;
+		}
+	}
+
+	private async Task<bool> JumpToCloudSongAsync(SongInfo song, CancellationToken cancellationToken = default(CancellationToken))
+	{
+		if (_apiClient == null || song == null || string.IsNullOrEmpty(song.CloudSongId))
+		{
+			return false;
+		}
+		int page = 1;
+		int offset = 0;
+		const int pageSize = 50;
+		while (true)
+		{
+			cancellationToken.ThrowIfCancellationRequested();
+			CloudSongPageResult pageResult = await _apiClient.GetCloudSongsAsync(pageSize, offset, cancellationToken);
+			if (pageResult?.Songs != null)
+			{
+				int idx = pageResult.Songs.FindIndex((SongInfo s) => s != null && s.IsCloudSong && string.Equals(s.CloudSongId, song.CloudSongId, StringComparison.OrdinalIgnoreCase));
+				if (idx >= 0)
+				{
+					_cloudPage = page;
+					_pendingCloudFocusId = song.CloudSongId;
+					_lastSelectedCloudSongId = song.CloudSongId;
+					return true;
+				}
+			}
+			if (pageResult == null || !pageResult.HasMore)
+			{
+				break;
+			}
+			page++;
+			offset += pageSize;
+			if (page > 200)
+			{
+				break;
+			}
+		}
+		return false;
+	}
+
 	private async Task<bool> NavigateByViewSourceAsync(string viewSource, SongInfo currentSong)
 	{
 		if (string.IsNullOrWhiteSpace(viewSource))
@@ -12857,6 +13021,7 @@ private ToolStripMenuItem helpMenuItem;
 		try
 		{
 			SaveNavigationState();
+			RequestSongFocus(viewSource, currentSong);
 			if (string.Equals(viewSource, "homepage", StringComparison.OrdinalIgnoreCase))
 			{
 				await LoadHomePageAsync(skipSave: true);
@@ -12957,7 +13122,15 @@ private ToolStripMenuItem helpMenuItem;
 			}
 			else if (string.Equals(viewSource, "recent_play", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "recent_playlists", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "recent_albums", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "recent_listened", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "recent_podcasts", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "daily_recommend", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "personalized", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "toplist", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "daily_recommend_songs", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "daily_recommend_playlists", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "personalized_playlists", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "personalized_newsongs", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "highquality_playlists", StringComparison.OrdinalIgnoreCase) || viewSource.StartsWith("playlist_cat_", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "playlist_category", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "new_songs", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "new_songs_all", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "new_songs_chinese", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "new_songs_western", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "new_songs_japan", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "new_songs_korea", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "new_albums", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "user_liked_songs", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "user_playlists", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "user_albums", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "user_podcasts", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "user_cloud", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "artist_favorites", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "artist_categories", StringComparison.OrdinalIgnoreCase) || viewSource.StartsWith("artist_top_", StringComparison.OrdinalIgnoreCase) || viewSource.StartsWith("artist_songs_", StringComparison.OrdinalIgnoreCase) || viewSource.StartsWith("artist_albums_", StringComparison.OrdinalIgnoreCase) || viewSource.StartsWith("artist_type_", StringComparison.OrdinalIgnoreCase) || viewSource.StartsWith("artist_area_", StringComparison.OrdinalIgnoreCase))
 			{
-				await LoadCategoryContent(viewSource, skipSave: true);
+				if (string.Equals(viewSource, "user_cloud", StringComparison.OrdinalIgnoreCase))
+				{
+					bool found = await JumpToCloudSongAsync(currentSong);
+					await LoadCloudSongsAsync(skipSave: true, preserveSelection: found);
+				}
+				else
+				{
+					await LoadCategoryContent(viewSource, skipSave: true);
+				}
 			}
 			else if (viewSource.StartsWith("url:song:", StringComparison.OrdinalIgnoreCase))
 			{
@@ -12985,11 +13158,19 @@ private ToolStripMenuItem helpMenuItem;
 
 	private void FocusSongInCurrentView(SongInfo song)
 	{
+		if (_pendingSongFocusSatisfied && !string.IsNullOrWhiteSpace(_currentViewSource) && string.Equals(_pendingSongFocusSatisfiedViewSource, _currentViewSource, StringComparison.OrdinalIgnoreCase))
+		{
+			return;
+		}
 		if (song == null || resultListView == null || _currentSongs == null || _currentSongs.Count == 0)
 		{
 			return;
 		}
-		int num = _currentSongs.FindIndex((SongInfo s) => string.Equals(s.Id, song.Id, StringComparison.OrdinalIgnoreCase));
+		int num = _currentSongs.FindIndex((SongInfo s) => s != null && string.Equals(s.Id, song.Id, StringComparison.OrdinalIgnoreCase));
+		if (num < 0 && song.IsCloudSong && !string.IsNullOrEmpty(song.CloudSongId))
+		{
+			num = _currentSongs.FindIndex((SongInfo s) => s != null && s.IsCloudSong && !string.IsNullOrEmpty(s.CloudSongId) && string.Equals(s.CloudSongId, song.CloudSongId, StringComparison.OrdinalIgnoreCase));
+		}
 		if (num >= 0 && num < resultListView.Items.Count)
 		{
 			resultListView.BeginUpdate();
@@ -14559,6 +14740,7 @@ private ToolStripMenuItem helpMenuItem;
 			_nextSongPreloader?.Dispose();
 			_audioEngine?.Dispose();
 			_apiClient?.Dispose();
+			_unblockService?.Dispose();
 			try
 			{
 				DownloadManager.Instance?.Dispose();
@@ -14654,7 +14836,7 @@ private ToolStripMenuItem helpMenuItem;
 		throw new TimeoutException($"获取播放链接超时（{timeoutElapsed:F0}ms > {12000}ms）");
 	}
 
-	private async Task<Dictionary<string, SongUrlInfo>> GetSongUrlWithRetryAsync(string[] ids, QualityLevel quality, CancellationToken cancellationToken, int? maxAttempts = null, bool suppressStatusUpdates = false, bool skipAvailabilityCheck = false)
+	private async Task<Dictionary<string, SongUrlInfo>> GetSongUrlWithRetryAsync(string[] ids, QualityLevel quality, CancellationToken cancellationToken, int? maxAttempts = 3, bool suppressStatusUpdates = false, bool skipAvailabilityCheck = false)
 	{
 		int attempt = 0;
 		int delayMs = 1200;
@@ -14703,6 +14885,83 @@ private ToolStripMenuItem helpMenuItem;
 				}
 			}
 		}
+	}
+
+	private static string GetQualityLevelString(QualityLevel quality)
+	{
+		switch (quality)
+		{
+		case QualityLevel.Standard:
+			return "standard";
+		case QualityLevel.High:
+			return "exhigh";
+		case QualityLevel.Lossless:
+			return "lossless";
+		case QualityLevel.HiRes:
+			return "hires";
+		case QualityLevel.SurroundHD:
+			return "jyeffect";
+		case QualityLevel.Dolby:
+			return "sky";
+		case QualityLevel.Master:
+			return "jymaster";
+		default:
+			return "standard";
+		}
+	}
+
+	private async Task<bool> TryApplyUnblockAsync(SongInfo song, string targetQualityLevel, CancellationToken cancellationToken)
+	{
+		if (_unblockService == null || song == null || string.IsNullOrWhiteSpace(song.Id) || song.IsPodcastEpisode)
+		{
+			return false;
+		}
+
+		var result = await _unblockService.TryMatchAsync(song, cancellationToken).ConfigureAwait(false);
+		if (result == null || string.IsNullOrWhiteSpace(result.Url))
+		{
+			return false;
+		}
+
+		var headers = result.Headers != null
+			? new Dictionary<string, string>(result.Headers, StringComparer.OrdinalIgnoreCase)
+			: null;
+
+		long size = result.Size > 0 ? result.Size : song.Size;
+		if (size <= 0)
+		{
+			var (_, contentLength) = await HttpRangeHelper.CheckRangeSupportAsync(result.Url, null, cancellationToken, headers).ConfigureAwait(false);
+			if (contentLength > 0)
+			{
+				size = contentLength;
+			}
+		}
+		if (size <= 0)
+		{
+			size = song.Size > 0 ? song.Size : 16 * 1024 * 1024;
+		}
+		string level = string.IsNullOrWhiteSpace(targetQualityLevel) ? GetQualityLevelString(GetCurrentQuality()) : targetQualityLevel;
+
+		song.IsAvailable = true;
+		song.IsTrial = false;
+		song.TrialStart = 0;
+		song.TrialEnd = 0;
+		song.IsUnblocked = true;
+		song.UnblockSource = result.Source ?? string.Empty;
+		song.CustomHeaders = headers;
+		if (result.DurationMs.HasValue && song.Duration <= 0)
+		{
+			song.Duration = (int)Math.Max(0, result.DurationMs.Value / 1000);
+		}
+
+		song.SetQualityUrl(level, result.Url, size, isAvailable: true, isTrial: false, trialStart: 0, trialEnd: 0);
+		song.Url = result.Url;
+		song.Level = level;
+		song.Size = size;
+
+		OptimizedHttpClientFactory.PreWarmConnection(song.Url);
+		Debug.WriteLine($"[Unblock] ✓ 解封成功: {song.Name} ({song.UnblockSource}), level={level}, size={size}");
+		return true;
 	}
 
 	private async Task PlaySong(SongInfo song)
@@ -14871,18 +15130,22 @@ private ToolStripMenuItem helpMenuItem;
 		{
 			UpdateLoadingState(isLoading: true, "正在获取歌曲数据: " + song.Name, playRequestVersion);
 			loadingStateActive = true;
+			string defaultQualityName = _config.DefaultQuality ?? "超清母带";
+			QualityLevel selectedQuality = NeteaseApiClient.GetQualityLevelFromName(defaultQualityName);
+			string selectedQualityLevel = selectedQuality.ToString().ToLower();
+			bool needRefreshUrl = string.IsNullOrEmpty(song.Url);
 			if (song.IsAvailable == false)
 			{
 				Debug.WriteLine("[MainForm] 歌曲资源不可用（预检缓存）: " + song.Name);
+				if (await TryApplyUnblockAsync(song, GetQualityLevelString(GetCurrentQuality()), cancellationToken).ConfigureAwait(false))
+				{
+					goto UrlResolved;
+				}
 				UpdateLoadingState(isLoading: false, "歌曲不存在，已跳过", playRequestVersion);
 				loadingStateActive = false;
 				HandleSongResourceNotFoundDuringPlayback(song, isAutoPlayback);
 				return;
 			}
-			string defaultQualityName = _config.DefaultQuality ?? "超清母带";
-			QualityLevel selectedQuality = NeteaseApiClient.GetQualityLevelFromName(defaultQualityName);
-			string selectedQualityLevel = selectedQuality.ToString().ToLower();
-			bool needRefreshUrl = string.IsNullOrEmpty(song.Url);
 			if (!needRefreshUrl && !string.IsNullOrEmpty(song.Level))
 			{
 				string cachedLevel = song.Level.ToLower();
@@ -14929,6 +15192,10 @@ private ToolStripMenuItem helpMenuItem;
 						if (!available)
 						{
 							Debug.WriteLine("[MainForm] 单曲可用性检查判定为不可用: " + song.Name);
+							if (await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(false))
+							{
+								goto UrlResolved;
+							}
 							UpdateLoadingState(isLoading: false, "歌曲不存在，已跳过", playRequestVersion);
 							loadingStateActive = false;
 							HandleSongResourceNotFoundDuringPlayback(song, isAutoPlayback);
@@ -14939,12 +15206,16 @@ private ToolStripMenuItem helpMenuItem;
 					Dictionary<string, SongUrlInfo> urlResult;
 					try
 					{
-						urlResult = await GetSongUrlWithRetryAsync(new string[1] { song.Id }, selectedQuality, cancellationToken, null, suppressStatusUpdates: false, skipAvailabilityCheck: false).ConfigureAwait(continueOnCapturedContext: false);
+						urlResult = await GetSongUrlWithRetryAsync(new string[1] { song.Id }, selectedQuality, cancellationToken, 3, suppressStatusUpdates: false, skipAvailabilityCheck: false).ConfigureAwait(continueOnCapturedContext: false);
 					}
 					catch (SongResourceNotFoundException ex)
 					{
 						Debug.WriteLine("[MainForm] 获取播放链接时检测到歌曲缺失: " + ex.Message);
 						song.IsAvailable = false;
+						if (await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(false))
+						{
+							goto UrlResolved;
+						}
 						UpdateLoadingState(isLoading: false, "歌曲不存在，已跳过", playRequestVersion);
 						loadingStateActive = false;
 						HandleSongResourceNotFoundDuringPlayback(song, isAutoPlayback);
@@ -15001,6 +15272,10 @@ private ToolStripMenuItem helpMenuItem;
 					if (!urlResult.TryGetValue(song.Id, out SongUrlInfo songUrl) || string.IsNullOrEmpty(songUrl?.Url))
 					{
 						Debug.WriteLine("[MainForm ERROR] 无法获取播放链接");
+						if (await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(false))
+						{
+							goto UrlResolved;
+						}
 						UpdateLoadingState(isLoading: false, "获取播放链接失败", playRequestVersion);
 						loadingStateActive = false;
 						MessageBox.Show("无法获取播放链接，请尝试播放其他歌曲", "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
@@ -15013,6 +15288,10 @@ private ToolStripMenuItem helpMenuItem;
 					if (isTrial)
 					{
 						Debug.WriteLine($"[MainForm] \ud83c\udfb5 试听版本: {song.Name}, 片段: {trialStart / 1000}s - {trialEnd / 1000}s");
+						if (await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(false))
+						{
+							goto UrlResolved;
+						}
 					}
 					string actualLevel = songUrl.Level?.ToLower() ?? selectedQualityLevel;
 					song.SetQualityUrl(actualLevel, songUrl.Url, songUrl.Size, isAvailable: true, isTrial, trialStart, trialEnd);
@@ -15026,6 +15305,7 @@ private ToolStripMenuItem helpMenuItem;
 					OptimizedHttpClientFactory.PreWarmConnection(song.Url);
 				}
 			}
+UrlResolved:
 			if (cancellationToken.IsCancellationRequested)
 			{
 				UpdateLoadingState(isLoading: false, "播放已取消", playRequestVersion);
@@ -16334,7 +16614,7 @@ private ToolStripMenuItem helpMenuItem;
 	private void InitializeDownload()
 	{
 		_downloadManager = DownloadManager.Instance;
-		_downloadManager.Initialize(_apiClient);
+		_downloadManager.Initialize(_apiClient, _unblockService);
 		UploadManager instance = UploadManager.Instance;
 		instance.Initialize(_apiClient);
 		instance.TaskCompleted -= OnCloudUploadTaskCompleted;
@@ -18930,10 +19210,6 @@ private ToolStripMenuItem helpMenuItem;
 					{
 						CacheCurrentCloudSelection();
 					}
-					if (!skipSave)
-					{
-						SaveNavigationState();
-					}
 					_isHomePage = false;
 					ViewLoadRequest request = new ViewLoadRequest("user_cloud", "云盘歌曲", "正在加载云盘歌曲...", cancelActiveNavigation: true, pendingIndex);
 					ViewLoadResult<CloudPageViewData?> loadResult = await RunViewLoadAsync(request, async delegate(CancellationToken token)
@@ -19100,6 +19376,12 @@ private ToolStripMenuItem helpMenuItem;
 
 	private void RestoreCloudSelection()
 	{
+		if (_skipCloudRestoreOnce)
+		{
+			_skipCloudRestoreOnce = false;
+			_pendingCloudFocusId = null;
+			return;
+		}
 		if (!string.Equals(_currentViewSource, "user_cloud", StringComparison.OrdinalIgnoreCase))
 		{
 			_pendingCloudFocusId = null;
@@ -19305,7 +19587,12 @@ private ToolStripMenuItem helpMenuItem;
 				{
 					await StartSongRecognitionAsync();
 				};
-				int num = fileMenuItem.DropDownItems.IndexOf(loginMenuItem);
+				// 插入顺序：登录/用户信息 -> 当前播放 -> 听歌识曲
+				int num = fileMenuItem.DropDownItems.IndexOf(currentPlayingMenuItem);
+				if (num < 0)
+				{
+					num = fileMenuItem.DropDownItems.IndexOf(loginMenuItem);
+				}
 				num = ((num < 0) ? Math.Max(0, fileMenuItem.DropDownItems.IndexOf(refreshMenuItem) + 1) : (num + 1));
 				fileMenuItem.DropDownItems.Insert(num, _listenRecognitionMenuItem);
 				if (downloadManagerMenuItem != null && fileMenuItem.DropDownItems.Contains(downloadManagerMenuItem))
@@ -19664,6 +19951,10 @@ private ToolStripMenuItem helpMenuItem;
 
 	private int ResolvePendingListFocusIndex(int fallbackIndex)
 	{
+		if (_pendingSongFocusSatisfied && !string.IsNullOrWhiteSpace(_pendingSongFocusSatisfiedViewSource) && string.Equals(_pendingSongFocusSatisfiedViewSource, _currentViewSource, StringComparison.OrdinalIgnoreCase))
+		{
+			return fallbackIndex;
+		}
 		if (_pendingListFocusIndex >= 0 && !string.IsNullOrWhiteSpace(_pendingListFocusViewSource) && string.Equals(_pendingListFocusViewSource, _currentViewSource, StringComparison.OrdinalIgnoreCase))
 		{
 			int pendingListFocusIndex = _pendingListFocusIndex;
@@ -21205,18 +21496,18 @@ private ToolStripMenuItem helpMenuItem;
 					onGiveUp?.Invoke(attempt, ex2);
 					throw;
 				}
-			}
 		}
 	}
+}
 
 private static bool IsNonRecoverableFetchError(Exception ex)
 {
 	if (ex is UnauthorizedAccessException)
 	{
 		return true;
-		}
-		string text = ex.Message ?? string.Empty;
-		if (text.IndexOf("不存在", StringComparison.OrdinalIgnoreCase) >= 0 || text.IndexOf("下架", StringComparison.OrdinalIgnoreCase) >= 0 || text.IndexOf("被移除", StringComparison.OrdinalIgnoreCase) >= 0 || text.IndexOf("版权", StringComparison.OrdinalIgnoreCase) >= 0)
+	}
+	string text = ex.Message ?? string.Empty;
+	if (text.IndexOf("不存在", StringComparison.OrdinalIgnoreCase) >= 0 || text.IndexOf("下架", StringComparison.OrdinalIgnoreCase) >= 0 || text.IndexOf("被移除", StringComparison.OrdinalIgnoreCase) >= 0 || text.IndexOf("版权", StringComparison.OrdinalIgnoreCase) >= 0)
 	{
 		return true;
 	}

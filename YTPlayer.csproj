@@ -127,6 +127,7 @@
     <Compile Include="MainForm.cs">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="Core\Unblock\UnblockService.cs" />
     <Compile Include="Forms\ArtistDetailDialog.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -200,6 +201,7 @@
     <Compile Include="Core\Streaming\HttpRangeHelper.cs" />
     <Compile Include="Core\Streaming\ChunkData.cs" />
     <Compile Include="Core\Streaming\OptimizedHttpClientFactory.cs" />
+    <Compile Include="Utils\HttpHeaderExtensions.cs" />
     <Compile Include="Core\Streaming\DynamicBufferOptimizer.cs" />
     <Compile Include="Core\Download\DownloadManager.cs" />
     <Compile Include="Core\Download\DownloadExecutor.cs" />
@@ -300,6 +302,10 @@
       <Project>{5B4E8843-B54F-49F5-8B0D-F1BC572C6E62}</Project>
       <Name>YTPlayer.Updater</Name>
       <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+    </ProjectReference>
+    <ProjectReference Include="ThirdParty\UnblockNCM.Core\UnblockNCM.Core.csproj">
+      <Project>{6D1BA998-96AC-4797-86A9-96520A87CD56}</Project>
+      <Name>UnblockNCM.Core</Name>
     </ProjectReference>
   </ItemGroup>
   <ItemGroup>

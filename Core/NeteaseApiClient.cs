@@ -1043,6 +1043,17 @@ namespace YTPlayer.Core
                 }
             }
 
+            // ⚠️ 针对部分 CDN/代理丢失 Content-Encoding 头的兜底解压（与 EAPI 逻辑对齐）
+            try
+            {
+                rawBytes = TryDecompressCommonPayload(rawBytes);
+            }
+            catch (Exception ex)
+            {
+                // 兜底解压失败视为网络抖动，继续后续解码流程
+                System.Diagnostics.Debug.WriteLine($"[DecodeResponseContent] 兜底解压失败（忽略）: {ex.Message}");
+            }
+
             Encoding encoding = null;
             string charset = response?.Content?.Headers?.ContentType?.CharSet;
 
@@ -2119,6 +2130,81 @@ namespace YTPlayer.Core
             // 其他情况，直接返回原始字节
             System.Diagnostics.Debug.WriteLine($"[DEBUG EAPI] 响应格式未知，长度: {rawBytes.Length} bytes，直接使用原始字节");
             return rawBytes;
+        }
+
+        /// <summary>
+        /// 通用兜底解压：在响应头缺失或错误时，基于魔数尝试 gzip/deflate/brotli。
+        /// </summary>
+        private static byte[] TryDecompressCommonPayload(byte[] data)
+        {
+            if (data == null || data.Length == 0)
+            {
+                return data ?? Array.Empty<byte>();
+            }
+
+            if (LooksLikePlainJson(data))
+            {
+                return data;
+            }
+
+            byte[] working = data;
+            bool decompressed = false;
+
+            if (HasGzipHeader(working))
+            {
+                try
+                {
+                    using (var compressedStream = new MemoryStream(working))
+                    using (var gzip = new GZipStream(compressedStream, CompressionMode.Decompress))
+                    using (var decompressedStream = new MemoryStream())
+                    {
+                        gzip.CopyTo(decompressedStream);
+                        working = decompressedStream.ToArray();
+                        decompressed = true;
+                    }
+                    System.Diagnostics.Debug.WriteLine($"[DecodeResponseContent] 兜底 Gzip 解压成功，大小: {working.Length} bytes");
+                }
+                catch (Exception gzipEx)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[DecodeResponseContent] 兜底 Gzip 解压失败: {gzipEx.Message}");
+                }
+            }
+
+            if (!decompressed && HasZlibHeader(working))
+            {
+                try
+                {
+                    using (var compressedStream = new MemoryStream(working))
+                    using (var deflate = new DeflateStream(compressedStream, CompressionMode.Decompress))
+                    using (var decompressedStream = new MemoryStream())
+                    {
+                        deflate.CopyTo(decompressedStream);
+                        working = decompressedStream.ToArray();
+                        decompressed = true;
+                    }
+                    System.Diagnostics.Debug.WriteLine($"[DecodeResponseContent] 兜底 Deflate 解压成功，大小: {working.Length} bytes");
+                }
+                catch (Exception deflateEx)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[DecodeResponseContent] 兜底 Deflate 解压失败: {deflateEx.Message}");
+                }
+            }
+
+            if (!decompressed && !LooksLikePlainJson(working))
+            {
+                try
+                {
+                    working = Brotli.DecompressBuffer(working, 0, working.Length, null);
+                    decompressed = true;
+                    System.Diagnostics.Debug.WriteLine($"[DecodeResponseContent] 兜底 Brotli 解压成功，大小: {working.Length} bytes");
+                }
+                catch (Exception brotliEx)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[DecodeResponseContent] 兜底 Brotli 解压失败: {brotliEx.Message}");
+                }
+            }
+
+            return working;
         }
 
         private static byte[] TryDecompressEapiPayload(byte[] data, string path)
@@ -4241,6 +4327,10 @@ namespace YTPlayer.Core
                         if (itemMissing)
                         {
                             System.Diagnostics.Debug.WriteLine($"[EAPI] 歌曲{id} 在音质 {currentLevel} 下不可用，尝试降级。");
+                            if (!string.IsNullOrEmpty(id))
+                            {
+                                missingSongIds.Add(id);
+                            }
                             fallbackToLowerQuality = true;
                             break;
                         }
@@ -4268,6 +4358,10 @@ namespace YTPlayer.Core
                             if (string.IsNullOrEmpty(url))
                             {
                                 System.Diagnostics.Debug.WriteLine($"[EAPI] 歌曲{id} 在音质 {currentLevel} 下无可用URL，尝试降级");
+                                if (!string.IsNullOrEmpty(id))
+                                {
+                                    missingSongIds.Add(id);
+                                }
                                 fallbackToLowerQuality = true;
                                 break;
                             }
@@ -4337,7 +4431,7 @@ namespace YTPlayer.Core
                 }
             }
 
-            if (missingSongIds.Count > 0 && (_authContext?.CurrentAccountState?.IsLoggedIn ?? false))
+            if (missingSongIds.Count > 0)
             {
                 throw new SongResourceNotFoundException("请求的歌曲资源在官方曲库中不存在或已下架。", missingSongIds);
             }
@@ -4441,6 +4535,11 @@ namespace YTPlayer.Core
                     System.Diagnostics.Debug.WriteLine($"[API] 公共API异常: {songId}, error={ex.Message}");
                     // 继续尝试下一首歌曲
                 }
+            }
+
+            if (result.Count == 0)
+            {
+                throw new SongResourceNotFoundException("请求的歌曲资源在官方曲库中不存在或已下架。", ids);
             }
 
             return result;

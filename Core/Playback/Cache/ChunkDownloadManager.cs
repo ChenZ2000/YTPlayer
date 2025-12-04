@@ -24,13 +24,15 @@ namespace YTPlayer.Core.Playback.Cache
         private readonly int _chunkSize;
         private readonly int _totalChunks;
         private readonly HttpClient _httpClient;
+        private readonly IDictionary<string, string>? _headers;
 
-        public ChunkDownloadManager(string url, long totalSize, int chunkSize, HttpClient httpClient)
+        public ChunkDownloadManager(string url, long totalSize, int chunkSize, HttpClient httpClient, IDictionary<string, string>? headers = null)
         {
             _url = url ?? throw new ArgumentNullException(nameof(url));
             _totalSize = totalSize;
             _chunkSize = chunkSize;
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+            _headers = headers;
 
             _totalChunks = (int)Math.Ceiling(totalSize / (double)chunkSize);
         }
@@ -53,6 +55,7 @@ namespace YTPlayer.Core.Playback.Cache
                 {
                     using var request = new HttpRequestMessage(HttpMethod.Get, _url);
                     request.Headers.Range = new RangeHeaderValue(start, end);
+                    request.ApplyCustomHeaders(_headers);
 
                     using var response = await _httpClient.SendAsync(
                         request,
@@ -113,8 +116,10 @@ namespace YTPlayer.Core.Playback.Cache
                 throw new ArgumentNullException(nameof(onChunkReady));
             }
 
-            using var response = await _httpClient.GetAsync(
-                _url,
+            using var request = new HttpRequestMessage(HttpMethod.Get, _url);
+            request.ApplyCustomHeaders(_headers);
+            using var response = await _httpClient.SendAsync(
+                request,
                 HttpCompletionOption.ResponseHeadersRead,
                 token).ConfigureAwait(false);
 

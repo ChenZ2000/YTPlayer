@@ -293,7 +293,8 @@ namespace YTPlayer.Core.Playback
                     nextSong.Url,
                     nextSong.Size,
                     _httpClient,
-                    PreferSequentialFull(nextSong, nextSong.Size));
+                    PreferSequentialFull(nextSong, nextSong.Size),
+                    nextSong.CustomHeaders);
 
                 // 🎯 预加载场景：只需要 Chunk0，不需要最后块
                 bool initialized = await cacheManager.InitializeAsync(cancellationToken, isPreload: true).ConfigureAwait(false);

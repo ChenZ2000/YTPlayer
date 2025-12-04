@@ -7,6 +7,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "YTPlayer", "YTPlayer.csproj
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "YTPlayer.Updater", "Updater\YTPlayer.Updater.csproj", "{5B4E8843-B54F-49F5-8B0D-F1BC572C6E62}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UnblockNCM.Core", "ThirdParty\UnblockNCM.Core\UnblockNCM.Core.csproj", "{6D1BA998-96AC-4797-86A9-96520A87CD56}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -21,5 +23,9 @@ Global
 		{5B4E8843-B54F-49F5-8B0D-F1BC572C6E62}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{5B4E8843-B54F-49F5-8B0D-F1BC572C6E62}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{5B4E8843-B54F-49F5-8B0D-F1BC572C6E62}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6D1BA998-96AC-4797-86A9-96520A87CD56}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6D1BA998-96AC-4797-86A9-96520A87CD56}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6D1BA998-96AC-4797-86A9-96520A87CD56}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6D1BA998-96AC-4797-86A9-96520A87CD56}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

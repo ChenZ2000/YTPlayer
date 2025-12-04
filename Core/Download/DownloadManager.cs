@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using YTPlayer.Core.Streaming;
+using YTPlayer.Core.Unblock;
 using YTPlayer.Models;
 using YTPlayer.Models.Download;
 using YTPlayer.Utils;
@@ -99,6 +101,7 @@ namespace YTPlayer.Core.Download
         private readonly List<DownloadTask> _completedQueue;    // 已完成队列
 
         private NeteaseApiClient? _apiClient;
+        private UnblockService? _unblockService;
         private readonly ConfigManager _configManager;
         private readonly DownloadBandwidthCoordinator _bandwidthCoordinator;
 
@@ -137,9 +140,10 @@ namespace YTPlayer.Core.Download
         /// 初始化下载管理器（设置 API 客户端）
         /// </summary>
         /// <param name="apiClient">NetEase API 客户端实例</param>
-        public void Initialize(NeteaseApiClient apiClient)
+        public void Initialize(NeteaseApiClient apiClient, UnblockService? unblockService = null)
         {
             _apiClient = apiClient ?? throw new ArgumentNullException(nameof(apiClient));
+            _unblockService = unblockService;
         }
 
         #endregion
@@ -846,6 +850,78 @@ namespace YTPlayer.Core.Download
 
         #region 私有方法 - URL 获取
 
+        private static string MapQualityLevel(QualityLevel quality)
+        {
+            switch (quality)
+            {
+                case QualityLevel.Standard:
+                    return "standard";
+                case QualityLevel.High:
+                    return "exhigh";
+                case QualityLevel.Lossless:
+                    return "lossless";
+                case QualityLevel.HiRes:
+                    return "hires";
+                case QualityLevel.SurroundHD:
+                    return "jyeffect";
+                case QualityLevel.Dolby:
+                    return "sky";
+                case QualityLevel.Master:
+                    return "jymaster";
+                default:
+                    return "standard";
+            }
+        }
+
+        private async Task<bool> TryApplyUnblockAsync(DownloadTask task, CancellationToken cancellationToken)
+        {
+            if (_unblockService == null || task?.Song == null)
+            {
+                return false;
+            }
+
+            var result = await _unblockService.TryMatchAsync(task.Song, cancellationToken).ConfigureAwait(false);
+            if (result == null || string.IsNullOrWhiteSpace(result.Url))
+            {
+                return false;
+            }
+
+            var headers = result.Headers != null
+                ? new Dictionary<string, string>(result.Headers, StringComparer.OrdinalIgnoreCase)
+                : null;
+
+            long size = result.Size > 0 ? result.Size : task.Song.Size;
+            if (size <= 0)
+            {
+                var (_, contentLength) = await HttpRangeHelper.CheckRangeSupportAsync(result.Url, null, cancellationToken, headers).ConfigureAwait(false);
+                if (contentLength > 0)
+                {
+                    size = contentLength;
+                }
+            }
+            if (size <= 0)
+            {
+                size = task.Song.Size > 0 ? task.Song.Size : 16 * 1024 * 1024;
+            }
+            string level = MapQualityLevel(task.Quality);
+
+            task.Song.IsAvailable = true;
+            task.Song.IsTrial = false;
+            task.Song.TrialStart = 0;
+            task.Song.TrialEnd = 0;
+            task.Song.IsUnblocked = true;
+            task.Song.UnblockSource = result.Source ?? string.Empty;
+            task.Song.CustomHeaders = headers;
+            task.Song.SetQualityUrl(level, result.Url, size, true, false, 0, 0);
+            task.Song.Url = result.Url;
+            task.Song.Level = level;
+            task.Song.Size = size;
+
+            task.DownloadUrl = result.Url;
+            task.TotalBytes = size;
+            return true;
+        }
+
         /// <summary>
         /// 获取下载 URL
         /// </summary>
@@ -868,6 +944,11 @@ namespace YTPlayer.Core.Download
 
                 if (urlDict == null || !urlDict.ContainsKey(task.Song.Id))
                 {
+                    if (await TryApplyUnblockAsync(task, CancellationToken.None).ConfigureAwait(false))
+                    {
+                        return true;
+                    }
+
                     task.ErrorMessage = "无法获取下载链接";
                     return false;
                 }
@@ -876,6 +957,11 @@ namespace YTPlayer.Core.Download
                 string? url = urlInfo.Url;
                 if (string.IsNullOrWhiteSpace(url))
                 {
+                    if (await TryApplyUnblockAsync(task, CancellationToken.None).ConfigureAwait(false))
+                    {
+                        return true;
+                    }
+
                     task.ErrorMessage = "歌曲下载链接为空（可能无版权或 VIP 专属）";
                     return false;
                 }
@@ -887,6 +973,11 @@ namespace YTPlayer.Core.Download
                 // ⭐ 关键修复：将试听信息填充到 SongInfo，确保文件名包含试听标记
                 if (urlInfo.FreeTrialInfo != null)
                 {
+                    if (await TryApplyUnblockAsync(task, CancellationToken.None).ConfigureAwait(false))
+                    {
+                        return true;
+                    }
+
                     task.Song.IsTrial = true;
                     task.Song.TrialStart = urlInfo.FreeTrialInfo.Start;
                     task.Song.TrialEnd = urlInfo.FreeTrialInfo.End;

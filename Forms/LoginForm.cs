@@ -206,7 +206,7 @@ namespace YTPlayer.Forms
             int delayMs = 2000; // 初始延迟2秒
             bool userScanned = false;
             int consecutiveErrors = 0;
-            const int maxConsecutiveErrors = 3;
+            const int maxConsecutiveErrors = 5;
 
             try
             {
@@ -222,7 +222,6 @@ namespace YTPlayer.Forms
                     try
                     {
                         result = await _apiClient.PollQrLoginAsync(qrKey);
-                        consecutiveErrors = 0;
                     }
                     catch (Exception pollEx)
                     {
@@ -239,6 +238,25 @@ namespace YTPlayer.Forms
                     }
 
                     System.Diagnostics.Debug.WriteLine($"[LoginForm] 轮询#{pollCount}，返回状态={result.State}, 原始Code={result.RawCode}");
+
+                    // 将解析/解压失败（RawCode == -2）视为网络抖动，最多重试 maxConsecutiveErrors 次
+                    if (result.State == QrLoginState.Error && result.RawCode == -2)
+                    {
+                        consecutiveErrors++;
+                        if (consecutiveErrors >= maxConsecutiveErrors)
+                        {
+                            qrStatusLabel.Text = "登录失败：服务器返回异常响应，请稍后重试或改用短信登录";
+                            qrStatusLabel.ForeColor = Color.Red;
+                            refreshQrButton.Enabled = true;
+                            return;
+                        }
+
+                        continue;
+                    }
+                    else
+                    {
+                        consecutiveErrors = 0;
+                    }
 
                     switch (result.State)
                     {

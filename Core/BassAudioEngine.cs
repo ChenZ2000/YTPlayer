@@ -417,7 +417,8 @@ namespace YTPlayer.Core
                     var (_, contentLength) = await HttpRangeHelper.CheckRangeSupportAsync(
                         song.Url,
                         _httpClient,
-                        cancellationToken).ConfigureAwait(false);
+                        cancellationToken,
+                        song.CustomHeaders).ConfigureAwait(false);
                     totalSize = contentLength;
                 }
 
@@ -438,7 +439,7 @@ namespace YTPlayer.Core
                 else
                 {
                     Debug.WriteLine($"[BassAudioEngine] 创建新的缓存管理器");
-                    cacheManager = await GetOrCreateCacheManagerAsync(song, totalSize, cancellationToken).ConfigureAwait(false);
+                    cacheManager = await GetOrCreateCacheManagerAsync(song, totalSize, cancellationToken, song.CustomHeaders).ConfigureAwait(false);
                 }
 
                 AttachCacheManager(cacheManager);
@@ -992,9 +993,9 @@ namespace YTPlayer.Core
             }
         }
 
-        private async Task<SmartCacheManager> GetOrCreateCacheManagerAsync(SongInfo song, long totalSize, CancellationToken token)
+        private async Task<SmartCacheManager> GetOrCreateCacheManagerAsync(SongInfo song, long totalSize, CancellationToken token, IDictionary<string, string>? headers)
         {
-            var manager = new SmartCacheManager(song.Id, song.Url, totalSize, _httpClient, PreferSequentialFull(song, totalSize));
+            var manager = new SmartCacheManager(song.Id, song.Url, totalSize, _httpClient, PreferSequentialFull(song, totalSize), headers);
             bool initialized = await manager.InitializeAsync(token).ConfigureAwait(false);
 
             if (!initialized)

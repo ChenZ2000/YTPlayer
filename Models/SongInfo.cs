@@ -230,6 +230,21 @@ namespace YTPlayer.Models
         public bool RequiresVip { get; set; }
 
         /// <summary>
+        /// 是否来自解封源（第三方匹配）。
+        /// </summary>
+        public bool IsUnblocked { get; set; }
+
+        /// <summary>
+        /// 解封源标识（如 kugou / qq 等）。
+        /// </summary>
+        public string UnblockSource { get; set; } = string.Empty;
+
+        /// <summary>
+        /// 播放或下载该歌曲时需要附加的请求头。
+        /// </summary>
+        public Dictionary<string, string>? CustomHeaders { get; set; }
+
+        /// <summary>
         /// 当前登录用户是否已收藏（“我喜欢的音乐”）。
         /// </summary>
         public bool IsLiked { get; set; }

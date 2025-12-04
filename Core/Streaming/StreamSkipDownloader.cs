@@ -19,13 +19,15 @@ namespace YTPlayer.Core.Streaming
         private readonly string _url;
         private readonly long _totalSize;
         private readonly DynamicBufferOptimizer _bufferOptimizer;
+        private readonly System.Collections.Generic.IDictionary<string, string>? _headers;
 
-        public StreamSkipDownloader(HttpClient httpClient, string url, long totalSize)
+        public StreamSkipDownloader(HttpClient httpClient, string url, long totalSize, System.Collections.Generic.IDictionary<string, string>? headers = null)
         {
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
             _url = url ?? throw new ArgumentNullException(nameof(url));
             _totalSize = totalSize;
             _bufferOptimizer = new DynamicBufferOptimizer(totalSize);
+            _headers = headers;
         }
 
         /// <summary>
@@ -52,11 +54,13 @@ namespace YTPlayer.Core.Streaming
             try
             {
                 using (var request = new HttpRequestMessage(HttpMethod.Get, _url))
-                using (var response = await _httpClient.SendAsync(
-                    request,
-                    HttpCompletionOption.ResponseHeadersRead,
-                    token).ConfigureAwait(false))
                 {
+                    request.ApplyCustomHeaders(_headers);
+                    using (var response = await _httpClient.SendAsync(
+                        request,
+                        HttpCompletionOption.ResponseHeadersRead,
+                        token).ConfigureAwait(false))
+                    {
                     if (!response.IsSuccessStatusCode)
                     {
                         DebugLogger.Log(
@@ -216,6 +220,7 @@ namespace YTPlayer.Core.Streaming
                         return true;
                     }
                 }
+            }
             }
             catch (OperationCanceledException)
             {

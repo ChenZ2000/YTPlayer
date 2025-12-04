@@ -32,6 +32,7 @@ namespace YTPlayer.Core.Playback.Cache
         private readonly long _totalSize;
         private readonly int _totalChunks;
         private readonly HttpClient _httpClient;
+        private readonly IDictionary<string, string>? _headers;
         private readonly ConcurrentDictionary<int, byte[]> _cache;
         private readonly ChunkDownloadManager _downloader;
         private readonly bool _preferSequentialFull;
@@ -65,17 +66,18 @@ namespace YTPlayer.Core.Playback.Cache
         private readonly object _bufferingLock = new object();
         private BufferingState _bufferingState = BufferingState.Idle;
 
-        public SmartCacheManager(string songId, string url, long totalSize, HttpClient httpClient, bool preferSequentialFull = false)
+        public SmartCacheManager(string songId, string url, long totalSize, HttpClient httpClient, bool preferSequentialFull = false, IDictionary<string, string>? headers = null)
         {
             _songId = songId ?? string.Empty;  // 🎯 允许空字符串（用于不需要预缓存的场景）
             _url = url ?? throw new ArgumentNullException(nameof(url));
             _totalSize = totalSize > 0 ? totalSize : throw new ArgumentOutOfRangeException(nameof(totalSize));
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
             _preferSequentialFull = preferSequentialFull;
+            _headers = headers;
 
             _totalChunks = (int)Math.Ceiling(totalSize / (double)ChunkSize);
             _cache = new ConcurrentDictionary<int, byte[]>();
-            _downloader = new ChunkDownloadManager(url, totalSize, ChunkSize, _httpClient);
+            _downloader = new ChunkDownloadManager(url, totalSize, ChunkSize, _httpClient, _headers);
         }
 
         /// <summary>
@@ -598,8 +600,11 @@ namespace YTPlayer.Core.Playback.Cache
 
             try
             {
-                using var response = await _httpClient.GetAsync(
-                    _url,
+                using var request = new HttpRequestMessage(HttpMethod.Get, _url);
+                request.ApplyCustomHeaders(_headers);
+
+                using var response = await _httpClient.SendAsync(
+                    request,
                     HttpCompletionOption.ResponseHeadersRead,
                     token).ConfigureAwait(false);
 
@@ -976,14 +981,16 @@ namespace YTPlayer.Core.Playback.Cache
                 var (supportsRange, _) = await HttpRangeHelper.CheckRangeSupportAsync(
                     _url,
                     _httpClient,
-                    token).ConfigureAwait(false);
+                    token,
+                    _headers).ConfigureAwait(false);
 
                 if (supportsRange)
                 {
                     bool rangeVerified = await HttpRangeHelper.TestRangeRequestAsync(
                         _url,
                         _httpClient,
-                        token).ConfigureAwait(false);
+                        token,
+                        _headers).ConfigureAwait(false);
 
                     if (rangeVerified)
                     {

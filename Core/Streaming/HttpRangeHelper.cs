@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using YTPlayer.Utils;
 
 namespace YTPlayer.Core.Streaming
 {
@@ -21,7 +23,8 @@ namespace YTPlayer.Core.Streaming
         public static async Task<(bool supportsRange, long contentLength)> CheckRangeSupportAsync(
             string url,
             HttpClient? httpClient = null,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            IDictionary<string, string>? headers = null)
         {
             if (string.IsNullOrEmpty(url))
                 return (false, 0);
@@ -36,6 +39,7 @@ namespace YTPlayer.Core.Streaming
             try
             {
                 using var request = new HttpRequestMessage(HttpMethod.Head, url);
+                request.ApplyCustomHeaders(headers);
 
                 using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
 
@@ -94,7 +98,8 @@ namespace YTPlayer.Core.Streaming
         public static async Task<bool> TestRangeRequestAsync(
             string url,
             HttpClient? httpClient = null,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            IDictionary<string, string>? headers = null)
         {
             if (string.IsNullOrEmpty(url))
                 return false;
@@ -110,6 +115,7 @@ namespace YTPlayer.Core.Streaming
             {
                 using var request = new HttpRequestMessage(HttpMethod.Get, url);
                 request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(0, 0);
+                request.ApplyCustomHeaders(headers);
 
                 using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
 

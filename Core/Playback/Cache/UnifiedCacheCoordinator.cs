@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
@@ -20,15 +21,17 @@ namespace YTPlayer.Core.Playback.Cache
         private readonly DynamicHotspotManager _hotspotManager;
         private readonly PlaybackAwareScheduler _scheduler;
         private readonly HttpClient _httpClient;
+        private readonly IDictionary<string, string>? _headers;
 
         private bool _isAttached;
         private readonly object _lock = new object();
 
-        public UnifiedCacheCoordinator(HttpClient httpClient)
+        public UnifiedCacheCoordinator(HttpClient httpClient, IDictionary<string, string>? headers = null)
         {
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
             _hotspotManager = new DynamicHotspotManager();
-            _scheduler = new PlaybackAwareScheduler(_hotspotManager, _httpClient);
+            _headers = headers;
+            _scheduler = new PlaybackAwareScheduler(_hotspotManager, _httpClient, _headers);
         }
 
         /// <summary>

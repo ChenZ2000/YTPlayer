@@ -6,6 +6,7 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using YTPlayer.Models.Playback;
+using YTPlayer.Utils;
 
 namespace YTPlayer.Core.Playback.Cache
 {
@@ -31,12 +32,14 @@ namespace YTPlayer.Core.Playback.Cache
         private const int MAX_CONCURRENT_DOWNLOADS = 8;
 
         private readonly SemaphoreSlim _downloadSemaphore;
+        private readonly IDictionary<string, string>? _headers;
 
-        public PlaybackAwareScheduler(DynamicHotspotManager hotspotManager, HttpClient httpClient)
+        public PlaybackAwareScheduler(DynamicHotspotManager hotspotManager, HttpClient httpClient, IDictionary<string, string>? headers = null)
         {
             _hotspotManager = hotspotManager ?? throw new ArgumentNullException(nameof(hotspotManager));
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
             _downloadSemaphore = new SemaphoreSlim(MAX_CONCURRENT_DOWNLOADS, MAX_CONCURRENT_DOWNLOADS);
+            _headers = headers;
         }
 
         /// <summary>
@@ -221,6 +224,7 @@ namespace YTPlayer.Core.Playback.Cache
                 using (var request = new HttpRequestMessage(HttpMethod.Get, url))
                 {
                     request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(startByte, endByte);
+                    request.ApplyCustomHeaders(_headers);
 
                     using (var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token))
                     {

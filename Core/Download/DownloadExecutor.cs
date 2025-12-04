@@ -348,6 +348,8 @@ namespace YTPlayer.Core.Download
                 request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(startPosition, null);
             }
 
+            request.ApplyCustomHeaders(task.Song?.CustomHeaders);
+
             // 发送请求
             HttpResponseMessage? response = null;
             try
@@ -379,7 +381,7 @@ namespace YTPlayer.Core.Download
                     DebugLogger.Log(
                         DebugLogger.LogLevel.Warning,
                         "DownloadExecutor",
-                        $"服务器不支持断点续传，从头开始下载: {task.Song.Name}");
+                        $"服务器不支持断点续传，从头开始下载: {task.Song?.Name ?? "未知"}");
 
                     startPosition = 0;
                     task.DownloadedBytes = 0;
