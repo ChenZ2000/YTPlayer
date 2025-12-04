@@ -840,6 +840,14 @@ private string? _playButtonTextBeforeLoading = null;
 
 	private string? _pendingSongFocusSatisfiedViewSource;
 
+	private string? _lastListenMatchSessionId;
+
+	private List<SongInfo> _listenMatchAggregate = new List<SongInfo>();
+
+	private string? _lastAnnouncedViewSource;
+
+	private string? _lastAnnouncedHeader;
+
 	private IContainer components = null;
 
 	private MenuStrip menuStrip1;
@@ -4050,7 +4058,7 @@ private ToolStripMenuItem helpMenuItem;
 				await LoadRecentListenedCategoryAsync(skipSave);
 				return;
 			case string s when s != null && s.StartsWith("listen-match:", StringComparison.OrdinalIgnoreCase):
-				await LoadListenMatchAsync(categoryId, skipSave: true);
+				await LoadListenMatchAsync(NormalizeListenMatchViewSource(categoryId), skipSave: true);
 				return;
 			case "recent_playlists":
 				await LoadRecentPlaylistsAsync();
@@ -6069,7 +6077,8 @@ private ToolStripMenuItem helpMenuItem;
 				}
 				matchedPendingSelection = pendingSelectionIndex >= 0;
 			}
-			if (allowSelection && resultListView.Items.Count > 0 && (!suppressFocus || matchedPendingSelection) && !IsListAutoFocusSuppressed)
+			bool skipFocusDueToSatisfied = _pendingSongFocusSatisfied && !string.IsNullOrWhiteSpace(_pendingSongFocusSatisfiedViewSource) && string.Equals(_pendingSongFocusSatisfiedViewSource, viewSource ?? _currentViewSource, StringComparison.OrdinalIgnoreCase);
+			if (allowSelection && resultListView.Items.Count > 0 && (!suppressFocus || matchedPendingSelection) && !IsListAutoFocusSuppressed && !skipFocusDueToSatisfied)
 			{
 				int targetIndex = -1;
 				bool matchedPending = matchedPendingSelection;
@@ -6363,6 +6372,8 @@ private ToolStripMenuItem helpMenuItem;
 			{
 				_pendingSongFocusSatisfied = false;
 				_pendingSongFocusSatisfiedViewSource = null;
+				_lastAnnouncedViewSource = null;
+				_lastAnnouncedHeader = null;
 			}
 			_currentViewSource = viewSource;
 			_isHomePage = string.Equals(viewSource, "homepage", StringComparison.OrdinalIgnoreCase);
@@ -6393,7 +6404,13 @@ private ToolStripMenuItem helpMenuItem;
 			string value = ((!string.IsNullOrWhiteSpace(accessibleName)) ? accessibleName : ((!string.IsNullOrWhiteSpace(resultListView.AccessibleName)) ? resultListView.AccessibleName : string.Empty));
 			if (!string.IsNullOrWhiteSpace(value))
 			{
+				if (!string.IsNullOrWhiteSpace(_currentViewSource) && string.Equals(_lastAnnouncedViewSource, _currentViewSource, StringComparison.OrdinalIgnoreCase) && string.Equals(_lastAnnouncedHeader, value, StringComparison.Ordinal))
+				{
+					return;
+				}
 				TtsHelper.SpeakText(value);
+				_lastAnnouncedViewSource = _currentViewSource;
+				_lastAnnouncedHeader = value;
 			}
 		}
 	}
@@ -6492,11 +6509,37 @@ private ToolStripMenuItem helpMenuItem;
 			{
 				AnnounceListViewHeaderIfNeeded(text2);
 			}
-			if (allowSelection && !suppressFocus && !IsListAutoFocusSuppressed && resultListView.Items.Count > 0)
+			if (allowSelection && resultListView.Items.Count > 0 && (!suppressFocus || !string.IsNullOrWhiteSpace(_pendingSongFocusId)) && !IsListAutoFocusSuppressed)
 			{
-				int targetIndex = ((num >= 0) ? Math.Min(num, resultListView.Items.Count - 1) : 0);
+				int targetIndex = -1;
+				bool matchedPending = false;
+				if (!string.IsNullOrWhiteSpace(_pendingSongFocusId))
+				{
+					targetIndex = _currentPodcasts.FindIndex((PodcastRadioInfo p) => p != null && string.Equals(p.Id.ToString(), _pendingSongFocusId, StringComparison.OrdinalIgnoreCase));
+					matchedPending = targetIndex >= 0;
+				}
+				if (targetIndex < 0)
+				{
+					targetIndex = ((num >= 0) ? Math.Min(num, resultListView.Items.Count - 1) : 0);
+				}
+				if (matchedPending)
+				{
+					_pendingListFocusIndex = -1;
+					_pendingListFocusViewSource = null;
+				}
 				targetIndex = ResolvePendingListFocusIndex(targetIndex);
 				EnsureListSelectionWithoutFocus(targetIndex);
+				if (matchedPending)
+				{
+					_pendingSongFocusId = null;
+					_pendingSongFocusViewSource = null;
+					_pendingSongFocusSatisfied = true;
+					_pendingSongFocusSatisfiedViewSource = viewSource ?? _currentViewSource;
+					if (resultListView != null && resultListView.CanFocus)
+					{
+						resultListView.Focus();
+					}
+				}
 			}
 		}
 	}
@@ -8510,8 +8553,39 @@ private ToolStripMenuItem helpMenuItem;
 			AnnounceListViewHeaderIfNeeded(accessibleName2);
 			if (!IsListAutoFocusSuppressed && resultListView.Items.Count > 0)
 			{
-				int targetIndex = ((num >= 0) ? Math.Min(num, resultListView.Items.Count - 1) : 0);
-				RestoreListViewFocus(targetIndex);
+				int targetIndex = -1;
+				bool matchedPending = false;
+				if (!string.IsNullOrWhiteSpace(_pendingSongFocusId))
+				{
+					targetIndex = _currentSongs.FindIndex((SongInfo s) => s != null && string.Equals(s.Id, _pendingSongFocusId, StringComparison.OrdinalIgnoreCase));
+					if (targetIndex < 0)
+					{
+						targetIndex = _currentSongs.FindIndex((SongInfo s) => s != null && s.IsCloudSong && !string.IsNullOrEmpty(s.CloudSongId) && string.Equals(s.CloudSongId, _pendingSongFocusId, StringComparison.OrdinalIgnoreCase));
+					}
+					matchedPending = targetIndex >= 0;
+				}
+				if (targetIndex < 0)
+				{
+					targetIndex = ((num >= 0) ? Math.Min(num, resultListView.Items.Count - 1) : 0);
+				}
+				if (matchedPending)
+				{
+					_pendingListFocusIndex = -1;
+					_pendingListFocusViewSource = null;
+				}
+				targetIndex = ResolvePendingListFocusIndex(targetIndex);
+				EnsureListSelectionWithoutFocus(targetIndex);
+				if (matchedPending)
+				{
+					_pendingSongFocusId = null;
+					_pendingSongFocusViewSource = null;
+					_pendingSongFocusSatisfied = true;
+					_pendingSongFocusSatisfiedViewSource = viewSource ?? _currentViewSource;
+					if (resultListView != null && resultListView.CanFocus)
+					{
+						resultListView.Focus();
+					}
+				}
 			}
 		}
 	}
@@ -11893,7 +11967,29 @@ private ToolStripMenuItem helpMenuItem;
 			{
 				if (string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
 				{
-					DisplaySongs(merged, showPagination: false, hasNextPage: false, 1, preserveSelection: true, viewSource, accessibleName, skipAvailabilityCheck: true);
+					int pendingFocusIndex = (resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : -1;
+					bool sameIds = _currentSongs != null && _currentSongs.Count == merged.Count;
+					if (sameIds)
+					{
+						for (int i = 0; i < merged.Count; i++)
+						{
+							string? a = _currentSongs[i]?.Id;
+							string? b = merged[i]?.Id;
+							if (!string.Equals(a, b, StringComparison.OrdinalIgnoreCase))
+							{
+								sameIds = false;
+								break;
+							}
+						}
+					}
+					if (sameIds)
+					{
+						PatchSongs(merged, 1, skipAvailabilityCheck: true, showPagination: false, hasPreviousPage: false, hasNextPage: false, pendingFocusIndex: pendingFocusIndex, allowSelection: true);
+					}
+					else
+					{
+						DisplaySongs(merged, showPagination: false, hasNextPage: false, 1, preserveSelection: true, viewSource, accessibleName, skipAvailabilityCheck: true, announceHeader: false);
+					}
 					UpdateStatusBar(BuildAlbumStatusText(album, merged.Count, enriched: true));
 					ScheduleAvailabilityCheck(merged);
 				}
@@ -13034,9 +13130,10 @@ private ToolStripMenuItem helpMenuItem;
 			{
 				await LoadAlbumById(viewSource.Substring("album:".Length), skipSave: true);
 			}
-			else if (viewSource.StartsWith("listen-match:", StringComparison.OrdinalIgnoreCase))
+			else if (viewSource.StartsWith("listen-match:", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "listen-match", StringComparison.OrdinalIgnoreCase))
 			{
-				await LoadListenMatchAsync(viewSource, skipSave: true);
+				string normalized = NormalizeListenMatchViewSource(viewSource);
+				await LoadListenMatchAsync(normalized, skipSave: true);
 			}
 			else if (viewSource.StartsWith("artist_entries:", StringComparison.OrdinalIgnoreCase))
 			{
@@ -19682,12 +19779,28 @@ UrlResolved:
 	private async Task ShowRecognitionResultsAsync(SongRecognitionResult result)
 	{
 		List<SongInfo> newSongs = result.Matches?.ToList() ?? new List<SongInfo>();
-		bool isListeningView = !string.IsNullOrWhiteSpace(_currentViewSource) && _currentViewSource.StartsWith("listen-match:", StringComparison.OrdinalIgnoreCase) && _currentSongs != null && _currentSongs.Count > 0;
-		List<SongInfo> existingSongs = (isListeningView ? _currentSongs.ToList() : new List<SongInfo>());
-		int addedCount;
-		List<SongInfo> mergedSongs = MergeRecognitionSongs(newSongs, existingSongs, out addedCount);
-		string viewSource = (isListeningView ? _currentViewSource : ("listen-match:" + result.SessionId));
-		_listenMatchCache[result.SessionId] = CloneList(mergedSongs);
+		bool isListeningView = !string.IsNullOrWhiteSpace(_currentViewSource) && _currentViewSource.StartsWith("listen-match", StringComparison.OrdinalIgnoreCase) && _currentSongs != null && _currentSongs.Count > 0;
+		if (!isListeningView)
+		{
+			SaveNavigationState();
+		}
+		List<SongInfo> aggregateExisting = _listenMatchAggregate ?? new List<SongInfo>();
+		int aggregateAdded;
+		List<SongInfo> mergedAggregate = MergeRecognitionSongs(newSongs, aggregateExisting, out aggregateAdded);
+		_listenMatchAggregate = CloneList(mergedAggregate);
+		if (!string.IsNullOrWhiteSpace(result.SessionId))
+		{
+			_lastListenMatchSessionId = result.SessionId;
+		}
+		string viewSource = NormalizeListenMatchViewSource("listen-match");
+		foreach (SongInfo song in mergedAggregate)
+		{
+			if (song != null && (string.IsNullOrWhiteSpace(song.ViewSource) || song.ViewSource.StartsWith("listen-match", StringComparison.OrdinalIgnoreCase)))
+			{
+				song.ViewSource = viewSource;
+			}
+		}
+		_listenMatchCache["listen-match"] = CloneList(mergedAggregate);
 		EnsureSearchTypeSelection("歌曲");
 		_currentSearchType = "歌曲";
 		_lastKeyword = "听歌识曲";
@@ -19695,27 +19808,32 @@ UrlResolved:
 		_maxPage = 1;
 		_hasNextSearchPage = false;
 		_isHomePage = false;
-		ViewLoadRequest request = new ViewLoadRequest(viewSource, "听歌识曲", isListeningView ? "正在更新听歌识曲结果..." : "正在载入听歌识曲结果...", cancelActiveNavigation: true, 0, suppressLoadingFocus: false);
-		if (!(await RunViewLoadAsync(request, (CancellationToken _) => Task.FromResult(mergedSongs), "听歌识曲已取消").ConfigureAwait(continueOnCapturedContext: true)).IsCanceled)
+		ViewLoadRequest request = new ViewLoadRequest(viewSource, "听歌识曲", isListeningView ? "正在更新听歌识曲结果..." : "正在载入听歌识曲结果...", cancelActiveNavigation: true, pendingFocusIndex: -1, suppressLoadingFocus: true);
+		if (!(await RunViewLoadAsync(request, (CancellationToken _) => Task.FromResult(mergedAggregate), "听歌识曲已取消").ConfigureAwait(continueOnCapturedContext: true)).IsCanceled)
 		{
-			_currentSongs = mergedSongs;
+			_currentSongs = mergedAggregate;
 			_currentPlaylist = null;
 			_currentMixedQueryKey = null;
 			await ExecuteOnUiThreadAsync(delegate
 			{
 				DisplaySongs(_currentSongs, showPagination: false, hasNextPage: false, 1, preserveSelection: false, viewSource, "听歌识曲");
-				string message = ((mergedSongs.Count <= 0) ? "未能识别出歌曲" : (isListeningView ? $"识别到 {addedCount} 首新歌曲，累计 {mergedSongs.Count} 首" : $"识别到 {mergedSongs.Count} 首歌曲"));
+				string message = ((mergedAggregate.Count <= 0) ? "未能识别出歌曲" : (isListeningView ? $"识别到 {aggregateAdded} 首新歌曲，累计 {mergedAggregate.Count} 首" : $"识别到 {mergedAggregate.Count} 首歌曲"));
 				UpdateStatusBar(message);
 				AnnounceListViewHeaderIfNeeded("听歌识曲");
+				if (!IsListAutoFocusSuppressed && resultListView != null && resultListView.Items.Count > 0 && !resultListView.Focused && resultListView.CanFocus)
+				{
+					int idx = (resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : 0;
+					RestoreListViewFocus(Math.Max(0, Math.Min(idx, resultListView.Items.Count - 1)));
+				}
 			}).ConfigureAwait(continueOnCapturedContext: true);
 		}
 	}
 
 	private async Task LoadListenMatchAsync(string viewSource, bool skipSave = false)
 	{
-		ViewLoadRequest request = new ViewLoadRequest(viewSource, "听歌识曲", "正在载入听歌识曲结果...", !skipSave, 0, suppressLoadingFocus: false);
-		string sessionId = viewSource.StartsWith("listen-match:", StringComparison.OrdinalIgnoreCase) ? viewSource.Substring("listen-match:".Length) : viewSource;
-		List<SongInfo> songs = (_listenMatchCache.TryGetValue(sessionId, out var cached) ? CloneList(cached) : new List<SongInfo>());
+		string normalized = NormalizeListenMatchViewSource(viewSource);
+		ViewLoadRequest request = new ViewLoadRequest(normalized, "听歌识曲", "正在载入听歌识曲结果...", !skipSave, pendingFocusIndex: -1, suppressLoadingFocus: true);
+		List<SongInfo> songs = (_listenMatchCache.TryGetValue("listen-match", out var cached) ? CloneList(cached) : CloneList(_listenMatchAggregate));
 		ViewLoadResult<List<SongInfo>> loadResult = await RunViewLoadAsync(request, (CancellationToken _) => Task.FromResult(songs), "听歌识曲已取消").ConfigureAwait(continueOnCapturedContext: true);
 		if (!loadResult.IsCanceled)
 		{
@@ -19728,6 +19846,11 @@ UrlResolved:
 				string message = ((_currentSongs.Count <= 0) ? "未能识别出歌曲" : $"听歌识曲结果：{_currentSongs.Count} 首");
 				UpdateStatusBar(message);
 				AnnounceListViewHeaderIfNeeded("听歌识曲");
+				if (!IsListAutoFocusSuppressed && resultListView != null && resultListView.Items.Count > 0 && !resultListView.Focused && resultListView.CanFocus)
+				{
+					int idx = (resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : 0;
+					RestoreListViewFocus(Math.Max(0, Math.Min(idx, resultListView.Items.Count - 1)));
+				}
 			}).ConfigureAwait(continueOnCapturedContext: true);
 		}
 	}
@@ -19795,6 +19918,19 @@ UrlResolved:
 			CancelNavigationOperation();
 		}
 		return cancellationTokenSource.Token;
+	}
+
+	private string NormalizeListenMatchViewSource(string viewSource)
+	{
+		if (string.IsNullOrWhiteSpace(viewSource))
+		{
+			return "listen-match";
+		}
+		if (viewSource.StartsWith("listen-match", StringComparison.OrdinalIgnoreCase))
+		{
+			return "listen-match";
+		}
+		return viewSource;
 	}
 
 	private CancellationToken BeginNavigationOperation()
