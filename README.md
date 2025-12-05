@@ -2,6 +2,10 @@
 
 一个专注高可用与无障碍体验的网易云音乐第三方桌面客户端，基于 .NET Framework 4.8 + WinForms 构建，提供简洁直观的 UI ，高质量音频播放及下载、可靠的播放指令队列以及面向键鼠与屏幕阅读器用户的统一交互体验。
 
+## 系统要求
+
+- Windows 10/11 64 位
+
 ## 项目概述
 
 - **技术栈**：.NET Framework 4.8、Windows Forms、BASS 2.4、Newtonsoft.Json、QRCoder

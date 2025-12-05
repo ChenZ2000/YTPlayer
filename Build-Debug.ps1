@@ -93,9 +93,9 @@ Write-Host ""
 # 解决方案文件
 $solutionFile = "YTPlayer.sln"
 
-# 还原 NuGet 包
+# 还原 NuGet 包（统一 x64）
 Write-Host "[1/2] 还原 NuGet 包..." -ForegroundColor Yellow
-& $msbuildPath /t:Restore $solutionFile /p:Configuration=Debug /p:Platform="Any CPU" /v:minimal /nologo
+& $msbuildPath /t:Restore $solutionFile /p:Configuration=Debug /p:Platform="x64" /v:minimal /nologo
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "      × NuGet 包还原失败" -ForegroundColor Red
@@ -106,11 +106,11 @@ Write-Host "      ✓ NuGet 包还原成功" -ForegroundColor Green
 Write-Host ""
 
 # 构建项目（Debug 配置）
-Write-Host "[2/2] 开始编译项目 (Debug 配置)..." -ForegroundColor Yellow
+Write-Host "[2/2] 开始编译项目 (Debug 配置, x64)..." -ForegroundColor Yellow
 Write-Host ""
 
 $startTime = Get-Date
-& $msbuildPath $solutionFile /p:Configuration=Debug /p:Platform="Any CPU" /t:Rebuild /v:minimal /nologo /m
+& $msbuildPath $solutionFile /p:Configuration=Debug /p:Platform="x64" /t:Rebuild /v:minimal /nologo /m
 $exitCode = $LASTEXITCODE
 $elapsed = (Get-Date) - $startTime
 

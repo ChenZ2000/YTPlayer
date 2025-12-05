@@ -33,9 +33,9 @@ Write-Host ""
 # 解决方案文件
 $solutionFile = "YTPlayer.sln"
 
-# 还原 NuGet 包
+# 还原 NuGet 包（统一 x64）
 Write-Host "正在还原 NuGet 包..." -ForegroundColor Cyan
-& $msbuildPath /t:Restore $solutionFile /p:Configuration=Release /v:minimal
+& $msbuildPath /t:Restore $solutionFile /p:Configuration=Release /p:Platform=x64 /v:minimal
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "NuGet 包还原失败！" -ForegroundColor Red
@@ -47,7 +47,7 @@ Write-Host ""
 
 # 编译项目
 Write-Host "正在编译项目..." -ForegroundColor Cyan
-& $msbuildPath $solutionFile /p:Configuration=Release /v:minimal
+& $msbuildPath $solutionFile /p:Configuration=Release /p:Platform=x64 /v:minimal
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host ""
