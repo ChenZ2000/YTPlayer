@@ -11654,7 +11654,7 @@ private ToolStripMenuItem helpMenuItem;
 		_hideSequenceNumbers = !_hideSequenceNumbers;
 		UpdateHideSequenceMenuItemText();
 		RefreshSequenceDisplayInPlace();
-		string message = (_hideSequenceNumbers ? "已开启序号隐藏" : "已关闭序号隐藏");
+		string message = (_hideSequenceNumbers ? "以隐藏序号" : "以显示序号");
 		TtsHelper.SpeakText(message);
 		UpdateStatusBar(message);
 		Debug.WriteLine("[TTS] 序号隐藏: " + (_hideSequenceNumbers ? "开启" : "关闭"));
