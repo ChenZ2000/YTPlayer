@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using Newtonsoft.Json;
 using YTPlayer.Models;
 using YTPlayer.Utils;
@@ -16,6 +17,9 @@ namespace YTPlayer.Core
     {
         private static readonly object _lock = new object();
         private static ConfigManager? _instance;
+
+        internal const int MaxSearchHistoryCount = 50;
+        internal const int MaxLastPlayingQueueCount = 300;
 
         /// <summary>
         /// 获取程序所在目录
@@ -322,7 +326,6 @@ namespace YTPlayer.Core
 
                 // 听歌识曲
                 RecognitionInputDeviceId = AudioInputDeviceInfo.WindowsDefaultId,
-                RecognitionDurationSec = 6,
                 RecognitionAutoCloseDialog = true,
                 // 识曲后端：默认指向公开可用的 api-enhanced 部署
                 RecognitionApiBaseUrl = "http://159.75.21.45:5000",
@@ -338,7 +341,11 @@ namespace YTPlayer.Core
 
                 // 其他设置
                 LastPlayingSongId = string.Empty,
-                LastPlayingPosition = 0,
+                LastPlayingSource = string.Empty,
+                LastPlayingSongName = string.Empty,
+                LastPlayingDuration = 0,
+                LastPlayingQueue = new List<string>(),
+                LastPlayingQueueIndex = -1,
                 LyricsFontSize = 12
             };
         }
@@ -387,6 +394,37 @@ namespace YTPlayer.Core
                 config.SearchHistory = new List<string>();
                 changed = true;
             }
+            else
+            {
+                List<string> cleanedHistory = new List<string>(config.SearchHistory.Count);
+                HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (string item in config.SearchHistory)
+                {
+                    if (string.IsNullOrWhiteSpace(item))
+                    {
+                        continue;
+                    }
+
+                    string trimmed = item.Trim();
+                    if (!seen.Add(trimmed))
+                    {
+                        continue;
+                    }
+
+                    cleanedHistory.Add(trimmed);
+                    if (cleanedHistory.Count >= MaxSearchHistoryCount)
+                    {
+                        break;
+                    }
+                }
+
+                if (cleanedHistory.Count != config.SearchHistory.Count ||
+                    !config.SearchHistory.SequenceEqual(cleanedHistory, StringComparer.OrdinalIgnoreCase))
+                {
+                    config.SearchHistory = cleanedHistory;
+                    changed = true;
+                }
+            }
 
             // 验证下载目录路径（仅在为空时设置默认值，不要重置已有配置）
             if (string.IsNullOrWhiteSpace(config.DownloadDirectory))
@@ -427,13 +465,6 @@ namespace YTPlayer.Core
                 changed = true;
             }
 
-            // 时长已固定为 6 秒，仅保持存储值一致
-            if (config.RecognitionDurationSec != 6)
-            {
-                config.RecognitionDurationSec = 6;
-                changed = true;
-            }
-
             // RecognitionAutoCloseDialog 为 bool，无需额外验证
 
             if (string.IsNullOrWhiteSpace(config.RecognitionApiBaseUrl))
@@ -461,6 +492,69 @@ namespace YTPlayer.Core
                 }
             }
 
+            // 验证上次播放队列
+            if (config.LastPlayingQueue == null)
+            {
+                config.LastPlayingQueue = new List<string>();
+                changed = true;
+            }
+            else
+            {
+                var cleanedQueue = new List<string>(config.LastPlayingQueue.Count);
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (string id in config.LastPlayingQueue)
+                {
+                    if (string.IsNullOrWhiteSpace(id))
+                    {
+                        continue;
+                    }
+                    string trimmed = id.Trim();
+                    if (!seen.Add(trimmed))
+                    {
+                        continue;
+                    }
+                    cleanedQueue.Add(trimmed);
+                    if (cleanedQueue.Count >= MaxLastPlayingQueueCount)
+                    {
+                        break;
+                    }
+                }
+                if (!config.LastPlayingQueue.SequenceEqual(cleanedQueue, StringComparer.OrdinalIgnoreCase))
+                {
+                    config.LastPlayingQueue = cleanedQueue;
+                    changed = true;
+                }
+            }
+
+            if (config.LastPlayingQueueIndex >= config.LastPlayingQueue.Count)
+            {
+                config.LastPlayingQueueIndex = (config.LastPlayingQueue.Count > 0) ? 0 : -1;
+                changed = true;
+            }
+            if (config.LastPlayingQueueIndex < -1)
+            {
+                config.LastPlayingQueueIndex = -1;
+                changed = true;
+            }
+
+            if (config.LastPlayingDuration < 0)
+            {
+                config.LastPlayingDuration = 0;
+                changed = true;
+            }
+
+            if (config.LastPlayingSource == null)
+            {
+                config.LastPlayingSource = string.Empty;
+                changed = true;
+            }
+
+            if (config.LastPlayingSongName == null)
+            {
+                config.LastPlayingSongName = string.Empty;
+                changed = true;
+            }
+
             // 验证跳转间隔
             if (config.SeekMinIntervalMs < 0 || config.SeekMinIntervalMs > 1000)
             {
@@ -474,13 +568,6 @@ namespace YTPlayer.Core
             if (config.LyricsFontSize < 8 || config.LyricsFontSize > 32)
             {
                 config.LyricsFontSize = 12;
-                changed = true;
-            }
-
-            // 验证上次播放位置
-            if (config.LastPlayingPosition < 0)
-            {
-                config.LastPlayingPosition = 0;
                 changed = true;
             }
 

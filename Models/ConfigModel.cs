@@ -80,19 +80,34 @@ namespace YTPlayer.Models
         public string LastPlayingSongId { get; set; } = string.Empty;
 
         /// <summary>
-        /// 上次播放位置（秒）
+        /// 上次播放来源（视图来源标识，便于恢复队列/上下文）
         /// </summary>
-        public double LastPlayingPosition { get; set; } = 0;
+        public string LastPlayingSource { get; set; } = string.Empty;
+
+        /// <summary>
+        /// 上次播放的歌曲名称（用于可读的提示，可选）
+        /// </summary>
+        public string LastPlayingSongName { get; set; } = string.Empty;
+
+        /// <summary>
+        /// 上次播放的总时长（秒）
+        /// </summary>
+        public double LastPlayingDuration { get; set; } = 0;
+
+        /// <summary>
+        /// 上次播放时的队列歌曲 ID 列表（按顺序）
+        /// </summary>
+        public List<string> LastPlayingQueue { get; set; } = new List<string>();
+
+        /// <summary>
+        /// 上次播放时队列的当前索引（基于 LastPlayingQueue）
+        /// </summary>
+        public int LastPlayingQueueIndex { get; set; } = -1;
 
         /// <summary>
         /// 听歌识曲默认输入设备 ID（Default / Loopback / 设备标识）。
         /// </summary>
         public string RecognitionInputDeviceId { get; set; } = AudioInputDeviceInfo.WindowsDefaultId;
-
-        /// <summary>
-        /// 听歌识曲录制时长（秒）。现固定 6 秒，仅为向后兼容保留。
-        /// </summary>
-        public int RecognitionDurationSec { get; set; } = 6;
 
         /// <summary>
         /// 识曲完成后自动关闭对话框。

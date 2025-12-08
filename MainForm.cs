@@ -611,6 +611,20 @@ private CancellationTokenSource? _lyricsSpeechCts;
 
 	private string? _currentMixedQueryKey = null;
 
+	private const int MaxSearchHistoryEntries = ConfigManager.MaxSearchHistoryCount;
+
+	private int _searchHistoryIndex = -1;
+
+	private string _searchHistoryDraft = string.Empty;
+
+	private AutoCompleteStringCollection? _searchHistoryAutoComplete;
+
+	private bool _isApplyingSearchHistoryText = false;
+
+	private bool _lastPlaybackRestored = false;
+
+	private const string LastPlaybackViewSource = "resume:last_playback";
+
 	private CancellationTokenSource? _initialHomeLoadCts;
 	private bool _initialHomeLoadCompleted = false;
 
@@ -956,6 +970,18 @@ private ToolStripMenuItem helpMenuItem;
 	private TextBox searchTextBox;
 
 	private Label searchLabel;
+
+	private ContextMenuStrip searchTextContextMenu;
+
+	private ToolStripMenuItem searchCopyMenuItem;
+
+	private ToolStripMenuItem searchCutMenuItem;
+
+	private ToolStripMenuItem searchPasteMenuItem;
+
+	private ToolStripMenuItem searchClearHistoryMenuItem;
+
+	private ToolStripSeparator searchHistorySeparator;
 
 	private ListView resultListView;
 
@@ -1632,6 +1658,11 @@ private ToolStripMenuItem helpMenuItem;
 	private void LoadConfig()
 	{
 		ConfigModel configModel = EnsureConfigInitialized();
+		if (configModel.SearchHistory == null)
+		{
+			configModel.SearchHistory = new List<string>();
+		}
+		InitializeSearchHistoryUi(configModel.SearchHistory);
 		if (_audioEngine != null)
 		{
 			volumeTrackBar.Value = checked((int)(configModel.Volume * 100.0));
@@ -1687,6 +1718,338 @@ private ToolStripMenuItem helpMenuItem;
 			{
 				await EnsureLoginProfileAsync();
 			});
+		}
+	}
+
+	private void InitializeSearchHistoryUi(IReadOnlyCollection<string> history)
+	{
+		if (searchTextBox == null)
+		{
+			return;
+		}
+		EnsureSearchHistoryAutoCompleteSource();
+		RefreshSearchHistoryAutoComplete(history);
+		ResetSearchHistoryNavigation();
+	}
+
+	private void RefreshSearchHistoryAutoComplete(IEnumerable<string> history)
+	{
+		if (searchTextBox == null)
+		{
+			return;
+		}
+		EnsureSearchHistoryAutoCompleteSource();
+		_searchHistoryAutoComplete.Clear();
+		if (history == null)
+		{
+			return;
+		}
+		foreach (string item in history)
+		{
+			if (!string.IsNullOrWhiteSpace(item))
+			{
+				_searchHistoryAutoComplete.Add(item);
+			}
+		}
+	}
+
+	private void ResetSearchHistoryNavigation()
+	{
+		_searchHistoryIndex = -1;
+		_searchHistoryDraft = string.Empty;
+	}
+
+	private void ApplySearchHistoryText(string text)
+	{
+		if (searchTextBox == null)
+		{
+			return;
+		}
+		_isApplyingSearchHistoryText = true;
+		try
+		{
+			searchTextBox.Text = text;
+			searchTextBox.Focus();
+			// 使用异步选中以避免 AutoComplete 覆盖光标位置
+			BeginInvoke((MethodInvoker)delegate
+			{
+				searchTextBox.SelectAll();
+			});
+		}
+		finally
+		{
+			_isApplyingSearchHistoryText = false;
+		}
+	}
+
+	private bool NavigateSearchHistory(bool moveUp)
+	{
+		ConfigModel configModel = EnsureConfigInitialized();
+		if (configModel == null)
+		{
+			return false;
+		}
+		List<string> history = configModel.SearchHistory;
+		if (history == null || history.Count == 0 || searchTextBox == null)
+		{
+			return false;
+		}
+		if (_searchHistoryIndex == -1)
+		{
+			_searchHistoryDraft = searchTextBox.Text;
+		}
+		if (moveUp)
+		{
+			if (_searchHistoryIndex + 1 >= history.Count)
+			{
+				return true;
+			}
+			_searchHistoryIndex++;
+		}
+		else
+		{
+			if (_searchHistoryIndex <= -1)
+			{
+				return true;
+			}
+			_searchHistoryIndex--;
+		}
+		string text = (_searchHistoryIndex >= 0 && _searchHistoryIndex < history.Count) ? history[_searchHistoryIndex] : _searchHistoryDraft;
+		ApplySearchHistoryText(text);
+		return true;
+	}
+
+	private void RecordSearchHistory(string keyword)
+	{
+		if (string.IsNullOrWhiteSpace(keyword))
+		{
+			return;
+		}
+		ConfigModel configModel = EnsureConfigInitialized();
+		if (configModel == null)
+		{
+			return;
+		}
+		if (configModel.SearchHistory == null)
+		{
+			configModel.SearchHistory = new List<string>();
+		}
+		List<string> history = configModel.SearchHistory;
+		history.RemoveAll((string h) => string.Equals(h, keyword, StringComparison.OrdinalIgnoreCase));
+		history.Insert(0, keyword);
+		if (history.Count > MaxSearchHistoryEntries)
+		{
+			history.RemoveRange(MaxSearchHistoryEntries, history.Count - MaxSearchHistoryEntries);
+		}
+		if (_searchHistoryAutoComplete == null)
+		{
+			InitializeSearchHistoryUi(history);
+		}
+		else
+		{
+			RefreshSearchHistoryAutoComplete(history);
+		}
+		ResetSearchHistoryNavigation();
+		try
+		{
+			_configManager?.Save(configModel);
+		}
+		catch (Exception ex)
+		{
+			Debug.WriteLine("[SearchHistory] 保存搜索历史失败: " + ex.Message);
+		}
+	}
+
+	private void ClearSearchHistory()
+	{
+		ConfigModel configModel = EnsureConfigInitialized();
+		if (configModel?.SearchHistory == null || configModel.SearchHistory.Count == 0)
+		{
+			return;
+		}
+		configModel.SearchHistory.Clear();
+		RefreshSearchHistoryAutoComplete(configModel.SearchHistory);
+		ResetSearchHistoryNavigation();
+		try
+		{
+			_configManager?.Save(configModel);
+		}
+		catch (Exception ex)
+		{
+			Debug.WriteLine("[SearchHistory] 清空搜索历史失败: " + ex.Message);
+		}
+	}
+
+	private void PersistPlaybackState(bool includeQueue = true, bool persistToDisk = true)
+	{
+		try
+		{
+			ConfigModel configModel = EnsureConfigInitialized();
+			if (configModel == null || _audioEngine == null)
+			{
+				return;
+			}
+			SongInfo currentSong = _audioEngine.CurrentSong;
+			if (currentSong == null)
+			{
+				return;
+			}
+
+			configModel.LastPlayingSongId = currentSong.Id ?? string.Empty;
+			configModel.LastPlayingSongName = currentSong.Name ?? string.Empty;
+			configModel.LastPlayingDuration = currentSong.Duration;
+			configModel.LastPlayingSource = string.Empty;
+
+			if (includeQueue && _playbackQueue != null)
+			{
+				var snapshot = _playbackQueue.CaptureSnapshot();
+				if (snapshot != null && snapshot.Queue != null && snapshot.Queue.Count > 0)
+				{
+					configModel.LastPlayingQueue = snapshot.Queue
+						.Where(s => s != null && !string.IsNullOrWhiteSpace(s.Id))
+						.Select(s => s.Id)
+						.Take(ConfigManager.MaxLastPlayingQueueCount)
+						.ToList();
+					configModel.LastPlayingQueueIndex = Math.Max(0, Math.Min(snapshot.QueueIndex, configModel.LastPlayingQueue.Count - 1));
+					if (string.IsNullOrWhiteSpace(configModel.LastPlayingSource))
+					{
+						configModel.LastPlayingSource = snapshot.QueueSource ?? string.Empty;
+					}
+				}
+				else
+				{
+					configModel.LastPlayingQueue = new List<string>();
+					if (!string.IsNullOrWhiteSpace(currentSong.Id))
+					{
+						configModel.LastPlayingQueue.Add(currentSong.Id);
+						configModel.LastPlayingQueueIndex = 0;
+					}
+					else
+					{
+						configModel.LastPlayingQueueIndex = -1;
+					}
+				}
+			}
+			// 兜底来源：队列来源 > 音乐条目自身记录 > 当前视图
+			if (string.IsNullOrWhiteSpace(configModel.LastPlayingSource))
+			{
+				configModel.LastPlayingSource = _playbackQueue?.QueueSource ?? string.Empty;
+			}
+			if (string.IsNullOrWhiteSpace(configModel.LastPlayingSource))
+			{
+				configModel.LastPlayingSource = currentSong.ViewSource ?? string.Empty;
+			}
+			if (string.IsNullOrWhiteSpace(configModel.LastPlayingSource))
+			{
+				configModel.LastPlayingSource = _currentViewSource ?? string.Empty;
+			}
+
+			if (persistToDisk)
+			{
+				_configManager?.Save(configModel);
+			}
+		}
+		catch (Exception ex2)
+		{
+			Debug.WriteLine("[PlaybackState] 持久化失败: " + ex2.Message);
+		}
+	}
+
+	private async Task<bool> TryResumeLastPlaybackAsync()
+	{
+		if (_lastPlaybackRestored)
+		{
+			return false;
+		}
+		ConfigModel configModel = EnsureConfigInitialized();
+		if (configModel == null || _apiClient == null || _audioEngine == null)
+		{
+			return false;
+		}
+		if (string.IsNullOrWhiteSpace(configModel.LastPlayingSongId))
+		{
+			return false;
+		}
+
+		try
+		{
+			List<string> queueIds = new List<string>();
+			if (configModel.LastPlayingQueue != null && configModel.LastPlayingQueue.Count > 0)
+			{
+				queueIds.AddRange(configModel.LastPlayingQueue.Where(id => !string.IsNullOrWhiteSpace(id)));
+			}
+			if (!queueIds.Contains(configModel.LastPlayingSongId, StringComparer.OrdinalIgnoreCase))
+			{
+				queueIds.Insert(Math.Max(0, Math.Min(configModel.LastPlayingQueueIndex, queueIds.Count)), configModel.LastPlayingSongId);
+			}
+			if (queueIds.Count == 0)
+			{
+				queueIds.Add(configModel.LastPlayingSongId);
+			}
+
+			List<SongInfo> songs = await _apiClient.GetSongDetailAsync(queueIds.ToArray());
+			if (songs == null || songs.Count == 0)
+			{
+				return false;
+			}
+
+			// 保持队列原顺序
+			Dictionary<string, SongInfo> map = songs
+				.Where(s => s != null && !string.IsNullOrWhiteSpace(s.Id))
+				.GroupBy(s => s.Id, StringComparer.OrdinalIgnoreCase)
+				.ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+			List<SongInfo> ordered = new List<SongInfo>();
+			foreach (string id in queueIds)
+			{
+				if (map.TryGetValue(id, out var s))
+				{
+					ordered.Add(s);
+				}
+			}
+			if (ordered.Count == 0)
+			{
+				ordered = songs;
+			}
+
+			_currentSongs = ordered;
+			_currentViewSource = string.IsNullOrWhiteSpace(configModel.LastPlayingSource) ? LastPlaybackViewSource : configModel.LastPlayingSource;
+
+			SongInfo target = ordered.FirstOrDefault(s => string.Equals(s.Id, configModel.LastPlayingSongId, StringComparison.OrdinalIgnoreCase)) ?? ordered.First();
+			_playbackQueue.ManualSelect(target, _currentSongs, _currentViewSource);
+
+			// 立即播放
+			await PlaySongDirectWithCancellation(target, isAutoPlayback: true);
+
+			_lastPlaybackRestored = true;
+			return true;
+		}
+		catch (Exception ex)
+		{
+			Debug.WriteLine("[PlaybackState] 恢复上次播放失败: " + ex.Message);
+			return false;
+		}
+	}
+
+	private void EnsureSearchHistoryAutoCompleteSource()
+	{
+		if (searchTextBox == null)
+		{
+			return;
+		}
+		if (_searchHistoryAutoComplete == null)
+		{
+			_searchHistoryAutoComplete = new AutoCompleteStringCollection();
+			searchTextBox.AutoCompleteCustomSource = _searchHistoryAutoComplete;
+		}
+		// 使用 Suggest 避免 Append 引发“虚拟选中”和光标错位
+		if (searchTextBox.AutoCompleteMode != AutoCompleteMode.Suggest)
+		{
+			searchTextBox.AutoCompleteMode = AutoCompleteMode.Suggest;
+		}
+		if (searchTextBox.AutoCompleteSource != AutoCompleteSource.CustomSource)
+		{
+			searchTextBox.AutoCompleteSource = AutoCompleteSource.CustomSource;
 		}
 	}
 
@@ -1824,6 +2187,7 @@ private ToolStripMenuItem helpMenuItem;
 			}
 			configModel.LyricsReadingEnabled = _autoReadLyrics;
 			configModel.SequenceNumberHidden = _hideSequenceNumbers;
+			PersistPlaybackState(includeQueue: true, persistToDisk: false);
 			_configManager.Save(configModel);
 		}
 		catch (Exception ex)
@@ -1983,6 +2347,115 @@ private ToolStripMenuItem helpMenuItem;
 			e.Handled = true;
 			e.SuppressKeyPress = true;
 		}
+		else if (e.KeyCode == Keys.Up || e.KeyCode == Keys.Down)
+		{
+			bool handled = NavigateSearchHistory(e.KeyCode == Keys.Up);
+			if (handled)
+			{
+				e.Handled = true;
+				e.SuppressKeyPress = true;
+			}
+		}
+	}
+
+	private void searchTextBox_TextChanged(object sender, EventArgs e)
+	{
+		if (_isApplyingSearchHistoryText)
+		{
+			return;
+		}
+		ResetSearchHistoryNavigation();
+	}
+
+	private void searchTextContextMenu_Opening(object sender, CancelEventArgs e)
+	{
+		try
+		{
+			bool hasSelection = searchTextBox != null && searchTextBox.SelectionLength > 0;
+			bool hasClipboardText = false;
+			try
+			{
+				hasClipboardText = Clipboard.ContainsText();
+			}
+			catch (Exception ex)
+			{
+				Debug.WriteLine("[SearchHistory] Clipboard.ContainsText 异常: " + ex.Message);
+			}
+			ConfigModel configModel = _config ?? EnsureConfigInitialized();
+			bool hasHistory = configModel?.SearchHistory != null && configModel.SearchHistory.Count > 0;
+			if (searchCopyMenuItem != null)
+			{
+				searchCopyMenuItem.Enabled = hasSelection;
+			}
+			if (searchCutMenuItem != null)
+			{
+				searchCutMenuItem.Enabled = hasSelection;
+			}
+			if (searchPasteMenuItem != null)
+			{
+				searchPasteMenuItem.Enabled = hasClipboardText;
+			}
+			if (searchClearHistoryMenuItem != null)
+			{
+				searchClearHistoryMenuItem.Enabled = hasHistory;
+			}
+		}
+		catch (Exception ex2)
+		{
+			Debug.WriteLine("[SearchHistory] 上下文菜单 Opening 异常: " + ex2.Message);
+		}
+	}
+
+	private void searchCopyMenuItem_Click(object sender, EventArgs e)
+	{
+		try
+		{
+			if (searchTextBox != null && searchTextBox.SelectionLength > 0)
+			{
+				searchTextBox.Copy();
+			}
+		}
+		catch (Exception ex)
+		{
+			Debug.WriteLine("[SearchHistory] 复制失败: " + ex.Message);
+		}
+	}
+
+	private void searchCutMenuItem_Click(object sender, EventArgs e)
+	{
+		try
+		{
+			if (searchTextBox != null && searchTextBox.SelectionLength > 0)
+			{
+				searchTextBox.Cut();
+				ResetSearchHistoryNavigation();
+			}
+		}
+		catch (Exception ex)
+		{
+			Debug.WriteLine("[SearchHistory] 剪切失败: " + ex.Message);
+		}
+	}
+
+	private void searchPasteMenuItem_Click(object sender, EventArgs e)
+	{
+		try
+		{
+			if (searchTextBox != null && Clipboard.ContainsText())
+			{
+				searchTextBox.Paste();
+				ResetSearchHistoryNavigation();
+			}
+		}
+		catch (Exception ex)
+		{
+			Debug.WriteLine("[SearchHistory] 粘贴失败: " + ex.Message);
+		}
+	}
+
+	private void searchClearHistoryMenuItem_Click(object sender, EventArgs e)
+	{
+		ClearSearchHistory();
 	}
 
 	private void searchTypeComboBox_KeyDown(object sender, KeyEventArgs e)
@@ -2395,6 +2868,7 @@ private ToolStripMenuItem helpMenuItem;
 			singleUrlSearch = NeteaseUrlParser.TryParse(keyword, out parsedUrl);
 		}
 		bool isUrlSearch = isMultiUrlSearch || singleUrlSearch;
+		RecordSearchHistory(keyword);
 		string searchType;
 		if (isMultiUrlSearch && multiMatches != null)
 		{
@@ -9344,19 +9818,30 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		}
 	}
 
-	private void TogglePlayPause()
+	private async void TogglePlayPause()
 	{
-		if (_audioEngine != null)
+		if (_audioEngine == null)
 		{
-			switch (_audioEngine.GetPlaybackState())
+			return;
+		}
+
+		switch (_audioEngine.GetPlaybackState())
+		{
+		case PlaybackState.Playing:
+			_audioEngine.Pause();
+			PersistPlaybackState(includeQueue: true);
+			break;
+		case PlaybackState.Paused:
+			_audioEngine.Resume();
+			break;
+		default:
+		case PlaybackState.Idle:
+		case PlaybackState.Stopped:
+			if (!await TryResumeLastPlaybackAsync())
 			{
-			case PlaybackState.Playing:
-				_audioEngine.Pause();
-				break;
-			case PlaybackState.Paused:
-				_audioEngine.Resume();
-				break;
+				UpdateStatusBar("没有可恢复的播放记录");
 			}
+			break;
 		}
 	}
 
@@ -15125,6 +15610,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 	{
 		_isFormClosing = true;
 		_isApplicationExitRequested = true;
+		PersistPlaybackState(includeQueue: true);
 		StopInitialHomeLoadLoop("窗口关闭");
 		_autoUpdateCheckCts?.Cancel();
 		_autoUpdateCheckCts?.Dispose();
@@ -15808,6 +16294,7 @@ UrlResolved:
 			{
 				RefreshNextSongPreload();
 			});
+			PersistPlaybackState(includeQueue: true);
 		}
 		catch (OperationCanceledException)
 		{
@@ -20599,6 +21086,12 @@ UrlResolved:
 		this.searchTypeLabel = new System.Windows.Forms.Label();
 		this.searchButton = new System.Windows.Forms.Button();
 		this.searchTextBox = new System.Windows.Forms.TextBox();
+		this.searchTextContextMenu = new System.Windows.Forms.ContextMenuStrip();
+		this.searchCopyMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+		this.searchCutMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+		this.searchPasteMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+		this.searchHistorySeparator = new System.Windows.Forms.ToolStripSeparator();
+		this.searchClearHistoryMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.searchLabel = new System.Windows.Forms.Label();
 		this.resultListView = new System.Windows.Forms.ListView();
 		this.columnHeader1 = new System.Windows.Forms.ColumnHeader();
@@ -20681,6 +21174,7 @@ UrlResolved:
 		this.toolStripStatusLabel1 = new System.Windows.Forms.ToolStripStatusLabel();
 		this.menuStrip1.SuspendLayout();
 		this.searchPanel.SuspendLayout();
+		this.searchTextContextMenu.SuspendLayout();
 		this.controlPanel.SuspendLayout();
 		((System.ComponentModel.ISupportInitialize)this.volumeTrackBar).BeginInit();
 		((System.ComponentModel.ISupportInitialize)this.progressTrackBar).BeginInit();
@@ -20908,6 +21402,29 @@ UrlResolved:
 		this.searchButton.UseVisualStyleBackColor = true;
 		this.searchButton.AccessibleName = "搜索";
 		this.searchButton.Click += new System.EventHandler(searchButton_Click);
+		this.searchTextContextMenu.ImageScalingSize = new System.Drawing.Size(20, 20);
+		this.searchTextContextMenu.Items.AddRange(new System.Windows.Forms.ToolStripItem[5] { this.searchCopyMenuItem, this.searchCutMenuItem, this.searchPasteMenuItem, this.searchHistorySeparator, this.searchClearHistoryMenuItem });
+		this.searchTextContextMenu.Name = "searchTextContextMenu";
+		this.searchTextContextMenu.Size = new System.Drawing.Size(169, 114);
+		this.searchTextContextMenu.Opening += new System.ComponentModel.CancelEventHandler(this.searchTextContextMenu_Opening);
+		this.searchCopyMenuItem.Name = "searchCopyMenuItem";
+		this.searchCopyMenuItem.Size = new System.Drawing.Size(168, 24);
+		this.searchCopyMenuItem.Text = "复制";
+		this.searchCopyMenuItem.Click += new System.EventHandler(this.searchCopyMenuItem_Click);
+		this.searchCutMenuItem.Name = "searchCutMenuItem";
+		this.searchCutMenuItem.Size = new System.Drawing.Size(168, 24);
+		this.searchCutMenuItem.Text = "剪切";
+		this.searchCutMenuItem.Click += new System.EventHandler(this.searchCutMenuItem_Click);
+		this.searchPasteMenuItem.Name = "searchPasteMenuItem";
+		this.searchPasteMenuItem.Size = new System.Drawing.Size(168, 24);
+		this.searchPasteMenuItem.Text = "粘贴";
+		this.searchPasteMenuItem.Click += new System.EventHandler(this.searchPasteMenuItem_Click);
+		this.searchHistorySeparator.Name = "searchHistorySeparator";
+		this.searchHistorySeparator.Size = new System.Drawing.Size(165, 6);
+		this.searchClearHistoryMenuItem.Name = "searchClearHistoryMenuItem";
+		this.searchClearHistoryMenuItem.Size = new System.Drawing.Size(168, 24);
+		this.searchClearHistoryMenuItem.Text = "清空历史";
+		this.searchClearHistoryMenuItem.Click += new System.EventHandler(this.searchClearHistoryMenuItem_Click);
 		this.searchTextBox.Font = new System.Drawing.Font("Microsoft YaHei UI", 12f);
 		this.searchTextBox.Location = new System.Drawing.Point(130, 15);
 		this.searchTextBox.Name = "searchTextBox";
@@ -20915,6 +21432,8 @@ UrlResolved:
 		this.searchTextBox.TabIndex = 1;
 		this.searchTextBox.AccessibleName = "搜索关键词";
 		this.searchTextBox.AccessibleDescription = "输入要搜索的歌曲、歌单、专辑名称或链接，多个链接用分号分隔";
+		this.searchTextBox.ContextMenuStrip = this.searchTextContextMenu;
+		this.searchTextBox.TextChanged += new System.EventHandler(searchTextBox_TextChanged);
 		this.searchTextBox.KeyDown += new System.Windows.Forms.KeyEventHandler(searchTextBox_KeyDown);
 		this.searchLabel.AutoSize = true;
 		this.searchLabel.Font = new System.Drawing.Font("Microsoft YaHei UI", 12f);
@@ -21335,6 +21854,7 @@ UrlResolved:
 		this.menuStrip1.PerformLayout();
 		this.searchPanel.ResumeLayout(false);
 		this.searchPanel.PerformLayout();
+		this.searchTextContextMenu.ResumeLayout(false);
 		this.controlPanel.ResumeLayout(false);
 		this.controlPanel.PerformLayout();
 		((System.ComponentModel.ISupportInitialize)this.volumeTrackBar).EndInit();
