@@ -408,6 +408,10 @@ public partial class MainForm : Form
 
 	private List<AlbumInfo> _currentAlbums = new List<AlbumInfo>();
 
+	private readonly object _podcastCategoryLock = new object();
+
+	private readonly Dictionary<int, PodcastCategoryInfo> _podcastCategories = new Dictionary<int, PodcastCategoryInfo>();
+
 	private List<PodcastRadioInfo> _currentPodcasts = new List<PodcastRadioInfo>();
 
 	private List<PodcastEpisodeInfo> _currentPodcastSounds = new List<PodcastEpisodeInfo>();
@@ -417,6 +421,14 @@ public partial class MainForm : Form
 	private int _currentPodcastSoundOffset = 0;
 
 	private bool _currentPodcastHasMore = false;
+
+	private int _currentPodcastCategoryId = 0;
+
+	private string _currentPodcastCategoryName = string.Empty;
+
+	private int _currentPodcastCategoryOffset = 0;
+
+	private bool _currentPodcastCategoryHasMore = false;
 
 	private List<ListItemInfo> _currentListItems = new List<ListItemInfo>();
 
@@ -475,6 +487,8 @@ public partial class MainForm : Form
 	private int? _homeCachedArtistFavoritesCount;
 
 	private int? _homeCachedPodcastFavoritesCount;
+
+	private int? _homeCachedPodcastCategoryCount;
 
 	private int? _homeCachedToplistCount;
 
@@ -730,6 +744,8 @@ private string? _playButtonTextBeforeLoading = null;
 	private const int RecentPodcastFetchLimit = 100;
 
 	private const int PodcastSoundPageSize = 50;
+
+	private const int PodcastCategoryPageSize = 50;
 
 	private static readonly char[] MultiUrlSeparators = new char[2] { ';', '；' };
 
@@ -1275,6 +1291,14 @@ private ToolStripMenuItem helpMenuItem;
 				CategoryName = "歌单分类",
 				ItemCount = value,
 				ItemUnit = "类"
+			});
+			list.Add(new ListItemInfo
+			{
+				Type = ListItemType.Category,
+				CategoryId = "podcast_categories",
+				CategoryName = "播客分类",
+				ItemCount = _homeCachedPodcastCategoryCount,
+				ItemUnit = (_homeCachedPodcastCategoryCount.HasValue ? "类" : null)
 			});
 			list.Add(new ListItemInfo
 			{
@@ -3545,6 +3569,8 @@ private ToolStripMenuItem helpMenuItem;
 		int dailyRecommendPlaylistCount = 0;
 		int personalizedPlaylistCount = 0;
 		int personalizedSongCount = 0;
+		int podcastCategoryCount = 0;
+		Task<List<PodcastCategoryInfo>> podcastCategoriesTask = _apiClient.GetPodcastCategoriesAsync(cancellationToken);
 		Task<(List<SongInfo> Songs, List<PlaylistInfo> Playlists)> dailyRecommendTask = null;
 		Task<(List<PlaylistInfo> Playlists, List<SongInfo> Songs)> personalizedTask = null;
 		if (isLoggedIn)
@@ -3646,6 +3672,30 @@ private ToolStripMenuItem helpMenuItem;
 			catch (Exception ex7)
 			{
 				Debug.WriteLine("[HomePage] 获取新碟数量失败: " + ex7.Message);
+			}
+			try
+			{
+				List<PodcastCategoryInfo> podcastCategories = await podcastCategoriesTask.ConfigureAwait(continueOnCapturedContext: false);
+				ThrowIfHomeLoadCancelled();
+				podcastCategoryCount = podcastCategories?.Count ?? 0;
+				if (podcastCategories != null)
+				{
+					lock (_podcastCategoryLock)
+					{
+						_podcastCategories.Clear();
+						foreach (PodcastCategoryInfo cat in podcastCategories)
+						{
+							if (cat != null && cat.Id > 0 && !string.IsNullOrWhiteSpace(cat.Name))
+							{
+								_podcastCategories[cat.Id] = cat;
+							}
+						}
+					}
+				}
+			}
+			catch (Exception ex8)
+			{
+				Debug.WriteLine("[HomePage] 获取播客分类失败: " + ex8.Message);
 			}
 			if (dailyRecommendTask != null)
 			{
@@ -3800,6 +3850,14 @@ private ToolStripMenuItem helpMenuItem;
 				homeItems.Add(new ListItemInfo
 				{
 					Type = ListItemType.Category,
+					CategoryId = "podcast_categories",
+					CategoryName = "播客分类",
+					ItemCount = podcastCategoryCount,
+					ItemUnit = "个"
+				});
+				homeItems.Add(new ListItemInfo
+				{
+					Type = ListItemType.Category,
 					CategoryId = "artist_categories",
 					CategoryName = "歌手分类",
 					ItemCount = artistCategoryTypeCount,
@@ -3854,6 +3912,14 @@ private ToolStripMenuItem helpMenuItem;
 				homeItems.Add(new ListItemInfo
 				{
 					Type = ListItemType.Category,
+					CategoryId = "podcast_categories",
+					CategoryName = "播客分类",
+					ItemCount = podcastCategoryCount,
+					ItemUnit = "个"
+				});
+				homeItems.Add(new ListItemInfo
+				{
+					Type = ListItemType.Category,
 					CategoryId = "artist_categories",
 					CategoryName = "歌手分类",
 					ItemCount = artistCategoryTypeCount,
@@ -3878,6 +3944,7 @@ private ToolStripMenuItem helpMenuItem;
 			}
 			_homeCachedToplistCount = toplistCount;
 			_homeCachedNewAlbumCount = newAlbumCount;
+			_homeCachedPodcastCategoryCount = podcastCategoryCount;
 			if (isLoggedIn)
 			{
 				_homeCachedUserPlaylistCount = userPlaylistCount;
@@ -4120,6 +4187,9 @@ private ToolStripMenuItem helpMenuItem;
 			case "playlist_category":
 				await LoadPlaylistCategory();
 				return;
+			case "podcast_categories":
+				await LoadPodcastCategoriesAsync();
+				return;
 			case "new_albums":
 				await LoadNewAlbums();
 				return;
@@ -4145,6 +4215,11 @@ private ToolStripMenuItem helpMenuItem;
 				{
 					MessageBox.Show("未知的分类: " + categoryId, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 				}
+			}
+			else if (categoryId.StartsWith("podcast_cat_", StringComparison.OrdinalIgnoreCase))
+			{
+				ParsePodcastCategoryViewSource(categoryId, out var podcastCatId, out var catOffset);
+				await LoadPodcastsByCategoryAsync(podcastCatId, catOffset, skipSave: true);
 			}
 			else if (categoryId.StartsWith("artist_top_", StringComparison.OrdinalIgnoreCase) && long.TryParse(categoryId.Substring("artist_top_".Length), out artistTopId))
 			{
@@ -4489,6 +4564,149 @@ private ToolStripMenuItem helpMenuItem;
 				MessageBox.Show("加载" + cat + "歌单失败: " + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 				UpdateStatusBar("加载失败");
 			}
+		}
+	}
+
+	private async Task LoadPodcastCategoriesAsync()
+	{
+		try
+		{
+			ViewLoadRequest request = new ViewLoadRequest("podcast_categories", "播客分类", "正在加载播客分类...", cancelActiveNavigation: true);
+			ViewLoadResult<List<PodcastCategoryInfo>?> loadResult = await RunViewLoadAsync(request, async delegate(CancellationToken token)
+			{
+				List<PodcastCategoryInfo> categories = await _apiClient.GetPodcastCategoriesAsync(token).ConfigureAwait(continueOnCapturedContext: false);
+				token.ThrowIfCancellationRequested();
+				return categories ?? new List<PodcastCategoryInfo>();
+			}, "加载播客分类已取消").ConfigureAwait(continueOnCapturedContext: true);
+			if (!loadResult.IsCanceled)
+			{
+				List<PodcastCategoryInfo> categories = loadResult.Value ?? new List<PodcastCategoryInfo>();
+				lock (_podcastCategoryLock)
+				{
+					_podcastCategories.Clear();
+					foreach (PodcastCategoryInfo cat in categories)
+					{
+						if (cat != null && cat.Id > 0 && !string.IsNullOrWhiteSpace(cat.Name))
+						{
+							_podcastCategories[cat.Id] = cat;
+						}
+					}
+				}
+				_currentPodcastCategoryId = 0;
+				_currentPodcastCategoryName = string.Empty;
+				_currentPodcastCategoryOffset = 0;
+				_currentPodcastCategoryHasMore = false;
+				List<ListItemInfo> items = categories.Select((PodcastCategoryInfo cat) => new ListItemInfo
+				{
+					Type = ListItemType.Category,
+					CategoryId = "podcast_cat_" + cat.Id,
+					CategoryName = cat.Name
+				}).ToList();
+				DisplayListItems(items, request.ViewSource, request.AccessibleName);
+				if (items.Count == 0)
+				{
+					MessageBox.Show("暂时没有可用的播客分类。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+					UpdateStatusBar("暂无播客分类");
+				}
+				else
+				{
+					UpdateStatusBar($"共 {items.Count} 个播客分类");
+				}
+			}
+		}
+		catch (Exception ex)
+		{
+			if (TryHandleOperationCancelled(ex, "加载播客分类已取消"))
+			{
+				return;
+			}
+			Debug.WriteLine($"[LoadPodcastCategories] 异常: {ex}");
+			MessageBox.Show("加载播客分类失败: " + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+			UpdateStatusBar("加载失败");
+		}
+	}
+
+	private async Task LoadPodcastsByCategoryAsync(int categoryId, int offset, bool skipSave = false)
+	{
+		if (categoryId <= 0)
+		{
+			MessageBox.Show("无法识别播客分类。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+			return;
+		}
+		try
+		{
+			UpdateStatusBar("正在加载播客...");
+			if (!skipSave)
+			{
+				SaveNavigationState();
+			}
+			offset = Math.Max(0, offset);
+			string categoryName = ResolvePodcastCategoryName(categoryId);
+			string viewSource = $"podcast_cat_{categoryId}:offset{offset}";
+			string accessibleName = string.IsNullOrWhiteSpace(categoryName) ? "播客列表" : (categoryName + " 播客");
+			ViewLoadRequest request = new ViewLoadRequest(viewSource, accessibleName, "正在加载播客...");
+			ViewLoadResult<(List<PodcastRadioInfo> Items, bool HasMore, int TotalCount)> loadResult = await RunViewLoadAsync(request, async delegate(CancellationToken token)
+			{
+				(List<PodcastRadioInfo> Podcasts, bool HasMore, int TotalCount) tuple = await _apiClient.GetPodcastsByCategoryAsync(categoryId, PodcastCategoryPageSize, offset, token).ConfigureAwait(continueOnCapturedContext: false);
+				token.ThrowIfCancellationRequested();
+				return (Items: tuple.Podcasts, tuple.HasMore, tuple.TotalCount);
+			}, "加载播客已取消").ConfigureAwait(continueOnCapturedContext: true);
+			if (!loadResult.IsCanceled)
+			{
+				(List<PodcastRadioInfo> Items, bool HasMore, int TotalCount) data = loadResult.Value;
+				List<PodcastRadioInfo> podcasts = data.Items ?? new List<PodcastRadioInfo>();
+				int totalCount = Math.Max(data.TotalCount, offset + podcasts.Count);
+				bool hasMoreFlag = data.HasMore || totalCount > offset + podcasts.Count;
+
+				// 补齐一页 50 条，避免接口少返；依据总数而非 hasMoreFlag
+				int fetchOffset = offset + podcasts.Count;
+				while (podcasts.Count < PodcastCategoryPageSize && totalCount > fetchOffset && !GetCurrentViewContentToken().IsCancellationRequested)
+				{
+					int need = PodcastCategoryPageSize - podcasts.Count;
+					var extra = await _apiClient.GetPodcastsByCategoryAsync(categoryId, need, fetchOffset, GetCurrentViewContentToken()).ConfigureAwait(continueOnCapturedContext: false);
+					if (extra.Podcasts == null || extra.Podcasts.Count == 0)
+					{
+						break;
+					}
+					podcasts.AddRange(extra.Podcasts);
+					fetchOffset += extra.Podcasts.Count;
+					totalCount = Math.Max(totalCount, extra.TotalCount);
+				}
+
+				// 如果补齐过程中超额，保持单页最大 50 条（末页可少于 50）
+				if (podcasts.Count > PodcastCategoryPageSize && (offset + PodcastCategoryPageSize) < totalCount)
+				{
+					podcasts = podcasts.Take(PodcastCategoryPageSize).ToList();
+				}
+
+				bool hasMore = (offset + podcasts.Count) < totalCount;
+				_currentPodcastCategoryId = categoryId;
+				_currentPodcastCategoryName = categoryName;
+				_currentPodcastCategoryOffset = offset;
+				_currentPodcastCategoryHasMore = hasMore;
+				DisplayPodcasts(podcasts, showPagination: true, hasNextPage: hasMore, offset + 1, preserveSelection: false, viewSource, accessibleName, announceHeader: true, suppressFocus: false, allowSelection: true, includeNavigationRows: true);
+				if (podcasts.Count == 0)
+				{
+					MessageBox.Show("该分类暂时没有播客。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+					UpdateStatusBar("暂无播客");
+				}
+				else
+				{
+					int currentPage = offset / PodcastCategoryPageSize + 1;
+					int totalPages = Math.Max(1, (int)Math.Ceiling((double)Math.Max(totalCount, offset + podcasts.Count) / PodcastCategoryPageSize));
+					UpdateStatusBar($"{accessibleName}：第 {currentPage}/{totalPages} 页，本页 {podcasts.Count} 个 / 总 {totalCount} 个（PageDown/Up 翻页）");
+				}
+			}
+		}
+		catch (Exception ex)
+		{
+			if (TryHandleOperationCancelled(ex, "加载播客已取消"))
+			{
+				return;
+			}
+			Debug.WriteLine($"[LoadPodcastsByCategory] 异常: {ex}");
+			MessageBox.Show("加载播客失败: " + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+			UpdateStatusBar("加载失败");
 		}
 	}
 
@@ -5120,6 +5338,44 @@ private ToolStripMenuItem helpMenuItem;
 				}
 			}
 		}
+	}
+
+	private static void ParsePodcastCategoryViewSource(string? viewSource, out int categoryId, out int offset)
+	{
+		categoryId = 0;
+		offset = 0;
+		if (string.IsNullOrWhiteSpace(viewSource) || !viewSource.StartsWith("podcast_cat_", StringComparison.OrdinalIgnoreCase))
+		{
+			return;
+		}
+		string[] array = viewSource.Substring("podcast_cat_".Length).Split(new char[1] { ':' }, StringSplitOptions.RemoveEmptyEntries);
+		if (array.Length >= 1)
+		{
+			int.TryParse(array[0], out categoryId);
+		}
+		foreach (string item in array.Skip(1))
+		{
+			if (item.StartsWith("offset", StringComparison.OrdinalIgnoreCase) && int.TryParse(item.Substring("offset".Length), out var result))
+			{
+				offset = result;
+			}
+		}
+	}
+
+	private string ResolvePodcastCategoryName(int categoryId)
+	{
+		if (categoryId <= 0)
+		{
+			return string.Empty;
+		}
+		lock (_podcastCategoryLock)
+		{
+			if (_podcastCategories.TryGetValue(categoryId, out var cat) && cat != null && !string.IsNullOrWhiteSpace(cat.Name))
+			{
+				return cat.Name;
+			}
+		}
+		return string.Empty;
 	}
 
 	private async Task LoadRecentPlaylistsAsync()
@@ -7075,6 +7331,34 @@ private ToolStripMenuItem helpMenuItem;
 			});
 			return true;
 		}));
+		tasks.Add(Wrap("podcast_categories", async delegate
+		{
+			Debug.WriteLine("[HomeProviders] fetch podcast categories");
+			List<PodcastCategoryInfo> categories = await _apiClient.GetPodcastCategoriesAsync(token);
+			token.ThrowIfCancellationRequested();
+			int count = categories?.Count ?? 0;
+			lock (_podcastCategoryLock)
+			{
+				_podcastCategories.Clear();
+				if (categories != null)
+				{
+					foreach (PodcastCategoryInfo cat in categories)
+					{
+						if (cat != null && cat.Id > 0 && !string.IsNullOrWhiteSpace(cat.Name))
+						{
+							_podcastCategories[cat.Id] = cat;
+						}
+					}
+				}
+			}
+			ApplyHomeItemUpdate("podcast_categories", delegate(ListItemInfo info)
+			{
+				info.ItemCount = ((count > 0) ? count : null);
+				info.ItemUnit = ((count > 0) ? "个" : null);
+				info.CategoryDescription = null;
+			});
+			return true;
+		}));
 		tasks.Add(Wrap("daily_recommend", async delegate
 		{
 			if (!isLoggedIn)
@@ -8276,7 +8560,7 @@ private ToolStripMenuItem helpMenuItem;
         columnHeader5.Text = string.Empty;
 	}
 
-	private void DisplayPodcasts(List<PodcastRadioInfo> podcasts, bool showPagination = false, bool hasNextPage = false, int startIndex = 1, bool preserveSelection = false, string? viewSource = null, string? accessibleName = null, bool announceHeader = true, bool suppressFocus = false, bool allowSelection = true)
+	private void DisplayPodcasts(List<PodcastRadioInfo> podcasts, bool showPagination = false, bool hasNextPage = false, int startIndex = 1, bool preserveSelection = false, string? viewSource = null, string? accessibleName = null, bool announceHeader = true, bool suppressFocus = false, bool allowSelection = true, bool includeNavigationRows = true)
 	{
 		ConfigureListViewForPodcasts();
 		int num = -1;
@@ -8335,7 +8619,7 @@ private ToolStripMenuItem helpMenuItem;
 				resultListView.Items.Add(value);
 				num2++;
 			}
-			if (showPagination)
+			if (showPagination && includeNavigationRows)
 			{
 				if (startIndex > 1)
 				{
@@ -8364,7 +8648,7 @@ private ToolStripMenuItem helpMenuItem;
 		}
 	}
 
-	private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool showPagination = false, bool hasPreviousPage = false, bool hasNextPage = false, int pendingFocusIndex = -1, bool allowSelection = true)
+private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool showPagination = false, bool hasPreviousPage = false, bool hasNextPage = false, int pendingFocusIndex = -1, bool allowSelection = true, bool includeNavigationRows = true)
 	{
 		int num = ((resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : pendingFocusIndex);
 		_currentSongs.Clear();
@@ -8435,7 +8719,7 @@ private ToolStripMenuItem helpMenuItem;
 			{
 				resultListView.Items.RemoveAt(num3);
 			}
-			if (showPagination)
+			if (showPagination && includeNavigationRows)
 			{
 				if (hasPreviousPage)
 				{
@@ -8802,6 +9086,18 @@ private ToolStripMenuItem helpMenuItem;
 					await LoadPodcastEpisodesAsync(offset: Math.Max(0, offset4 - 50), radioId: podcastId, skipSave: true, podcastInfo: null, sortAscendingOverride: ascending);
 				}
 			}
+			else if (!string.IsNullOrEmpty(_currentViewSource) && _currentViewSource.StartsWith("podcast_cat_", StringComparison.OrdinalIgnoreCase))
+			{
+				ParsePodcastCategoryViewSource(_currentViewSource, out var categoryId, out var offset5);
+				if (offset5 <= 0)
+				{
+					UpdateStatusBar("已经是第一页");
+				}
+				else
+				{
+					await LoadPodcastsByCategoryAsync(categoryId, Math.Max(0, offset5 - PodcastCategoryPageSize), skipSave: true);
+				}
+			}
 			else if (string.Equals(_currentViewSource, "user_cloud", StringComparison.OrdinalIgnoreCase))
 			{
 				if (_cloudPage <= 1)
@@ -8883,6 +9179,17 @@ private ToolStripMenuItem helpMenuItem;
 				ParsePodcastViewSource(_currentViewSource, out var podcastId, out var offset4, out var ascending);
 				int newOffset4 = offset4 + 50;
 				await LoadPodcastEpisodesAsync(podcastId, newOffset4, skipSave: true, null, ascending);
+			}
+			else if (!string.IsNullOrEmpty(_currentViewSource) && _currentViewSource.StartsWith("podcast_cat_", StringComparison.OrdinalIgnoreCase))
+			{
+				if (!_currentPodcastCategoryHasMore)
+				{
+					UpdateStatusBar("已经是最后一页");
+					return;
+				}
+				ParsePodcastCategoryViewSource(_currentViewSource, out var categoryId, out var offset5);
+				int newOffset5 = offset5 + PodcastCategoryPageSize;
+				await LoadPodcastsByCategoryAsync(categoryId, newOffset5, skipSave: true);
 			}
 			else if (string.Equals(_currentViewSource, "user_cloud", StringComparison.OrdinalIgnoreCase))
 			{
@@ -10459,6 +10766,18 @@ private ToolStripMenuItem helpMenuItem;
 				e.Handled = true;
 				e.SuppressKeyPress = true;
 				ShowJumpToPositionDialog();
+			}
+			else if (e.KeyCode == Keys.PageDown)
+			{
+				e.Handled = true;
+				e.SuppressKeyPress = true;
+				OnNextPage();
+			}
+			else if (e.KeyCode == Keys.PageUp)
+			{
+				e.Handled = true;
+				e.SuppressKeyPress = true;
+				OnPrevPage();
 			}
 		}
 	}

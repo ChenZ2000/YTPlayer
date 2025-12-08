@@ -3921,6 +3921,71 @@ namespace YTPlayer.Core
         #region 播客/电台
 
         /// <summary>
+        /// 获取播客/电台分类列表。
+        /// </summary>
+        public async Task<List<PodcastCategoryInfo>> GetPodcastCategoriesAsync(CancellationToken cancellationToken = default)
+        {
+            await EnforceThrottleAsync("podcast:categories", TimeSpan.FromSeconds(1)).ConfigureAwait(false);
+
+            var response = await PostWeApiAsync<JObject>(
+                "/api/djradio/category/get",
+                new Dictionary<string, object>(),
+                cancellationToken: cancellationToken,
+                autoConvertApiSegment: true);
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var categoriesToken = response?["categories"] as JArray
+                                  ?? response?["data"]?["categories"] as JArray;
+
+            return ParsePodcastCategoryList(categoriesToken);
+        }
+
+        /// <summary>
+        /// 获取指定分类下的热门播客/电台。
+        /// </summary>
+        public async Task<(List<PodcastRadioInfo> Podcasts, bool HasMore, int TotalCount)> GetPodcastsByCategoryAsync(int categoryId, int limit = 30, int offset = 0, CancellationToken cancellationToken = default)
+        {
+            if (categoryId <= 0)
+            {
+                return (new List<PodcastRadioInfo>(), false, 0);
+            }
+
+            limit = Math.Max(1, Math.Min(100, limit));
+            offset = Math.Max(0, offset);
+
+            await EnforceThrottleAsync($"podcast:cat:{categoryId}", TimeSpan.FromSeconds(1)).ConfigureAwait(false);
+
+            var payload = new Dictionary<string, object>
+            {
+                { "cateId", categoryId },
+                { "limit", limit },
+                { "offset", offset }
+            };
+
+            var response = await PostWeApiAsync<JObject>(
+                "/api/djradio/hot",
+                payload,
+                cancellationToken: cancellationToken,
+                autoConvertApiSegment: true);
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (response["code"]?.Value<int>() != 200)
+            {
+                System.Diagnostics.Debug.WriteLine($"[API] 获取播客分类 {categoryId} 热门列表失败: {response}");
+                return (new List<PodcastRadioInfo>(), false, 0);
+            }
+
+            var radiosToken = response["djRadios"] as JArray ?? response["radios"] as JArray;
+            var radios = ParsePodcastRadioList(radiosToken);
+            int total = response["count"]?.Value<int>() ?? response["total"]?.Value<int>() ?? radios.Count;
+            bool hasMore = response["hasMore"]?.Value<bool>() ?? (offset + radios.Count < total);
+
+            return (radios, hasMore, total);
+        }
+
+        /// <summary>
         /// 获取播客/电台详情。
         /// </summary>
         public async Task<PodcastRadioInfo?> GetPodcastRadioDetailAsync(long radioId)
@@ -9814,6 +9879,42 @@ namespace YTPlayer.Core
                             result.Comments.Add(parsed);
                         }
                     }
+                }
+            }
+
+            return result;
+        }
+
+        private List<PodcastCategoryInfo> ParsePodcastCategoryList(JArray? categories)
+        {
+            var result = new List<PodcastCategoryInfo>();
+            if (categories == null)
+            {
+                return result;
+            }
+
+            foreach (var cat in categories)
+            {
+                if (cat is JObject obj)
+                {
+                    var id = obj["id"]?.Value<int>() ?? obj["categoryId"]?.Value<int>() ?? 0;
+                    var name = obj["name"]?.Value<string>() ?? obj["categoryName"]?.Value<string>() ?? string.Empty;
+                    if (id <= 0 || string.IsNullOrWhiteSpace(name))
+                    {
+                        continue;
+                    }
+
+                    result.Add(new PodcastCategoryInfo
+                    {
+                        Id = id,
+                        Name = name,
+                        CategoryType = obj["type"]?.Value<int?>() ?? obj["categoryType"]?.Value<int?>(),
+                        PicUrl = obj["pic56x56Url"]?.Value<string>()
+                                  ?? obj["pic84x84Url"]?.Value<string>()
+                                  ?? obj["pic96x96Url"]?.Value<string>()
+                                  ?? obj["pic120x120Url"]?.Value<string>()
+                                  ?? obj["picUrl"]?.Value<string>() ?? string.Empty
+                    });
                 }
             }
 

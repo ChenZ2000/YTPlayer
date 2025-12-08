@@ -244,6 +244,7 @@
     <Compile Include="Utils\WorkScopes.cs" />
     <Compile Include="Utils\NeteaseUrlParser.cs" />
     <Compile Include="Models\SongInfo.cs" />
+    <Compile Include="Models\PodcastCategoryInfo.cs" />
     <Compile Include="Models\PodcastRadioInfo.cs" />
     <Compile Include="Models\PodcastEpisodeInfo.cs" />
     <Compile Include="Models\CloudSongPageResult.cs" />
