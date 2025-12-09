@@ -104,11 +104,11 @@ powershell -ExecutionPolicy Bypass -File .\Build-Debug.ps1
 ## 鸣谢
 
 ### 人员
-- 感谢[**@ZJN046** - https://github.com/zjn046](https://github.com/zjn046) 给本项目提供的灵感、 UI 交互优化和大量后端代码参考。
+- 感谢[**@ZJN046**](https://github.com/zjn046) 给本项目提供的灵感、 UI 交互优化和大量后端代码参考。
 ### 代码库
-- [Binaryify/NeteaseCloudMusicApi](https://github.com/Binaryify/NeteaseCloudMusicApi)
-- [chaunsin/netease-cloud-music](https://github.com/chaunsin/netease-cloud-music)
-- [api-enhanced](https://github.com/NeteaseCloudMusicApiEnhanced/api-enhanced)
+- [**Binaryify/NeteaseCloudMusicApi**](https://github.com/Binaryify/NeteaseCloudMusicApi)
+- [**chaunsin/netease-cloud-music**](https://github.com/chaunsin/netease-cloud-music)
+- [**api-enhanced**](https://github.com/NeteaseCloudMusicApiEnhanced/api-enhanced)
 
 及本项目依赖的众多优秀第三方库
 
