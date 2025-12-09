@@ -15819,7 +15819,61 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			return false;
 		}
 
-		var result = await _unblockService.TryMatchAsync(song, cancellationToken).ConfigureAwait(false);
+		// 解封流程使用独立的取消逻辑，避免播放流程的取消信号提前中断第三方匹配
+		using var unblockTimeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+		CancellationToken unblockToken = unblockTimeoutCts.Token;
+
+		// 灰色/下架歌曲往往缺少时长、专辑、艺人等信息，先尽量补全再去匹配第三方源，提升命中率
+		if ((song.Duration <= 0 || string.IsNullOrWhiteSpace(song.AlbumId) || song.ArtistNames == null || song.ArtistNames.Count == 0) && _apiClient != null)
+		{
+			try
+			{
+				var detail = (await _apiClient.GetSongDetailAsync(new[] { song.Id }).ConfigureAwait(false))?.FirstOrDefault();
+				if (detail != null)
+				{
+					if (song.Duration <= 0 && detail.Duration > 0)
+					{
+						song.Duration = detail.Duration;
+					}
+					if (string.IsNullOrWhiteSpace(song.AlbumId) && !string.IsNullOrWhiteSpace(detail.AlbumId))
+					{
+						song.AlbumId = detail.AlbumId;
+					}
+					if (string.IsNullOrWhiteSpace(song.Album) && !string.IsNullOrWhiteSpace(detail.Album))
+					{
+						song.Album = detail.Album;
+					}
+					if ((song.ArtistNames == null || song.ArtistNames.Count == 0) && detail.ArtistNames != null && detail.ArtistNames.Count > 0)
+					{
+						song.ArtistNames = new List<string>(detail.ArtistNames);
+						song.Artist = string.Join("/", song.ArtistNames);
+					}
+					if ((song.ArtistIds == null || song.ArtistIds.Count == 0) && detail.ArtistIds != null && detail.ArtistIds.Count > 0)
+					{
+						song.ArtistIds = new List<long>(detail.ArtistIds);
+					}
+					if (string.IsNullOrWhiteSpace(song.PicUrl) && !string.IsNullOrWhiteSpace(detail.PicUrl))
+					{
+						song.PicUrl = detail.PicUrl;
+					}
+				}
+			}
+			catch (Exception ex)
+			{
+				Debug.WriteLine("[Unblock] å–æ ·æ¢è¯ç»†èŠ‚æ•°æ®å¤±è´¥ï¼ˆå¿½ç•¥ï¼‰: " + ex.Message);
+			}
+		}
+
+		UnblockService.UnblockMatchResult? result = null;
+		try
+		{
+			result = await _unblockService.TryMatchAsync(song, unblockToken).ConfigureAwait(false);
+		}
+		catch (Exception ex)
+		{
+			Debug.WriteLine($"[Unblock] 解封异常（忽略继续官方流程）: {ex.Message}");
+			return false;
+		}
 		if (result == null || string.IsNullOrWhiteSpace(result.Url))
 		{
 			return false;
@@ -15832,7 +15886,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		long size = result.Size > 0 ? result.Size : song.Size;
 		if (size <= 0)
 		{
-			var (_, contentLength) = await HttpRangeHelper.CheckRangeSupportAsync(result.Url, null, cancellationToken, headers).ConfigureAwait(false);
+			var (_, contentLength) = await HttpRangeHelper.CheckRangeSupportAsync(result.Url, null, unblockToken, headers).ConfigureAwait(false);
 			if (contentLength > 0)
 			{
 				size = contentLength;
@@ -16035,7 +16089,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			string defaultQualityName = _config.DefaultQuality ?? "超清母带";
 			QualityLevel selectedQuality = NeteaseApiClient.GetQualityLevelFromName(defaultQualityName);
 			string selectedQualityLevel = selectedQuality.ToString().ToLower();
-			bool needRefreshUrl = string.IsNullOrEmpty(song.Url);
+			bool needRefreshUrl = string.IsNullOrEmpty(song.Url) || song.IsTrial;
 			if (song.IsAvailable == false)
 			{
 				Debug.WriteLine("[MainForm] 歌曲资源不可用（预检缓存）: " + song.Name);
@@ -16068,6 +16122,19 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			{
 				QualityUrlInfo cachedQuality = song.GetQualityUrl(selectedQualityLevel);
 				if (cachedQuality != null && !string.IsNullOrEmpty(cachedQuality.Url))
+				{
+					if (cachedQuality.IsTrial)
+					{
+						Debug.WriteLine($"[MainForm] ⚠️ 命中试听版缓存，播放前尝试解封: {song.Name}, 音质: {selectedQualityLevel}");
+						if (await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(false))
+						{
+							goto UrlResolved;
+						}
+						Debug.WriteLine("[MainForm] 试听版缓存未解封成功，丢弃缓存并重新拉取官方链接");
+						cachedQuality = null;
+					}
+				}
+				if (cachedQuality != null && !string.IsNullOrEmpty(cachedQuality?.Url))
 				{
 					Debug.WriteLine($"[MainForm] ✓ 命中多音质缓存: {song.Name}, 音质: {selectedQualityLevel}, 试听: {cachedQuality.IsTrial}");
 					song.Url = cachedQuality.Url;
@@ -16156,6 +16223,10 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 					catch (Exception ex4)
 					{
 						Debug.WriteLine("[MainForm] 获取播放链接失败: " + ex4.Message);
+						if (await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(false))
+						{
+							goto UrlResolved;
+						}
 						UpdateLoadingState(isLoading: false, "获取播放链接失败", playRequestVersion);
 						loadingStateActive = false;
 						SafeInvoke(delegate
@@ -16173,7 +16244,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 					}
 					if (!urlResult.TryGetValue(song.Id, out SongUrlInfo songUrl) || string.IsNullOrEmpty(songUrl?.Url))
 					{
-						Debug.WriteLine("[MainForm ERROR] 无法获取播放链接");
+						Debug.WriteLine("[MainForm] 官方返回 URL 为空，尝试解封: " + song.Name);
 						if (await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(false))
 						{
 							goto UrlResolved;
@@ -16190,9 +16261,24 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 					if (isTrial)
 					{
 						Debug.WriteLine($"[MainForm] \ud83c\udfb5 试听版本: {song.Name}, 片段: {trialStart / 1000}s - {trialEnd / 1000}s");
+						// 先尝试解封
 						if (await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(false))
 						{
 							goto UrlResolved;
+						}
+						// 若试听片段无效则视为不可播放，跳过并尝试解封/下一首
+						if (trialEnd <= trialStart || songUrl.Size <= 0)
+						{
+							Debug.WriteLine($"[MainForm] ⚠️ 试听片段无效（start={trialStart}, end={trialEnd}, size={songUrl.Size}），视为资源不可用");
+							song.IsAvailable = false;
+							if (await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(false))
+							{
+								goto UrlResolved;
+							}
+							UpdateLoadingState(isLoading: false, "歌曲不存在，已跳过", playRequestVersion);
+							loadingStateActive = false;
+							HandleSongResourceNotFoundDuringPlayback(song, isAutoPlayback);
+							return;
 						}
 					}
 					string actualLevel = songUrl.Level?.ToLower() ?? selectedQualityLevel;
@@ -21457,7 +21543,6 @@ UrlResolved:
 		this.resultListView.AccessibleName = "正在加载";
 		this.resultListView.ContextMenuStrip = this.songContextMenu;
 		this.resultListView.ItemActivate += new System.EventHandler(resultListView_ItemActivate);
-		this.resultListView.DoubleClick += new System.EventHandler(resultListView_DoubleClick);
 		this.resultListView.SelectedIndexChanged += new System.EventHandler(resultListView_SelectedIndexChanged);
             this.columnHeader1.Text = string.Empty;
             this.columnHeader1.Width = 50;

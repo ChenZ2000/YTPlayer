@@ -318,7 +318,8 @@ namespace YTPlayer.Core.Playback.Cache
         public async Task<bool> WaitForPositionReadyAsync(
             long bytePosition,
             int timeoutMilliseconds,
-            CancellationToken token)
+            CancellationToken token,
+            bool forPlayback = true)
         {
             var timeoutCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(timeoutMilliseconds));
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token, timeoutCts.Token);
@@ -329,7 +330,7 @@ namespace YTPlayer.Core.Playback.Cache
                 {
                     linkedCts.Token.ThrowIfCancellationRequested();
 
-                    var health = CheckCacheHealth(bytePosition);
+                    var health = CheckCacheHealth(bytePosition, forPlayback);
                     if (health.IsReady)
                     {
                         return true;
@@ -340,13 +341,41 @@ namespace YTPlayer.Core.Playback.Cache
             }
             catch (OperationCanceledException)
             {
-                return CheckCacheHealth(bytePosition).IsReady;
+                return CheckCacheHealth(bytePosition, forPlayback).IsReady;
             }
+        }
+
+        /// <summary>
+        /// 主动预取目标块及后续若干块，避免短距跳转后的立即卡顿。
+        /// </summary>
+        public Task PrefetchAroundAsync(long bytePosition, int aheadChunks, CancellationToken token)
+        {
+            int centerChunk = (int)(bytePosition / ChunkSize);
+            if (aheadChunks <= 0) return Task.CompletedTask;
+
+            var tasks = new List<Task>(aheadChunks + 1);
+            for (int i = 0; i <= aheadChunks; i++)
+            {
+                int idx = centerChunk + i;
+                if (idx < 0 || idx >= _totalChunks) continue;
+                tasks.Add(EnsureChunkAsync(idx, token));
+            }
+
+            return Task.WhenAll(tasks);
         }
 
         public bool IsChunkCached(int chunkIndex)
         {
             return _cache.ContainsKey(chunkIndex);
+        }
+
+        /// <summary>
+        /// 确保包含指定字节位置的块已被调度/下载。
+        /// </summary>
+        public Task EnsurePositionAsync(long bytePosition, CancellationToken token)
+        {
+            int chunkIndex = GetChunkIndex(bytePosition);
+            return EnsureChunkAsync(chunkIndex, token);
         }
 
         public Task EnsureChunkAsync(int chunkIndex, CancellationToken token)
@@ -362,6 +391,23 @@ namespace YTPlayer.Core.Playback.Cache
             }
 
             return DownloadChunkOnDemandAsync(chunkIndex, token);
+        }
+
+        /// <summary>
+        /// 检查目标块及后续若干块是否都已缓存。
+        /// </summary>
+        public bool AreChunksReady(long bytePosition, int aheadChunks)
+        {
+            int startChunk = GetChunkIndex(bytePosition);
+            int endChunk = Math.Min(_totalChunks - 1, startChunk + Math.Max(0, aheadChunks));
+            for (int i = startChunk; i <= endChunk; i++)
+            {
+                if (!_cache.ContainsKey(i))
+                {
+                    return false;
+                }
+            }
+            return true;
         }
 
         public int Read(long position, byte[] buffer, int offset, int count)

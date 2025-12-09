@@ -46,6 +46,7 @@ namespace YTPlayer.Core.Streaming
         // BASS 常量
         private const int STREAMFILE_NOBUFFER = 0;
         private const int BASS_STREAM_DECODE = 0x200000;
+        private const int BASS_STREAM_BLOCK = 0x100000; // 允许阻塞读取，返回0不会被视为EOF
 
         #endregion
 
@@ -65,6 +66,9 @@ namespace YTPlayer.Core.Streaming
         // 读取缓冲区（避免频繁分配）
         private byte[]? _readBuffer;
         private const int READ_BUFFER_SIZE = 64 * 1024;  // 64KB
+        private const int BaseReadTimeoutMs = 15000;      // 缓存等待基础超时
+        private const int NearEofReadTimeoutMs = 5000;    // 接近 EOF 的较短等待
+        private const int MaxStallWaitMs = 60000;         // 单次读取最大等待时间
 
         // 统计信息
         private int _totalReads = 0;
@@ -137,7 +141,7 @@ namespace YTPlayer.Core.Streaming
 
             int stream = BASS_StreamCreateFileUser(
                 STREAMFILE_NOBUFFER,
-                flags,
+                flags | BASS_STREAM_BLOCK,
                 ref _fileProcs,
                 IntPtr.Zero  // user data (不使用，因为C#闭包已经捕获了上下文)
             );
@@ -226,83 +230,66 @@ namespace YTPlayer.Core.Streaming
                     position = _currentPosition;
                 }
 
-                // 🔧 关键修复：改为阻塞模式，等待缓存就绪后再返回数据给BASS
+                // ?? 关键修复：改为阻塞模式，等待缓存就绪后再返回数据给BASS
                 // waitIfNotReady=true：等待缓存下载完成，避免传递损坏/不完整的数据给BASS
-                // 使用超时机制（默认5秒，接近EOF时减少到500ms）防止无限阻塞
+                // 新策略：缓存未就绪时循环等待，避免误报 EOF
                 int bytesRead = 0;
-
-                // ⭐⭐⭐ 关键优化：如果请求位置接近文件末尾（> 98%），减少超时时间
-                // 避免在歌曲结束时等待 5 秒
                 double progressPercent = (double)position / _cacheManager.TotalSize;
-                int timeoutMs = progressPercent >= 0.98 ? 500 : 5000;
+                int totalWaitMs = 0;
 
-                using (var timeoutCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(timeoutMs)))
+                while (true)
                 {
-                    try
-                    {
-                        // ⭐⭐⭐ 修复：正确处理Task.Run().Result可能抛出的AggregateException
-                        bytesRead = Task.Run(async () =>
-                        {
-                            return await _cacheManager.ReadAsync(position, _readBuffer, 0, length, timeoutCts.Token, waitIfNotReady: true);
-                        }, timeoutCts.Token).Result;
-                    }
-                    catch (AggregateException aex)
-                    {
-                        // .Result会将内部异常包装成AggregateException，需要解包
-                        var innerEx = aex.InnerException ?? aex;
-                        if (innerEx is OperationCanceledException)
-                        {
-                            if (progressPercent >= 0.98)
-                            {
-                                // ⭐⭐⭐ EOF近端超时：可能是最后chunk下载不完整
-                                // 先检查是否真的是EOF（position >= totalSize - 256）
-                                long distanceToEOF = _cacheManager.TotalSize - position;
-                                if (distanceToEOF <= 256)
-                                {
-                                    // 真的接近EOF，允许返回0
-                                    Debug.WriteLine($"[BassStreamProvider] ⏱ FileRead timeout at EOF-{distanceToEOF}B, 返回 EOF（正常结束）");
-                                }
-                                else
-                                {
-                                    // 不应该超时！记录详细信息
-                                    Debug.WriteLine($"[BassStreamProvider] ⚠️⚠️⚠️ FileRead timeout at position {position} ({progressPercent:P1}, EOF-{distanceToEOF}B), 这可能是chunk不完整导致的！");
-                                }
-                            }
-                            else
-                            {
-                                Debug.WriteLine($"[BassStreamProvider] ⚠️ FileRead timeout ({timeoutMs}ms) at position {position}, cache may be too slow!");
-                            }
-                        }
-                        else
-                        {
-                            Debug.WriteLine($"[BassStreamProvider] ❌ FileRead exception at position {position}: {innerEx.Message}");
-                        }
-                        return 0;  // 返回0表示EOF或错误，BASS会触发 SYNC_END
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        if (progressPercent >= 0.98)
-                        {
-                            // ⭐⭐⭐ EOF近端超时：增强日志
-                            long distanceToEOF = _cacheManager.TotalSize - position;
-                            if (distanceToEOF <= 256)
-                            {
-                                Debug.WriteLine($"[BassStreamProvider] ⏱ FileRead timeout at EOF-{distanceToEOF}B, 返回 EOF（正常结束）");
-                            }
-                            else
-                            {
-                                Debug.WriteLine($"[BassStreamProvider] ⚠️⚠️⚠️ FileRead timeout at position {position} ({progressPercent:P1}, EOF-{distanceToEOF}B), 这可能是chunk不完整导致的！");
-                            }
-                        }
-                        else
-                        {
-                            Debug.WriteLine($"[BassStreamProvider] ⚠️ FileRead timeout ({timeoutMs}ms) at position {position}, cache may be too slow!");
-                        }
-                        return 0;  // 返回0表示EOF或错误，BASS会触发 SYNC_END
-                    }
-                }
+                    int timeoutMs = progressPercent >= 0.98 ? NearEofReadTimeoutMs : BaseReadTimeoutMs;
 
-                // 🔧 数据有效性检查
+                    using (var timeoutCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(timeoutMs)))
+                    {
+                        try
+                        {
+                            bytesRead = Task.Run(async () =>
+                            {
+                                return await _cacheManager.ReadAsync(position, _readBuffer, 0, length, timeoutCts.Token, waitIfNotReady: true);
+                            }, timeoutCts.Token).Result;
+                        }
+                        catch (AggregateException aex)
+                        {
+                            var innerEx = aex.InnerException ?? aex;
+                            if (innerEx is OperationCanceledException && timeoutCts.IsCancellationRequested)
+                            {
+                                bytesRead = 0; // 缓存未就绪，继续等待
+                            }
+                            else
+                            {
+                                Debug.WriteLine($"[BassStreamProvider] ? FileRead exception at position {position}: {innerEx.Message}");
+                                return -1;
+                            }
+                        }
+                        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+                        {
+                            bytesRead = 0; // 缓存未就绪，继续等待
+                        }
+                    }
+
+                    if (bytesRead > 0)
+                    {
+                        break;
+                    }
+
+                    long distanceToEOF = _cacheManager.TotalSize - position;
+                    if (distanceToEOF <= 256)
+                    {
+                        Debug.WriteLine($"[BassStreamProvider] ? FileRead near EOF (<=256B), returning EOF");
+                        return 0; // 真正 EOF
+                    }
+
+                    totalWaitMs += (progressPercent >= 0.98 ? NearEofReadTimeoutMs : BaseReadTimeoutMs);
+                    if (totalWaitMs >= MaxStallWaitMs)
+                    {
+                        Debug.WriteLine($"[BassStreamProvider] ⚠️ FileRead waited {totalWaitMs}ms without data (pos {position}), returning 0 to stall (BLOCK mode)");
+                        return 0; // 返回0并依赖 BLOCK 模式让 BASS 继续等待，而非结束/报错
+                    }
+
+                    Thread.Sleep(200); // 轻量等待，避免忙等
+                }
                 if (bytesRead > 0)
                 {
                     // 验证读取的数据大小是否合理

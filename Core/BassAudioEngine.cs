@@ -745,7 +745,8 @@ namespace YTPlayer.Core
         public async Task<bool> SetPositionWithCacheWaitAsync(
             double seconds,
             int timeoutMs = 60000,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            bool waitTargetOnly = false)
         {
             if (_currentStream == 0)
             {
@@ -765,11 +766,15 @@ namespace YTPlayer.Core
                     System.Diagnostics.Debug.WriteLine(
                         $"[BassAudioEngine] 🎯 已通知调度器优先下载目标位置: {seconds:F1}s");
 
+                    // 短按场景：优先调度目标块本身
+                    await _currentCacheManager.EnsurePositionAsync(targetBytes, cancellationToken).ConfigureAwait(false);
+
                     // 然后等待数据就绪
                     bool dataReady = await _currentCacheManager.WaitForPositionReadyAsync(
                         targetBytes,
                         timeoutMs,
-                        cancellationToken).ConfigureAwait(false);
+                        cancellationToken,
+                        forPlayback: !waitTargetOnly).ConfigureAwait(false);
 
                     if (!dataReady)
                     {
@@ -780,6 +785,9 @@ namespace YTPlayer.Core
 
                     System.Diagnostics.Debug.WriteLine(
                         $"[BassAudioEngine] ✓ Seek 数据就绪: {seconds:F1}s");
+
+                    // 主动预取目标后的少量块，避免短距跳转后立即卡顿
+                    _ = _currentCacheManager.PrefetchAroundAsync(targetBytes, aheadChunks: 2, cancellationToken);
                 }
                 catch (OperationCanceledException)
                 {

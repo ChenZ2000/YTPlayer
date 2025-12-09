@@ -30,13 +30,16 @@ namespace YTPlayer.Core
         private bool _executingIsPreview = false;  // 当前执行的是否为预览
         private double _currentExecutingTarget = -1; // 正在执行的目标位置（避免重复触发）
         private CancellationTokenSource? _currentSeekCts = null;  // 当前 Seek 操作的取消令牌
+        private bool _lastSeekSuccess = true;       // 最近一次 Seek 执行结果，用于 FinishSeek 事件
 
         // 快速定时器（50ms）
         private Timer? _seekTimer;
         private const int SEEK_INTERVAL_MS = 50;  // 50ms 一次，快速响应
 
         // 远距离跳转等待超时（60 秒，覆盖更多网络慢的情况）
-        private const int SEEK_CACHE_WAIT_TIMEOUT_MS = 60000;
+        // 缓存等待超时：缩短，超时后立即降级为“直接跳 + 后台缓冲”
+        private const int SEEK_CACHE_WAIT_TIMEOUT_MS = 8000;
+        private const int PREVIEW_CACHE_WAIT_TIMEOUT_MS = 1200; // 预览拖动用更短超时
         private const double NATURAL_PASS_TOLERANCE_SECONDS = 0.35;
         private const int NATURAL_PROGRESS_POLL_INTERVAL_MS = 200;
 
@@ -148,6 +151,14 @@ namespace YTPlayer.Core
                 return;
             }
 
+            // 避免跳到曲终后导致 BASS 拒绝定位：将目标时间钳制在曲长-50ms 以内
+            double duration = _audioEngine.GetDuration();
+            if (duration > 0)
+            {
+                double maxTarget = Math.Max(0, duration - 0.05);
+                targetSeconds = Math.Min(targetSeconds, maxTarget);
+            }
+
             lock (_seekLock)
             {
                 // 保存最新的目标位置（丢弃旧的）
@@ -189,8 +200,8 @@ namespace YTPlayer.Core
                 Debug.WriteLine("[SeekManager] Seek 序列结束（最后一次 seek 将继续完成）");
             }
 
-            // 触发完成事件
-            SeekCompleted?.Invoke(this, true);
+            // 触发完成事件，带上最近一次执行结果
+            SeekCompleted?.Invoke(this, _lastSeekSuccess);
         }
 
         /// <summary>
@@ -258,16 +269,9 @@ namespace YTPlayer.Core
             // 获取状态（线程安全）
             lock (_seekLock)
             {
-                // 如果正在执行 Seek
+                // 如果正在执行 Seek，无论预览/正式都取消并用新请求替换，保证快速响应
                 if (_isExecutingSeek)
                 {
-                    if (_executingIsPreview)
-                    {
-                        // 预览型执行中：直接返回，避免重复
-                        return;
-                    }
-
-                    // 非预览（正式）执行中：取消旧的，启动新的（Fire-and-Forget, 可被后续请求覆盖）
                     _currentSeekCts?.Cancel();
                     _currentSeekCts?.Dispose();
                     _currentSeekCts = null;
@@ -302,9 +306,10 @@ namespace YTPlayer.Core
             // 在后台线程执行（不阻塞定时器）
             _ = Task.Run(async () =>
             {
+                bool seekSuccess = false;
                 try
                 {
-                    await ExecuteSeekAsync(targetPosition, originPosition, isPreview, isUsingCache, cacheManager, seekCts.Token).ConfigureAwait(false);
+                    seekSuccess = await ExecuteSeekAsync(targetPosition, originPosition, isPreview, isUsingCache, cacheManager, seekCts.Token).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -319,6 +324,7 @@ namespace YTPlayer.Core
                         {
                             _seekTimer?.Change(SEEK_INTERVAL_MS, Timeout.Infinite);
                         }
+                        _lastSeekSuccess = seekSuccess;
                     }
                 }
             });
@@ -327,7 +333,7 @@ namespace YTPlayer.Core
         /// <summary>
         /// 异步执行 Seek（智能等待缓存数据）
         /// </summary>
-        private async Task ExecuteSeekAsync(
+        private async Task<bool> ExecuteSeekAsync(
             double targetSeconds,
             double originSeconds,
             bool isPreview,
@@ -346,12 +352,11 @@ namespace YTPlayer.Core
                 var startTime = DateTime.Now;
 
                 bool isForwardSeek = originSeconds >= 0 && targetSeconds > originSeconds + 0.01;
-                CancellationToken effectiveToken = cancellationToken;
+                linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                CancellationToken effectiveToken = linkedCts.Token;
 
                 if (!isPreview && isForwardSeek)
                 {
-                    linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                    effectiveToken = linkedCts.Token;
                     progressMonitor = MonitorNaturalProgressAsync(targetSeconds, linkedCts);
                 }
 
@@ -362,12 +367,40 @@ namespace YTPlayer.Core
                 }
                 else
                 {
-                    if (isUsingCache && cacheManager != null)
+                    double distance = originSeconds >= 0 ? Math.Abs(targetSeconds - originSeconds) : double.MaxValue;
+                    bool isShortJump = distance <= 6.0; // 短按快进/快退
+
+                    if (isUsingCache && cacheManager != null && isShortJump)
                     {
+                        long targetBytes = _audioEngine.GetBytesFromSeconds(targetSeconds);
+                        bool ready = cacheManager.AreChunksReady(targetBytes, aheadChunks: 5);
+
+                        // 类似 scrub：若目标及后续3块已在缓存，立即跳转；否则也直接跳，并后台补块
+                        success = _audioEngine.SetPosition(targetSeconds);
+                        _ = cacheManager.PrefetchAroundAsync(targetBytes, aheadChunks: 5, effectiveToken);
+                        if (!ready)
+                        {
+                            // 若尚未就绪，额外触发一次按需下载目标块，降低后续阻塞概率
+                            _ = cacheManager.EnsurePositionAsync(targetBytes, effectiveToken);
+                        }
+                    }
+                    else if (isUsingCache && cacheManager != null)
+                    {
+                        int timeoutMs = isPreview ? PREVIEW_CACHE_WAIT_TIMEOUT_MS : SEEK_CACHE_WAIT_TIMEOUT_MS;
+                        bool waitTargetOnly = false;
+
                         success = await _audioEngine.SetPositionWithCacheWaitAsync(
                             targetSeconds,
-                            SEEK_CACHE_WAIT_TIMEOUT_MS,
-                            effectiveToken).ConfigureAwait(false);
+                            timeoutMs,
+                            effectiveToken,
+                            waitTargetOnly: waitTargetOnly).ConfigureAwait(false);
+
+                        // 若等待超时/失败，则降级为直接定位，不再阻塞
+                        if (!success && !effectiveToken.IsCancellationRequested)
+                        {
+                            Debug.WriteLine($"[SeekManager] ⏳ WaitForCacheReady 超时，降级为直接 SetPosition: {targetSeconds:F1}s");
+                            success = _audioEngine.SetPosition(targetSeconds);
+                        }
                     }
                     else
                     {
@@ -430,6 +463,8 @@ namespace YTPlayer.Core
             {
                 _consecutiveFailures = 0;
             }
+
+            return success && !cancelledByNaturalProgress;
         }
 
         private Task MonitorNaturalProgressAsync(double targetSeconds, CancellationTokenSource linkedCts)
