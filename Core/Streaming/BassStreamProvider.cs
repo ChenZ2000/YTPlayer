@@ -245,10 +245,9 @@ namespace YTPlayer.Core.Streaming
                     {
                         try
                         {
-                            bytesRead = Task.Run(async () =>
-                            {
-                                return await _cacheManager.ReadAsync(position, _readBuffer, 0, length, timeoutCts.Token, waitIfNotReady: true);
-                            }, timeoutCts.Token).Result;
+                            bytesRead = _cacheManager.ReadAsync(position, _readBuffer, 0, length, timeoutCts.Token, waitIfNotReady: true)
+                                .GetAwaiter()
+                                .GetResult();
                         }
                         catch (AggregateException aex)
                         {
@@ -288,7 +287,7 @@ namespace YTPlayer.Core.Streaming
                         return 0; // 返回0并依赖 BLOCK 模式让 BASS 继续等待，而非结束/报错
                     }
 
-                    Thread.Sleep(200); // 轻量等待，避免忙等
+                    Task.Delay(200).GetAwaiter().GetResult(); // 轻量等待，避免忙等
                 }
                 if (bytesRead > 0)
                 {

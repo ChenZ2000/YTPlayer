@@ -3,6 +3,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Diagnostics;
 using YTPlayer.Core.Playback.Cache;
+using YTPlayer.Core.Playback;
 
 namespace YTPlayer.Core
 {
@@ -30,7 +31,12 @@ namespace YTPlayer.Core
         private bool _executingIsPreview = false;  // 当前执行的是否为预览
         private double _currentExecutingTarget = -1; // 正在执行的目标位置（避免重复触发）
         private CancellationTokenSource? _currentSeekCts = null;  // 当前 Seek 操作的取消令牌
+        private CancellationTokenSource? _deferredSeekCts = null; // 延迟 Seek 等待的取消令牌
         private bool _lastSeekSuccess = true;       // 最近一次 Seek 执行结果，用于 FinishSeek 事件
+
+        private long _pendingSeekVersion = 0;
+        private PendingSeekContext? _pendingSeekContext = null;
+        private bool _hasPendingSeekContext = false;
 
         // 快速定时器（50ms）
         private Timer? _seekTimer;
@@ -38,8 +44,9 @@ namespace YTPlayer.Core
 
         // 远距离跳转等待超时（60 秒，覆盖更多网络慢的情况）
         // 缓存等待超时：缩短，超时后立即降级为“直接跳 + 后台缓冲”
-        private const int SEEK_CACHE_WAIT_TIMEOUT_MS = 8000;
+        private const int SEEK_CACHE_WAIT_TIMEOUT_MS = 12000;
         private const int PREVIEW_CACHE_WAIT_TIMEOUT_MS = 1200; // 预览拖动用更短超时
+        private const int SEEK_DEFERRED_WAIT_TIMEOUT_MS = 30000;
         private const double NATURAL_PASS_TOLERANCE_SECONDS = 0.35;
         private const int NATURAL_PROGRESS_POLL_INTERVAL_MS = 200;
 
@@ -61,6 +68,32 @@ namespace YTPlayer.Core
         public event EventHandler<bool>? SeekCompleted; // bool = 是否成功
 
         #endregion
+
+        private readonly struct PendingSeekContext
+        {
+            public double OriginSeconds { get; }
+            public double TargetSeconds { get; }
+            public bool WasPlaying { get; }
+            public bool WasPaused { get; }
+            public PlaybackState PlaybackState { get; }
+            public long SeekVersion { get; }
+
+            public PendingSeekContext(
+                double originSeconds,
+                double targetSeconds,
+                bool wasPlaying,
+                bool wasPaused,
+                PlaybackState playbackState,
+                long seekVersion)
+            {
+                OriginSeconds = originSeconds;
+                TargetSeconds = targetSeconds;
+                WasPlaying = wasPlaying;
+                WasPaused = wasPaused;
+                PlaybackState = playbackState;
+                SeekVersion = seekVersion;
+            }
+        }
 
         #region 构造函数
 
@@ -224,11 +257,21 @@ namespace YTPlayer.Core
                 _currentSeekCts?.Dispose();
                 _currentSeekCts = null;
 
+                _deferredSeekCts?.Cancel();
+                _deferredSeekCts?.Dispose();
+                _deferredSeekCts = null;
+
                 // 重置状态
                 _latestSeekPosition = -1;
                 _latestSeekOriginPosition = -1;
+                _latestSeekIsPreview = false;
                 _hasNewSeekRequest = false;
                 _isExecutingSeek = false;
+                _executingIsPreview = false;
+                _currentExecutingTarget = -1;
+
+                _hasPendingSeekContext = false;
+                _pendingSeekContext = null;
 
                 Debug.WriteLine("[SeekManager] 所有 Seek 操作已取消");
             }
@@ -248,6 +291,137 @@ namespace YTPlayer.Core
                     return pendingReal || executingReal;
                 }
             }
+        }
+
+        /// <summary>
+        /// 是否存在长跳待恢复上下文
+        /// </summary>
+        public bool IsSeekingLong
+        {
+            get
+            {
+                lock (_seekLock)
+                {
+                    return _hasPendingSeekContext;
+                }
+            }
+        }
+
+        /// <summary>
+        /// 是否仍有延迟等待中的 Seek
+        /// </summary>
+        public bool HasPendingDeferredSeek
+        {
+            get
+            {
+                lock (_seekLock)
+                {
+                    return _deferredSeekCts != null;
+                }
+            }
+        }
+
+        /// <summary>
+        /// 取消当前长跳等待并恢复原播放状态
+        /// </summary>
+        public bool CancelPendingSeekAndRestore(bool? resumePlayback = null)
+        {
+            if (!TryCancelPendingSeekContext(out PendingSeekContext context))
+            {
+                Debug.WriteLine("[SeekManager] CancelPendingSeekAndRestore：无待恢复上下文");
+                return false;
+            }
+
+            var snapshot = context;
+            bool setOk = _audioEngine.SetPosition(snapshot.OriginSeconds);
+            bool shouldResume = ApplyResumePause(snapshot, resumePlayback);
+
+            Debug.WriteLine($"[SeekManager] CancelPendingSeekAndRestore：恢复到 {snapshot.OriginSeconds:F1}s，" +
+                            $"setOk={setOk}, resume={shouldResume}, targetWas={snapshot.TargetSeconds:F1}s");
+            return true;
+        }
+
+        /// <summary>
+        /// 取消长跳等待（不做位置恢复，仅恢复播放/暂停状态）
+        /// </summary>
+        public bool CancelPendingLongSeek(bool? resumePlayback = null)
+        {
+            if (!TryCancelPendingSeekContext(out PendingSeekContext context))
+            {
+                Debug.WriteLine("[SeekManager] CancelPendingLongSeek：无待恢复上下文");
+                return false;
+            }
+
+            var snapshot = context;
+            bool shouldResume = ApplyResumePause(snapshot, resumePlayback);
+
+            Debug.WriteLine($"[SeekManager] CancelPendingLongSeek：取消等待，resume={shouldResume}, targetWas={snapshot.TargetSeconds:F1}s");
+            return true;
+        }
+
+        private bool TryCancelPendingSeekContext(out PendingSeekContext context)
+        {
+            context = default;
+
+            if (IsDisposed || _audioEngine == null)
+            {
+                return false;
+            }
+
+            bool hasContext = false;
+            lock (_seekLock)
+            {
+                _seekTimer?.Change(Timeout.Infinite, Timeout.Infinite);
+
+                _currentSeekCts?.Cancel();
+                _currentSeekCts?.Dispose();
+                _currentSeekCts = null;
+
+                _deferredSeekCts?.Cancel();
+                _deferredSeekCts?.Dispose();
+                _deferredSeekCts = null;
+
+                _latestSeekPosition = -1;
+                _latestSeekOriginPosition = -1;
+                _latestSeekIsPreview = false;
+                _hasNewSeekRequest = false;
+                _isExecutingSeek = false;
+                _executingIsPreview = false;
+                _currentExecutingTarget = -1;
+
+                if (_hasPendingSeekContext && _pendingSeekContext.HasValue)
+                {
+                    context = _pendingSeekContext.Value;
+                    _hasPendingSeekContext = false;
+                    _pendingSeekContext = null;
+                    hasContext = true;
+                }
+            }
+
+            _cacheManager?.CancelSeekBoost();
+
+            return hasContext;
+        }
+
+        private bool ApplyResumePause(PendingSeekContext snapshot, bool? resumePlayback)
+        {
+            bool shouldResume = resumePlayback ?? snapshot.WasPlaying;
+            if (shouldResume)
+            {
+                if (!_audioEngine.IsPlaying)
+                {
+                    _audioEngine.Resume();
+                }
+            }
+            else
+            {
+                if (_audioEngine.IsPlaying)
+                {
+                    _audioEngine.Pause();
+                }
+            }
+
+            return shouldResume;
         }
 
         #endregion
@@ -345,6 +519,7 @@ namespace YTPlayer.Core
             Task? progressMonitor = null;
             bool success = false;
             bool cancelledByNaturalProgress = false;
+            long pendingVersion = 0;
 
             try
             {
@@ -369,6 +544,12 @@ namespace YTPlayer.Core
                 {
                     double distance = originSeconds >= 0 ? Math.Abs(targetSeconds - originSeconds) : double.MaxValue;
                     bool isShortJump = distance <= 6.0; // 短按快进/快退
+                    bool isLongSeek = !isPreview && !isShortJump;
+
+                    if (isLongSeek && originSeconds >= 0)
+                    {
+                        pendingVersion = BeginPendingLongSeek(originSeconds, targetSeconds);
+                    }
 
                     if (isUsingCache && cacheManager != null && isShortJump)
                     {
@@ -377,17 +558,23 @@ namespace YTPlayer.Core
 
                         // 类似 scrub：若目标及后续3块已在缓存，立即跳转；否则也直接跳，并后台补块
                         success = _audioEngine.SetPosition(targetSeconds);
-                        _ = cacheManager.PrefetchAroundAsync(targetBytes, aheadChunks: 5, effectiveToken);
+                        cacheManager.RequestSeekBoost(targetBytes, effectiveToken);
+                        _ = cacheManager.PrefetchAroundAsync(targetBytes, aheadChunks: 5, effectiveToken, allowRangeRescue: true);
                         if (!ready)
                         {
                             // 若尚未就绪，额外触发一次按需下载目标块，降低后续阻塞概率
-                            _ = cacheManager.EnsurePositionAsync(targetBytes, effectiveToken);
+                            _ = cacheManager.EnsurePositionAsync(targetBytes, effectiveToken, allowRangeRescue: true);
                         }
                     }
                     else if (isUsingCache && cacheManager != null)
                     {
+                        long targetBytes = _audioEngine.GetBytesFromSeconds(targetSeconds);
                         int timeoutMs = isPreview ? PREVIEW_CACHE_WAIT_TIMEOUT_MS : SEEK_CACHE_WAIT_TIMEOUT_MS;
                         bool waitTargetOnly = false;
+
+                        // 长距离跳转：提前触发目标区间的按需缓存，缩短等待时间
+                        cacheManager.RequestSeekBoost(targetBytes, effectiveToken);
+                        _ = cacheManager.PrefetchAroundAsync(targetBytes, aheadChunks: 6, effectiveToken, allowRangeRescue: true);
 
                         success = await _audioEngine.SetPositionWithCacheWaitAsync(
                             targetSeconds,
@@ -395,11 +582,11 @@ namespace YTPlayer.Core
                             effectiveToken,
                             waitTargetOnly: waitTargetOnly).ConfigureAwait(false);
 
-                        // 若等待超时/失败，则降级为直接定位，不再阻塞
+                        // 若等待超时/失败，则进入后台缓冲等待，避免跳转后长时间无声
                         if (!success && !effectiveToken.IsCancellationRequested)
                         {
-                            Debug.WriteLine($"[SeekManager] ⏳ WaitForCacheReady 超时，降级为直接 SetPosition: {targetSeconds:F1}s");
-                            success = _audioEngine.SetPosition(targetSeconds);
+                            Debug.WriteLine($"[SeekManager] ?? 缓存未就绪，转入后台缓冲等待: {targetSeconds:F1}s");
+                            success = await ExecuteDeferredSeekAsync(targetSeconds, cacheManager, effectiveToken).ConfigureAwait(false);
                         }
                     }
                     else
@@ -464,7 +651,127 @@ namespace YTPlayer.Core
                 _consecutiveFailures = 0;
             }
 
+            if (pendingVersion > 0)
+            {
+                ClearPendingSeekContext(pendingVersion);
+            }
+
             return success && !cancelledByNaturalProgress;
+        }
+
+        private async Task<bool> ExecuteDeferredSeekAsync(double targetSeconds, SmartCacheManager cacheManager, CancellationToken token)
+        {
+            if (cacheManager == null)
+            {
+                return false;
+            }
+
+            try
+            {
+                Debug.WriteLine($"[SeekManager] ?? 启动后台缓冲等待: {targetSeconds:F1}s");
+                long targetBytes = _audioEngine.GetBytesFromSeconds(targetSeconds);
+                bool wasPlaying = _audioEngine.IsPlaying;
+
+                if (wasPlaying)
+                {
+                    _audioEngine.Pause();
+                }
+
+                _ = cacheManager.PrefetchAroundAsync(targetBytes, aheadChunks: 6, token, allowRangeRescue: true);
+
+                CancellationTokenSource? waitCts = null;
+                try
+                {
+                    waitCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+                    waitCts.CancelAfter(TimeSpan.FromMilliseconds(SEEK_DEFERRED_WAIT_TIMEOUT_MS));
+
+                    lock (_seekLock)
+                    {
+                        _deferredSeekCts?.Cancel();
+                        _deferredSeekCts?.Dispose();
+                        _deferredSeekCts = waitCts;
+                    }
+
+                    bool ready = await cacheManager.WaitForCacheReadyAsync(targetBytes, true, waitCts.Token).ConfigureAwait(false);
+                    if (!ready)
+                    {
+                        Debug.WriteLine($"[SeekManager] ?? 缓冲等待超时: {targetSeconds:F1}s");
+                        return false;
+                    }
+                }
+                finally
+                {
+                    if (waitCts != null)
+                    {
+                        lock (_seekLock)
+                        {
+                            if (ReferenceEquals(_deferredSeekCts, waitCts))
+                            {
+                                _deferredSeekCts = null;
+                            }
+                        }
+
+                        try
+                        {
+                            waitCts.Dispose();
+                        }
+                        catch (ObjectDisposedException)
+                        {
+                        }
+                    }
+                }
+
+                Debug.WriteLine($"[SeekManager] ? 缓冲就绪，执行延迟跳转: {targetSeconds:F1}s");
+                bool setSuccess = _audioEngine.SetPosition(targetSeconds);
+                if (!setSuccess)
+                {
+                    return false;
+                }
+
+                if (wasPlaying && !token.IsCancellationRequested)
+                {
+                    _audioEngine.Resume();
+                }
+
+                return true;
+            }
+            catch (OperationCanceledException)
+            {
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[SeekManager] ?? 延迟Seek异常: {ex.Message}");
+                return false;
+            }
+        }
+
+        private long BeginPendingLongSeek(double originSeconds, double targetSeconds)
+        {
+            PlaybackState playbackState = _audioEngine.GetPlaybackState();
+            bool wasPlaying = _audioEngine.IsPlaying;
+            bool wasPaused = _audioEngine.IsPaused;
+
+            lock (_seekLock)
+            {
+                _pendingSeekVersion++;
+                long version = _pendingSeekVersion;
+                _pendingSeekContext = new PendingSeekContext(originSeconds, targetSeconds, wasPlaying, wasPaused, playbackState, version);
+                _hasPendingSeekContext = true;
+                return version;
+            }
+        }
+
+        private void ClearPendingSeekContext(long version)
+        {
+            lock (_seekLock)
+            {
+                if (_hasPendingSeekContext && _pendingSeekContext.HasValue && _pendingSeekContext.Value.SeekVersion == version)
+                {
+                    _hasPendingSeekContext = false;
+                    _pendingSeekContext = null;
+                }
+            }
         }
 
         private Task MonitorNaturalProgressAsync(double targetSeconds, CancellationTokenSource linkedCts)
@@ -510,6 +817,13 @@ namespace YTPlayer.Core
             _currentSeekCts?.Cancel();
             _currentSeekCts?.Dispose();
             _currentSeekCts = null;
+
+            _deferredSeekCts?.Cancel();
+            _deferredSeekCts?.Dispose();
+            _deferredSeekCts = null;
+
+            _hasPendingSeekContext = false;
+            _pendingSeekContext = null;
         }
 
         #endregion

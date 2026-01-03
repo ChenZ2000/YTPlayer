@@ -1,11 +1,12 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Drawing;
 using System.Runtime.InteropServices;
+using System.Runtime.Loader;
 using System.Reflection;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using System.Net;
 using Newtonsoft.Json.Linq;
 using YTPlayer.Core;
 using YTPlayer.Utils;
@@ -20,6 +21,7 @@ namespace YTPlayer
         [STAThread]
         static void Main(string[] args)
         {
+            TryEnableLegacyAccessibility();
             // ✅ 初始化日志系统（优先执行）
             DebugLogger.Initialize();
             DebugLogger.Log(DebugLogger.LogLevel.Info, "Program", "════════════════════════════════════════");
@@ -27,9 +29,12 @@ namespace YTPlayer
             DebugLogger.Log(DebugLogger.LogLevel.Info, "Program", $"命令行参数: {string.Join(" ", args)}");
             DebugLogger.Log(DebugLogger.LogLevel.Info, "Program", "════════════════════════════════════════");
 
-            // ✅ 配置网络连接池以支持高吞吐量并发下载（解决高码率无损音频卡顿）
+            // ✅ 配置依赖加载路径（托管与本机）
             ConfigurePrivateLibPath();
-            ConfigureNetworkSettings();
+
+            // 与 .NET Framework 4.8 视觉一致（默认字体/高 DPI 行为）
+            Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
+            Application.SetDefaultFont(new Font("Microsoft Sans Serif", 8.25f));
 
             // ✅ 注册全局异常处理器
             AppDomain.CurrentDomain.UnhandledException += OnUnhandledException;
@@ -71,6 +76,7 @@ namespace YTPlayer
             finally
             {
                 DebugLogger.Log(DebugLogger.LogLevel.Info, "Program", "应用程序退出");
+                DebugLogger.Shutdown();
             }
         }
 
@@ -117,36 +123,24 @@ namespace YTPlayer
             }
         }
 
-        /// <summary>
-        /// 配置网络设置以支持高吞吐量并发下载
-        /// 解决高码率无损音频（lossless/hires/sky）播放卡顿问题
-        /// </summary>
-        private static void ConfigureNetworkSettings()
+        private static void TryEnableLegacyAccessibility()
         {
             try
             {
-                // 🔧 核心修复：增加每个服务器的最大并发连接数
-                // .NET Framework 默认值是 2，这是导致高码率音频卡顿的根本原因
-                // 研究表明：并发 HTTP Range 请求需要多个 TCP 连接才能充分利用带宽
-                System.Net.ServicePointManager.DefaultConnectionLimit = 100;
-
-                // 🔧 禁用 Expect: 100-continue 头，减少请求延迟
-                // 此头会在发送请求体前先等待服务器响应，对 Range 请求无意义
-                System.Net.ServicePointManager.Expect100Continue = false;
-
-                // 🔧 禁用 Nagle 算法，减少小包延迟
-                // Nagle 算法会合并小包，但对音频流式传输来说延迟比吞吐量更重要
-                System.Net.ServicePointManager.UseNagleAlgorithm = false;
-                System.Net.ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12 | SecurityProtocolType.Tls11 | SecurityProtocolType.Tls;
-
+                AppContext.SetSwitch("Switch.System.Windows.Forms.UseLegacyAccessibilityFeatures", true);
+                AppContext.SetSwitch("Switch.System.Windows.Forms.UseLegacyAccessibilityFeatures.2", true);
+                AppContext.SetSwitch("Switch.System.Windows.Forms.UseLegacyAccessibilityFeatures.3", true);
+                bool value1;
+                bool value2;
+                bool value3;
+                AppContext.TryGetSwitch("Switch.System.Windows.Forms.UseLegacyAccessibilityFeatures", out value1);
+                AppContext.TryGetSwitch("Switch.System.Windows.Forms.UseLegacyAccessibilityFeatures.2", out value2);
+                AppContext.TryGetSwitch("Switch.System.Windows.Forms.UseLegacyAccessibilityFeatures.3", out value3);
                 DebugLogger.Log(DebugLogger.LogLevel.Info, "Program",
-                    "✓ 网络设置已优化: DefaultConnectionLimit=100, Expect100Continue=False, UseNagleAlgorithm=False");
-                DebugLogger.Log(DebugLogger.LogLevel.Info, "Program",
-                    "  目标：支持高码率无损音频流式播放，榨干带宽，永不卡顿");
+                    $"Legacy accessibility switches: {value1}, {value2}, {value3}");
             }
-            catch (Exception ex)
+            catch
             {
-                DebugLogger.LogException("Program", ex, "配置网络设置失败（非致命）");
             }
         }
 
@@ -157,8 +151,7 @@ namespace YTPlayer
         {
             try
             {
-                string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-                string libsPath = Path.Combine(baseDir, "libs");
+                string libsPath = PathHelper.LibsDirectory;
                 if (!Directory.Exists(libsPath))
                 {
                     return;
@@ -173,24 +166,38 @@ namespace YTPlayer
                     Environment.SetEnvironmentVariable("PATH", libsPath + ";" + currentPath);
                 }
 
-                // 托管依赖兜底解析（确保 Newtonsoft.Json 等从 libs 解析）
-                AppDomain.CurrentDomain.AssemblyResolve += (sender, args) =>
+                Assembly? ResolveFromLibs(AssemblyName name)
                 {
                     try
                     {
-                        string assemblyName = new AssemblyName(args.Name).Name + ".dll";
-                        string candidate = Path.Combine(libsPath, assemblyName);
+                        if (string.IsNullOrWhiteSpace(name.Name))
+                        {
+                            return null;
+                        }
+
+                        var loaded = AssemblyLoadContext.Default.Assemblies
+                            .FirstOrDefault(asm => string.Equals(asm.GetName().Name, name.Name, StringComparison.OrdinalIgnoreCase));
+                        if (loaded != null)
+                        {
+                            return loaded;
+                        }
+
+                        string candidate = Path.Combine(libsPath, name.Name + ".dll");
                         if (File.Exists(candidate))
                         {
-                            return Assembly.LoadFrom(candidate);
+                            return AssemblyLoadContext.Default.LoadFromAssemblyPath(candidate);
                         }
                     }
                     catch (Exception ex)
                     {
-                        DebugLogger.LogException("Program", ex, $"AssemblyResolve 处理失败: {args.Name}");
+                        DebugLogger.LogException("Program", ex, $"AssemblyResolve 处理失败: {name.FullName}");
                     }
                     return null;
-                };
+                }
+
+                // 托管依赖兜底解析（确保 Newtonsoft.Json 等从 libs 解析）
+                AssemblyLoadContext.Default.Resolving += (_, name) => ResolveFromLibs(name);
+                AppDomain.CurrentDomain.AssemblyResolve += (_, args) => ResolveFromLibs(new AssemblyName(args.Name));
             }
             catch (Exception ex)
             {
@@ -468,3 +475,4 @@ namespace YTPlayer
         }
     }
 }
+

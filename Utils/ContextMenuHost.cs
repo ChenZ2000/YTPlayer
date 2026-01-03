@@ -48,17 +48,17 @@ namespace YTPlayer.Utils
         }
 
         /// <summary>
-        /// 重写 OnClosing 事件，取消关闭操作
+        /// 重写 OnFormClosing 事件，取消关闭操作
         /// </summary>
-        protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+        protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            System.Diagnostics.Debug.WriteLine("[ContextMenuHost] OnClosing 被调用，取消关闭操作");
+            System.Diagnostics.Debug.WriteLine("[ContextMenuHost] OnFormClosing 被调用，取消关闭操作");
 
             // ⭐ 取消关闭操作，改为隐藏
             e.Cancel = true;
             this.Hide();
 
-            // 不调用 base.OnClosing
+            // 不调用 base.OnFormClosing
         }
 
         /// <summary>

@@ -61,6 +61,40 @@ namespace YTPlayer.Core.Playback.Cache
         private int _rangeFailureCount;
         private const int RangeFailureThreshold = 3;
         private bool _rangeFallbackTriggered;
+        private bool _rangeSupportChecked;
+        private bool _supportsRange;
+        private readonly SemaphoreSlim _rangeSupportLock = new SemaphoreSlim(1, 1);
+
+        private readonly object _seekBoostLock = new object();
+        private readonly object _seekBoostStatsLock = new object();
+        private CancellationTokenSource? _seekBoostCts;
+        private long _seekBoostVersion;
+        private const int SeekBoostAheadChunks = 8;
+        private const int SeekBoostBehindChunks = 2;
+        private const int SeekBoostMaxConcurrency = 3;
+        private const int SeekBoostMinConcurrency = 2;
+        private const int SeekBoostMaxAdaptiveConcurrency = 6;
+        private double _seekBoostAvgChunkMs;
+
+        private bool _resumeSequentialAfterSeek;
+        private bool _resumeSequentialPreloadOnly;
+        private long _resumeSequentialVersion;
+
+        private readonly struct SeekBoostProfile
+        {
+            public int Ahead { get; }
+            public int Behind { get; }
+            public int BaseConcurrency { get; }
+            public string Reason { get; }
+
+            public SeekBoostProfile(int ahead, int behind, int baseConcurrency, string reason)
+            {
+                Ahead = ahead;
+                Behind = behind;
+                BaseConcurrency = baseConcurrency;
+                Reason = reason;
+            }
+        }
 
         private readonly object _stateLock = new object();
         private readonly object _bufferingLock = new object();
@@ -185,6 +219,12 @@ namespace YTPlayer.Core.Playback.Cache
             {
                 _strategy = await DetectStrategyAsync(token).ConfigureAwait(false);
                 _strategyCache[GetStrategyCacheKey()] = _strategy;
+            }
+
+            if (_strategy == DownloadStrategy.Range)
+            {
+                _supportsRange = true;
+                _rangeSupportChecked = true;
             }
 
             StrategyDetermined?.Invoke(this, _strategy);
@@ -348,7 +388,7 @@ namespace YTPlayer.Core.Playback.Cache
         /// <summary>
         /// 主动预取目标块及后续若干块，避免短距跳转后的立即卡顿。
         /// </summary>
-        public Task PrefetchAroundAsync(long bytePosition, int aheadChunks, CancellationToken token)
+        public Task PrefetchAroundAsync(long bytePosition, int aheadChunks, CancellationToken token, bool allowRangeRescue = false)
         {
             int centerChunk = (int)(bytePosition / ChunkSize);
             if (aheadChunks <= 0) return Task.CompletedTask;
@@ -358,7 +398,7 @@ namespace YTPlayer.Core.Playback.Cache
             {
                 int idx = centerChunk + i;
                 if (idx < 0 || idx >= _totalChunks) continue;
-                tasks.Add(EnsureChunkAsync(idx, token));
+                tasks.Add(EnsureChunkAsync(idx, token, allowRangeRescue));
             }
 
             return Task.WhenAll(tasks);
@@ -372,13 +412,13 @@ namespace YTPlayer.Core.Playback.Cache
         /// <summary>
         /// 确保包含指定字节位置的块已被调度/下载。
         /// </summary>
-        public Task EnsurePositionAsync(long bytePosition, CancellationToken token)
+        public Task EnsurePositionAsync(long bytePosition, CancellationToken token, bool allowRangeRescue = false)
         {
             int chunkIndex = GetChunkIndex(bytePosition);
-            return EnsureChunkAsync(chunkIndex, token);
+            return EnsureChunkAsync(chunkIndex, token, allowRangeRescue);
         }
 
-        public Task EnsureChunkAsync(int chunkIndex, CancellationToken token)
+        public Task EnsureChunkAsync(int chunkIndex, CancellationToken token, bool allowRangeRescue = false)
         {
             if (_cache.ContainsKey(chunkIndex))
             {
@@ -387,10 +427,370 @@ namespace YTPlayer.Core.Playback.Cache
 
             if (_strategy != DownloadStrategy.Range)
             {
+                if (allowRangeRescue)
+                {
+                    return EnsureChunkRescueAsync(chunkIndex, token);
+                }
                 return Task.CompletedTask;
             }
 
             return DownloadChunkOnDemandAsync(chunkIndex, token);
+        }
+
+        public void RequestSeekBoost(long bytePosition, CancellationToken token)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            var profile = GetSeekBoostProfile();
+            int targetChunk = GetChunkIndex(bytePosition);
+            int maxAhead = Math.Max(0, _totalChunks - 1 - targetChunk);
+            int maxBehind = Math.Max(0, targetChunk);
+            int ahead = Math.Min(profile.Ahead, maxAhead);
+            int behind = Math.Min(profile.Behind, maxBehind);
+            var chunks = BuildSeekBoostChunkList(targetChunk, ahead, behind);
+
+            CancellationTokenSource? cts;
+            long version;
+            lock (_seekBoostLock)
+            {
+                _seekBoostCts?.Cancel();
+                _seekBoostCts?.Dispose();
+
+                _seekBoostVersion++;
+                version = _seekBoostVersion;
+
+                _seekBoostCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+                cts = _seekBoostCts;
+            }
+
+            TryPauseSequentialDownloadForSeekBoost(version);
+
+            double avgMs = GetSeekBoostAverageMs();
+            int concurrency = DecideSeekBoostConcurrency(profile.BaseConcurrency);
+            DebugLogger.Log(
+                DebugLogger.LogLevel.Info,
+                "SmartCache",
+                $"SeekBoost profile: size={_totalSize / 1024d / 1024d:F1}MB, chunks={_totalChunks}, " +
+                $"target={targetChunk}, ahead={ahead}, behind={behind}, baseConc={profile.BaseConcurrency}, " +
+                $"avgMs={avgMs:F0}, conc={concurrency}, reason={profile.Reason}");
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await RunSeekBoostAsync(chunks, version, concurrency, cts.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                }
+                catch (Exception ex)
+                {
+                    DebugLogger.LogException("SmartCache", ex, "SeekBoost 执行异常");
+                }
+            });
+        }
+
+        public void CancelSeekBoost()
+        {
+            lock (_seekBoostLock)
+            {
+                _seekBoostCts?.Cancel();
+                _seekBoostCts?.Dispose();
+                _seekBoostCts = null;
+                _seekBoostVersion++;
+            }
+
+            DebugLogger.Log(
+                DebugLogger.LogLevel.Info,
+                "SmartCache",
+                "SeekBoost 已取消");
+        }
+
+        private List<int> BuildSeekBoostChunkList(int targetChunk, int ahead, int behind)
+        {
+            var list = new List<int>();
+            if (targetChunk < 0 || targetChunk >= _totalChunks)
+            {
+                return list;
+            }
+
+            list.Add(targetChunk);
+
+            for (int i = 1; i <= ahead; i++)
+            {
+                int idx = targetChunk + i;
+                if (idx >= 0 && idx < _totalChunks)
+                {
+                    list.Add(idx);
+                }
+            }
+
+            for (int i = 1; i <= behind; i++)
+            {
+                int idx = targetChunk - i;
+                if (idx >= 0 && idx < _totalChunks)
+                {
+                    list.Add(idx);
+                }
+            }
+
+            return list;
+        }
+
+        private async Task RunSeekBoostAsync(List<int> chunks, long version, int maxConcurrency, CancellationToken token)
+        {
+            if (chunks == null || chunks.Count == 0)
+            {
+                TryResumeSequentialDownloadAfterSeekBoost(version);
+                return;
+            }
+
+            bool supportsRange = await EnsureRangeSupportAsync(token).ConfigureAwait(false);
+            if (!supportsRange)
+            {
+                TryResumeSequentialDownloadAfterSeekBoost(version);
+                return;
+            }
+
+            _bandwidthAllocator?.ActivateFastSeek();
+
+            int concurrency = Math.Max(SeekBoostMinConcurrency, Math.Min(SeekBoostMaxAdaptiveConcurrency, maxConcurrency));
+            var semaphore = new SemaphoreSlim(concurrency, concurrency);
+            var tasks = new List<Task>();
+
+            try
+            {
+                foreach (int chunkIndex in chunks)
+                {
+                    if (token.IsCancellationRequested || version != Volatile.Read(ref _seekBoostVersion))
+                    {
+                        break;
+                    }
+
+                    if (_cache.ContainsKey(chunkIndex))
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        await semaphore.WaitAsync(token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
+
+                    tasks.Add(Task.Run(async () =>
+                    {
+                        var stopwatch = Stopwatch.StartNew();
+                        try
+                        {
+                            if (token.IsCancellationRequested || version != Volatile.Read(ref _seekBoostVersion))
+                            {
+                                return;
+                            }
+
+                            byte[]? data = await DownloadChunkOnDemandAsync(chunkIndex, token).ConfigureAwait(false);
+                            if (data != null && !token.IsCancellationRequested)
+                            {
+                                UpdateSeekBoostAverage(stopwatch.Elapsed.TotalMilliseconds);
+                            }
+                        }
+                        catch (OperationCanceledException)
+                        {
+                        }
+                        finally
+                        {
+                            try
+                            {
+                                semaphore.Release();
+                            }
+                            catch (ObjectDisposedException)
+                            {
+                            }
+                        }
+                    }));
+                }
+
+                if (tasks.Count > 0)
+                {
+                    try
+                    {
+                        await Task.WhenAll(tasks).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                    }
+                }
+            }
+            finally
+            {
+                _bandwidthAllocator?.DeactivateFastSeek();
+                semaphore.Dispose();
+                TryResumeSequentialDownloadAfterSeekBoost(version);
+            }
+        }
+
+        private SeekBoostProfile GetSeekBoostProfile()
+        {
+            long size = _totalSize;
+            int ahead;
+            int behind;
+            int baseConcurrency;
+            string reason;
+
+            if (_preferSequentialFull || size >= 80 * 1024 * 1024)
+            {
+                ahead = 14;
+                behind = 3;
+                baseConcurrency = 5;
+                reason = _preferSequentialFull ? "preferSequential" : "large";
+            }
+            else if (size >= 20 * 1024 * 1024)
+            {
+                ahead = 9;
+                behind = 3;
+                baseConcurrency = 4;
+                reason = "medium";
+            }
+            else
+            {
+                ahead = 6;
+                behind = 2;
+                baseConcurrency = 3;
+                reason = "small";
+            }
+
+            baseConcurrency = Math.Max(SeekBoostMinConcurrency, Math.Min(SeekBoostMaxAdaptiveConcurrency, baseConcurrency));
+            return new SeekBoostProfile(ahead, behind, baseConcurrency, reason);
+        }
+
+        private int DecideSeekBoostConcurrency(int baseConcurrency)
+        {
+            double avgMs = GetSeekBoostAverageMs();
+            int adaptive = baseConcurrency;
+
+            if (avgMs > 0)
+            {
+                if (avgMs < 300)
+                {
+                    adaptive = 5;
+                }
+                else if (avgMs < 800)
+                {
+                    adaptive = 4;
+                }
+                else
+                {
+                    adaptive = 2;
+                }
+            }
+
+            adaptive = Math.Max(SeekBoostMinConcurrency, Math.Min(SeekBoostMaxAdaptiveConcurrency, adaptive));
+            int chosen = Math.Max(SeekBoostMinConcurrency, Math.Min(baseConcurrency, adaptive));
+
+            return chosen;
+        }
+
+        private void UpdateSeekBoostAverage(double chunkMs)
+        {
+            if (chunkMs <= 0)
+            {
+                return;
+            }
+
+            lock (_seekBoostStatsLock)
+            {
+                if (_seekBoostAvgChunkMs <= 0)
+                {
+                    _seekBoostAvgChunkMs = chunkMs;
+                }
+                else
+                {
+                    _seekBoostAvgChunkMs = _seekBoostAvgChunkMs * 0.8 + chunkMs * 0.2;
+                }
+            }
+        }
+
+        private double GetSeekBoostAverageMs()
+        {
+            lock (_seekBoostStatsLock)
+            {
+                return _seekBoostAvgChunkMs;
+            }
+        }
+
+        private void TryPauseSequentialDownloadForSeekBoost(long version)
+        {
+            if (_strategy != DownloadStrategy.SequentialFull && _strategy != DownloadStrategy.ParallelFull)
+            {
+                return;
+            }
+
+            lock (_downloadLock)
+            {
+                bool active = _mainDownloadTask != null &&
+                              !_mainDownloadTask.IsCompleted &&
+                              !_mainDownloadTask.IsCanceled &&
+                              !_mainDownloadTask.IsFaulted;
+
+                if (!active)
+                {
+                    return;
+                }
+
+                _mainDownloadCts?.Cancel();
+                _resumeSequentialAfterSeek = true;
+                _resumeSequentialPreloadOnly = _isPreloadMode;
+                _resumeSequentialVersion = version;
+
+                DebugLogger.Log(
+                    DebugLogger.LogLevel.Info,
+                    "SmartCache",
+                    "SeekBoost 启动：暂停顺序下载以释放带宽");
+            }
+        }
+
+        private void TryResumeSequentialDownloadAfterSeekBoost(long version)
+        {
+            bool shouldResume = false;
+            bool preloadOnly = false;
+
+            lock (_downloadLock)
+            {
+                if (_resumeSequentialAfterSeek && version == _resumeSequentialVersion)
+                {
+                    shouldResume = true;
+                    preloadOnly = _resumeSequentialPreloadOnly;
+                    _resumeSequentialAfterSeek = false;
+                    _resumeSequentialPreloadOnly = false;
+                    _resumeSequentialVersion = 0;
+                }
+            }
+
+            if (!shouldResume)
+            {
+                return;
+            }
+
+            if (preloadOnly)
+            {
+                DebugLogger.Log(
+                    DebugLogger.LogLevel.Info,
+                    "SmartCache",
+                    "SeekBoost 结束：检测到预加载模式，跳过顺序下载恢复");
+                return;
+            }
+
+            DebugLogger.Log(
+                DebugLogger.LogLevel.Info,
+                "SmartCache",
+                "SeekBoost 结束：恢复顺序下载任务");
+            StartSequentialDownload(CancellationToken.None, preloadOnly: false);
         }
 
         /// <summary>
@@ -462,6 +862,13 @@ namespace YTPlayer.Core.Playback.Cache
             }
 
             _disposed = true;
+
+            lock (_seekBoostLock)
+            {
+                _seekBoostCts?.Cancel();
+                _seekBoostCts?.Dispose();
+                _seekBoostCts = null;
+            }
 
             try
             {
@@ -1013,40 +1420,20 @@ namespace YTPlayer.Core.Playback.Cache
 
         private async Task<DownloadStrategy> DetectStrategyAsync(CancellationToken token)
         {
+            bool supportsRange = await EnsureRangeSupportAsync(token).ConfigureAwait(false);
+
             if (_preferSequentialFull)
             {
                 DebugLogger.Log(
                     DebugLogger.LogLevel.Info,
                     "SmartCache",
-                    "⚙️ 启用顺序整流优先策略（高码率/大文件）");
+                    "启用顺序整流优先策略（高码率/大文件）");
                 return DownloadStrategy.SequentialFull;
             }
 
-            try
+            if (supportsRange)
             {
-                var (supportsRange, _) = await HttpRangeHelper.CheckRangeSupportAsync(
-                    _url,
-                    _httpClient,
-                    token,
-                    _headers).ConfigureAwait(false);
-
-                if (supportsRange)
-                {
-                    bool rangeVerified = await HttpRangeHelper.TestRangeRequestAsync(
-                        _url,
-                        _httpClient,
-                        token,
-                        _headers).ConfigureAwait(false);
-
-                    if (rangeVerified)
-                    {
-                        return DownloadStrategy.Range;
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                DebugLogger.LogException("SmartCache", ex, "检测 Range 能力失败");
+                return DownloadStrategy.Range;
             }
 
             if (_totalSize <= 50 * 1024 * 1024)
@@ -1240,7 +1627,7 @@ namespace YTPlayer.Core.Playback.Cache
                         {
                             try
                             {
-                                await EnsureChunkAsync(chunkToDownload, CancellationToken.None).ConfigureAwait(false);
+                                await EnsureChunkAsync(chunkToDownload, CancellationToken.None, allowRangeRescue: true).ConfigureAwait(false);
                                 DebugLogger.Log(
                                     DebugLogger.LogLevel.Info,
                                     "SmartCache",
@@ -1260,8 +1647,75 @@ namespace YTPlayer.Core.Playback.Cache
                 }
             }
 
-            await EnsureChunkAsync(chunkIndex, token).ConfigureAwait(false);
+            await EnsureChunkAsync(chunkIndex, token, allowRangeRescue: true).ConfigureAwait(false);
             return true;
+        }
+
+        private async Task EnsureChunkRescueAsync(int chunkIndex, CancellationToken token)
+        {
+            if (chunkIndex < 0 || chunkIndex >= _totalChunks)
+            {
+                return;
+            }
+
+            bool supportsRange = await EnsureRangeSupportAsync(token).ConfigureAwait(false);
+            if (!supportsRange)
+            {
+                return;
+            }
+
+            await DownloadChunkOnDemandAsync(chunkIndex, token).ConfigureAwait(false);
+        }
+
+        private async Task<bool> EnsureRangeSupportAsync(CancellationToken token)
+        {
+            if (_rangeSupportChecked)
+            {
+                return _supportsRange;
+            }
+
+            await _rangeSupportLock.WaitAsync(token).ConfigureAwait(false);
+            try
+            {
+                if (_rangeSupportChecked)
+                {
+                    return _supportsRange;
+                }
+
+                bool supportsRange = false;
+                try
+                {
+                    var (rangeHint, _) = await HttpRangeHelper.CheckRangeSupportAsync(
+                        _url,
+                        _httpClient,
+                        token,
+                        _headers).ConfigureAwait(false);
+                    supportsRange = rangeHint;
+
+                    if (supportsRange)
+                    {
+                        bool rangeVerified = await HttpRangeHelper.TestRangeRequestAsync(
+                            _url,
+                            _httpClient,
+                            token,
+                            _headers).ConfigureAwait(false);
+                        supportsRange = supportsRange && rangeVerified;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    DebugLogger.LogException("SmartCache", ex, "检测 Range 能力失败");
+                    supportsRange = false;
+                }
+
+                _supportsRange = supportsRange;
+                _rangeSupportChecked = true;
+                return supportsRange;
+            }
+            finally
+            {
+                _rangeSupportLock.Release();
+            }
         }
 
         private void SetBufferingState(BufferingState newState)

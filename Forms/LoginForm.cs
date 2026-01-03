@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.IO;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -11,6 +12,7 @@ using YTPlayer.Core.Auth;
 using YTPlayer.Core;
 using YTPlayer.Models;
 using YTPlayer.Models.Auth;
+using YTPlayer.Utils;
 using QRCoder;
 
 namespace YTPlayer.Forms
@@ -34,8 +36,17 @@ namespace YTPlayer.Forms
         private bool _webAutoLoginRequested;
         private string? _webUserDataFolder;
         private CoreWebView2Environment? _webEnvironment;
+        private readonly System.Windows.Forms.Timer _captchaTimer = new System.Windows.Forms.Timer();
+        private int _captchaSecondsRemaining;
+        private bool _captchaSending;
+        private bool _captchaLoginInProgress;
+        private bool _countryListLoaded;
+        private bool _countryListLoading;
+        private bool _countryFilterUpdating;
+        private List<CountryCodeEntry> _countryCodeEntries = new List<CountryCodeEntry>();
         private const string WebLoginUrl = "https://music.163.com";
         private const string WebPreheatUrl = "https://music.163.com/favicon.ico";
+        private const int CaptchaCountdownSeconds = 60;
         private readonly string[] _webCookieDomains =
         {
             "https://music.163.com",
@@ -78,22 +89,64 @@ namespace YTPlayer.Forms
             // 默认显示二维码登录标签页
             loginTabControl.SelectedIndex = 0;
 
+            InitializeCaptchaLoginTab();
+
             // 绑定事件
             this.Load += LoginForm_Load;
             this.FormClosing += LoginForm_FormClosing;
             loginTabControl.SelectedIndexChanged += LoginTabControl_SelectedIndexChanged;
         }
 
-        private void LoginForm_Load(object sender, EventArgs e)
+        private void InitializeCaptchaLoginTab()
+        {
+            if (countryCodeComboBox != null)
+            {
+                countryCodeComboBox.AutoCompleteMode = AutoCompleteMode.SuggestAppend;
+                countryCodeComboBox.AutoCompleteSource = AutoCompleteSource.ListItems;
+                countryCodeComboBox.KeyDown += CountryCodeComboBox_KeyDown;
+                countryCodeComboBox.TextUpdate += CountryCodeComboBox_TextUpdate;
+            }
+
+            if (phoneTextBox != null)
+            {
+                phoneTextBox.KeyPress += PhoneTextBox_KeyPress;
+                phoneTextBox.KeyDown += CaptchaInput_KeyDown;
+            }
+
+            if (captchaTextBox != null)
+            {
+                captchaTextBox.KeyPress += CaptchaTextBox_KeyPress;
+                captchaTextBox.KeyDown += CaptchaInput_KeyDown;
+            }
+
+            if (sendCaptchaButton != null)
+            {
+                sendCaptchaButton.Click += sendCaptchaButton_Click;
+            }
+
+            if (captchaLoginButton != null)
+            {
+                captchaLoginButton.Click += captchaLoginButton_Click;
+            }
+
+            _captchaTimer.Interval = 1000;
+            _captchaTimer.Tick += CaptchaTimer_Tick;
+
+            var fallback = BuildFallbackCountryList();
+            _countryCodeEntries = fallback;
+            ApplyCountryList(fallback, preserveText: false);
+        }
+
+        private void LoginForm_Load(object? sender, EventArgs e)
         {
             // 如果默认显示二维码标签页，则加载二维码
             if (loginTabControl.SelectedIndex == 0)
             {
-                LoadQrCodeAsync();
+                LoadQrCodeAsync().SafeFireAndForget("Login QR load");
             }
         }
 
-        private void LoginForm_FormClosing(object sender, FormClosingEventArgs e)
+        private void LoginForm_FormClosing(object? sender, FormClosingEventArgs e)
         {
             System.Diagnostics.Debug.WriteLine($"[LoginForm] ========== 窗口正在关闭 ==========");
             System.Diagnostics.Debug.WriteLine($"[LoginForm] DialogResult={this.DialogResult}");
@@ -106,6 +159,8 @@ namespace YTPlayer.Forms
                 _qrCheckCancellation.Cancel();
             }
             System.Diagnostics.Debug.WriteLine($"[LoginForm] ========== 窗口关闭处理完成 ==========");
+
+            _captchaTimer.Stop();
 
             // 删除临时 WebView 用户数据目录，避免残留历史 Cookie
             try
@@ -122,12 +177,13 @@ namespace YTPlayer.Forms
             }
         }
 
-        private void LoginTabControl_SelectedIndexChanged(object sender, EventArgs e)
+        private void LoginTabControl_SelectedIndexChanged(object? sender, EventArgs e)
         {
             // 切换到二维码登录
             if (loginTabControl.SelectedTab == qrTabPage)
             {
-                LoadQrCodeAsync();
+                this.AcceptButton = null;
+                LoadQrCodeAsync().SafeFireAndForget("Login QR load");
             }
             else
             {
@@ -135,16 +191,26 @@ namespace YTPlayer.Forms
                 _qrCheckCancellation?.Cancel();
 
                 // 打开网页登录时启动 WebView
-                if (loginTabControl.SelectedTab == webTabPage)
+                if (loginTabControl.SelectedTab == captchaTabPage)
                 {
+                    this.AcceptButton = captchaLoginButton;
+                    _ = EnsureCountryCodeListLoadedAsync();
+                }
+                else if (loginTabControl.SelectedTab == webTabPage)
+                {
+                    this.AcceptButton = null;
                     _ = InitializeWebLoginAsync();
+                }
+                else
+                {
+                    this.AcceptButton = null;
                 }
             }
         }
 
         #region 二维码登录
 
-        private async void LoadQrCodeAsync()
+        private async Task LoadQrCodeAsync()
         {
             System.Diagnostics.Debug.WriteLine($"[LoginForm] ========== LoadQrCodeAsync开始 ==========");
             try
@@ -456,7 +522,529 @@ namespace YTPlayer.Forms
 
         private void refreshQrButton_Click(object sender, EventArgs e)
         {
-            LoadQrCodeAsync();
+            LoadQrCodeAsync().SafeFireAndForget("Login QR refresh");
+        }
+
+        #endregion
+
+        #region 手机验证码登录
+
+        private async void sendCaptchaButton_Click(object? sender, EventArgs e)
+        {
+            await SendCaptchaAsync();
+        }
+
+        private async void captchaLoginButton_Click(object? sender, EventArgs e)
+        {
+            await PerformCaptchaLoginAsync();
+        }
+
+        private void CaptchaInput_KeyDown(object? sender, KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.Return)
+            {
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+                _ = PerformCaptchaLoginAsync();
+            }
+        }
+
+        private void PhoneTextBox_KeyPress(object? sender, KeyPressEventArgs e)
+        {
+            if (!char.IsControl(e.KeyChar) && !char.IsDigit(e.KeyChar))
+            {
+                e.Handled = true;
+            }
+        }
+
+        private void CaptchaTextBox_KeyPress(object? sender, KeyPressEventArgs e)
+        {
+            if (!char.IsControl(e.KeyChar) && !char.IsDigit(e.KeyChar))
+            {
+                e.Handled = true;
+            }
+        }
+
+        private void CountryCodeComboBox_KeyDown(object? sender, KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.Down || e.KeyCode == Keys.Up)
+            {
+                ApplyCountryFilter(countryCodeComboBox?.Text ?? string.Empty);
+                if (countryCodeComboBox == null)
+                {
+                    return;
+                }
+
+                if (!countryCodeComboBox.DroppedDown)
+                {
+                    countryCodeComboBox.DroppedDown = true;
+                }
+
+                int count = countryCodeComboBox.Items.Count;
+                if (count == 0)
+                {
+                    return;
+                }
+
+                int index = countryCodeComboBox.SelectedIndex;
+                if (index < 0)
+                {
+                    index = e.KeyCode == Keys.Down ? 0 : count - 1;
+                }
+                else
+                {
+                    index = e.KeyCode == Keys.Down
+                        ? Math.Min(count - 1, index + 1)
+                        : Math.Max(0, index - 1);
+                }
+
+                countryCodeComboBox.SelectedIndex = index;
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+            }
+        }
+
+        private void CountryCodeComboBox_TextUpdate(object? sender, EventArgs e)
+        {
+            if (_countryFilterUpdating)
+            {
+                return;
+            }
+
+            ApplyCountryFilter(countryCodeComboBox?.Text ?? string.Empty);
+        }
+
+        private async Task SendCaptchaAsync()
+        {
+            if (_captchaSending)
+            {
+                return;
+            }
+
+            if (!TryGetValidatedPhone(out string phone, out string ctcode, out string error))
+            {
+                UpdateSmsStatus(error, Color.Red);
+                return;
+            }
+
+            _captchaSending = true;
+            sendCaptchaButton.Enabled = false;
+            UpdateSmsStatus("正在发送验证码...", Color.Gray);
+
+            try
+            {
+                await _apiClient.SendCaptchaAsync(phone, ctcode);
+                UpdateSmsStatus("验证码已发送，请在 60 秒内输入。", Color.Blue);
+                StartCaptchaCountdown();
+            }
+            catch (Exception ex)
+            {
+                UpdateSmsStatus($"发送验证码失败：{ex.Message}", Color.Red);
+                ResetCaptchaCountdown();
+            }
+            finally
+            {
+                _captchaSending = false;
+            }
+        }
+
+        private async Task PerformCaptchaLoginAsync()
+        {
+            if (_captchaLoginInProgress)
+            {
+                return;
+            }
+
+            if (!TryGetValidatedPhone(out string phone, out string ctcode, out string error))
+            {
+                UpdateSmsStatus(error, Color.Red);
+                return;
+            }
+
+            string captcha = captchaTextBox?.Text?.Trim() ?? string.Empty;
+            if (!Regex.IsMatch(captcha, @"^\d{4}$"))
+            {
+                UpdateSmsStatus("请输入 4 位验证码。", Color.Red);
+                return;
+            }
+
+            _captchaLoginInProgress = true;
+            captchaLoginButton.Enabled = false;
+            UpdateSmsStatus("正在登录...", Color.Gray);
+
+            try
+            {
+                var loginResult = await _apiClient.LoginByCaptchaAsync(phone, captcha, ctcode);
+                if (loginResult == null || loginResult.Code != 200)
+                {
+                    string message = loginResult?.Message ?? string.Empty;
+                    if (string.IsNullOrWhiteSpace(message))
+                    {
+                        message = $"登录失败，错误码: {loginResult?.Code ?? -1}";
+                    }
+                    UpdateSmsStatus(message, Color.Red);
+                    return;
+                }
+
+                try
+                {
+                    await _apiClient.RefreshLoginAsync();
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[LoginForm SMS] RefreshLoginAsync 失败（忽略）: {ex.Message}");
+                }
+
+                UserAccountInfo? userInfo = null;
+                try
+                {
+                    userInfo = await _apiClient.GetUserAccountAsync();
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[LoginForm SMS] 获取用户信息失败: {ex.Message}");
+                }
+
+                if (userInfo != null)
+                {
+                    _apiClient.ApplyLoginProfile(userInfo);
+                }
+
+                try
+                {
+                    await _apiClient.CompleteLoginAsync(loginResult);
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[LoginForm SMS] CompleteLoginAsync 失败（忽略）: {ex.Message}");
+                }
+
+                UpdateSmsStatus("登录成功，正在返回...", Color.Green);
+
+                var eventArgs = new LoginSuccessEventArgs
+                {
+                    Cookie = loginResult.Cookie ?? _apiClient.GetCurrentCookieString(),
+                    UserId = userInfo?.UserId.ToString() ?? loginResult.UserId ?? "0",
+                    Nickname = userInfo?.Nickname ?? loginResult.Nickname ?? "网易云用户",
+                    VipType = userInfo?.VipType ?? loginResult.VipType,
+                    AvatarUrl = userInfo?.AvatarUrl ?? loginResult.AvatarUrl ?? string.Empty
+                };
+
+                await CompleteLoginAsync(eventArgs);
+            }
+            catch (Exception ex)
+            {
+                UpdateSmsStatus($"登录失败：{ex.Message}", Color.Red);
+            }
+            finally
+            {
+                _captchaLoginInProgress = false;
+                if (!IsDisposed && !Disposing)
+                {
+                    captchaLoginButton.Enabled = true;
+                }
+            }
+        }
+
+        private void CaptchaTimer_Tick(object? sender, EventArgs e)
+        {
+            _captchaSecondsRemaining--;
+            if (_captchaSecondsRemaining <= 0)
+            {
+                ResetCaptchaCountdown();
+                return;
+            }
+
+            UpdateCaptchaButtonText();
+        }
+
+        private void StartCaptchaCountdown()
+        {
+            _captchaSecondsRemaining = CaptchaCountdownSeconds;
+            UpdateCaptchaButtonText();
+            sendCaptchaButton.Enabled = false;
+            _captchaTimer.Start();
+        }
+
+        private void ResetCaptchaCountdown()
+        {
+            _captchaTimer.Stop();
+            _captchaSecondsRemaining = 0;
+            if (sendCaptchaButton != null)
+            {
+                sendCaptchaButton.Text = "发送验证码";
+                sendCaptchaButton.Enabled = true;
+            }
+        }
+
+        private void UpdateCaptchaButtonText()
+        {
+            if (sendCaptchaButton == null)
+            {
+                return;
+            }
+
+            sendCaptchaButton.Text = $"重新发送({_captchaSecondsRemaining}s)";
+        }
+
+        private bool TryGetValidatedPhone(out string phone, out string ctcode, out string error)
+        {
+            phone = phoneTextBox?.Text?.Trim() ?? string.Empty;
+            ctcode = GetSelectedCountryCode();
+
+            if (string.IsNullOrWhiteSpace(phone))
+            {
+                error = "请输入手机号。";
+                return false;
+            }
+
+            if (!Regex.IsMatch(phone, @"^\d+$"))
+            {
+                error = "手机号只能包含数字。";
+                return false;
+            }
+
+            if (string.IsNullOrEmpty(ctcode))
+            {
+                ctcode = "86";
+            }
+
+            if (ctcode == "86")
+            {
+                if (!Regex.IsMatch(phone, @"^1[3-9]\d{9}$"))
+                {
+                    error = "请输入有效的中国大陆手机号。";
+                    return false;
+                }
+            }
+
+            error = string.Empty;
+            return true;
+        }
+
+        private string GetSelectedCountryCode()
+        {
+            if (countryCodeComboBox?.SelectedItem is CountryCodeEntry entry)
+            {
+                return entry.Code;
+            }
+
+            string text = countryCodeComboBox?.Text?.Trim() ?? string.Empty;
+            var match = Regex.Match(text, @"\+?\s*(\d{1,4})");
+            if (match.Success)
+            {
+                return match.Groups[1].Value;
+            }
+
+            return "86";
+        }
+
+        private void UpdateSmsStatus(string text, Color? color = null)
+        {
+            if (smsStatusLabel == null || IsDisposed || Disposing)
+            {
+                return;
+            }
+
+            if (smsStatusLabel.InvokeRequired)
+            {
+                if (!smsStatusLabel.IsHandleCreated)
+                {
+                    return;
+                }
+
+                smsStatusLabel.Invoke(new Action(() => UpdateSmsStatus(text, color)));
+                return;
+            }
+
+            smsStatusLabel.Text = text;
+            if (color.HasValue)
+            {
+                smsStatusLabel.ForeColor = color.Value;
+            }
+        }
+
+        private async Task EnsureCountryCodeListLoadedAsync()
+        {
+            if (_countryListLoaded || _countryListLoading)
+            {
+                return;
+            }
+
+            _countryListLoading = true;
+            try
+            {
+                UpdateSmsStatus("正在获取国家地区列表...", Color.Gray);
+                var list = await _apiClient.GetCountryCodeListAsync();
+                if (list != null && list.Count > 0)
+                {
+                    _countryCodeEntries = list.Select(BuildCountryEntry).ToList();
+                    bool preserveText = !string.IsNullOrWhiteSpace(countryCodeComboBox?.Text);
+                    ApplyCountryList(_countryCodeEntries, preserveText);
+                    _countryListLoaded = true;
+                    UpdateSmsStatus("请选择国家地区并输入手机号。", Color.Gray);
+                    return;
+                }
+
+                UpdateSmsStatus("国家地区列表加载失败，使用默认列表。", Color.DarkOrange);
+                _countryListLoaded = true;
+            }
+            catch (Exception ex)
+            {
+                UpdateSmsStatus($"国家地区列表加载失败：{ex.Message}", Color.DarkOrange);
+            }
+            finally
+            {
+                _countryListLoading = false;
+            }
+        }
+
+        private void ApplyCountryFilter(string keyword)
+        {
+            if (countryCodeComboBox == null)
+            {
+                return;
+            }
+
+            _countryFilterUpdating = true;
+            try
+            {
+                var filtered = string.IsNullOrWhiteSpace(keyword)
+                    ? _countryCodeEntries
+                    : _countryCodeEntries
+                        .Where(e => e.Matches(keyword))
+                        .ToList();
+
+                if (filtered.Count == 0)
+                {
+                    filtered = _countryCodeEntries;
+                }
+
+                ApplyCountryList(filtered, preserveText: true);
+                countryCodeComboBox.DroppedDown = true;
+            }
+            finally
+            {
+                _countryFilterUpdating = false;
+            }
+        }
+
+        private void ApplyCountryList(List<CountryCodeEntry> entries, bool preserveText)
+        {
+            if (countryCodeComboBox == null)
+            {
+                return;
+            }
+
+            string existingText = preserveText ? countryCodeComboBox.Text : string.Empty;
+
+            countryCodeComboBox.BeginUpdate();
+            countryCodeComboBox.Items.Clear();
+            foreach (var entry in entries)
+            {
+                countryCodeComboBox.Items.Add(entry);
+            }
+            countryCodeComboBox.EndUpdate();
+
+            if (preserveText)
+            {
+                countryCodeComboBox.Text = existingText;
+                countryCodeComboBox.SelectionStart = existingText.Length;
+                countryCodeComboBox.SelectionLength = 0;
+            }
+            else
+            {
+                var defaultEntry = entries.FirstOrDefault(e => e.Code == "86") ?? entries.FirstOrDefault();
+                if (defaultEntry != null)
+                {
+                    countryCodeComboBox.SelectedItem = defaultEntry;
+                }
+                else
+                {
+                    countryCodeComboBox.Text = "中国 +86";
+                }
+            }
+        }
+
+        private static CountryCodeEntry BuildCountryEntry(CountryCodeInfo info)
+        {
+            string name = info.Name;
+            string english = info.EnglishName;
+            return new CountryCodeEntry(info.Code, name, english);
+        }
+
+        private static List<CountryCodeEntry> BuildFallbackCountryList()
+        {
+            return new List<CountryCodeEntry>
+            {
+                new CountryCodeEntry("86", "中国", "China"),
+                new CountryCodeEntry("852", "中国香港", "Hong Kong"),
+                new CountryCodeEntry("853", "中国澳门", "Macau"),
+                new CountryCodeEntry("886", "中国台湾", "Taiwan"),
+                new CountryCodeEntry("1", "美国/加拿大", "United States/Canada"),
+                new CountryCodeEntry("44", "英国", "United Kingdom"),
+                new CountryCodeEntry("81", "日本", "Japan"),
+                new CountryCodeEntry("82", "韩国", "South Korea"),
+                new CountryCodeEntry("65", "新加坡", "Singapore"),
+                new CountryCodeEntry("60", "马来西亚", "Malaysia"),
+                new CountryCodeEntry("61", "澳大利亚", "Australia"),
+                new CountryCodeEntry("64", "新西兰", "New Zealand"),
+                new CountryCodeEntry("49", "德国", "Germany"),
+                new CountryCodeEntry("33", "法国", "France"),
+                new CountryCodeEntry("91", "印度", "India"),
+                new CountryCodeEntry("7", "俄罗斯", "Russia")
+            };
+        }
+
+        private sealed class CountryCodeEntry
+        {
+            public string Code { get; }
+            public string Name { get; }
+            public string EnglishName { get; }
+
+            public CountryCodeEntry(string code, string name, string englishName)
+            {
+                Code = code ?? string.Empty;
+                Name = name ?? string.Empty;
+                EnglishName = englishName ?? string.Empty;
+            }
+
+            public bool Matches(string keyword)
+            {
+                if (string.IsNullOrWhiteSpace(keyword))
+                {
+                    return true;
+                }
+
+                string compare = keyword.Trim();
+                return Display.Contains(compare, StringComparison.OrdinalIgnoreCase) ||
+                       Name.Contains(compare, StringComparison.OrdinalIgnoreCase) ||
+                       EnglishName.Contains(compare, StringComparison.OrdinalIgnoreCase) ||
+                       Code.Contains(compare, StringComparison.OrdinalIgnoreCase);
+            }
+
+            public string Display
+            {
+                get
+                {
+                    string primary = string.IsNullOrWhiteSpace(Name) ? EnglishName : Name;
+                    if (string.IsNullOrWhiteSpace(primary))
+                    {
+                        primary = "未知";
+                    }
+                    return $"{primary} +{Code}";
+                }
+            }
+
+            public override string ToString()
+            {
+                if (!string.IsNullOrWhiteSpace(EnglishName) && !string.IsNullOrWhiteSpace(Name) && !Name.Equals(EnglishName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return $"{Name} / {EnglishName} +{Code}";
+                }
+
+                return Display;
+            }
         }
 
         #endregion
@@ -473,8 +1061,7 @@ namespace YTPlayer.Forms
                 return;
             }
 
-            string baseDir = AppDomain.CurrentDomain.BaseDirectory ?? ".";
-            string libsDir = Path.Combine(baseDir, "libs");
+            string libsDir = Utils.PathHelper.LibsDirectory;
             _webUserDataFolder = Path.Combine(libsDir, "YTPlayer.exe.WebView2");
 
             Directory.CreateDirectory(libsDir);
@@ -483,7 +1070,7 @@ namespace YTPlayer.Forms
             try
             {
                 // 额外清理历史默认位置（程序根目录下的 YTPlayer.exe.WebView2）
-                string legacyFolder = Path.Combine(baseDir, "YTPlayer.exe.WebView2");
+                string legacyFolder = Path.Combine(Utils.PathHelper.ApplicationRootDirectory, "YTPlayer.exe.WebView2");
                 if (Directory.Exists(legacyFolder))
                 {
                     Directory.Delete(legacyFolder, true);

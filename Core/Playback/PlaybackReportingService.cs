@@ -159,7 +159,7 @@ namespace YTPlayer.Core.Playback
         {
             _apiClient = apiClient ?? throw new ArgumentNullException(nameof(apiClient));
             _queue = new BlockingCollection<PlaybackReportOperation>(new ConcurrentQueue<PlaybackReportOperation>());
-            _retryFilePath = Path.Combine(AppContext.BaseDirectory ?? AppDomain.CurrentDomain.BaseDirectory ?? ".", "Logs", "playback_retry.json");
+            _retryFilePath = Path.Combine(Utils.PathHelper.ApplicationRootDirectory, "Logs", "playback_retry.json");
             RestorePersistedOperations();
             _workerTask = Task.Run(() => ProcessQueueAsync(_cts.Token));
         }

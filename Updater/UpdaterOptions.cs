@@ -23,6 +23,8 @@ namespace YTPlayer.Updater
 
         public string MainExecutablePath { get; }
 
+        public bool MainIsLauncher => MainExecutablePath.EndsWith("YTPlayer.exe", StringComparison.OrdinalIgnoreCase);
+
         public int MainProcessId { get; }
 
         public string[] MainArguments { get; }

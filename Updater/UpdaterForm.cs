@@ -295,20 +295,38 @@ namespace YTPlayer.Updater
                 return;
             }
 
-            if (string.IsNullOrWhiteSpace(_options.MainExecutablePath) || !File.Exists(_options.MainExecutablePath))
-            {
-                return;
-            }
-
             try
             {
+                string? launchTarget = null;
+                string launcherCandidate = Path.Combine(_options.TargetDirectory, "YTPlayer.exe");
+                if (File.Exists(launcherCandidate))
+                {
+                    launchTarget = launcherCandidate;
+                }
+                else if (!string.IsNullOrWhiteSpace(_options.MainExecutablePath) && File.Exists(_options.MainExecutablePath))
+                {
+                    launchTarget = _options.MainExecutablePath;
+                }
+
+                if (string.IsNullOrWhiteSpace(launchTarget))
+                {
+                    return;
+                }
+
+                bool launchingLauncher = string.Equals(launchTarget, launcherCandidate, StringComparison.OrdinalIgnoreCase);
                 var startInfo = new ProcessStartInfo
                 {
-                    FileName = _options.MainExecutablePath,
-                    WorkingDirectory = Path.GetDirectoryName(_options.MainExecutablePath),
+                    FileName = launchTarget,
+                    WorkingDirectory = _options.TargetDirectory,
                     UseShellExecute = false,
-                    Arguments = BuildArgumentString(_options.MainArguments)
+                    Arguments = BuildArgumentString(launchingLauncher ? Array.Empty<string>() : _options.MainArguments)
                 };
+                startInfo.EnvironmentVariables["YTPLAYER_ROOT"] = _options.TargetDirectory;
+                startInfo.EnvironmentVariables["YTPLAYER_TARGET"] = _options.TargetDirectory;
+                if (launchingLauncher)
+                {
+                    startInfo.EnvironmentVariables["YTPLAYER_LAUNCH_ARGS"] = BuildArgumentString(_options.MainArguments);
+                }
 
                 Process.Start(startInfo);
                 _mainRestarted = true;
@@ -559,16 +577,18 @@ namespace YTPlayer.Updater
 
         private async Task<string?> GetInstalledVersionAsync(CancellationToken token)
         {
-            string versionFile = Path.Combine(_options.TargetDirectory, "version.txt");
-
-            if (File.Exists(versionFile))
+            string launcherExe = Path.Combine(_options.TargetDirectory, "YTPlayer.exe");
+            if (File.Exists(launcherExe))
             {
-                AppendLog("验证 version.txt");
-                string versionText = await Task.Run(() => File.ReadAllText(versionFile), token).ConfigureAwait(true);
-                return NormalizeVersionString(versionText);
+                AppendLog("验证启动器元数据");
+                string? launcherVersion = await ReadVersionFromFileAsync(launcherExe, token).ConfigureAwait(true);
+                if (!string.IsNullOrWhiteSpace(launcherVersion))
+                {
+                    return launcherVersion;
+                }
             }
 
-            AppendLog("未找到 version.txt，尝试读取主程序元数据");
+            AppendLog("尝试读取主程序元数据");
 
             if (string.IsNullOrWhiteSpace(_options.MainExecutablePath))
             {
@@ -587,7 +607,17 @@ namespace YTPlayer.Updater
             {
                 try
                 {
-                    var info = FileVersionInfo.GetVersionInfo(exePath);
+                    string versionTarget = exePath;
+                    if (_options.MainIsLauncher)
+                    {
+                        string appDll = Path.Combine(_options.TargetDirectory, "libs", "YTPlayer.App.dll");
+                        if (File.Exists(appDll))
+                        {
+                            versionTarget = appDll;
+                        }
+                    }
+
+                    var info = FileVersionInfo.GetVersionInfo(versionTarget);
                     string? candidate = info.ProductVersion;
                     if (string.IsNullOrWhiteSpace(candidate))
                     {
@@ -599,6 +629,29 @@ namespace YTPlayer.Updater
                 catch (Exception ex)
                 {
                     AppendLog($"读取主程序版本失败：{ex.Message}");
+                    return null;
+                }
+            }, token).ConfigureAwait(true);
+        }
+
+        private async Task<string?> ReadVersionFromFileAsync(string filePath, CancellationToken token)
+        {
+            return await Task.Run(() =>
+            {
+                try
+                {
+                    var info = FileVersionInfo.GetVersionInfo(filePath);
+                    string? candidate = info.ProductVersion;
+                    if (string.IsNullOrWhiteSpace(candidate))
+                    {
+                        candidate = info.FileVersion;
+                    }
+
+                    return NormalizeVersionString(candidate);
+                }
+                catch (Exception ex)
+                {
+                    AppendLog($"读取版本信息失败：{ex.Message}");
                     return null;
                 }
             }, token).ConfigureAwait(true);

@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using System.ComponentModel;
 using YTPlayer.Update;
 
 namespace YTPlayer.Forms
@@ -23,6 +24,8 @@ namespace YTPlayer.Forms
             _updateClient = new UpdateServiceClient(UpdateConstants.DefaultEndpoint, "YTPlayer", VersionInfo.Version);
         }
 
+        [Browsable(false)]
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
         public Func<UpdatePlan, bool>? UpdateLauncher { get; set; }
 
         protected override void OnShown(EventArgs e)

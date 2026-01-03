@@ -166,7 +166,11 @@ namespace UnblockNCM.Core.Proxy
                 var pfx = _options.SignCertPath;
                 if (!string.IsNullOrWhiteSpace(pfx) && File.Exists(pfx))
                 {
-                    return new X509Certificate2(pfx, string.Empty, X509KeyStorageFlags.Exportable);
+                    return X509CertificateLoader.LoadPkcs12FromFile(
+                        pfx,
+                        string.Empty,
+                        X509KeyStorageFlags.Exportable,
+                        Pkcs12LoaderLimits.Defaults);
                 }
             }
             catch (Exception ex)
@@ -382,9 +386,9 @@ namespace UnblockNCM.Core.Proxy
             else if (path.StartsWith("/api/"))
             {
                 ctxNet.CryptoKind = NeteaseCryptoKind.Api;
-                var parsed = System.Web.HttpUtility.ParseQueryString(body);
+                var parsed = FormUrlEncodedParser.Parse(body ?? string.Empty);
                 var obj = new JObject();
-                foreach (string key in parsed.Keys) obj[key] = parsed[key];
+                foreach (var item in parsed) obj[item.Key] = item.Value;
                 ctxNet.Path = TrimTailDigits(path);
                 ctxNet.Param = obj;
             }

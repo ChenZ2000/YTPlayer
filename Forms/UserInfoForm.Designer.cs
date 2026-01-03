@@ -46,7 +46,6 @@ namespace YTPlayer.Forms
             this.loadingLabel.TabIndex = 0;
             this.loadingLabel.Text = "正在加载用户信息...";
             this.loadingLabel.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
-            this.loadingLabel.AccessibleName = "加载提示";
             //
             // infoTextBox
             //
@@ -62,8 +61,6 @@ namespace YTPlayer.Forms
             this.infoTextBox.TabIndex = 0;
             this.infoTextBox.TabStop = true;
             this.infoTextBox.Visible = false;
-            this.infoTextBox.AccessibleName = "用户信息";
-            this.infoTextBox.AccessibleDescription = "显示用户的详细信息，包括昵称、会员状态、等级等";
             //
             // buttonPanel
             //
@@ -85,8 +82,6 @@ namespace YTPlayer.Forms
             this.logoutButton.Text = "退出登录(&L)";
             this.logoutButton.UseVisualStyleBackColor = true;
             this.logoutButton.Click += new System.EventHandler(this.logoutButton_Click);
-            this.logoutButton.AccessibleName = "退出登录";
-            this.logoutButton.AccessibleDescription = "点击退出登录并清除账号信息";
             //
             // closeButton
             //
@@ -98,8 +93,6 @@ namespace YTPlayer.Forms
             this.closeButton.Text = "关闭(&C)";
             this.closeButton.UseVisualStyleBackColor = true;
             this.closeButton.Click += new System.EventHandler(this.closeButton_Click);
-            this.closeButton.AccessibleName = "关闭";
-            this.closeButton.AccessibleDescription = "点击关闭用户信息对话框";
             //
             // UserInfoForm
             //
@@ -112,8 +105,6 @@ namespace YTPlayer.Forms
             this.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
             this.Name = "UserInfoForm";
             this.Text = "用户信息";
-            this.AccessibleName = "用户信息对话框";
-            this.AccessibleDescription = "显示当前登录用户的详细信息";
             this.buttonPanel.ResumeLayout(false);
             this.ResumeLayout(false);
             this.PerformLayout();

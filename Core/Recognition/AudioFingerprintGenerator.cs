@@ -40,12 +40,13 @@ namespace YTPlayer.Core.Recognition
                 dynamic generateFp = engine.Script.__generateFpManaged;
                 var taskObj = (Task<object>)generateFp(floats);
                 var result = await taskObj.ConfigureAwait(false);
-                if (result == null || string.IsNullOrWhiteSpace(result.ToString()))
+                string? output = result?.ToString();
+                if (string.IsNullOrWhiteSpace(output))
                 {
                     throw new InvalidOperationException("指纹生成返回空结果");
                 }
 
-                return result.ToString();
+                return output;
             }
             finally
             {

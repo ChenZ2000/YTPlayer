@@ -208,6 +208,28 @@ namespace YTPlayer.Utils
             }
         }
 
+        /// <summary>
+        /// 判断 NVDA 是否正在运行
+        /// </summary>
+        public static bool IsNvdaRunning()
+        {
+            lock (_lock)
+            {
+                try
+                {
+                    if (!DllExists(NvdaDllName))
+                    {
+                        return false;
+                    }
+                    return nvdaController_testIfRunning() == 0;
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+        }
+
         #endregion
 
         #region 私有方法

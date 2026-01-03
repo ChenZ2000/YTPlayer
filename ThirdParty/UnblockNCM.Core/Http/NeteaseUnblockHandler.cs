@@ -29,6 +29,7 @@ namespace UnblockNCM.Core.Http
         private readonly ProviderManager _provider;
         private readonly Regex[] _targetHosts;
         private readonly HashSet<string> _targetPaths;
+        private static readonly HttpRequestOptionsKey<NeteaseContext> NeteaseContextKey = new HttpRequestOptionsKey<NeteaseContext>("neteaseCtx");
 
         public NeteaseUnblockHandler(UnblockOptions opt, ProviderManager provider, HttpMessageHandler inner = null)
             : base(inner ?? new HttpClientHandler
@@ -87,7 +88,7 @@ namespace UnblockNCM.Core.Http
                 };
                 req.Headers.Remove("Accept-Encoding");
                 req.Headers.Add("X-Real-IP", "118.88.88.88");
-                req.Properties["neteaseCtx"] = ctx;
+                req.Options.Set(NeteaseContextKey, ctx);
                 return ctx;
             }
 
@@ -127,9 +128,9 @@ namespace UnblockNCM.Core.Http
             else if (path.StartsWith("/api/"))
             {
                 ctxNet.CryptoKind = NeteaseCryptoKind.Api;
-                var parsed = System.Web.HttpUtility.ParseQueryString(bodyStr ?? string.Empty);
+                var parsed = FormUrlEncodedParser.Parse(bodyStr ?? string.Empty);
                 var obj = new JObject();
-                foreach (string key in parsed.Keys) obj[key] = parsed[key];
+                foreach (var item in parsed) obj[item.Key] = item.Value;
                 ctxNet.Path = TrimTailDigits(path);
                 ctxNet.Param = obj;
             }
@@ -137,7 +138,7 @@ namespace UnblockNCM.Core.Http
             req.Headers.Remove("Accept-Encoding");
             req.Headers.Remove("X-Real-IP");
             req.Headers.Add("X-Real-IP", "118.88.88.88");
-            req.Properties["neteaseCtx"] = ctxNet;
+            req.Options.Set(NeteaseContextKey, ctxNet);
 
             // Pretend download to play
             if (ctxNet.Path == "/api/song/enhance/download/url")

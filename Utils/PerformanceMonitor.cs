@@ -35,12 +35,14 @@ namespace YTPlayer.Utils
             _warningThresholdMs = warningThresholdMs;
 
             // 检查是否在 UI 线程
-            if (Control.CheckForIllegalCrossThreadCalls &&
-                Application.OpenForms.Count > 0 &&
-                Application.OpenForms[0].InvokeRequired == false)
+            if (Control.CheckForIllegalCrossThreadCalls)
             {
-                DebugLogger.Log(DebugLogger.LogLevel.Warning, _category,
-                    $"⚠️ 在 UI 线程上开始操作: {operationName} - 如果耗时过长会导致界面卡死");
+                Form? rootForm = Application.OpenForms.Count > 0 ? Application.OpenForms[0] : null;
+                if (rootForm != null && !rootForm.InvokeRequired)
+                {
+                    DebugLogger.Log(DebugLogger.LogLevel.Warning, _category,
+                        $"⚠️ 在 UI 线程上开始操作: {operationName} - 如果耗时过长会导致界面卡死");
+                }
             }
 
             _stopwatch = Stopwatch.StartNew();
@@ -157,7 +159,8 @@ namespace YTPlayer.Utils
             try
             {
                 if (Application.OpenForms.Count == 0) return false;
-                return !Application.OpenForms[0].InvokeRequired;
+                Form? rootForm = Application.OpenForms[0];
+                return rootForm != null && !rootForm.InvokeRequired;
             }
             catch
             {
@@ -228,7 +231,8 @@ namespace YTPlayer.Utils
             try
             {
                 if (Application.OpenForms.Count == 0) return false;
-                return !Application.OpenForms[0].InvokeRequired;
+                Form? rootForm = Application.OpenForms[0];
+                return rootForm != null && !rootForm.InvokeRequired;
             }
             catch
             {
@@ -237,3 +241,8 @@ namespace YTPlayer.Utils
         }
     }
 }
+
+
+
+
+

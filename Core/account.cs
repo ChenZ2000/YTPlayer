@@ -2102,39 +2102,18 @@ namespace YTPlayer.Core
 
         /// <summary>
         /// 获取应用程序目录。
-        /// 优先返回当前 AppDomain 的 BaseDirectory（即可执行文件所在目录），
-        /// 确保 account.json 与程序放置在同一目录，便于便携式部署。
+        /// 使用启动器传入的根目录，确保 account.json 与程序放置在同一目录。
         /// </summary>
         private static string GetApplicationDirectory()
         {
             try
             {
-                string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-                if (!string.IsNullOrEmpty(baseDir))
-                {
-                    return Path.GetFullPath(baseDir);
-                }
+                return YTPlayer.Utils.PathHelper.ApplicationRootDirectory;
             }
             catch
             {
-                // 忽略 BaseDirectory 获取失败，回退到程序集路径
+                return Directory.GetCurrentDirectory();
             }
-
-            try
-            {
-                string exePath = System.Reflection.Assembly.GetExecutingAssembly().Location;
-                string exeDir = Path.GetDirectoryName(exePath);
-                if (!string.IsNullOrEmpty(exeDir))
-                {
-                    return Path.GetFullPath(exeDir);
-                }
-            }
-            catch
-            {
-                // 忽略获取失败，回退到当前工作目录
-            }
-
-            return Directory.GetCurrentDirectory();
         }
     }
 }

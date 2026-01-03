@@ -1,6 +1,6 @@
 # YTPlayer 易听
 
-一个专注高可用与无障碍体验的网易云音乐第三方桌面客户端，基于 .NET Framework 4.8 + WinForms 构建，提供简洁直观的 UI ，高质量音频播放及下载、可靠的播放指令队列以及面向键鼠与屏幕阅读器用户的统一交互体验。
+一个专注高可用与无障碍体验的网易云音乐第三方桌面客户端，基于 .NET 10 + WinForms 构建，提供简洁直观的 UI ，高质量音频播放及下载、可靠的播放指令队列以及面向键鼠与屏幕阅读器用户的统一交互体验。
 
 ## 系统要求
 
@@ -8,7 +8,7 @@
 
 ## 项目概述
 
-- **技术栈**：.NET Framework 4.8、Windows Forms、BASS 2.4、Newtonsoft.Json、QRCoder
+- **技术栈**：.NET 10、Windows Forms、BASS 2.4、Newtonsoft.Json、QRCoder、WebView2、ClearScript
 - **定位**：桌面级流媒体播放器，结合网易云开放接口与自研播放/缓存策略，兼顾音质、性能、可访问性
 - **架构理念**：所有 UI 请求均可被取消/覆盖，播放队列以最新指令为最高优先级，确保界面永不阻塞
 
@@ -69,8 +69,8 @@
 
 ### 环境要求
 - Windows 10/11 64 位
-- .NET Framework 4.8 SDK
-- Visual Studio 2022 (含 MSBuild) | PowerShell 7+
+- .NET 10 SDK
+- Visual Studio 2022/2025 (含 MSBuild) | PowerShell 7+
 
 ### 构建脚本
 ```powershell
@@ -83,12 +83,7 @@ powershell -ExecutionPolicy Bypass -File .\Build-Debug.ps1
 可执行文件位于 `bin\Release\YTPlayer.exe` 或 `bin\Debug\YTPlayer.exe`，同时会生成并复制自动更新器 `YTPlayer.Updater.exe`。
 
 ### 依赖还原
-项目使用 `packages.config` 管理 NuGet 依赖，构建脚本会自动执行 `nuget restore`，包含：
-- Newtonsoft.Json
-- QRCoder
-- BrotliSharpLib
-- System.Runtime.CompilerServices.Unsafe
-- taglib-sharp
+项目使用 `PackageReference` 管理 NuGet 依赖，构建脚本会自动执行 `MSBuild /t:Restore` 或 `dotnet restore`。
 
 ## 文档
 

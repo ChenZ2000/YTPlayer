@@ -3,6 +3,8 @@ using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
+using System.Collections.Concurrent;
 
 namespace YTPlayer.Utils
 {
@@ -12,9 +14,22 @@ namespace YTPlayer.Utils
     /// </summary>
     public static class DebugLogger
     {
+        private static readonly bool Enabled =
+#if DEBUG
+            true;
+#else
+            false;
+#endif
+
         private static readonly object _fileLock = new object();
         private static string? _logDirectory;
         private static string? _currentLogFile;
+        private static readonly ConcurrentQueue<string> _pendingLines = new ConcurrentQueue<string>();
+        private static readonly AutoResetEvent _flushSignal = new AutoResetEvent(false);
+        private static CancellationTokenSource? _writerCts;
+        private static Task? _writerTask;
+        private const int FlushBatchSize = 256;
+        private static bool _shutdownHookRegistered = false;
         private static bool _initialized = false;
 
         public enum LogLevel
@@ -30,11 +45,16 @@ namespace YTPlayer.Utils
         /// </summary>
         public static void Initialize()
         {
+            if (!Enabled)
+            {
+                return;
+            }
+
             if (_initialized) return;
 
             try
             {
-                string appDir = AppDomain.CurrentDomain.BaseDirectory;
+                string appDir = PathHelper.ApplicationRootDirectory;
                 _logDirectory = Path.Combine(appDir, "Logs");
 
                 if (!Directory.Exists(_logDirectory))
@@ -46,6 +66,12 @@ namespace YTPlayer.Utils
                 _currentLogFile = Path.Combine(_logDirectory, $"Debug_{timestamp}.log");
 
                 _initialized = true;
+                EnsureWriterStarted();
+                if (!_shutdownHookRegistered)
+                {
+                    AppDomain.CurrentDomain.ProcessExit += (_, __) => Shutdown();
+                    _shutdownHookRegistered = true;
+                }
                 Log(LogLevel.Info, "Logger", "日志系统初始化完成");
                 Log(LogLevel.Info, "Logger", $"日志文件: {_currentLogFile}");
             }
@@ -60,6 +86,11 @@ namespace YTPlayer.Utils
         /// </summary>
         public static void Log(LogLevel level, string category, string message)
         {
+            if (!Enabled)
+            {
+                return;
+            }
+
             if (!_initialized) Initialize();
 
             try
@@ -73,14 +104,9 @@ namespace YTPlayer.Utils
                 // 输出到 Debug 控制台
                 Debug.WriteLine(logLine);
 
-                // 写入文件（线程安全）
-                lock (_fileLock)
-                {
-                    if (!string.IsNullOrEmpty(_currentLogFile))
-                    {
-                        File.AppendAllText(_currentLogFile, logLine + Environment.NewLine, Encoding.UTF8);
-                    }
-                }
+                // 异步写入文件，避免阻塞调用线程
+                _pendingLines.Enqueue(logLine);
+                _flushSignal.Set();
             }
             catch (Exception ex)
             {
@@ -93,6 +119,11 @@ namespace YTPlayer.Utils
         /// </summary>
         public static void LogException(string category, Exception ex, string? additionalInfo = null)
         {
+            if (!Enabled)
+            {
+                return;
+            }
+
             if (!_initialized) Initialize();
 
             var sb = new StringBuilder();
@@ -119,6 +150,11 @@ namespace YTPlayer.Utils
         /// </summary>
         public static void LogPerformanceIssue(string category, string operation, long elapsedMs, long thresholdMs)
         {
+            if (!Enabled)
+            {
+                return;
+            }
+
             if (elapsedMs > thresholdMs)
             {
                 Log(LogLevel.Performance, category,
@@ -131,6 +167,11 @@ namespace YTPlayer.Utils
         /// </summary>
         public static Stopwatch StartTimer(string category, string operation)
         {
+            if (!Enabled)
+            {
+                return new Stopwatch();
+            }
+
             Log(LogLevel.Info, category, $"▶️ 开始: {operation}");
             return Stopwatch.StartNew();
         }
@@ -140,6 +181,11 @@ namespace YTPlayer.Utils
         /// </summary>
         public static void EndTimer(Stopwatch timer, string category, string operation, long warningThresholdMs = 1000)
         {
+            if (!Enabled)
+            {
+                return;
+            }
+
             timer.Stop();
             long elapsed = timer.ElapsedMilliseconds;
 
@@ -159,6 +205,11 @@ namespace YTPlayer.Utils
         /// </summary>
         public static void LogUIThreadBlock(string category, string operation, long blockTimeMs)
         {
+            if (!Enabled)
+            {
+                return;
+            }
+
             Log(LogLevel.Error, category,
                 $"🔴 UI线程阻塞: {operation} 阻塞了 {blockTimeMs}ms - 这会导致界面卡死！");
         }
@@ -168,8 +219,96 @@ namespace YTPlayer.Utils
         /// </summary>
         public static void LogDeadlockRisk(string category, string operation, string reason)
         {
+            if (!Enabled)
+            {
+                return;
+            }
+
             Log(LogLevel.Error, category,
                 $"☠️ 死锁风险: {operation} - 原因: {reason}");
+        }
+
+        public static void Shutdown()
+        {
+            if (!Enabled || !_initialized)
+            {
+                return;
+            }
+
+            try
+            {
+                _writerCts?.Cancel();
+                _flushSignal.Set();
+                _writerTask?.Wait(TimeSpan.FromSeconds(2));
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[DebugLogger] Shutdown wait failed: {ex.Message}");
+            }
+            finally
+            {
+                FlushPendingLines();
+            }
+        }
+
+        private static void EnsureWriterStarted()
+        {
+            if (_writerTask != null)
+            {
+                return;
+            }
+
+            _writerCts = new CancellationTokenSource();
+            _writerTask = Task.Run(() => WriterLoop(_writerCts.Token));
+        }
+
+        private static void WriterLoop(CancellationToken token)
+        {
+            try
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    _flushSignal.WaitOne(500);
+                    FlushPendingLines();
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[DebugLogger] WriterLoop error: {ex.Message}");
+            }
+            finally
+            {
+                FlushPendingLines();
+            }
+        }
+
+        private static void FlushPendingLines()
+        {
+            if (string.IsNullOrEmpty(_currentLogFile))
+            {
+                return;
+            }
+
+            var sb = new StringBuilder();
+            int count = 0;
+            while (count < FlushBatchSize && _pendingLines.TryDequeue(out string? line))
+            {
+                if (!string.IsNullOrEmpty(line))
+                {
+                    sb.AppendLine(line);
+                }
+                count++;
+            }
+
+            if (sb.Length == 0)
+            {
+                return;
+            }
+
+            lock (_fileLock)
+            {
+                File.AppendAllText(_currentLogFile, sb.ToString(), Encoding.UTF8);
+            }
         }
 
         /// <summary>
@@ -177,6 +316,11 @@ namespace YTPlayer.Utils
         /// </summary>
         public static void CleanOldLogs(int keepDays = 7)
         {
+            if (!Enabled)
+            {
+                return;
+            }
+
             try
             {
                 if (string.IsNullOrEmpty(_logDirectory)) return;

@@ -11,5 +11,6 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyCulture("")]
 [assembly: ComVisible(false)]
 [assembly: Guid("6b9d8c03-7eab-4e6a-a24f-2e6bd6d43f8a")]
-[assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.0.0.0")]
+[assembly: AssemblyVersion(YTPlayer.VersionInfo.AssemblyVersion)]
+[assembly: AssemblyFileVersion(YTPlayer.VersionInfo.AssemblyVersion)]
+[assembly: AssemblyInformationalVersion(YTPlayer.VersionInfo.Version)]

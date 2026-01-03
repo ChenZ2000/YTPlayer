@@ -9,12 +9,12 @@ using System.Drawing;
 using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using Newtonsoft.Json.Linq;
 using YTPlayer.Core;
 using YTPlayer.Core.Download;
 using YTPlayer.Core.Lyrics;
@@ -22,8 +22,8 @@ using YTPlayer.Core.Playback;
 using YTPlayer.Core.Playback.Cache;
 using YTPlayer.Core.Recognition;
 using YTPlayer.Core.Streaming;
-using YTPlayer.Core.Upload;
 using YTPlayer.Core.Unblock;
+using YTPlayer.Core.Upload;
 using YTPlayer.Forms;
 using YTPlayer.Forms.Download;
 using YTPlayer.Models;
@@ -32,7 +32,7 @@ using YTPlayer.Models.Download;
 using YTPlayer.Models.Upload;
 using YTPlayer.Update;
 using YTPlayer.Utils;
-#pragma warning disable CS8600, CS8601, CS8602, CS8603, CS8604, CS8618, CS8625, CS8632, CS4014
+#pragma warning disable CS0219, CS8600, CS8601, CS8602, CS8603, CS8604, CS8618, CS8622, CS8625, CS8632, CS4014
 
 namespace YTPlayer
 {
@@ -114,34 +114,6 @@ public partial class MainForm : Form
 		Artists,
 		Podcasts,
 		All
-	}
-
-	private struct RECT
-	{
-		public int left;
-
-		public int top;
-
-		public int right;
-
-		public int bottom;
-	}
-
-	private struct COMBOBOXINFO
-	{
-		public int cbSize;
-
-		public RECT rcItem;
-
-		public RECT rcButton;
-
-		public int stateButton;
-
-		public IntPtr hwndCombo;
-
-		public IntPtr hwndItem;
-
-		public IntPtr hwndList;
 	}
 
 	private enum ManualNavigationAvailability
@@ -343,7 +315,7 @@ public partial class MainForm : Form
 		public bool HasPrimaryEntity => PrimaryEntity != MenuEntityKind.None;
 	}
 
-	private sealed class SortState<T>
+	private sealed class SortState<T> where T : notnull
 	{
 		private readonly Dictionary<T, string> _accessibleDescriptions;
 
@@ -384,7 +356,443 @@ public partial class MainForm : Form
 		}
 	}
 
+        private sealed class AccessibleGroupPanel : GroupBox
+        {
+                public AccessibleGroupPanel()
+                {
+                        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, value: true);
+                }
+
+                protected override void OnPaint(PaintEventArgs e)
+                {
+                        Color color = ((base.Parent != null) ? base.Parent.BackColor : BackColor);
+                        e.Graphics.Clear(color);
+                }
+        }
+
+        private sealed class AccessibleStatusStrip : StatusStrip
+        {
+                protected override AccessibleObject CreateAccessibilityInstance()
+                {
+                        return new AccessibleStatusStripAccessibleObject(this);
+                }
+
+                private sealed class AccessibleStatusStripAccessibleObject : ToolStrip.ToolStripAccessibleObject
+                {
+                        private readonly AccessibleStatusStrip _owner;
+
+                        public AccessibleStatusStripAccessibleObject(AccessibleStatusStrip owner)
+                                : base(owner)
+                        {
+                                _owner = owner;
+                        }
+
+                        public override AccessibleRole Role => AccessibleRole.StatusBar;
+
+                        public override string Name
+                        {
+                                get
+                                {
+                                        return _owner.AccessibleName ?? _owner.Text ?? string.Empty;
+                                }
+                                set
+                                {
+                                        base.Name = value;
+                                }
+                        }
+
+                        public override string Description
+                        {
+                                get
+                                {
+                                        return _owner.AccessibleDescription ?? string.Empty;
+                                }
+                        }
+
+                }
+        }
+
+        private sealed class MainFormAccessibleObject : Control.ControlAccessibleObject
+        {
+                private readonly MainForm _owner;
+
+                public MainFormAccessibleObject(MainForm owner)
+                        : base(owner)
+                {
+                        _owner = owner;
+                }
+
+                public override AccessibleRole Role => AccessibleRole.Window;
+
+                public override Rectangle Bounds
+                {
+                        get
+                        {
+                                try
+                                {
+                                        if (_owner != null && !_owner.IsDisposed)
+                                        {
+                                                return _owner.RectangleToScreen(_owner.ClientRectangle);
+                                        }
+                                }
+                                catch
+                                {
+                                }
+                                return base.Bounds;
+                        }
+                }
+        }
+
+        private sealed class StatusBarProxy : Control
+        {
+                private string _statusText = string.Empty;
+
+                public StatusBarProxy()
+                {
+                        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, value: true);
+                        TabStop = false;
+                        AccessibleRole = AccessibleRole.StatusBar;
+                }
+
+                public void UpdateStatusText(string text)
+                {
+                        _statusText = text?.Trim() ?? string.Empty;
+                        AccessibleName = _statusText;
+                        AccessibleDescription = _statusText;
+                        Text = _statusText;
+                }
+
+                protected override AccessibleObject CreateAccessibilityInstance()
+                {
+                        return new StatusBarProxyAccessibleObject(this);
+                }
+
+                protected override void OnPaint(PaintEventArgs e)
+                {
+                        Color color = ((base.Parent != null) ? base.Parent.BackColor : BackColor);
+                        e.Graphics.Clear(color);
+                }
+
+                private sealed class StatusBarProxyAccessibleObject : Control.ControlAccessibleObject
+                {
+                        private readonly StatusBarProxy _owner;
+                        private readonly StatusBarPaneAccessibleObject _pane;
+
+                        public StatusBarProxyAccessibleObject(StatusBarProxy owner)
+                                : base(owner)
+                        {
+                                _owner = owner;
+                                _pane = new StatusBarPaneAccessibleObject(owner);
+                        }
+
+                        public override AccessibleRole Role => AccessibleRole.StatusBar;
+
+                        public override string Name => _owner._statusText ?? string.Empty;
+
+                        public override int GetChildCount()
+                        {
+                                return 1;
+                        }
+
+                        public override AccessibleObject GetChild(int index)
+                        {
+                                return (index == 0) ? _pane : null;
+                        }
+
+                        public override Rectangle Bounds
+                        {
+                                get
+                                {
+                                        return _owner.RectangleToScreen(_owner.ClientRectangle);
+                                }
+                        }
+
+
+                        private sealed class StatusBarPaneAccessibleObject : AccessibleObject
+                        {
+                                private readonly StatusBarProxy _owner;
+
+                                public StatusBarPaneAccessibleObject(StatusBarProxy owner)
+                                {
+                                        _owner = owner;
+                                }
+
+                                public override AccessibleRole Role => AccessibleRole.StaticText;
+
+                                public override string Name => _owner._statusText ?? string.Empty;
+
+                                public override Rectangle Bounds
+                                {
+                                        get
+                                        {
+                                                return _owner.RectangleToScreen(_owner.ClientRectangle);
+                                        }
+                                }
+
+                        }
+                }
+        }
+
+        private sealed class NativeStatusBarWindow
+        {
+                private const int WM_USER = 1024;
+                private const int SB_SETTEXT = WM_USER + 1;
+                private const int SB_SETMINHEIGHT = WM_USER + 8;
+                private const int SB_SIMPLE = WM_USER + 9;
+                private const int WS_CHILD = 0x40000000;
+                private const int WS_VISIBLE = 0x10000000;
+                private const uint SWP_NOACTIVATE = 0x0010;
+                private static readonly nint HWND_TOP = new nint(0);
+                private static readonly nint HWND_BOTTOM = new nint(1);
+                private const int ICC_BAR_CLASSES = 0x00000004;
+                private static bool _commonControlsInitialized;
+                private nint _handle = nint.Zero;
+                private string _pendingText = string.Empty;
+                private Rectangle _bounds = Rectangle.Empty;
+
+                [StructLayout(LayoutKind.Sequential)]
+                private struct INITCOMMONCONTROLSEX
+                {
+                        public int dwSize;
+                        public int dwICC;
+                }
+
+                [DllImport("comctl32.dll", SetLastError = true)]
+                private static extern bool InitCommonControlsEx(ref INITCOMMONCONTROLSEX init);
+
+                [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+                private static extern nint CreateWindowEx(int exStyle, string className, string windowName, int style, int x, int y, int width, int height, nint parentHandle, nint menuHandle, nint instanceHandle, nint param);
+
+                [DllImport("user32.dll", SetLastError = true)]
+                private static extern bool DestroyWindow(nint hWnd);
+
+                [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+                private static extern nint GetModuleHandle(string lpModuleName);
+
+                [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+                private static extern nint SendMessage(nint hWnd, int msg, nint wParam, string lParam);
+
+                [DllImport("user32.dll")]
+                private static extern nint SendMessage(nint hWnd, int msg, nint wParam, nint lParam);
+
+                [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+                private static extern int GetClassName(nint hWnd, StringBuilder lpClassName, int nMaxCount);
+
+                [DllImport("user32.dll", SetLastError = true)]
+                private static extern bool SetWindowPos(nint hWnd, nint hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+
+                public nint Handle => _handle;
+
+                public bool IsCreated => _handle != nint.Zero;
+
+                public Rectangle Bounds => _bounds;
+
+                public void EnsureCreated(nint parentHandle)
+                {
+                        if (IsCreated)
+                        {
+                                return;
+                        }
+                        EnsureCommonControls();
+                        nint instanceHandle = GetModuleHandle(null);
+                        _handle = CreateWindowEx(0, "msctls_statusbar32", string.Empty, WS_CHILD | WS_VISIBLE,
+                                _bounds.X, _bounds.Y, _bounds.Width, _bounds.Height, parentHandle, nint.Zero, instanceHandle, nint.Zero);
+                        if (_handle == nint.Zero)
+                        {
+                                int error = Marshal.GetLastWin32Error();
+                                DebugLogger.Log(DebugLogger.LogLevel.Error, "A11yStatusBar",
+                                        $"NativeStatusBarWindow CreateWindowEx failed (error={error}).");
+                                return;
+                        }
+                        ApplyMinHeight(_bounds.Height);
+                        EnsureSimpleMode();
+                        ApplyPendingText();
+                        SetWindowPos(_handle, HWND_TOP, _bounds.X, _bounds.Y, _bounds.Width, _bounds.Height, SWP_NOACTIVATE);
+                        LogHandleCreated();
+                }
+
+                public void Destroy()
+                {
+                        if (!IsCreated)
+                        {
+                                return;
+                        }
+                        if (DestroyWindow(_handle))
+                        {
+                                DebugLogger.Log(DebugLogger.LogLevel.Info, "A11yStatusBar",
+                                        "NativeStatusBarWindow handle destroyed.");
+                        }
+                        _handle = nint.Zero;
+                }
+
+                public void UpdateBounds(Rectangle bounds)
+                {
+                        _bounds = bounds;
+                        if (!IsCreated)
+                        {
+                                return;
+                        }
+                        ApplyMinHeight(bounds.Height);
+                        SetWindowPos(_handle, HWND_BOTTOM, bounds.X, bounds.Y, bounds.Width, bounds.Height, SWP_NOACTIVATE);
+                }
+
+                public void UpdateStatusText(string text)
+                {
+                        _pendingText = text ?? string.Empty;
+                        if (!IsCreated)
+                        {
+                                DebugLogger.Log(DebugLogger.LogLevel.Info, "A11yStatusBar",
+                                        "NativeStatusBarWindow UpdateStatusText cached (handle not created yet).");
+                                return;
+                        }
+                        EnsureSimpleMode();
+                        SendMessage(_handle, SB_SETTEXT, nint.Zero, _pendingText);
+                }
+
+                private static void EnsureCommonControls()
+                {
+                        if (_commonControlsInitialized)
+                        {
+                                return;
+                        }
+                        INITCOMMONCONTROLSEX init = new INITCOMMONCONTROLSEX
+                        {
+                                dwSize = Marshal.SizeOf<INITCOMMONCONTROLSEX>(),
+                                dwICC = ICC_BAR_CLASSES
+                        };
+                        _commonControlsInitialized = InitCommonControlsEx(ref init);
+                        if (!_commonControlsInitialized)
+                        {
+                                int error = Marshal.GetLastWin32Error();
+                                DebugLogger.Log(DebugLogger.LogLevel.Warning, "A11yStatusBar",
+                                        $"InitCommonControlsEx failed (error={error}).");
+                        }
+                }
+
+                private void EnsureSimpleMode()
+                {
+                        if (!IsCreated)
+                        {
+                                return;
+                        }
+                        SendMessage(_handle, SB_SIMPLE, new nint(1), nint.Zero);
+                }
+
+                private void ApplyMinHeight(int height)
+                {
+                        if (!IsCreated)
+                        {
+                                return;
+                        }
+                        int target = Math.Max(1, height);
+                        SendMessage(_handle, SB_SETMINHEIGHT, new nint(target), nint.Zero);
+                }
+
+                private void ApplyPendingText()
+                {
+                        if (!IsCreated)
+                        {
+                                return;
+                        }
+                        EnsureSimpleMode();
+                        SendMessage(_handle, SB_SETTEXT, nint.Zero, _pendingText);
+                }
+
+                private void LogHandleCreated()
+                {
+                        try
+                        {
+                                string className = ResolveClassName();
+                                DebugLogger.Log(DebugLogger.LogLevel.Info, "A11yStatusBar",
+                                        $"NativeStatusBarWindow handle created. Handle=0x{_handle.ToInt64():X}, Class={className}, Bounds={_bounds}");
+                        }
+                        catch (Exception ex)
+                        {
+                                DebugLogger.LogException("A11yStatusBar", ex, "NativeStatusBarWindow LogHandleCreated failed");
+                        }
+                }
+
+                private string ResolveClassName()
+                {
+                        if (!IsCreated)
+                        {
+                                return string.Empty;
+                        }
+                        StringBuilder sb = new StringBuilder(256);
+                        int length = GetClassName(_handle, sb, sb.Capacity);
+                        if (length <= 0)
+                        {
+                                return string.Empty;
+                        }
+                        return sb.ToString(0, length);
+                }
+        }
+
+	internal sealed class NavigationHistoryItem
+	{
+		public string ViewSource { get; set; } = string.Empty;
+
+		public string ViewName { get; set; } = string.Empty;
+
+		public int SelectedIndex { get; set; }
+
+		public int SelectedDataIndex { get; set; }
+
+		public string PageType { get; set; } = string.Empty;
+
+		public string CategoryId { get; set; } = string.Empty;
+
+		public string PlaylistId { get; set; } = string.Empty;
+
+		public string AlbumId { get; set; } = string.Empty;
+
+		public string SearchType { get; set; } = string.Empty;
+
+		public string SearchKeyword { get; set; } = string.Empty;
+
+		public int CurrentPage { get; set; }
+
+		public long ArtistId { get; set; }
+
+		public string ArtistName { get; set; } = string.Empty;
+
+		public int ArtistOffset { get; set; }
+
+		public string ArtistOrder { get; set; } = string.Empty;
+
+		public string ArtistAlbumSort { get; set; } = string.Empty;
+
+		public int ArtistType { get; set; }
+
+		public int ArtistArea { get; set; }
+
+		public long PodcastRadioId { get; set; }
+
+		public int PodcastOffset { get; set; }
+
+		public bool PodcastAscending { get; set; }
+
+		public string PodcastRadioName { get; set; } = string.Empty;
+
+		public string MixedQueryKey { get; set; } = string.Empty;
+
+		public string SongId { get; set; } = string.Empty;
+	}
+
+	internal enum ArtistSongSortOption
+	{
+		Hot,
+		Time
+	}
+
+	internal enum ArtistAlbumSortOption
+	{
+		Latest,
+		Oldest
+	}
+
 	protected NeteaseApiClient _apiClient = null;
+
 	private UnblockService _unblockService = null;
 
 	private BassAudioEngine _audioEngine = null;
@@ -402,6 +810,7 @@ public partial class MainForm : Form
 	private List<PlaylistInfo> _currentPlaylists = new List<PlaylistInfo>();
 
 	private PlaylistInfo? _currentPlaylist = null;
+
 	private bool _currentPlaylistOwnedByUser = false;
 
 	private PlaylistInfo? _userLikedPlaylist = null;
@@ -452,7 +861,13 @@ public partial class MainForm : Form
 
 	private const string RecentPodcastsCategoryId = "recent_podcasts";
 
-	private readonly Dictionary<string, int> _homeItemIndexMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, int> _homeItemIndexMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        private readonly Dictionary<string, Dictionary<string, int>> _playlistTrackIndexMapCache = new Dictionary<string, Dictionary<string, int>>(StringComparer.OrdinalIgnoreCase);
+
+        private readonly Queue<string> _playlistTrackIndexMapOrder = new Queue<string>();
+
+        private const int PlaylistTrackIndexMapCacheLimit = 4;
 
 	private const string DownloadSongMenuText = "下载歌曲(&D)";
 
@@ -538,12 +953,15 @@ public partial class MainForm : Form
 
 	private LyricsDisplayManager _lyricsDisplayManager = null;
 
-private LyricsLoader _lyricsLoader = null;
+	private LyricsLoader _lyricsLoader = null;
 
-private bool _autoReadLyrics = false;
-private bool _hideSequenceNumbers = false;
+	private bool _autoReadLyrics = false;
 
-private CancellationTokenSource? _lyricsSpeechCts;
+	private bool _hideSequenceNumbers = false;
+
+	private bool _hideControlBar = false;
+
+	private CancellationTokenSource? _lyricsSpeechCts;
 
 	private readonly object _lyricsSpeechLock = new object();
 
@@ -575,9 +993,9 @@ private CancellationTokenSource? _lyricsSpeechCts;
 
 	private bool _autoUpdateCheckScheduled;
 
-	private bool _autoUpdatePromptShown;
+        private bool _autoUpdatePromptShown;
 
-	private bool _isUserDragging = false;
+        private bool _isUserDragging = false;
 
 	private int _currentPage = 1;
 
@@ -595,6 +1013,62 @@ private CancellationTokenSource? _lyricsSpeechCts;
 
 	private int _lastListViewFocusedIndex = -1;
 
+        private int _lastListViewSpokenIndex = -1;
+
+        private string? _lastListViewSpokenViewSource;
+
+        private string? _lastListViewSpokenText;
+
+        private DateTime _lastListViewSpokenAt = DateTime.MinValue;
+
+        private CancellationTokenSource? _listViewFocusSpeechCts;
+
+        private const int ListViewFocusSpeakDelayMs = 120;
+
+        private const int ListViewRepeatCooldownMs = 200;
+
+	private DateTime _lastNvdaCheckAt = DateTime.MinValue;
+
+	private bool _isNvdaRunningCached = false;
+
+	private const int NvdaCheckIntervalMs = 1000;
+
+	private const int ListViewSpeechColumnIndex = 0;
+
+	private const int ListViewFirstDataColumnIndex = 1;
+
+	private const int ListViewDataColumnCount = 5;
+
+	private const int ListViewTotalColumnCount = 6;
+
+	private const int VirtualSongListThreshold = 600;
+
+	private const int LongPlaylistSongThreshold = 1000;
+
+	private const int LongPlaylistBatchSize = 200;
+
+	private const int LongPlaylistBatchDelayMs = 1500;
+
+	private const string LongPlaylistPlaceholderText = "加载中 ...";
+
+	private bool _isVirtualSongListActive = false;
+
+	private List<SongInfo> _virtualSongs = new List<SongInfo>();
+
+	private int _virtualStartIndex = 1;
+
+	private bool _virtualShowPagination = false;
+
+	private bool _virtualHasPreviousPage = false;
+
+	private bool _virtualHasNextPage = false;
+
+	private int _virtualCacheStartIndex = -1;
+
+	private int _virtualCacheEndIndex = -1;
+
+	private ListViewItem[]? _virtualItemCache;
+
 	private string _lastKeyword = "";
 
 	private readonly PlaybackQueueManager _playbackQueue = new PlaybackQueueManager();
@@ -603,29 +1077,36 @@ private CancellationTokenSource? _lyricsSpeechCts;
 
 	private string _currentViewSource = "";
 
-	private const string MixedSearchTypeDisplayName = "混合";
+        private const string MixedSearchTypeDisplayName = "混合";
 
-	private bool _isMixedSearchTypeActive = false;
+        private bool _isMixedSearchTypeActive = false;
 
-	private string _lastExplicitSearchType = "歌曲";
+        private string _lastExplicitSearchType = "歌曲";
 
-	private string? _currentMixedQueryKey = null;
+        private bool _suppressSearchTypeComboEvents = false;
 
-	private const int MaxSearchHistoryEntries = ConfigManager.MaxSearchHistoryCount;
+        private string? _currentMixedQueryKey = null;
+
+	private const int MaxSearchHistoryEntries = 50;
 
 	private int _searchHistoryIndex = -1;
 
-	private string _searchHistoryDraft = string.Empty;
+        private string _searchHistoryDraft = string.Empty;
 
-	private AutoCompleteStringCollection? _searchHistoryAutoComplete;
+        private AutoCompleteStringCollection? _searchHistoryAutoComplete;
 
-	private bool _isApplyingSearchHistoryText = false;
+        private bool _searchAutoCompleteDisabled;
+
+        private bool _searchAutoCompletePending;
+
+        private bool _isApplyingSearchHistoryText = false;
 
 	private bool _lastPlaybackRestored = false;
 
 	private const string LastPlaybackViewSource = "resume:last_playback";
 
 	private CancellationTokenSource? _initialHomeLoadCts;
+
 	private bool _initialHomeLoadCompleted = false;
 
 	private int _autoFocusSuppressionDepth = 0;
@@ -634,17 +1115,17 @@ private CancellationTokenSource? _lyricsSpeechCts;
 
 	private long _loggedInUserId = 0L;
 
-private bool _isHomePage = false;
+	private bool _isHomePage = false;
 
-private Stack<NavigationHistoryItem> _navigationHistory = new Stack<NavigationHistoryItem>();
+	private Stack<NavigationHistoryItem> _navigationHistory = new Stack<NavigationHistoryItem>();
 
-private DateTime _lastBackTime = DateTime.MinValue;
+	private DateTime _lastBackTime = DateTime.MinValue;
 
-private const int MIN_BACK_INTERVAL_MS = 300;
+	private const int MIN_BACK_INTERVAL_MS = 300;
 
-private bool _isNavigating = false;
+	private bool _isNavigating = false;
 
-private bool _pendingBackNavigation = false;
+	private bool _pendingBackNavigation = false;
 
 	private const string BaseWindowTitle = "易听";
 
@@ -708,12 +1189,15 @@ private bool _pendingBackNavigation = false;
 
 	private CancellationTokenSource? _stateUpdateCancellation = null;
 
-private bool _stateUpdateLoopRunning = false;
+	private bool _stateUpdateLoopRunning = false;
 
-private bool _isPlaybackLoading = false;
-private bool _isSwitchingTrack = false;
+	private bool _isPlaybackLoading = false;
 
-private string? _playButtonTextBeforeLoading = null;
+	private bool _isSwitchingTrack = false;
+
+	private int _playPauseCommandInFlight = 0;
+
+	private string? _playButtonTextBeforeLoading = null;
 
 	private string? _statusTextBeforeLoading = null;
 
@@ -856,27 +1340,43 @@ private string? _playButtonTextBeforeLoading = null;
 
 	private CancellationTokenSource? _navigationCts;
 
-	private string? _pendingListFocusViewSource;
+        private string? _pendingListFocusViewSource;
 
-	private int _pendingListFocusIndex = -1;
+        private int _pendingListFocusIndex = -1;
 
-	private string? _pendingSongFocusId;
+        private bool _pendingListFocusFromPlayback = false;
+
+        private string? _deferredPlaybackFocusViewSource;
+
+        private string? _pendingSongFocusId;
 
 	private string? _pendingSongFocusViewSource;
 
 	private bool _skipCloudRestoreOnce = false;
 
-	private bool _pendingSongFocusSatisfied = false;
+        private bool _pendingSongFocusSatisfied = false;
 
-	private string? _pendingSongFocusSatisfiedViewSource;
+        private string? _pendingSongFocusSatisfiedViewSource;
 
-	private string? _lastListenMatchSessionId;
+        private int _pendingPlaceholderPlaybackIndex = -1;
+
+        private string? _pendingPlaceholderPlaybackViewSource;
+
+        private string? _lastListenMatchSessionId;
 
 	private List<SongInfo> _listenMatchAggregate = new List<SongInfo>();
 
 	private string? _lastAnnouncedViewSource;
 
 	private string? _lastAnnouncedHeader;
+
+	private Label? _accessibilityAnnouncementLabel;
+
+	private string? _lastAnnouncementText;
+
+	private DateTime _lastAnnouncementAt = DateTime.MinValue;
+
+	private static readonly TimeSpan AnnouncementRepeatCooldown = TimeSpan.FromMilliseconds(350.0);
 
 	private IContainer components = null;
 
@@ -942,14 +1442,17 @@ private string? _playButtonTextBeforeLoading = null;
 
 	private ToolStripMenuItem prevMenuItem;
 
-private ToolStripMenuItem nextMenuItem;
+	private ToolStripMenuItem nextMenuItem;
 
-private ToolStripMenuItem jumpToPositionMenuItem;
+	private ToolStripMenuItem jumpToPositionMenuItem;
 
-private ToolStripMenuItem autoReadLyricsMenuItem;
-private ToolStripMenuItem hideSequenceMenuItem;
+	private ToolStripMenuItem autoReadLyricsMenuItem;
 
-private ToolStripMenuItem helpMenuItem;
+	private ToolStripMenuItem hideSequenceMenuItem;
+
+	private ToolStripMenuItem hideControlBarMenuItem;
+
+	private ToolStripMenuItem helpMenuItem;
 
 	private ToolStripMenuItem checkUpdateMenuItem;
 
@@ -967,7 +1470,7 @@ private ToolStripMenuItem helpMenuItem;
 
 	private Button searchButton;
 
-	private TextBox searchTextBox;
+        private SafeTextBox searchTextBox;
 
 	private Label searchLabel;
 
@@ -983,7 +1486,9 @@ private ToolStripMenuItem helpMenuItem;
 
 	private ToolStripSeparator searchHistorySeparator;
 
-	private ListView resultListView;
+        private SafeListView resultListView;
+
+	private ColumnHeader columnHeader0;
 
 	private ColumnHeader columnHeader1;
 
@@ -995,23 +1500,29 @@ private ToolStripMenuItem helpMenuItem;
 
 	private ColumnHeader columnHeader5;
 
-	private Panel controlPanel;
+	private GroupBox controlPanel;
 
-	private Label lyricsLabel;
+        private Label lyricsLabel;
 
 	private Label volumeLabel;
 
-	private TrackBar volumeTrackBar;
+        private TrackBar volumeTrackBar;
 
 	private Label timeLabel;
 
-	private TrackBar progressTrackBar;
+        private TrackBar progressTrackBar;
 
 	private Button playPauseButton;
 
 	private Label currentSongLabel;
 
-	private StatusStrip statusStrip1;
+private AccessibleStatusStrip statusStrip1;
+private StatusBarProxy _statusBarProxy;
+private NativeStatusBarWindow _nativeStatusBar;
+private string _lastStatusBarDebugText = string.Empty;
+private Rectangle _lastStatusBarProxyBounds = Rectangle.Empty;
+private Rectangle _lastNativeStatusBarBounds = Rectangle.Empty;
+private bool _nativeStatusBarCreateDeferredLogged;
 
 	private ToolStripStatusLabel toolStripStatusLabel1;
 
@@ -1178,7 +1689,8 @@ private ToolStripMenuItem helpMenuItem;
 						catch (Exception ex)
 						{
 							Exception ex2 = ex;
-							Debug.WriteLine("[StateCache] 获取状态异常: " + ex2.Message);
+							Exception ex3 = ex2;
+							Debug.WriteLine("[StateCache] 获取状态异常: " + ex3.Message);
 						}
 						lock (_stateCacheLock)
 						{
@@ -1196,8 +1708,9 @@ private ToolStripMenuItem helpMenuItem;
 			}
 			catch (Exception ex)
 			{
-				Exception ex3 = ex;
-				Debug.WriteLine("[StateCache ERROR] 状态更新循环异常: " + ex3.Message);
+				Exception ex4 = ex;
+				Exception ex5 = ex4;
+				Debug.WriteLine("[StateCache ERROR] 状态更新循环异常: " + ex5.Message);
 			}
 			finally
 			{
@@ -1213,146 +1726,145 @@ private ToolStripMenuItem helpMenuItem;
 		List<ListItemInfo> list = new List<ListItemInfo>();
 		int value = _homePlaylistCategoryPresets.Length;
 		int count = ArtistMetadataHelper.GetTypeOptions().Count;
-		checked
+		if (flag)
 		{
-			if (flag)
+			ListItemInfo obj = new ListItemInfo
 			{
-				ListItemInfo obj = new ListItemInfo
-				{
-					Type = ListItemType.Category,
-					CategoryId = "user_liked_songs",
-					CategoryName = "喜欢的音乐",
-					ItemCount = (_userLikedPlaylist?.TrackCount > 0) ? _userLikedPlaylist?.TrackCount : null
-				};
-				PlaylistInfo? userLikedPlaylist = _userLikedPlaylist;
-				obj.ItemUnit = ((userLikedPlaylist != null && userLikedPlaylist.TrackCount > 0) ? "首" : null);
-				list.Add(obj);
-				list.Add(new ListItemInfo
-				{
-					Type = ListItemType.Category,
-					CategoryId = "recent_listened",
-					CategoryName = "最近听过",
-					CategoryDescription = (string.IsNullOrWhiteSpace(BuildRecentListenedDescription()) ? null : BuildRecentListenedDescription())
-				});
-				list.Add(new ListItemInfo
-				{
-					Type = ListItemType.Category,
-					CategoryId = "user_playlists",
-					CategoryName = "创建和收藏的歌单",
-					ItemCount = _homeCachedUserPlaylistCount,
-					ItemUnit = (_homeCachedUserPlaylistCount.HasValue ? "个" : null)
-				});
-				list.Add(new ListItemInfo
-				{
-					Type = ListItemType.Category,
-					CategoryId = "user_albums",
-					CategoryName = "收藏的专辑",
-					ItemCount = _homeCachedUserAlbumCount,
-					ItemUnit = (_homeCachedUserAlbumCount.HasValue ? "张" : null)
-				});
-				list.Add(new ListItemInfo
-				{
-					Type = ListItemType.Category,
-					CategoryId = "artist_favorites",
-					CategoryName = "收藏的歌手",
-					ItemCount = _homeCachedArtistFavoritesCount,
-					ItemUnit = (_homeCachedArtistFavoritesCount.HasValue ? "位" : null)
-				});
-				list.Add(new ListItemInfo
-				{
-					Type = ListItemType.Category,
-					CategoryId = "user_podcasts",
-					CategoryName = "收藏的播客",
-					ItemCount = _homeCachedPodcastFavoritesCount,
-					ItemUnit = (_homeCachedPodcastFavoritesCount.HasValue ? "个" : null)
-				});
-				list.Add(new ListItemInfo
-				{
-					Type = ListItemType.Category,
-					CategoryId = "user_cloud",
-					CategoryName = "云盘",
-					CategoryDescription = ((_cloudMaxSize > 0 || _cloudTotalCount > 0) ? ("已用 " + FormatSize(_cloudUsedSize) + " / " + FormatSize(_cloudMaxSize)) : null),
-					ItemCount = ((_cloudTotalCount > 0) ? new int?(_cloudTotalCount) : ((int?)null)),
-					ItemUnit = ((_cloudTotalCount > 0) ? "首" : null)
-				});
-				list.Add(new ListItemInfo
-				{
-					Type = ListItemType.Category,
-					CategoryId = "daily_recommend",
-					CategoryName = "每日推荐",
-					CategoryDescription = ((_homeCachedDailyRecommendSongCount.GetValueOrDefault() > 0 || _homeCachedDailyRecommendPlaylistCount.GetValueOrDefault() > 0) ? $"歌曲 {_homeCachedDailyRecommendSongCount.GetValueOrDefault()} 首 / 歌单 {_homeCachedDailyRecommendPlaylistCount.GetValueOrDefault()} 个" : null),
-					ItemCount = null,
-					ItemUnit = null
-				});
-				list.Add(new ListItemInfo
-				{
-					Type = ListItemType.Category,
-					CategoryId = "personalized",
-					CategoryName = "为您推荐",
-					CategoryDescription = ((_homeCachedPersonalizedPlaylistCount.GetValueOrDefault() > 0 || _homeCachedPersonalizedSongCount.GetValueOrDefault() > 0) ? $"歌单 {_homeCachedPersonalizedPlaylistCount.GetValueOrDefault()} 个 / 歌曲 {_homeCachedPersonalizedSongCount.GetValueOrDefault()} 首" : null),
-					ItemCount = null,
-					ItemUnit = null
-				});
-			}
+				Type = ListItemType.Category,
+				CategoryId = "user_liked_songs",
+				CategoryName = "喜欢的音乐"
+			};
+			PlaylistInfo? userLikedPlaylist = _userLikedPlaylist;
+			obj.ItemCount = ((userLikedPlaylist == null || userLikedPlaylist.TrackCount <= 0) ? ((int?)null) : _userLikedPlaylist?.TrackCount);
+			ListItemInfo listItemInfo = obj;
+			PlaylistInfo userLikedPlaylist2 = _userLikedPlaylist;
+			listItemInfo.ItemUnit = ((userLikedPlaylist2 != null && userLikedPlaylist2.TrackCount > 0) ? "首" : null);
+			list.Add(listItemInfo);
 			list.Add(new ListItemInfo
 			{
 				Type = ListItemType.Category,
-				CategoryId = "highquality_playlists",
-				CategoryName = "精品歌单",
-				ItemCount = 50,
-				ItemUnit = "个"
+				CategoryId = "recent_listened",
+				CategoryName = "最近听过",
+				CategoryDescription = (string.IsNullOrWhiteSpace(BuildRecentListenedDescription()) ? null : BuildRecentListenedDescription())
 			});
 			list.Add(new ListItemInfo
 			{
 				Type = ListItemType.Category,
-				CategoryId = "new_songs",
-				CategoryName = "新歌速递",
-				ItemCount = 5,
-				ItemUnit = "类"
+				CategoryId = "user_playlists",
+				CategoryName = "创建和收藏的歌单",
+				ItemCount = _homeCachedUserPlaylistCount,
+				ItemUnit = (_homeCachedUserPlaylistCount.HasValue ? "个" : null)
 			});
 			list.Add(new ListItemInfo
 			{
 				Type = ListItemType.Category,
-				CategoryId = "playlist_category",
-				CategoryName = "歌单分类",
-				ItemCount = value,
-				ItemUnit = "类"
+				CategoryId = "user_albums",
+				CategoryName = "收藏的专辑",
+				ItemCount = _homeCachedUserAlbumCount,
+				ItemUnit = (_homeCachedUserAlbumCount.HasValue ? "张" : null)
 			});
 			list.Add(new ListItemInfo
 			{
 				Type = ListItemType.Category,
-				CategoryId = "podcast_categories",
-				CategoryName = "播客分类",
-				ItemCount = _homeCachedPodcastCategoryCount,
-				ItemUnit = (_homeCachedPodcastCategoryCount.HasValue ? "类" : null)
+				CategoryId = "artist_favorites",
+				CategoryName = "收藏的歌手",
+				ItemCount = _homeCachedArtistFavoritesCount,
+				ItemUnit = (_homeCachedArtistFavoritesCount.HasValue ? "位" : null)
 			});
 			list.Add(new ListItemInfo
 			{
 				Type = ListItemType.Category,
-				CategoryId = "artist_categories",
-				CategoryName = "歌手分类",
-				ItemCount = count,
-				ItemUnit = "类"
+				CategoryId = "user_podcasts",
+				CategoryName = "收藏的播客",
+				ItemCount = _homeCachedPodcastFavoritesCount,
+				ItemUnit = (_homeCachedPodcastFavoritesCount.HasValue ? "个" : null)
 			});
 			list.Add(new ListItemInfo
 			{
 				Type = ListItemType.Category,
-				CategoryId = "new_albums",
-				CategoryName = "新碟上架",
-				ItemCount = _homeCachedNewAlbumCount,
-				ItemUnit = (_homeCachedNewAlbumCount.HasValue ? "张" : null)
+				CategoryId = "user_cloud",
+				CategoryName = "云盘",
+				CategoryDescription = ((_cloudMaxSize > 0 || _cloudTotalCount > 0) ? ("已用 " + FormatSize(_cloudUsedSize) + " / " + FormatSize(_cloudMaxSize)) : null),
+				ItemCount = ((_cloudTotalCount > 0) ? new int?(_cloudTotalCount) : ((int?)null)),
+				ItemUnit = ((_cloudTotalCount > 0) ? "首" : null)
 			});
 			list.Add(new ListItemInfo
 			{
 				Type = ListItemType.Category,
-				CategoryId = "toplist",
-				CategoryName = "官方榜单",
-				ItemCount = _homeCachedToplistCount,
-				ItemUnit = (_homeCachedToplistCount.HasValue ? "个" : null)
+				CategoryId = "daily_recommend",
+				CategoryName = "每日推荐",
+				CategoryDescription = ((_homeCachedDailyRecommendSongCount.GetValueOrDefault() > 0 || _homeCachedDailyRecommendPlaylistCount.GetValueOrDefault() > 0) ? $"歌曲 {_homeCachedDailyRecommendSongCount.GetValueOrDefault()} 首 / 歌单 {_homeCachedDailyRecommendPlaylistCount.GetValueOrDefault()} 个" : null),
+				ItemCount = null,
+				ItemUnit = null
 			});
-			string statusText = (flag ? "主页骨架已加载，正在同步数据..." : "欢迎使用，登录后解锁更多入口");
-			return new HomePageViewData(list, statusText);
+			list.Add(new ListItemInfo
+			{
+				Type = ListItemType.Category,
+				CategoryId = "personalized",
+				CategoryName = "为您推荐",
+				CategoryDescription = ((_homeCachedPersonalizedPlaylistCount.GetValueOrDefault() > 0 || _homeCachedPersonalizedSongCount.GetValueOrDefault() > 0) ? $"歌单 {_homeCachedPersonalizedPlaylistCount.GetValueOrDefault()} 个 / 歌曲 {_homeCachedPersonalizedSongCount.GetValueOrDefault()} 首" : null),
+				ItemCount = null,
+				ItemUnit = null
+			});
 		}
+		list.Add(new ListItemInfo
+		{
+			Type = ListItemType.Category,
+			CategoryId = "highquality_playlists",
+			CategoryName = "精品歌单",
+			ItemCount = 50,
+			ItemUnit = "个"
+		});
+		list.Add(new ListItemInfo
+		{
+			Type = ListItemType.Category,
+			CategoryId = "new_songs",
+			CategoryName = "新歌速递",
+			ItemCount = 5,
+			ItemUnit = "类"
+		});
+		list.Add(new ListItemInfo
+		{
+			Type = ListItemType.Category,
+			CategoryId = "playlist_category",
+			CategoryName = "歌单分类",
+			ItemCount = value,
+			ItemUnit = "类"
+		});
+		list.Add(new ListItemInfo
+		{
+			Type = ListItemType.Category,
+			CategoryId = "podcast_categories",
+			CategoryName = "播客分类",
+			ItemCount = _homeCachedPodcastCategoryCount,
+			ItemUnit = (_homeCachedPodcastCategoryCount.HasValue ? "类" : null)
+		});
+		list.Add(new ListItemInfo
+		{
+			Type = ListItemType.Category,
+			CategoryId = "artist_categories",
+			CategoryName = "歌手分类",
+			ItemCount = count,
+			ItemUnit = "类"
+		});
+		list.Add(new ListItemInfo
+		{
+			Type = ListItemType.Category,
+			CategoryId = "new_albums",
+			CategoryName = "新碟上架",
+			ItemCount = _homeCachedNewAlbumCount,
+			ItemUnit = (_homeCachedNewAlbumCount.HasValue ? "张" : null)
+		});
+		list.Add(new ListItemInfo
+		{
+			Type = ListItemType.Category,
+			CategoryId = "toplist",
+			CategoryName = "官方榜单",
+			ItemCount = _homeCachedToplistCount,
+			ItemUnit = (_homeCachedToplistCount.HasValue ? "个" : null)
+		});
+		string statusText = (flag ? "主页骨架已加载，正在同步数据..." : "欢迎使用，登录后解锁更多入口");
+		return new HomePageViewData(list, statusText);
 	}
 
 	private async Task EnrichHomePageAsync(bool isInitialLoad, CancellationToken externalToken)
@@ -1367,9 +1879,10 @@ private ToolStripMenuItem helpMenuItem;
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			if (!TryHandleOperationCancelled(ex2, "主页丰富已取消"))
+			Exception ex3 = ex2;
+			if (!TryHandleOperationCancelled(ex3, "主页丰富已取消"))
 			{
-				Debug.WriteLine($"[HomePage] 丰富失败: {ex2}");
+				Debug.WriteLine($"[HomePage] 丰富失败: {ex3}");
 			}
 		}
 		finally
@@ -1423,11 +1936,14 @@ private ToolStripMenuItem helpMenuItem;
 		}
 	}
 
-	public MainForm()
-	{
-		InitializeComponent();
-		UpdateWindowTitle(null);
-		if (songContextMenu != null)
+        public MainForm()
+        {
+                InitializeComponent();
+                InitializeAccessibilityAnnouncementLabel();
+                InitializeStatusBarProxy();
+                UpdateStatusStripAccessibility(toolStripStatusLabel1?.Text);
+                UpdateWindowTitle(null);
+                if (songContextMenu != null)
 		{
 			songContextMenu.ShowCheckMargin = true;
 		}
@@ -1445,14 +1961,41 @@ private ToolStripMenuItem helpMenuItem;
 		trayContextMenu.Opening += TrayContextMenu_Opening;
 		trayContextMenu.Opened += TrayContextMenu_Opened;
 		trayContextMenu.Closed += TrayContextMenu_Closed;
-		SyncPlayPauseButtonText();
-		base.Load += MainForm_Load;
-	}
+                SyncPlayPauseButtonText();
+                base.SizeChanged += MainForm_SizeChanged;
+                base.Load += MainForm_Load;
+        }
 
-	private async void MainForm_Load(object sender, EventArgs e)
-	{
-		Task.Run(async delegate
-		{
+        protected override AccessibleObject CreateAccessibilityInstance()
+        {
+                return new MainFormAccessibleObject(this);
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+                base.OnHandleCreated(e);
+                _nativeStatusBarCreateDeferredLogged = false;
+                TryCreateNativeStatusBarWindow("OnHandleCreated");
+        }
+
+        protected override void OnHandleDestroyed(EventArgs e)
+        {
+                _nativeStatusBar?.Destroy();
+                base.OnHandleDestroyed(e);
+        }
+
+        protected override void OnShown(EventArgs e)
+        {
+                base.OnShown(e);
+                TryCreateNativeStatusBarWindow("OnShown");
+                SyncStatusBarProxyBounds();
+                LogStatusBarSnapshot("OnShown");
+        }
+
+        private async void MainForm_Load(object sender, EventArgs e)
+        {
+                Task.Run(async delegate
+                {
 			try
 			{
 				await _apiClient.WarmupSessionAsync();
@@ -1460,7 +2003,8 @@ private ToolStripMenuItem helpMenuItem;
 			catch (Exception ex)
 			{
 				Exception ex2 = ex;
-				Debug.WriteLine("[MainForm] 热身失败（忽略）: " + ex2.Message);
+				Exception ex3 = ex2;
+				Debug.WriteLine("[MainForm] 热身失败（忽略）: " + ex3.Message);
 			}
 		});
 		ScheduleBackgroundUpdateCheck();
@@ -1563,7 +2107,7 @@ private ToolStripMenuItem helpMenuItem;
 			_updateTimer.Tick += UpdateTimer_Tick;
 			_updateTimer.Start();
 			_scrubKeyTimer = new System.Windows.Forms.Timer();
-			_scrubKeyTimer.Interval = 50; // 20 次/秒，提升长按快进/快退响应
+			_scrubKeyTimer.Interval = 50;
 			_scrubKeyTimer.Tick += ScrubKeyTimer_Tick;
 			StartStateUpdateLoop();
 			InitializeCommandQueueSystem();
@@ -1663,12 +2207,12 @@ private ToolStripMenuItem helpMenuItem;
 			configModel.SearchHistory = new List<string>();
 		}
 		InitializeSearchHistoryUi(configModel.SearchHistory);
-		if (_audioEngine != null)
-		{
-			volumeTrackBar.Value = checked((int)(configModel.Volume * 100.0));
-			_audioEngine.SetVolume((float)configModel.Volume);
-			volumeLabel.Text = $"{volumeTrackBar.Value}%";
-		}
+        if (_audioEngine != null)
+        {
+                volumeTrackBar.Value = checked((int)(configModel.Volume * 100.0));
+                _audioEngine.SetVolume((float)configModel.Volume);
+                volumeLabel.Text = $"{volumeTrackBar.Value}%";
+        }
 		PlayMode playMode = PlayMode.Sequential;
 		if (configModel.PlaybackOrder == "列表循环")
 		{
@@ -1692,21 +2236,25 @@ private ToolStripMenuItem helpMenuItem;
 		RefreshQualityMenuAvailability();
 		_autoReadLyrics = configModel.LyricsReadingEnabled;
 		_hideSequenceNumbers = configModel.SequenceNumberHidden;
+		_hideControlBar = configModel.ControlBarHidden;
 		try
 		{
-			autoReadLyricsMenuItem.Checked = _autoReadLyrics;
-			autoReadLyricsMenuItem.Text = (_autoReadLyrics ? "关闭歌词朗读\tF11" : "打开歌词朗读\tF11");
+            SetMenuItemCheckedState(autoReadLyricsMenuItem, _autoReadLyrics);
+            autoReadLyricsMenuItem.Text = (_autoReadLyrics ? "关闭歌词朗读\tF11" : "打开歌词朗读\tF11");
 			UpdateHideSequenceMenuItemText();
+			UpdateHideControlBarMenuItemText();
 			if (_hideSequenceNumbers)
 			{
 				RefreshSequenceDisplayInPlace();
 			}
+			ApplyControlBarVisibility();
 		}
 		catch
 		{
 		}
 		Debug.WriteLine($"[CONFIG] LyricsReadingEnabled={_autoReadLyrics}");
 		Debug.WriteLine($"[CONFIG] SequenceNumberHidden={_hideSequenceNumbers}");
+		Debug.WriteLine($"[CONFIG] ControlBarHidden={_hideControlBar}");
 		_playbackReportingService?.UpdateSettings(_config);
 		Debug.WriteLine($"[CONFIG] UsePersonalCookie={_apiClient.UsePersonalCookie} (自动检测)");
 		Debug.WriteLine($"[CONFIG] AccountState.IsLoggedIn={_accountState?.IsLoggedIn}");
@@ -1723,27 +2271,30 @@ private ToolStripMenuItem helpMenuItem;
 
 	private void InitializeSearchHistoryUi(IReadOnlyCollection<string> history)
 	{
-		if (searchTextBox == null)
+		if (searchTextBox != null)
 		{
-			return;
+			EnsureSearchHistoryAutoCompleteSource();
+			RefreshSearchHistoryAutoComplete(history);
+			ResetSearchHistoryNavigation();
 		}
-		EnsureSearchHistoryAutoCompleteSource();
-		RefreshSearchHistoryAutoComplete(history);
-		ResetSearchHistoryNavigation();
 	}
 
-	private void RefreshSearchHistoryAutoComplete(IEnumerable<string> history)
-	{
-		if (searchTextBox == null)
-		{
-			return;
-		}
-		EnsureSearchHistoryAutoCompleteSource();
-		_searchHistoryAutoComplete.Clear();
-		if (history == null)
-		{
-			return;
-		}
+        private void RefreshSearchHistoryAutoComplete(IEnumerable<string> history)
+        {
+                if (searchTextBox == null)
+                {
+                        return;
+                }
+                EnsureSearchHistoryAutoCompleteSource();
+                if (_searchHistoryAutoComplete == null)
+                {
+                        return;
+                }
+                _searchHistoryAutoComplete.Clear();
+                if (history == null)
+                {
+                        return;
+                }
 		foreach (string item in history)
 		{
 			if (!string.IsNullOrWhiteSpace(item))
@@ -1770,8 +2321,7 @@ private ToolStripMenuItem helpMenuItem;
 		{
 			searchTextBox.Text = text;
 			searchTextBox.Focus();
-			// 使用异步选中以避免 AutoComplete 覆盖光标位置
-			BeginInvoke((MethodInvoker)delegate
+			BeginInvoke((System.Windows.Forms.MethodInvoker)delegate
 			{
 				searchTextBox.SelectAll();
 			});
@@ -1789,8 +2339,8 @@ private ToolStripMenuItem helpMenuItem;
 		{
 			return false;
 		}
-		List<string> history = configModel.SearchHistory;
-		if (history == null || history.Count == 0 || searchTextBox == null)
+		List<string> searchHistory = configModel.SearchHistory;
+		if (searchHistory == null || searchHistory.Count == 0 || searchTextBox == null)
 		{
 			return false;
 		}
@@ -1798,25 +2348,28 @@ private ToolStripMenuItem helpMenuItem;
 		{
 			_searchHistoryDraft = searchTextBox.Text;
 		}
-		if (moveUp)
+		checked
 		{
-			if (_searchHistoryIndex + 1 >= history.Count)
+			if (moveUp)
 			{
-				return true;
+				if (_searchHistoryIndex + 1 >= searchHistory.Count)
+				{
+					return true;
+				}
+				_searchHistoryIndex++;
 			}
-			_searchHistoryIndex++;
-		}
-		else
-		{
-			if (_searchHistoryIndex <= -1)
+			else
 			{
-				return true;
+				if (_searchHistoryIndex <= -1)
+				{
+					return true;
+				}
+				_searchHistoryIndex--;
 			}
-			_searchHistoryIndex--;
+			string text = ((_searchHistoryIndex >= 0 && _searchHistoryIndex < searchHistory.Count) ? searchHistory[_searchHistoryIndex] : _searchHistoryDraft);
+			ApplySearchHistoryText(text);
+			return true;
 		}
-		string text = (_searchHistoryIndex >= 0 && _searchHistoryIndex < history.Count) ? history[_searchHistoryIndex] : _searchHistoryDraft;
-		ApplySearchHistoryText(text);
-		return true;
 	}
 
 	private void RecordSearchHistory(string keyword)
@@ -1834,20 +2387,20 @@ private ToolStripMenuItem helpMenuItem;
 		{
 			configModel.SearchHistory = new List<string>();
 		}
-		List<string> history = configModel.SearchHistory;
-		history.RemoveAll((string h) => string.Equals(h, keyword, StringComparison.OrdinalIgnoreCase));
-		history.Insert(0, keyword);
-		if (history.Count > MaxSearchHistoryEntries)
+		List<string> searchHistory = configModel.SearchHistory;
+		searchHistory.RemoveAll((string h) => string.Equals(h, keyword, StringComparison.OrdinalIgnoreCase));
+		searchHistory.Insert(0, keyword);
+		if (searchHistory.Count > 50)
 		{
-			history.RemoveRange(MaxSearchHistoryEntries, history.Count - MaxSearchHistoryEntries);
+			searchHistory.RemoveRange(50, checked(searchHistory.Count - 50));
 		}
 		if (_searchHistoryAutoComplete == null)
 		{
-			InitializeSearchHistoryUi(history);
+			InitializeSearchHistoryUi(searchHistory);
 		}
 		else
 		{
-			RefreshSearchHistoryAutoComplete(history);
+			RefreshSearchHistoryAutoComplete(searchHistory);
 		}
 		ResetSearchHistoryNavigation();
 		try
@@ -1894,26 +2447,23 @@ private ToolStripMenuItem helpMenuItem;
 			{
 				return;
 			}
-
-			configModel.LastPlayingSongId = currentSong.Id ?? string.Empty;
-			configModel.LastPlayingSongName = currentSong.Name ?? string.Empty;
-			configModel.LastPlayingDuration = currentSong.Duration;
-			configModel.LastPlayingSource = string.Empty;
-
-			if (includeQueue && _playbackQueue != null)
-			{
-				var snapshot = _playbackQueue.CaptureSnapshot();
-				if (snapshot != null && snapshot.Queue != null && snapshot.Queue.Count > 0)
+                        configModel.LastPlayingSongId = currentSong.Id ?? string.Empty;
+                        configModel.LastPlayingSongName = currentSong.Name ?? string.Empty;
+                        configModel.LastPlayingDuration = currentSong.Duration;
+                        configModel.LastPlayingSource = string.Empty;
+                        configModel.LastPlayingSourceIndex = -1;
+                        if (includeQueue && _playbackQueue != null)
+                        {
+				PlaybackSnapshot playbackSnapshot = _playbackQueue.CaptureSnapshot();
+				if (playbackSnapshot != null && playbackSnapshot.Queue != null && playbackSnapshot.Queue.Count > 0)
 				{
-					configModel.LastPlayingQueue = snapshot.Queue
-						.Where(s => s != null && !string.IsNullOrWhiteSpace(s.Id))
-						.Select(s => s.Id)
-						.Take(ConfigManager.MaxLastPlayingQueueCount)
-						.ToList();
-					configModel.LastPlayingQueueIndex = Math.Max(0, Math.Min(snapshot.QueueIndex, configModel.LastPlayingQueue.Count - 1));
+					configModel.LastPlayingQueue = (from s in playbackSnapshot.Queue
+						where s != null && !string.IsNullOrWhiteSpace(s.Id)
+						select s.Id).Take(300).ToList();
+					configModel.LastPlayingQueueIndex = Math.Max(0, Math.Min(playbackSnapshot.QueueIndex, checked(configModel.LastPlayingQueue.Count - 1)));
 					if (string.IsNullOrWhiteSpace(configModel.LastPlayingSource))
 					{
-						configModel.LastPlayingSource = snapshot.QueueSource ?? string.Empty;
+						configModel.LastPlayingSource = playbackSnapshot.QueueSource ?? string.Empty;
 					}
 				}
 				else
@@ -1930,7 +2480,6 @@ private ToolStripMenuItem helpMenuItem;
 					}
 				}
 			}
-			// 兜底来源：队列来源 > 音乐条目自身记录 > 当前视图
 			if (string.IsNullOrWhiteSpace(configModel.LastPlayingSource))
 			{
 				configModel.LastPlayingSource = _playbackQueue?.QueueSource ?? string.Empty;
@@ -1939,19 +2488,28 @@ private ToolStripMenuItem helpMenuItem;
 			{
 				configModel.LastPlayingSource = currentSong.ViewSource ?? string.Empty;
 			}
-			if (string.IsNullOrWhiteSpace(configModel.LastPlayingSource))
-			{
-				configModel.LastPlayingSource = _currentViewSource ?? string.Empty;
-			}
-
-			if (persistToDisk)
-			{
-				_configManager?.Save(configModel);
-			}
+                        if (string.IsNullOrWhiteSpace(configModel.LastPlayingSource) && IsSongInCurrentView(currentSong))
+                        {
+                                configModel.LastPlayingSource = _currentViewSource ?? string.Empty;
+                        }
+                        int resolvedSourceIndex = -1;
+                        if (!string.IsNullOrWhiteSpace(configModel.LastPlayingSource))
+                        {
+                                resolvedSourceIndex = ResolveSongIndexFromCache(configModel.LastPlayingSource, currentSong);
+                                if (resolvedSourceIndex < 0 && !string.IsNullOrWhiteSpace(_currentViewSource) && string.Equals(_currentViewSource, configModel.LastPlayingSource, StringComparison.OrdinalIgnoreCase) && _currentSongs != null && _currentSongs.Count > 0)
+                                {
+                                        resolvedSourceIndex = FindSongIndexInList(_currentSongs, currentSong);
+                                }
+                        }
+                        configModel.LastPlayingSourceIndex = resolvedSourceIndex;
+                        if (persistToDisk)
+                        {
+                                _configManager?.Save(configModel);
+                        }
 		}
-		catch (Exception ex2)
+		catch (Exception ex)
 		{
-			Debug.WriteLine("[PlaybackState] 持久化失败: " + ex2.Message);
+			Debug.WriteLine("[PlaybackState] 持久化失败: " + ex.Message);
 		}
 	}
 
@@ -1970,15 +2528,14 @@ private ToolStripMenuItem helpMenuItem;
 		{
 			return false;
 		}
-
 		try
 		{
 			List<string> queueIds = new List<string>();
 			if (configModel.LastPlayingQueue != null && configModel.LastPlayingQueue.Count > 0)
 			{
-				queueIds.AddRange(configModel.LastPlayingQueue.Where(id => !string.IsNullOrWhiteSpace(id)));
+				queueIds.AddRange(configModel.LastPlayingQueue.Where((string value) => !string.IsNullOrWhiteSpace(value)));
 			}
-			if (!queueIds.Contains(configModel.LastPlayingSongId, StringComparer.OrdinalIgnoreCase))
+			if (!queueIds.Contains<string>(configModel.LastPlayingSongId, StringComparer.OrdinalIgnoreCase))
 			{
 				queueIds.Insert(Math.Max(0, Math.Min(configModel.LastPlayingQueueIndex, queueIds.Count)), configModel.LastPlayingSongId);
 			}
@@ -1986,19 +2543,12 @@ private ToolStripMenuItem helpMenuItem;
 			{
 				queueIds.Add(configModel.LastPlayingSongId);
 			}
-
 			List<SongInfo> songs = await _apiClient.GetSongDetailAsync(queueIds.ToArray());
 			if (songs == null || songs.Count == 0)
 			{
 				return false;
 			}
-
-			// 保持队列原顺序
-			Dictionary<string, SongInfo> map = songs
-				.Where(s => s != null && !string.IsNullOrWhiteSpace(s.Id))
-				.GroupBy(s => s.Id, StringComparer.OrdinalIgnoreCase)
-				.ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
-
+			Dictionary<string, SongInfo> map = songs.Where((SongInfo songInfo) => songInfo != null && !string.IsNullOrWhiteSpace(songInfo.Id)).GroupBy<SongInfo, string>((SongInfo songInfo) => songInfo.Id, StringComparer.OrdinalIgnoreCase).ToDictionary<IGrouping<string, SongInfo>, string, SongInfo>((IGrouping<string, SongInfo> g) => g.Key, (IGrouping<string, SongInfo> g) => g.First(), StringComparer.OrdinalIgnoreCase);
 			List<SongInfo> ordered = new List<SongInfo>();
 			foreach (string id in queueIds)
 			{
@@ -2006,21 +2556,16 @@ private ToolStripMenuItem helpMenuItem;
 				{
 					ordered.Add(s);
 				}
+				s = null;
 			}
 			if (ordered.Count == 0)
 			{
 				ordered = songs;
 			}
-
-			_currentSongs = ordered;
-			_currentViewSource = string.IsNullOrWhiteSpace(configModel.LastPlayingSource) ? LastPlaybackViewSource : configModel.LastPlayingSource;
-
-			SongInfo target = ordered.FirstOrDefault(s => string.Equals(s.Id, configModel.LastPlayingSongId, StringComparison.OrdinalIgnoreCase)) ?? ordered.First();
-			_playbackQueue.ManualSelect(target, _currentSongs, _currentViewSource);
-
-			// 立即播放
+			string resumeViewSource = (string.IsNullOrWhiteSpace(configModel.LastPlayingSource) ? "resume:last_playback" : configModel.LastPlayingSource);
+			SongInfo target = ordered.FirstOrDefault((SongInfo songInfo) => string.Equals(songInfo.Id, configModel.LastPlayingSongId, StringComparison.OrdinalIgnoreCase)) ?? ordered.First();
+			_playbackQueue.ManualSelect(target, ordered, resumeViewSource);
 			await PlaySongDirectWithCancellation(target, isAutoPlayback: true);
-
 			_lastPlaybackRestored = true;
 			return true;
 		}
@@ -2031,37 +2576,102 @@ private ToolStripMenuItem helpMenuItem;
 		}
 	}
 
-	private void EnsureSearchHistoryAutoCompleteSource()
-	{
-		if (searchTextBox == null)
-		{
-			return;
-		}
-		if (_searchHistoryAutoComplete == null)
-		{
-			_searchHistoryAutoComplete = new AutoCompleteStringCollection();
-			searchTextBox.AutoCompleteCustomSource = _searchHistoryAutoComplete;
-		}
-		// 使用 Suggest 避免 Append 引发“虚拟选中”和光标错位
-		if (searchTextBox.AutoCompleteMode != AutoCompleteMode.Suggest)
-		{
-			searchTextBox.AutoCompleteMode = AutoCompleteMode.Suggest;
-		}
-		if (searchTextBox.AutoCompleteSource != AutoCompleteSource.CustomSource)
-		{
-			searchTextBox.AutoCompleteSource = AutoCompleteSource.CustomSource;
-		}
-	}
+        private void EnsureSearchHistoryAutoCompleteSource()
+        {
+                if (searchTextBox == null || _searchAutoCompleteDisabled)
+                {
+                        return;
+                }
+
+                if (_searchHistoryAutoComplete == null)
+                {
+                        _searchHistoryAutoComplete = new AutoCompleteStringCollection();
+                }
+
+                if (!searchTextBox.IsHandleCreated)
+                {
+                        if (!_searchAutoCompletePending)
+                        {
+                                searchTextBox.HandleCreated += SearchTextBox_HandleCreated;
+                                _searchAutoCompletePending = true;
+                        }
+                        return;
+                }
+
+                TryApplySearchHistoryAutoComplete();
+        }
+
+        private void SearchTextBox_HandleCreated(object? sender, EventArgs e)
+        {
+                if (searchTextBox != null)
+                {
+                        searchTextBox.HandleCreated -= SearchTextBox_HandleCreated;
+                }
+                _searchAutoCompletePending = false;
+                TryApplySearchHistoryAutoComplete();
+        }
+
+        private void TryApplySearchHistoryAutoComplete()
+        {
+                if (searchTextBox == null || _searchAutoCompleteDisabled)
+                {
+                        return;
+                }
+
+                if (searchTextBox is SafeTextBox safeTextBox && safeTextBox.IsAutoCompleteDisabled)
+                {
+                        _searchAutoCompleteDisabled = true;
+                        return;
+                }
+
+                try
+                {
+                        searchTextBox.AutoCompleteCustomSource = _searchHistoryAutoComplete;
+                        if (searchTextBox.AutoCompleteMode != AutoCompleteMode.Suggest)
+                        {
+                                searchTextBox.AutoCompleteMode = AutoCompleteMode.Suggest;
+                        }
+                        if (searchTextBox.AutoCompleteSource != AutoCompleteSource.CustomSource)
+                        {
+                                searchTextBox.AutoCompleteSource = AutoCompleteSource.CustomSource;
+                        }
+                }
+                catch (Exception ex)
+                {
+                        _searchAutoCompleteDisabled = true;
+                        DebugLogger.LogException("SearchHistory", ex, "搜索框自动完成初始化失败，已禁用");
+                        DisableSearchHistoryAutoComplete();
+                }
+        }
+
+        private void DisableSearchHistoryAutoComplete()
+        {
+                if (searchTextBox == null)
+                {
+                        return;
+                }
+
+                try
+                {
+                        searchTextBox.AutoCompleteMode = AutoCompleteMode.None;
+                        searchTextBox.AutoCompleteSource = AutoCompleteSource.None;
+                        searchTextBox.AutoCompleteCustomSource = null;
+                }
+                catch
+                {
+                }
+        }
 
 	private bool IsUserLoggedIn()
 	{
-		if (_accountState?.IsLoggedIn == true)
+		AccountState accountState = _accountState;
+		if (accountState != null && accountState.IsLoggedIn)
 		{
 			return true;
 		}
-		if (_apiClient?.UsePersonalCookie == true)
+		NeteaseApiClient apiClient = _apiClient;
+		if (apiClient != null && apiClient.UsePersonalCookie)
 		{
-			// 只有拿到有效用户ID才视为已登录，避免“看起来登录但没有用户ID”的假阳性
 			return GetCurrentUserId() > 0;
 		}
 		return false;
@@ -2081,20 +2691,18 @@ private ToolStripMenuItem helpMenuItem;
 		{
 			try
 			{
-				_apiClient.LogoutAsync().GetAwaiter().GetResult();
+                                _apiClient.LogoutAsync().SafeFireAndForget("Logout");
 			}
 			catch (Exception ex)
 			{
 				Debug.WriteLine("[Login] 远端退出登录失败（继续清理本地）: " + ex.Message);
 			}
 		}
-
 		InvalidateLibraryCaches();
 		if (persist)
 		{
 			SaveConfig(refreshCookieFromClient: false);
 		}
-
 		_accountState = _apiClient?.GetAccountStateSnapshot() ?? new AccountState
 		{
 			IsLoggedIn = false
@@ -2138,10 +2746,10 @@ private ToolStripMenuItem helpMenuItem;
 		{
 			_accountState = _apiClient.GetAccountStateSnapshot();
 		}
-		long parsedId = ParseUserIdFromAccountState(_accountState);
-		if (parsedId > 0)
+		long num = ParseUserIdFromAccountState(_accountState);
+		if (num > 0)
 		{
-			CacheLoggedInUserId(parsedId);
+			CacheLoggedInUserId(num);
 		}
 		UpdateUiFromAccountState(reapplyCookies);
 	}
@@ -2182,11 +2790,12 @@ private ToolStripMenuItem helpMenuItem;
 			}
 			if (volumeTrackBar != null)
 			{
-				int num = ((!volumeTrackBar.InvokeRequired) ? volumeTrackBar.Value : ((!volumeTrackBar.IsHandleCreated) ? volumeTrackBar.Value : ((int)volumeTrackBar.Invoke((Func<int>)(() => volumeTrackBar.Value)))));
+				int num = ((!volumeTrackBar.InvokeRequired) ? volumeTrackBar.Value : ((!volumeTrackBar.IsHandleCreated) ? volumeTrackBar.Value : volumeTrackBar.Invoke(() => volumeTrackBar.Value)));
 				configModel.Volume = (double)num / 100.0;
 			}
 			configModel.LyricsReadingEnabled = _autoReadLyrics;
 			configModel.SequenceNumberHidden = _hideSequenceNumbers;
+			configModel.ControlBarHidden = _hideControlBar;
 			PersistPlaybackState(includeQueue: true, persistToDisk: false);
 			_configManager.Save(configModel);
 		}
@@ -2237,7 +2846,7 @@ private ToolStripMenuItem helpMenuItem;
 			{
 				if (base.IsHandleCreated)
 				{
-					BeginInvoke(new Action(UpdateLoginMenuItemText));
+					BeginInvoke(UpdateLoginMenuItemText);
 				}
 				else
 				{
@@ -2329,14 +2938,14 @@ private ToolStripMenuItem helpMenuItem;
 				ComboBox comboBox = searchTypeComboBox;
 				if (comboBox == null || !comboBox.ContainsFocus)
 				{
-					goto IL_0047;
+					goto IL_0054;
 				}
 			}
 			PerformSearch();
 			return true;
 		}
-		goto IL_0047;
-		IL_0047:
+		goto IL_0054;
+		IL_0054:
 		return base.ProcessCmdKey(ref msg, keyData);
 	}
 
@@ -2347,57 +2956,52 @@ private ToolStripMenuItem helpMenuItem;
 			e.Handled = true;
 			e.SuppressKeyPress = true;
 		}
-		else if (e.KeyCode == Keys.Up || e.KeyCode == Keys.Down)
+		else if ((e.KeyCode == Keys.Up || e.KeyCode == Keys.Down) && NavigateSearchHistory(e.KeyCode == Keys.Up))
 		{
-			bool handled = NavigateSearchHistory(e.KeyCode == Keys.Up);
-			if (handled)
-			{
-				e.Handled = true;
-				e.SuppressKeyPress = true;
-			}
+			e.Handled = true;
+			e.SuppressKeyPress = true;
 		}
 	}
 
 	private void searchTextBox_TextChanged(object sender, EventArgs e)
 	{
-		if (_isApplyingSearchHistoryText)
+		if (!_isApplyingSearchHistoryText)
 		{
-			return;
+			ResetSearchHistoryNavigation();
 		}
-		ResetSearchHistoryNavigation();
 	}
 
 	private void searchTextContextMenu_Opening(object sender, CancelEventArgs e)
 	{
 		try
 		{
-			bool hasSelection = searchTextBox != null && searchTextBox.SelectionLength > 0;
-			bool hasClipboardText = false;
+			bool enabled = searchTextBox != null && searchTextBox.SelectionLength > 0;
+			bool enabled2 = false;
 			try
 			{
-				hasClipboardText = Clipboard.ContainsText();
+				enabled2 = Clipboard.ContainsText();
 			}
 			catch (Exception ex)
 			{
 				Debug.WriteLine("[SearchHistory] Clipboard.ContainsText 异常: " + ex.Message);
 			}
 			ConfigModel configModel = _config ?? EnsureConfigInitialized();
-			bool hasHistory = configModel?.SearchHistory != null && configModel.SearchHistory.Count > 0;
+			bool enabled3 = configModel?.SearchHistory != null && configModel.SearchHistory.Count > 0;
 			if (searchCopyMenuItem != null)
 			{
-				searchCopyMenuItem.Enabled = hasSelection;
+				searchCopyMenuItem.Enabled = enabled;
 			}
 			if (searchCutMenuItem != null)
 			{
-				searchCutMenuItem.Enabled = hasSelection;
+				searchCutMenuItem.Enabled = enabled;
 			}
 			if (searchPasteMenuItem != null)
 			{
-				searchPasteMenuItem.Enabled = hasClipboardText;
+				searchPasteMenuItem.Enabled = enabled2;
 			}
 			if (searchClearHistoryMenuItem != null)
 			{
-				searchClearHistoryMenuItem.Enabled = hasHistory;
+				searchClearHistoryMenuItem.Enabled = enabled3;
 			}
 		}
 		catch (Exception ex2)
@@ -2458,46 +3062,21 @@ private ToolStripMenuItem helpMenuItem;
 		ClearSearchHistory();
 	}
 
-	private void searchTypeComboBox_KeyDown(object sender, KeyEventArgs e)
-	{
-		if (_isMixedSearchTypeActive && (e.KeyCode == Keys.Down || e.KeyCode == Keys.Up))
-		{
-			e.Handled = true;
-			e.SuppressKeyPress = true;
-			if (searchTypeComboBox.Items.Count > 0)
-			{
-				int index = ((e.KeyCode != Keys.Down) ? checked(searchTypeComboBox.Items.Count - 1) : 0);
-				string targetType = searchTypeComboBox.Items[index]?.ToString() ?? _lastExplicitSearchType;
-				DeactivateMixedSearchTypeOption(targetType);
-			}
-		}
-		else if (e.KeyCode == Keys.Return)
-		{
-			e.Handled = true;
-			e.SuppressKeyPress = true;
-		}
-	}
-
 	private string GetSelectedSearchType()
 	{
 		if (_isMixedSearchTypeActive)
 		{
 			return _lastExplicitSearchType;
 		}
-		if (searchTypeComboBox.SelectedIndex >= 0 && searchTypeComboBox.SelectedIndex < searchTypeComboBox.Items.Count)
-		{
-			string text = searchTypeComboBox.Items[searchTypeComboBox.SelectedIndex]?.ToString();
-			if (!string.IsNullOrWhiteSpace(text))
-			{
-				return text;
-			}
-		}
-		string text2 = searchTypeComboBox.Text;
-		if (!string.IsNullOrWhiteSpace(text2))
-		{
-			return text2.Trim();
-		}
-		return _lastExplicitSearchType;
+        if (searchTypeComboBox.SelectedIndex >= 0 && searchTypeComboBox.SelectedIndex < searchTypeComboBox.Items.Count)
+        {
+                string text = searchTypeComboBox.Items[searchTypeComboBox.SelectedIndex]?.ToString();
+                if (!string.IsNullOrWhiteSpace(text))
+                {
+                        return text;
+                }
+        }
+        return _lastExplicitSearchType;
 	}
 
 	private string NormalizeSearchTypeName(string? searchType)
@@ -2520,80 +3099,115 @@ private ToolStripMenuItem helpMenuItem;
 		}
 	}
 
-	private void EnsureSearchTypeSelection(string searchType)
-	{
-		if (string.IsNullOrWhiteSpace(searchType))
-		{
-			return;
-		}
-		if (string.Equals(searchType, "混合", StringComparison.OrdinalIgnoreCase))
-		{
-			ActivateMixedSearchTypeOption();
-			return;
-		}
-		_lastExplicitSearchType = searchType;
-		if (_isMixedSearchTypeActive)
-		{
-			_isMixedSearchTypeActive = false;
-		}
-		int num = searchTypeComboBox.Items.IndexOf(searchType);
-		if (num >= 0)
-		{
-			if (searchTypeComboBox.SelectedIndex != num)
-			{
-				searchTypeComboBox.SelectedIndex = num;
-			}
-			else
-			{
-				UpdateSearchTypeAccessibleAnnouncement(searchType);
-			}
-		}
-		else
-		{
-			searchTypeComboBox.SelectedIndex = -1;
-			searchTypeComboBox.Text = searchType;
-			UpdateSearchTypeAccessibleAnnouncement(searchType);
-		}
-	}
+private void EnsureSearchTypeSelection(string searchType)
+{
+        if (string.IsNullOrWhiteSpace(searchType))
+        {
+                return;
+        }
+        if (string.Equals(searchType, MixedSearchTypeDisplayName, StringComparison.OrdinalIgnoreCase))
+        {
+                ActivateMixedSearchTypeOption();
+                return;
+        }
+        _lastExplicitSearchType = searchType;
+        _isMixedSearchTypeActive = false;
+        UpdateSearchTypeCombo(delegate
+        {
+                int num = searchTypeComboBox.Items.IndexOf(searchType);
+                if (num >= 0)
+                {
+                        if (searchTypeComboBox.SelectedIndex != num)
+                        {
+                                searchTypeComboBox.SelectedIndex = num;
+                        }
+                }
+                else
+                {
+                        int fallbackIndex = searchTypeComboBox.Items.IndexOf("歌曲");
+                        if (fallbackIndex < 0)
+                        {
+                                fallbackIndex = 0;
+                        }
+                        if (searchTypeComboBox.Items.Count > 0 && fallbackIndex < searchTypeComboBox.Items.Count)
+                        {
+                                searchTypeComboBox.SelectedIndex = fallbackIndex;
+                        }
+                }
+                RemoveMixedSearchTypeOptionCore();
+        });
+}
 
-	private void ActivateMixedSearchTypeOption()
-	{
-		_isMixedSearchTypeActive = true;
-		searchTypeComboBox.SelectedIndex = -1;
-		searchTypeComboBox.Text = "混合";
-		UpdateSearchTypeAccessibleAnnouncement("混合");
-	}
+private void ActivateMixedSearchTypeOption()
+{
+        ShowMixedSearchTypeOption();
+}
 
-	private void DeactivateMixedSearchTypeOption(string? targetType = null)
-	{
-		if (_isMixedSearchTypeActive)
-		{
-			_isMixedSearchTypeActive = false;
-			string value = targetType ?? _lastExplicitSearchType;
-			if (string.IsNullOrWhiteSpace(value))
-			{
-				value = (_lastExplicitSearchType = "歌曲");
-			}
-			int num = searchTypeComboBox.Items.IndexOf(value);
-			if (num >= 0)
-			{
-				searchTypeComboBox.SelectedIndex = num;
-				return;
-			}
-			searchTypeComboBox.SelectedIndex = -1;
-			searchTypeComboBox.Text = value;
-			UpdateSearchTypeAccessibleAnnouncement(value);
-		}
-	}
+        private void UpdateSearchTypeCombo(Action update)
+        {
+                if (_suppressSearchTypeComboEvents)
+                {
+                        update();
+                        return;
+                }
+                _suppressSearchTypeComboEvents = true;
+                try
+                {
+                        update();
+                }
+                finally
+                {
+                        _suppressSearchTypeComboEvents = false;
+                }
+        }
 
-	private void UpdateSearchTypeAccessibleAnnouncement(string? text)
-	{
-		string accessibleName = (string.IsNullOrEmpty(text) ? "类型" : ("类型" + text));
-		searchTypeComboBox.AccessibleName = accessibleName;
-		AccessibilityNotifyClients(AccessibleEvents.NameChange, -1);
-		AccessibilityNotifyClients(AccessibleEvents.ValueChange, -1);
-		AccessibilityNotifyClients(AccessibleEvents.Selection, -1);
-	}
+        private void ShowMixedSearchTypeOption()
+        {
+                if (searchTypeComboBox == null)
+                {
+                        return;
+                }
+                UpdateSearchTypeCombo(delegate
+                {
+                        int mixedIndex = searchTypeComboBox.Items.IndexOf(MixedSearchTypeDisplayName);
+                        if (mixedIndex < 0)
+                        {
+                                searchTypeComboBox.Items.Add(MixedSearchTypeDisplayName);
+                                mixedIndex = searchTypeComboBox.Items.Count - 1;
+                        }
+                        _isMixedSearchTypeActive = true;
+                        if (mixedIndex >= 0 && searchTypeComboBox.SelectedIndex != mixedIndex)
+                        {
+                                searchTypeComboBox.SelectedIndex = mixedIndex;
+                        }
+                });
+        }
+
+        private void HideMixedSearchTypeOption()
+        {
+                UpdateSearchTypeCombo(delegate
+                {
+                        RemoveMixedSearchTypeOptionCore();
+                });
+        }
+
+        private void RemoveMixedSearchTypeOptionCore()
+        {
+                if (searchTypeComboBox == null)
+                {
+                        return;
+                }
+                int mixedIndex = searchTypeComboBox.Items.IndexOf(MixedSearchTypeDisplayName);
+                if (mixedIndex < 0)
+                {
+                        return;
+                }
+                if (searchTypeComboBox.SelectedIndex == mixedIndex)
+                {
+                        return;
+                }
+                searchTypeComboBox.Items.RemoveAt(mixedIndex);
+        }
 
 	private static List<string> SplitMultiSearchInput(string? rawInput)
 	{
@@ -2672,7 +3286,7 @@ private ToolStripMenuItem helpMenuItem;
 		{
 			return string.Empty;
 		}
-		return string.Join(";", matches.Select((NeteaseUrlMatch m) => $"{(int)m.Type}:{m.ResourceId}"));
+		return string.Join(";", matches.Select((NeteaseUrlMatch m) => $"{m.Type}:{m.ResourceId}"));
 	}
 
 	private bool TryParseMixedQueryKey(string? key, out List<NeteaseUrlMatch> matches)
@@ -2684,18 +3298,19 @@ private ToolStripMenuItem helpMenuItem;
 		}
 		string[] array = key.Split(new char[1] { ';' }, StringSplitOptions.RemoveEmptyEntries);
 		string[] array2 = array;
-		foreach (string text in array2)
+		string[] array3 = array2;
+		foreach (string text in array3)
 		{
-			string[] array3 = text.Split(new char[1] { ':' }, 2);
-			if (array3.Length != 2)
+			string[] array4 = text.Split(new char[1] { ':' }, 2);
+			if (array4.Length != 2)
 			{
 				return false;
 			}
-			if (!int.TryParse(array3[0], out var result) || !Enum.IsDefined(typeof(NeteaseUrlType), result))
+			if (!int.TryParse(array4[0], out var result) || !Enum.IsDefined(typeof(NeteaseUrlType), result))
 			{
 				return false;
 			}
-			string text2 = array3[1];
+			string text2 = array4[1];
 			matches.Add(new NeteaseUrlMatch((NeteaseUrlType)result, text2, text2));
 		}
 		return matches.Count > 0;
@@ -2703,7 +3318,10 @@ private ToolStripMenuItem helpMenuItem;
 
 	private static string GetEntityDisplayName(NeteaseUrlType type)
 	{
-		return type switch
+		if (1 == 0)
+		{
+		}
+		string result = type switch
 		{
 			NeteaseUrlType.Playlist => "歌单", 
 			NeteaseUrlType.Album => "专辑", 
@@ -2712,6 +3330,10 @@ private ToolStripMenuItem helpMenuItem;
 			NeteaseUrlType.PodcastEpisode => "播客节目", 
 			_ => "歌曲", 
 		};
+		if (1 == 0)
+		{
+		}
+		return result;
 	}
 
 	private async Task<List<SongInfo>> FetchRecentSongsAsync(int limit, CancellationToken cancellationToken = default(CancellationToken))
@@ -2766,7 +3388,8 @@ private ToolStripMenuItem helpMenuItem;
 			catch (Exception ex)
 			{
 				Exception ex2 = ex;
-				Debug.WriteLine($"[RecentSummary] 获取最近歌曲失败: {ex2}");
+				Exception ex3 = ex2;
+				Debug.WriteLine($"[RecentSummary] 获取最近歌曲失败: {ex3}");
 				if (forceRefresh)
 				{
 					_recentSongsCache = new List<SongInfo>();
@@ -2779,8 +3402,9 @@ private ToolStripMenuItem helpMenuItem;
 			}
 			catch (Exception ex)
 			{
-				Exception ex3 = ex;
-				Debug.WriteLine($"[RecentSummary] 获取最近歌单失败: {ex3}");
+				Exception ex4 = ex;
+				Exception ex5 = ex4;
+				Debug.WriteLine($"[RecentSummary] 获取最近歌单失败: {ex5}");
 				if (forceRefresh)
 				{
 					_recentPlaylistsCache = new List<PlaylistInfo>();
@@ -2793,8 +3417,9 @@ private ToolStripMenuItem helpMenuItem;
 			}
 			catch (Exception ex)
 			{
-				Exception ex4 = ex;
-				Debug.WriteLine($"[RecentSummary] 获取最近专辑失败: {ex4}");
+				Exception ex6 = ex;
+				Exception ex7 = ex6;
+				Debug.WriteLine($"[RecentSummary] 获取最近专辑失败: {ex7}");
 				if (forceRefresh)
 				{
 					_recentAlbumsCache = new List<AlbumInfo>();
@@ -2807,8 +3432,9 @@ private ToolStripMenuItem helpMenuItem;
 			}
 			catch (Exception ex)
 			{
-				Exception ex5 = ex;
-				Debug.WriteLine($"[RecentSummary] 获取最近播客失败: {ex5}");
+				Exception ex8 = ex;
+				Exception ex9 = ex8;
+				Debug.WriteLine($"[RecentSummary] 获取最近播客失败: {ex9}");
 				if (forceRefresh)
 				{
 					_recentPodcastsCache = new List<PodcastRadioInfo>();
@@ -2822,7 +3448,7 @@ private ToolStripMenuItem helpMenuItem;
 
 	private bool IsSameSearchContext(string keyword, string searchType, int page)
 	{
-		ParseSearchViewSource(_currentViewSource, out string searchType2, out string keyword2, out int page2);
+		ParseSearchViewSource(_currentViewSource, out var searchType2, out var keyword2, out var page2);
 		return string.Equals(keyword2, keyword, StringComparison.OrdinalIgnoreCase) && string.Equals(searchType2, searchType, StringComparison.OrdinalIgnoreCase) && page2 == page;
 	}
 
@@ -2850,7 +3476,7 @@ private ToolStripMenuItem helpMenuItem;
 		bool isMultiUrlSearch = false;
 		if (multiSegments.Count > 1)
 		{
-			if (!TryParseMultiUrlInput(multiSegments, out List<NeteaseUrlMatch> parsedMatches, out string parseError))
+			if (!TryParseMultiUrlInput(multiSegments, out var parsedMatches, out var parseError))
 			{
 				MessageBox.Show(parseError, "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
 				return;
@@ -2915,8 +3541,9 @@ private ToolStripMenuItem helpMenuItem;
 		catch (Exception ex2)
 		{
 			Exception ex3 = ex2;
-			Debug.WriteLine($"[Search] 执行搜索失败: {ex3}");
-			MessageBox.Show("搜索失败: " + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+			Exception ex4 = ex3;
+			Debug.WriteLine($"[Search] 执行搜索失败: {ex4}");
+			MessageBox.Show("搜索失败: " + ex4.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 			UpdateStatusBar("搜索失败");
 		}
 		finally
@@ -2981,7 +3608,7 @@ private ToolStripMenuItem helpMenuItem;
 			{
 				SearchViewData<SongInfo> skeleton = loadResult.Value;
 				string statusText = BuildSearchSkeletonStatus(keyword, skeleton.Items.Count, "歌曲");
-				DisplaySongs(skeleton.Items, showPagination: false, hasNextPage: false, skeleton.StartIndex, preserveSelection: false, viewSource, accessibleName, skipAvailabilityCheck: true, announceHeader: true, suppressFocus: false, allowSelection: true);
+				DisplaySongs(skeleton.Items, showPagination: false, hasNextPage: false, skeleton.StartIndex, preserveSelection: false, viewSource, accessibleName, skipAvailabilityCheck: true);
 				_currentPlaylist = null;
 				UpdateStatusBar(statusText);
 				EnrichSongSearchResultsAsync(keyword, page, offset, viewSource, accessibleName, showEmptyPrompt, searchToken, pendingFocusIndex);
@@ -3017,14 +3644,14 @@ private ToolStripMenuItem helpMenuItem;
 					}
 					await ExecuteOnUiThreadAsync(delegate
 					{
-					if (!ShouldAbortViewRender(viewToken, "搜索歌曲"))
-					{
-						_currentSongs = CloneList(songs);
-						_currentPlaylist = null;
-						_maxPage = maxPage;
-						_hasNextSearchPage = hasMore;
-						PatchSongs(_currentSongs, offset + 1, skipAvailabilityCheck: false, showPagination: true, page > 1, hasMore, pendingFocusIndex, allowSelection: true);
-						FocusListAfterEnrich(pendingFocusIndex);
+						if (!ShouldAbortViewRender(viewToken, "搜索歌曲"))
+						{
+							_currentSongs = CloneList(songs);
+							_currentPlaylist = null;
+							_maxPage = maxPage;
+							_hasNextSearchPage = hasMore;
+							PatchSongs(_currentSongs, offset + 1, skipAvailabilityCheck: false, showPagination: true, page > 1, hasMore, pendingFocusIndex);
+							FocusListAfterEnrich(pendingFocusIndex);
 							if (_currentSongs.Count == 0)
 							{
 								UpdateStatusBar("未找到结果");
@@ -3085,7 +3712,7 @@ private ToolStripMenuItem helpMenuItem;
 			{
 				SearchViewData<PlaylistInfo> skeleton = loadResult.Value;
 				string statusText = BuildSearchSkeletonStatus(keyword, skeleton.Items.Count, "歌单");
-				DisplayPlaylists(skeleton.Items, preserveSelection: false, viewSource, accessibleName, skeleton.StartIndex, showPagination: false, hasNextPage: false, announceHeader: true, suppressFocus: false, allowSelection: true);
+				DisplayPlaylists(skeleton.Items, preserveSelection: false, viewSource, accessibleName, skeleton.StartIndex);
 				UpdateStatusBar(statusText);
 				EnrichPlaylistSearchResultsAsync(keyword, page, offset, viewSource, accessibleName, showEmptyPrompt, searchToken, pendingFocusIndex);
 			}
@@ -3120,14 +3747,14 @@ private ToolStripMenuItem helpMenuItem;
 					}
 					await ExecuteOnUiThreadAsync(delegate
 					{
-					if (!ShouldAbortViewRender(viewToken, "搜索歌单"))
-					{
-						_currentPlaylists = CloneList(playlists);
-						_maxPage = maxPage;
-						_hasNextSearchPage = hasMore;
-						PatchPlaylists(_currentPlaylists, offset + 1, showPagination: true, page > 1, hasMore, pendingFocusIndex, allowSelection: true);
-						FocusListAfterEnrich(pendingFocusIndex);
-						if (_currentPlaylists.Count == 0)
+						if (!ShouldAbortViewRender(viewToken, "搜索歌单"))
+						{
+							_currentPlaylists = CloneList(playlists);
+							_maxPage = maxPage;
+							_hasNextSearchPage = hasMore;
+							PatchPlaylists(_currentPlaylists, offset + 1, showPagination: true, page > 1, hasMore, pendingFocusIndex);
+							FocusListAfterEnrich(pendingFocusIndex);
+							if (_currentPlaylists.Count == 0)
 							{
 								UpdateStatusBar("未找到结果");
 								if (showEmptyPrompt)
@@ -3187,7 +3814,7 @@ private ToolStripMenuItem helpMenuItem;
 			{
 				SearchViewData<AlbumInfo> skeleton = loadResult.Value;
 				string statusText = BuildSearchSkeletonStatus(keyword, skeleton.Items.Count, "专辑");
-				DisplayAlbums(skeleton.Items, preserveSelection: false, viewSource, accessibleName, skeleton.StartIndex, showPagination: false, hasNextPage: false, announceHeader: true, suppressFocus: false, allowSelection: true);
+				DisplayAlbums(skeleton.Items, preserveSelection: false, viewSource, accessibleName, skeleton.StartIndex);
 				UpdateStatusBar(statusText);
 				EnrichAlbumSearchResultsAsync(keyword, page, offset, viewSource, accessibleName, showEmptyPrompt, searchToken, pendingFocusIndex);
 			}
@@ -3222,14 +3849,14 @@ private ToolStripMenuItem helpMenuItem;
 					}
 					await ExecuteOnUiThreadAsync(delegate
 					{
-					if (!ShouldAbortViewRender(viewToken, "搜索专辑"))
-					{
-						_currentAlbums = CloneList(albums);
-						_maxPage = maxPage;
-						_hasNextSearchPage = hasMore;
-						PatchAlbums(_currentAlbums, offset + 1, showPagination: true, page > 1, hasMore, pendingFocusIndex, allowSelection: true);
-						FocusListAfterEnrich(pendingFocusIndex);
-						if (_currentAlbums.Count == 0)
+						if (!ShouldAbortViewRender(viewToken, "搜索专辑"))
+						{
+							_currentAlbums = CloneList(albums);
+							_maxPage = maxPage;
+							_hasNextSearchPage = hasMore;
+							PatchAlbums(_currentAlbums, offset + 1, showPagination: true, page > 1, hasMore, pendingFocusIndex);
+							FocusListAfterEnrich(pendingFocusIndex);
+							if (_currentAlbums.Count == 0)
 							{
 								UpdateStatusBar("未找到结果");
 								if (showEmptyPrompt)
@@ -3289,7 +3916,7 @@ private ToolStripMenuItem helpMenuItem;
 			{
 				SearchViewData<ArtistInfo> skeleton = loadResult.Value;
 				string statusText = BuildSearchSkeletonStatus(keyword, skeleton.Items.Count, "歌手");
-				DisplayArtists(skeleton.Items, showPagination: false, hasNextPage: false, skeleton.StartIndex, preserveSelection: false, viewSource, accessibleName, announceHeader: true, suppressFocus: false, allowSelection: true);
+				DisplayArtists(skeleton.Items, showPagination: false, hasNextPage: false, skeleton.StartIndex, preserveSelection: false, viewSource, accessibleName);
 				UpdateStatusBar(statusText);
 				EnrichArtistSearchResultsAsync(keyword, page, offset, viewSource, accessibleName, showEmptyPrompt, searchToken, pendingFocusIndex);
 			}
@@ -3324,14 +3951,14 @@ private ToolStripMenuItem helpMenuItem;
 					}
 					await ExecuteOnUiThreadAsync(delegate
 					{
-					if (!ShouldAbortViewRender(viewToken, "搜索歌手"))
-					{
-						_currentArtists = CloneList(artists);
-						_maxPage = maxPage;
-						_hasNextSearchPage = hasMore;
-						PatchArtists(_currentArtists, offset + 1, showPagination: true, page > 1, hasMore, pendingFocusIndex, allowSelection: true);
-						FocusListAfterEnrich(pendingFocusIndex);
-						if (_currentArtists.Count == 0)
+						if (!ShouldAbortViewRender(viewToken, "搜索歌手"))
+						{
+							_currentArtists = CloneList(artists);
+							_maxPage = maxPage;
+							_hasNextSearchPage = hasMore;
+							PatchArtists(_currentArtists, offset + 1, showPagination: true, page > 1, hasMore, pendingFocusIndex);
+							FocusListAfterEnrich(pendingFocusIndex);
+							if (_currentArtists.Count == 0)
 							{
 								UpdateStatusBar("未找到结果");
 								if (showEmptyPrompt)
@@ -3391,7 +4018,7 @@ private ToolStripMenuItem helpMenuItem;
 			{
 				SearchViewData<PodcastRadioInfo> skeleton = loadResult.Value;
 				string statusText = BuildSearchSkeletonStatus(keyword, skeleton.Items.Count, "播客");
-				DisplayPodcasts(skeleton.Items, showPagination: false, hasNextPage: false, skeleton.StartIndex, preserveSelection: false, viewSource, accessibleName, announceHeader: true, suppressFocus: false, allowSelection: true);
+				DisplayPodcasts(skeleton.Items, showPagination: false, hasNextPage: false, skeleton.StartIndex, preserveSelection: false, viewSource, accessibleName);
 				UpdateStatusBar(statusText);
 				EnrichPodcastSearchResultsAsync(keyword, page, offset, viewSource, accessibleName, showEmptyPrompt, searchToken, pendingFocusIndex);
 			}
@@ -3707,12 +4334,20 @@ private ToolStripMenuItem helpMenuItem;
 			return;
 		}
 		MultiUrlViewData data = loadResult.Value;
+		object obj;
 		if (data == null || data.Items.Count == 0)
 		{
-			string failureMessage2 = ((data != null && data.Failures?.Count > 0) ? ("未能加载任何结果：\n" + string.Join("\n", data.Failures.Take(5))) : "未能加载任何结果。");
-			MessageBox.Show(failureMessage2, "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
-			UpdateStatusBar("链接加载失败");
-			return;
+			if (data != null)
+			{
+				List<string> failures = data.Failures;
+				if (failures != null && failures.Count > 0)
+				{
+					obj = "未能加载任何结果：\n" + string.Join("\n", data.Failures.Take(5));
+					goto IL_042c;
+				}
+			}
+			obj = "未能加载任何结果。";
+			goto IL_042c;
 		}
 		_currentMixedQueryKey = targetMixedKey;
 		foreach (SongInfo song in data.AggregatedSongs)
@@ -3743,9 +4378,14 @@ private ToolStripMenuItem helpMenuItem;
 		if (data.Failures.Count > 0)
 		{
 			IEnumerable<string> preview = data.Failures.Take(5);
-			MessageBox.Show(string.Concat(str2: (data.Failures.Count > 5) ? "\n..." : string.Empty, str0: "部分链接未能加载：\n", str1: string.Join("\n", preview)), "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+			MessageBox.Show(string.Concat("部分链接未能加载：\n", str2: (data.Failures.Count > 5) ? "\n..." : string.Empty, str1: string.Join("\n", preview)), "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
 		}
 		FocusListAfterEnrich(0);
+		return;
+		IL_042c:
+		string failureMessage2 = (string)obj;
+		MessageBox.Show(failureMessage2, "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+		UpdateStatusBar("链接加载失败");
 	}
 
 	private async Task<MultiUrlViewData?> BuildMultiUrlViewDataAsync(List<NormalizedUrlMatch> normalizedMatches, List<string> initialFailures, CancellationToken cancellationToken)
@@ -3757,16 +4397,23 @@ private ToolStripMenuItem helpMenuItem;
 		Dictionary<long, ArtistInfo> artistCache = new Dictionary<long, ArtistInfo>();
 		List<string> failures = new List<string>(initialFailures);
 		Dictionary<string, SongInfo> songMap = null;
-		List<string> songIds = (from n in normalizedMatches
-			where n.Type == NeteaseUrlType.Song
-			select n.IdText).Distinct<string>(StringComparer.OrdinalIgnoreCase).ToList();
+		List<string> songIds = normalizedMatches.Where(delegate(NormalizedUrlMatch n)
+		{
+			NormalizedUrlMatch normalizedUrlMatch = n;
+			return normalizedUrlMatch.Type == NeteaseUrlType.Song;
+		}).Select(delegate(NormalizedUrlMatch n)
+		{
+			NormalizedUrlMatch normalizedUrlMatch = n;
+			return normalizedUrlMatch.IdText;
+		}).Distinct<string>(StringComparer.OrdinalIgnoreCase)
+			.ToList();
 		if (songIds.Count > 0)
 		{
 			List<SongInfo> songDetails = await _apiClient.GetSongDetailAsync(songIds.ToArray()).ConfigureAwait(continueOnCapturedContext: true);
 			cancellationToken.ThrowIfCancellationRequested();
 			if (songDetails != null)
 			{
-				songMap = songDetails.Where((SongInfo s) => !string.IsNullOrWhiteSpace(s.Id)).GroupBy<SongInfo, string>((SongInfo s) => s.Id, StringComparer.OrdinalIgnoreCase).ToDictionary((IGrouping<string, SongInfo> g) => g.Key, (IGrouping<string, SongInfo> g) => g.First(), StringComparer.OrdinalIgnoreCase);
+				songMap = songDetails.Where((SongInfo s) => !string.IsNullOrWhiteSpace(s.Id)).GroupBy<SongInfo, string>((SongInfo s) => s.Id, StringComparer.OrdinalIgnoreCase).ToDictionary<IGrouping<string, SongInfo>, string, SongInfo>((IGrouping<string, SongInfo> g) => g.Key, (IGrouping<string, SongInfo> g) => g.First(), StringComparer.OrdinalIgnoreCase);
 			}
 		}
 		foreach (NormalizedUrlMatch normalized in normalizedMatches)
@@ -3922,7 +4569,7 @@ private ToolStripMenuItem helpMenuItem;
 
 	private async Task<bool> RestoreMixedUrlStateAsync(string mixedQueryKey)
 	{
-		if (!TryParseMixedQueryKey(mixedQueryKey, out List<NeteaseUrlMatch> matches) || matches.Count == 0)
+		if (!TryParseMixedQueryKey(mixedQueryKey, out var matches) || matches.Count == 0)
 		{
 			MessageBox.Show("无法恢复混合链接结果。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
 			return false;
@@ -4013,10 +4660,11 @@ private ToolStripMenuItem helpMenuItem;
 		catch (Exception ex2)
 		{
 			Exception ex3 = ex2;
-			Debug.WriteLine($"[HomePage] 加载失败: {ex3}");
+			Exception ex4 = ex3;
+			Debug.WriteLine($"[HomePage] 加载失败: {ex4}");
 			if (showErrorDialog)
 			{
-				MessageBox.Show("加载主页失败: " + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+				MessageBox.Show("加载主页失败: " + ex4.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 			}
 			UpdateStatusBar("加载主页失败");
 			return false;
@@ -4063,9 +4711,7 @@ private ToolStripMenuItem helpMenuItem;
 					if (userInfo != null && userInfo.UserId > 0)
 					{
 						_loggedInUserId = userInfo.UserId;
-						List<PlaylistInfo> playlists;
-						int totalCount;
-						(playlists, totalCount) = await _apiClient.GetUserPlaylistsAsync(userInfo.UserId);
+						var (playlists, totalCount) = await _apiClient.GetUserPlaylistsAsync(userInfo.UserId);
 						ThrowIfHomeLoadCancelled();
 						if (playlists != null && playlists.Count > 0)
 						{
@@ -4111,7 +4757,8 @@ private ToolStripMenuItem helpMenuItem;
 				catch (Exception ex4)
 				{
 					Exception ex5 = ex4;
-					Debug.WriteLine("[HomePage] 预加载用户数据失败: " + ex5.Message);
+					Exception ex6 = ex5;
+					Debug.WriteLine("[HomePage] 预加载用户数据失败: " + ex6.Message);
 				}
 			}
 			else
@@ -4133,9 +4780,9 @@ private ToolStripMenuItem helpMenuItem;
 				ThrowIfHomeLoadCancelled();
 				toplistCount = toplist?.Count ?? 0;
 			}
-			catch (Exception ex6)
+			catch (Exception ex7)
 			{
-				Debug.WriteLine("[HomePage] 获取排行榜数量失败: " + ex6.Message);
+				Debug.WriteLine("[HomePage] 获取排行榜数量失败: " + ex7.Message);
 			}
 			try
 			{
@@ -4143,9 +4790,9 @@ private ToolStripMenuItem helpMenuItem;
 				ThrowIfHomeLoadCancelled();
 				newAlbumCount = newAlbums?.Count ?? 0;
 			}
-			catch (Exception ex7)
+			catch (Exception ex8)
 			{
-				Debug.WriteLine("[HomePage] 获取新碟数量失败: " + ex7.Message);
+				Debug.WriteLine("[HomePage] 获取新碟数量失败: " + ex8.Message);
 			}
 			try
 			{
@@ -4167,9 +4814,9 @@ private ToolStripMenuItem helpMenuItem;
 					}
 				}
 			}
-			catch (Exception ex8)
+			catch (Exception ex9)
 			{
-				Debug.WriteLine("[HomePage] 获取播客分类失败: " + ex8.Message);
+				Debug.WriteLine("[HomePage] 获取播客分类失败: " + ex9.Message);
 			}
 			if (dailyRecommendTask != null)
 			{
@@ -4182,8 +4829,9 @@ private ToolStripMenuItem helpMenuItem;
 				}
 				catch (Exception ex4)
 				{
-					Exception ex8 = ex4;
-					Debug.WriteLine("[HomePage] 获取每日推荐摘要失败: " + ex8.Message);
+					Exception ex10 = ex4;
+					Exception ex11 = ex10;
+					Debug.WriteLine("[HomePage] 获取每日推荐摘要失败: " + ex11.Message);
 				}
 			}
 			if (personalizedTask != null)
@@ -4197,8 +4845,9 @@ private ToolStripMenuItem helpMenuItem;
 				}
 				catch (Exception ex4)
 				{
-					Exception ex9 = ex4;
-					Debug.WriteLine("[HomePage] 获取为您推荐摘要失败: " + ex9.Message);
+					Exception ex12 = ex4;
+					Exception ex13 = ex12;
+					Debug.WriteLine("[HomePage] 获取为您推荐摘要失败: " + ex13.Message);
 				}
 			}
 			_userLikedPlaylist = likedPlaylist;
@@ -4219,8 +4868,9 @@ private ToolStripMenuItem helpMenuItem;
 				}
 				catch (Exception ex4)
 				{
-					Exception ex10 = ex4;
-					Debug.WriteLine("[Home] 获取云盘摘要失败: " + ex10.Message);
+					Exception ex14 = ex4;
+					Exception ex15 = ex14;
+					Debug.WriteLine("[Home] 获取云盘摘要失败: " + ex15.Message);
 				}
 				homeItems.Add(new ListItemInfo
 				{
@@ -4454,12 +5104,13 @@ private ToolStripMenuItem helpMenuItem;
 	{
 		switch (listItem.Type)
 		{
-		case ListItemType.Song:
-			if (listItem.Song != null)
-			{
-				await PlaySong(listItem.Song);
-			}
-			break;
+                case ListItemType.Song:
+                        if (listItem.Song != null)
+                        {
+                                AnnounceSongLoadingForActivation(listItem.Song);
+                                await PlaySong(listItem.Song);
+                        }
+                        break;
 		case ListItemType.Playlist:
 			if (listItem.Playlist != null)
 			{
@@ -4491,12 +5142,13 @@ private ToolStripMenuItem helpMenuItem;
 				await OpenPodcastRadioAsync(listItem.Podcast);
 			}
 			break;
-		case ListItemType.PodcastEpisode:
-			if (listItem.PodcastEpisode?.Song != null)
-			{
-				await PlaySong(listItem.PodcastEpisode.Song);
-			}
-			break;
+                case ListItemType.PodcastEpisode:
+                        if (listItem.PodcastEpisode?.Song != null)
+                        {
+                                AnnounceSongLoadingForActivation(listItem.PodcastEpisode.Song);
+                                await PlaySong(listItem.PodcastEpisode.Song);
+                        }
+                        break;
 		case ListItemType.Category:
 			await LoadCategoryContent(listItem.CategoryId);
 			break;
@@ -4533,7 +5185,8 @@ private ToolStripMenuItem helpMenuItem;
 	{
 		try
 		{
-			ArtistDetail detail = ((_currentArtistDetail == null || _currentArtistDetail.Id != artist.Id) ? (await _apiClient.GetArtistDetailAsync(artist.Id)) : _currentArtistDetail);
+			ArtistDetail artistDetail = ((_currentArtistDetail != null && _currentArtistDetail.Id == artist.Id) ? _currentArtistDetail : (await _apiClient.GetArtistDetailAsync(artist.Id)));
+			ArtistDetail detail = artistDetail;
 			if (detail == null)
 			{
 				MessageBox.Show("暂时无法获取该歌手的详细介绍。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
@@ -4553,7 +5206,8 @@ private ToolStripMenuItem helpMenuItem;
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			MessageBox.Show("加载歌手介绍失败: " + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+			Exception ex3 = ex2;
+			MessageBox.Show("加载歌手介绍失败: " + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 		}
 	}
 
@@ -4598,81 +5252,95 @@ private ToolStripMenuItem helpMenuItem;
 			case "recent_listened":
 				await LoadRecentListenedCategoryAsync(skipSave);
 				return;
-			case string s when s != null && s.StartsWith("listen-match:", StringComparison.OrdinalIgnoreCase):
-				await LoadListenMatchAsync(NormalizeListenMatchViewSource(categoryId), skipSave: true);
-				return;
-			case "recent_playlists":
-				await LoadRecentPlaylistsAsync();
-				return;
-			case "recent_albums":
-				await LoadRecentAlbumsAsync();
-				return;
-			case "recent_podcasts":
-				await LoadRecentPodcastsAsync();
-				return;
-			case "daily_recommend":
-				await LoadDailyRecommend();
-				return;
-			case "personalized":
-				await LoadPersonalized();
-				return;
-			case "toplist":
-				await LoadToplist();
-				return;
-			case string s when s != null && s.StartsWith("listen-match:", StringComparison.OrdinalIgnoreCase):
-				await LoadListenMatchAsync(categoryId, skipSave: true);
-				return;
-			case "daily_recommend_songs":
-				await LoadDailyRecommendSongs();
-				return;
-			case "daily_recommend_playlists":
-				await LoadDailyRecommendPlaylists();
-				return;
-			case "personalized_playlists":
-				await LoadPersonalizedPlaylists();
-				return;
-			case "personalized_newsongs":
-				await LoadPersonalizedNewSongs();
-				return;
-			case "highquality_playlists":
-				await LoadHighQualityPlaylists();
-				return;
-			case "new_songs":
-				await LoadNewSongs();
-				return;
-			case "new_songs_all":
-				await LoadNewSongsAll();
-				return;
-			case "new_songs_chinese":
-				await LoadNewSongsChinese();
-				return;
-			case "new_songs_western":
-				await LoadNewSongsWestern();
-				return;
-			case "new_songs_japan":
-				await LoadNewSongsJapan();
-				return;
-			case "new_songs_korea":
-				await LoadNewSongsKorea();
-				return;
-			case "personalized_newsong":
-				await LoadPersonalizedNewSong();
-				return;
-			case "playlist_category":
-				await LoadPlaylistCategory();
-				return;
-			case "podcast_categories":
-				await LoadPodcastCategoriesAsync();
-				return;
-			case "new_albums":
-				await LoadNewAlbums();
-				return;
-			case "artist_favorites":
-				await LoadArtistFavoritesAsync(skipSave: true);
-				return;
-			case "artist_categories":
-				await LoadArtistCategoryTypesAsync(skipSave: true);
-				return;
+			}
+			if (categoryId != null)
+			{
+				if (categoryId != null && categoryId.StartsWith("listen-match:", StringComparison.OrdinalIgnoreCase))
+				{
+					await LoadListenMatchAsync(NormalizeListenMatchViewSource(categoryId), skipSave: true);
+					return;
+				}
+				switch (categoryId)
+				{
+				case "recent_playlists":
+					await LoadRecentPlaylistsAsync();
+					return;
+				case "recent_albums":
+					await LoadRecentAlbumsAsync();
+					return;
+				case "recent_podcasts":
+					await LoadRecentPodcastsAsync();
+					return;
+				case "daily_recommend":
+					await LoadDailyRecommend();
+					return;
+				case "personalized":
+					await LoadPersonalized();
+					return;
+				case "toplist":
+					await LoadToplist();
+					return;
+				}
+				string s = categoryId;
+				if (s != null && s.StartsWith("listen-match:", StringComparison.OrdinalIgnoreCase))
+				{
+					await LoadListenMatchAsync(categoryId, skipSave: true);
+					return;
+				}
+				switch (categoryId)
+				{
+				case "daily_recommend_songs":
+					await LoadDailyRecommendSongs();
+					return;
+				case "daily_recommend_playlists":
+					await LoadDailyRecommendPlaylists();
+					return;
+				case "personalized_playlists":
+					await LoadPersonalizedPlaylists();
+					return;
+				case "personalized_newsongs":
+					await LoadPersonalizedNewSongs();
+					return;
+				case "highquality_playlists":
+					await LoadHighQualityPlaylists();
+					return;
+				case "new_songs":
+					await LoadNewSongs();
+					return;
+				case "new_songs_all":
+					await LoadNewSongsAll();
+					return;
+				case "new_songs_chinese":
+					await LoadNewSongsChinese();
+					return;
+				case "new_songs_western":
+					await LoadNewSongsWestern();
+					return;
+				case "new_songs_japan":
+					await LoadNewSongsJapan();
+					return;
+				case "new_songs_korea":
+					await LoadNewSongsKorea();
+					return;
+				case "personalized_newsong":
+					await LoadPersonalizedNewSong();
+					return;
+				case "playlist_category":
+					await LoadPlaylistCategory();
+					return;
+				case "podcast_categories":
+					await LoadPodcastCategoriesAsync();
+					return;
+				case "new_albums":
+					await LoadNewAlbums();
+					return;
+				case "artist_favorites":
+					await LoadArtistFavoritesAsync(skipSave: true);
+					return;
+				case "artist_categories":
+					await LoadArtistCategoryTypesAsync(skipSave: true);
+					return;
+				}
 			}
 			long artistTopId;
 			long artistSongsId;
@@ -4731,8 +5399,9 @@ private ToolStripMenuItem helpMenuItem;
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			Debug.WriteLine($"[LoadCategoryContent] 异常: {ex2}");
-			MessageBox.Show("加载分类内容失败: " + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+			Exception ex3 = ex2;
+			Debug.WriteLine($"[LoadCategoryContent] 异常: {ex3}");
+			MessageBox.Show("加载分类内容失败: " + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 			UpdateStatusBar("加载失败");
 		}
 	}
@@ -4772,10 +5441,11 @@ private ToolStripMenuItem helpMenuItem;
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			if (!TryHandleOperationCancelled(ex2, "加载精品歌单已取消"))
+			Exception ex3 = ex2;
+			if (!TryHandleOperationCancelled(ex3, "加载精品歌单已取消"))
 			{
-				Debug.WriteLine($"[LoadHighQualityPlaylists] 异常: {ex2}");
-				MessageBox.Show("加载精品歌单失败: " + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+				Debug.WriteLine($"[LoadHighQualityPlaylists] 异常: {ex3}");
+				MessageBox.Show("加载精品歌单失败: " + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 				UpdateStatusBar("加载失败");
 			}
 		}
@@ -4880,10 +5550,11 @@ private ToolStripMenuItem helpMenuItem;
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			if (!TryHandleOperationCancelled(ex2, "加载" + areaName + "新歌已取消"))
+			Exception ex3 = ex2;
+			if (!TryHandleOperationCancelled(ex3, "加载" + areaName + "新歌已取消"))
 			{
-				Debug.WriteLine($"[LoadNewSongsByArea] 异常: {ex2}");
-				MessageBox.Show("加载" + areaName + "新歌失败: " + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+				Debug.WriteLine($"[LoadNewSongsByArea] 异常: {ex3}");
+				MessageBox.Show("加载" + areaName + "新歌失败: " + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 				UpdateStatusBar("加载失败");
 			}
 		}
@@ -4909,10 +5580,11 @@ private ToolStripMenuItem helpMenuItem;
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			if (!TryHandleOperationCancelled(ex2, "加载推荐新歌已取消"))
+			Exception ex3 = ex2;
+			if (!TryHandleOperationCancelled(ex3, "加载推荐新歌已取消"))
 			{
-				Debug.WriteLine($"[LoadPersonalizedNewSong] 异常: {ex2}");
-				MessageBox.Show("加载推荐新歌失败: " + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+				Debug.WriteLine($"[LoadPersonalizedNewSong] 异常: {ex3}");
+				MessageBox.Show("加载推荐新歌失败: " + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 				UpdateStatusBar("加载失败");
 			}
 		}
@@ -4928,10 +5600,10 @@ private ToolStripMenuItem helpMenuItem;
 				List<SongInfo> songsResult = (await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.GetPersonalizedNewSongsAsync(), "personalized:new_song", viewToken, delegate(int attempt, Exception _)
 				{
 					SafeInvoke(delegate
-				{
-					UpdateStatusBar($"加载推荐新歌失败，正在重试（第 {attempt} 次）...");
-				});
-			}).ConfigureAwait(continueOnCapturedContext: true)) ?? new List<SongInfo>();
+					{
+						UpdateStatusBar($"加载推荐新歌失败，正在重试（第 {attempt} 次）...");
+					});
+				}).ConfigureAwait(continueOnCapturedContext: true)) ?? new List<SongInfo>();
 				_dailyRecommendSongsCache = CloneList(songsResult);
 				_dailyRecommendSongsFetchedUtc = DateTime.UtcNow;
 				if (viewToken.IsCancellationRequested)
@@ -4942,7 +5614,7 @@ private ToolStripMenuItem helpMenuItem;
 				{
 					if (!ShouldAbortViewRender(viewToken, "推荐新歌"))
 					{
-						DisplaySongs(songsResult, showPagination: false, hasNextPage: false, 1, preserveSelection: true, viewSource, accessibleName, skipAvailabilityCheck: false, announceHeader: false, suppressFocus: false);
+						DisplaySongs(songsResult, showPagination: false, hasNextPage: false, 1, preserveSelection: true, viewSource, accessibleName, skipAvailabilityCheck: false, announceHeader: false);
 						_currentPlaylist = null;
 						FocusListAfterEnrich(0);
 						if (songsResult.Count == 0)
@@ -5032,10 +5704,11 @@ private ToolStripMenuItem helpMenuItem;
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			if (!TryHandleOperationCancelled(ex2, "加载" + cat + "歌单已取消"))
+			Exception ex3 = ex2;
+			if (!TryHandleOperationCancelled(ex3, "加载" + cat + "歌单已取消"))
 			{
-				Debug.WriteLine($"[LoadPlaylistsByCat] 异常: {ex2}");
-				MessageBox.Show("加载" + cat + "歌单失败: " + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+				Debug.WriteLine($"[LoadPlaylistsByCat] 异常: {ex3}");
+				MessageBox.Show("加载" + cat + "歌单失败: " + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 				UpdateStatusBar("加载失败");
 			}
 		}
@@ -5045,58 +5718,57 @@ private ToolStripMenuItem helpMenuItem;
 	{
 		try
 		{
-			ViewLoadRequest request = new ViewLoadRequest("podcast_categories", "播客分类", "正在加载播客分类...", cancelActiveNavigation: true);
+			ViewLoadRequest request = new ViewLoadRequest("podcast_categories", "播客分类", "正在加载播客分类...");
 			ViewLoadResult<List<PodcastCategoryInfo>?> loadResult = await RunViewLoadAsync(request, async delegate(CancellationToken token)
 			{
-				List<PodcastCategoryInfo> categories = await _apiClient.GetPodcastCategoriesAsync(token).ConfigureAwait(continueOnCapturedContext: false);
+				List<PodcastCategoryInfo> categories2 = await _apiClient.GetPodcastCategoriesAsync(token).ConfigureAwait(continueOnCapturedContext: false);
 				token.ThrowIfCancellationRequested();
-				return categories ?? new List<PodcastCategoryInfo>();
+				return categories2 ?? new List<PodcastCategoryInfo>();
 			}, "加载播客分类已取消").ConfigureAwait(continueOnCapturedContext: true);
-			if (!loadResult.IsCanceled)
-			{
-				List<PodcastCategoryInfo> categories = loadResult.Value ?? new List<PodcastCategoryInfo>();
-				lock (_podcastCategoryLock)
-				{
-					_podcastCategories.Clear();
-					foreach (PodcastCategoryInfo cat in categories)
-					{
-						if (cat != null && cat.Id > 0 && !string.IsNullOrWhiteSpace(cat.Name))
-						{
-							_podcastCategories[cat.Id] = cat;
-						}
-					}
-				}
-				_currentPodcastCategoryId = 0;
-				_currentPodcastCategoryName = string.Empty;
-				_currentPodcastCategoryOffset = 0;
-				_currentPodcastCategoryHasMore = false;
-				List<ListItemInfo> items = categories.Select((PodcastCategoryInfo cat) => new ListItemInfo
-				{
-					Type = ListItemType.Category,
-					CategoryId = "podcast_cat_" + cat.Id,
-					CategoryName = cat.Name
-				}).ToList();
-				DisplayListItems(items, request.ViewSource, request.AccessibleName);
-				if (items.Count == 0)
-				{
-					MessageBox.Show("暂时没有可用的播客分类。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
-					UpdateStatusBar("暂无播客分类");
-				}
-				else
-				{
-					UpdateStatusBar($"共 {items.Count} 个播客分类");
-				}
-			}
-		}
-		catch (Exception ex)
-		{
-			if (TryHandleOperationCancelled(ex, "加载播客分类已取消"))
+			if (loadResult.IsCanceled)
 			{
 				return;
 			}
-			Debug.WriteLine($"[LoadPodcastCategories] 异常: {ex}");
-			MessageBox.Show("加载播客分类失败: " + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
-			UpdateStatusBar("加载失败");
+			List<PodcastCategoryInfo> categories = loadResult.Value ?? new List<PodcastCategoryInfo>();
+			lock (_podcastCategoryLock)
+			{
+				_podcastCategories.Clear();
+				foreach (PodcastCategoryInfo cat in categories)
+				{
+					if (cat != null && cat.Id > 0 && !string.IsNullOrWhiteSpace(cat.Name))
+					{
+						_podcastCategories[cat.Id] = cat;
+					}
+				}
+			}
+			_currentPodcastCategoryId = 0;
+			_currentPodcastCategoryName = string.Empty;
+			_currentPodcastCategoryOffset = 0;
+			_currentPodcastCategoryHasMore = false;
+			List<ListItemInfo> items = categories.Select((PodcastCategoryInfo podcastCategoryInfo) => new ListItemInfo
+			{
+				Type = ListItemType.Category,
+				CategoryId = "podcast_cat_" + podcastCategoryInfo.Id,
+				CategoryName = podcastCategoryInfo.Name
+			}).ToList();
+			DisplayListItems(items, request.ViewSource, request.AccessibleName);
+			if (items.Count == 0)
+			{
+				MessageBox.Show("暂时没有可用的播客分类。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+				UpdateStatusBar("暂无播客分类");
+				return;
+			}
+			UpdateStatusBar($"共 {items.Count} 个播客分类");
+		}
+		catch (Exception ex)
+		{
+			Exception ex2 = ex;
+			if (!TryHandleOperationCancelled(ex2, "加载播客分类已取消"))
+			{
+				Debug.WriteLine($"[LoadPodcastCategories] 异常: {ex2}");
+				MessageBox.Show("加载播客分类失败: " + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+				UpdateStatusBar("加载失败");
+			}
 		}
 	}
 
@@ -5107,37 +5779,42 @@ private ToolStripMenuItem helpMenuItem;
 			MessageBox.Show("无法识别播客分类。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
 			return;
 		}
-		try
+		checked
 		{
-			UpdateStatusBar("正在加载播客...");
-			if (!skipSave)
+			try
 			{
-				SaveNavigationState();
-			}
-			offset = Math.Max(0, offset);
-			string categoryName = ResolvePodcastCategoryName(categoryId);
-			string viewSource = $"podcast_cat_{categoryId}:offset{offset}";
-			string accessibleName = string.IsNullOrWhiteSpace(categoryName) ? "播客列表" : (categoryName + " 播客");
-			ViewLoadRequest request = new ViewLoadRequest(viewSource, accessibleName, "正在加载播客...");
-			ViewLoadResult<(List<PodcastRadioInfo> Items, bool HasMore, int TotalCount)> loadResult = await RunViewLoadAsync(request, async delegate(CancellationToken token)
-			{
-				(List<PodcastRadioInfo> Podcasts, bool HasMore, int TotalCount) tuple = await _apiClient.GetPodcastsByCategoryAsync(categoryId, PodcastCategoryPageSize, offset, token).ConfigureAwait(continueOnCapturedContext: false);
-				token.ThrowIfCancellationRequested();
-				return (Items: tuple.Podcasts, tuple.HasMore, tuple.TotalCount);
-			}, "加载播客已取消").ConfigureAwait(continueOnCapturedContext: true);
-			if (!loadResult.IsCanceled)
-			{
+				UpdateStatusBar("正在加载播客...");
+				if (!skipSave)
+				{
+					SaveNavigationState();
+				}
+				offset = Math.Max(0, offset);
+				string categoryName = ResolvePodcastCategoryName(categoryId);
+				string viewSource = $"podcast_cat_{categoryId}:offset{offset}";
+				string accessibleName = (string.IsNullOrWhiteSpace(categoryName) ? "播客列表" : (categoryName + " 播客"));
+				ViewLoadRequest request = new ViewLoadRequest(viewSource, accessibleName, "正在加载播客...");
+				ViewLoadResult<(List<PodcastRadioInfo> Items, bool HasMore, int TotalCount)> loadResult = await RunViewLoadAsync(request, async delegate(CancellationToken token)
+				{
+					(List<PodcastRadioInfo> Podcasts, bool HasMore, int TotalCount) tuple = await _apiClient.GetPodcastsByCategoryAsync(categoryId, 50, offset, token).ConfigureAwait(continueOnCapturedContext: false);
+					token.ThrowIfCancellationRequested();
+					return (Items: tuple.Podcasts, HasMore: tuple.HasMore, TotalCount: tuple.TotalCount);
+				}, "加载播客已取消").ConfigureAwait(continueOnCapturedContext: true);
+				if (loadResult.IsCanceled)
+				{
+					return;
+				}
 				(List<PodcastRadioInfo> Items, bool HasMore, int TotalCount) data = loadResult.Value;
 				List<PodcastRadioInfo> podcasts = data.Items ?? new List<PodcastRadioInfo>();
 				int totalCount = Math.Max(data.TotalCount, offset + podcasts.Count);
-				bool hasMoreFlag = data.HasMore || totalCount > offset + podcasts.Count;
-
-				// 补齐一页 50 条，避免接口少返；依据总数而非 hasMoreFlag
-				int fetchOffset = offset + podcasts.Count;
-				while (podcasts.Count < PodcastCategoryPageSize && totalCount > fetchOffset && !GetCurrentViewContentToken().IsCancellationRequested)
+				if (!data.HasMore)
 				{
-					int need = PodcastCategoryPageSize - podcasts.Count;
-					var extra = await _apiClient.GetPodcastsByCategoryAsync(categoryId, need, fetchOffset, GetCurrentViewContentToken()).ConfigureAwait(continueOnCapturedContext: false);
+					_ = totalCount > offset + podcasts.Count;
+				}
+				int fetchOffset = offset + podcasts.Count;
+				while (podcasts.Count < 50 && totalCount > fetchOffset && !GetCurrentViewContentToken().IsCancellationRequested)
+				{
+					int need = 50 - podcasts.Count;
+					(List<PodcastRadioInfo> Podcasts, bool HasMore, int TotalCount) extra = await _apiClient.GetPodcastsByCategoryAsync(categoryId, need, fetchOffset, GetCurrentViewContentToken()).ConfigureAwait(continueOnCapturedContext: false);
 					if (extra.Podcasts == null || extra.Podcasts.Count == 0)
 					{
 						break;
@@ -5146,41 +5823,35 @@ private ToolStripMenuItem helpMenuItem;
 					fetchOffset += extra.Podcasts.Count;
 					totalCount = Math.Max(totalCount, extra.TotalCount);
 				}
-
-				// 如果补齐过程中超额，保持单页最大 50 条（末页可少于 50）
-				if (podcasts.Count > PodcastCategoryPageSize && (offset + PodcastCategoryPageSize) < totalCount)
+				if (podcasts.Count > 50 && offset + 50 < totalCount)
 				{
-					podcasts = podcasts.Take(PodcastCategoryPageSize).ToList();
+					podcasts = podcasts.Take(50).ToList();
 				}
-
-				bool hasMore = (offset + podcasts.Count) < totalCount;
+				bool hasMore = offset + podcasts.Count < totalCount;
 				_currentPodcastCategoryId = categoryId;
 				_currentPodcastCategoryName = categoryName;
 				_currentPodcastCategoryOffset = offset;
 				_currentPodcastCategoryHasMore = hasMore;
-				DisplayPodcasts(podcasts, showPagination: true, hasNextPage: hasMore, offset + 1, preserveSelection: false, viewSource, accessibleName, announceHeader: true, suppressFocus: false, allowSelection: true, includeNavigationRows: true);
+				DisplayPodcasts(podcasts, showPagination: true, hasMore, offset + 1, preserveSelection: false, viewSource, accessibleName);
 				if (podcasts.Count == 0)
 				{
 					MessageBox.Show("该分类暂时没有播客。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
 					UpdateStatusBar("暂无播客");
+					return;
 				}
-				else
-				{
-					int currentPage = offset / PodcastCategoryPageSize + 1;
-					int totalPages = Math.Max(1, (int)Math.Ceiling((double)Math.Max(totalCount, offset + podcasts.Count) / PodcastCategoryPageSize));
-					UpdateStatusBar($"{accessibleName}：第 {currentPage}/{totalPages} 页，本页 {podcasts.Count} 个 / 总 {totalCount} 个（PageDown/Up 翻页）");
-				}
+				int currentPage = unchecked(offset / 50) + 1;
+				int totalPages = Math.Max(1, (int)Math.Ceiling((double)Math.Max(totalCount, offset + podcasts.Count) / 50.0));
+				UpdateStatusBar($"{accessibleName}：第 {currentPage}/{totalPages} 页，本页 {podcasts.Count} 个 / 总 {totalCount} 个（PageDown/Up 翻页）");
 			}
-		}
-		catch (Exception ex)
-		{
-			if (TryHandleOperationCancelled(ex, "加载播客已取消"))
+			catch (Exception ex)
 			{
-				return;
+				if (!TryHandleOperationCancelled(ex, "加载播客已取消"))
+				{
+					Debug.WriteLine($"[LoadPodcastsByCategory] 异常: {ex}");
+					MessageBox.Show("加载播客失败: " + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+					UpdateStatusBar("加载失败");
+				}
 			}
-			Debug.WriteLine($"[LoadPodcastsByCategory] 异常: {ex}");
-			MessageBox.Show("加载播客失败: " + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
-			UpdateStatusBar("加载失败");
 		}
 	}
 
@@ -5206,10 +5877,11 @@ private ToolStripMenuItem helpMenuItem;
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			if (!TryHandleOperationCancelled(ex2, "加载新碟上架已取消"))
+			Exception ex3 = ex2;
+			if (!TryHandleOperationCancelled(ex3, "加载新碟上架已取消"))
 			{
-				Debug.WriteLine($"[LoadNewAlbums] 异常: {ex2}");
-				MessageBox.Show("加载新碟上架失败: " + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+				Debug.WriteLine($"[LoadNewAlbums] 异常: {ex3}");
+				MessageBox.Show("加载新碟上架失败: " + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 				UpdateStatusBar("加载失败");
 			}
 		}
@@ -5240,8 +5912,7 @@ private ToolStripMenuItem helpMenuItem;
 					throw new InvalidOperationException("请先登录有效账号。");
 				}
 				_loggedInUserId = userInfo.UserId;
-				List<PlaylistInfo> playlists;
-				(playlists, _) = await _apiClient.GetUserPlaylistsAsync(userInfo.UserId).ConfigureAwait(continueOnCapturedContext: false);
+				var (playlists, _) = await _apiClient.GetUserPlaylistsAsync(userInfo.UserId).ConfigureAwait(continueOnCapturedContext: false);
 				ct.ThrowIfCancellationRequested();
 				PlaylistInfo likedPlaylist = playlists?.FirstOrDefault((PlaylistInfo p) => IsLikedMusicPlaylist(p, userInfo.UserId));
 				if (likedPlaylist != null)
@@ -5261,7 +5932,7 @@ private ToolStripMenuItem helpMenuItem;
 				}
 				(PlaylistInfo Playlist, List<SongInfo> Songs, string StatusText) viewData = data.Value;
 				(_currentPlaylist, _, _) = viewData;
-				DisplaySongs(viewData.Songs, showPagination: false, hasNextPage: false, 1, preserveSelection, request.ViewSource, request.AccessibleName, skipAvailabilityCheck: true, announceHeader: true, suppressFocus: false, allowSelection: true);
+				DisplaySongs(viewData.Songs, showPagination: false, hasNextPage: false, 1, preserveSelection, request.ViewSource, request.AccessibleName, skipAvailabilityCheck: true);
 				UpdateStatusBar(viewData.StatusText);
 				EnrichCurrentPlaylistSongsAsync(viewData.Playlist, viewData.Songs, request.ViewSource, request.AccessibleName);
 			}
@@ -5269,10 +5940,11 @@ private ToolStripMenuItem helpMenuItem;
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			if (!TryHandleOperationCancelled(ex2, "加载喜欢的音乐已取消"))
+			Exception ex3 = ex2;
+			if (!TryHandleOperationCancelled(ex3, "加载喜欢的音乐已取消"))
 			{
-				Debug.WriteLine($"[LoadUserLikedSongs] 异常: {ex2}");
-				MessageBox.Show("加载喜欢的音乐失败: " + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+				Debug.WriteLine($"[LoadUserLikedSongs] 异常: {ex3}");
+				MessageBox.Show("加载喜欢的音乐失败: " + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 				UpdateStatusBar("加载喜欢的音乐失败");
 			}
 		}
@@ -5294,8 +5966,7 @@ private ToolStripMenuItem helpMenuItem;
 					throw new InvalidOperationException("请先登录网易云账号。");
 				}
 				_loggedInUserId = userInfo.UserId;
-				List<PlaylistInfo> playlists;
-				(playlists, _) = await _apiClient.GetUserPlaylistsAsync(userInfo.UserId).ConfigureAwait(continueOnCapturedContext: false);
+				var (playlists, _) = await _apiClient.GetUserPlaylistsAsync(userInfo.UserId).ConfigureAwait(continueOnCapturedContext: false);
 				token.ThrowIfCancellationRequested();
 				List<PlaylistInfo> filtered = (playlists ?? new List<PlaylistInfo>()).Where((PlaylistInfo p) => !IsLikedMusicPlaylist(p, userInfo.UserId)).ToList();
 				string status = ((filtered.Count == 0) ? "暂无歌单" : $"加载完成，共 {filtered.Count} 个歌单");
@@ -5320,11 +5991,12 @@ private ToolStripMenuItem helpMenuItem;
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			if (TryHandleOperationCancelled(ex2, "加载创建和收藏的歌单已取消"))
+			Exception ex3 = ex2;
+			if (TryHandleOperationCancelled(ex3, "加载创建和收藏的歌单已取消"))
 			{
 				return;
 			}
-			Debug.WriteLine($"[LoadUserPlaylists] 异常: {ex2}");
+			Debug.WriteLine($"[LoadUserPlaylists] 异常: {ex3}");
 			throw;
 		}
 	}
@@ -5356,9 +6028,7 @@ private ToolStripMenuItem helpMenuItem;
 			ViewLoadRequest request = new ViewLoadRequest("user_albums", "收藏的专辑", "正在加载收藏的专辑...", cancelActiveNavigation: true, pendingIndex);
 			ViewLoadResult<(List<AlbumInfo> Items, string StatusText)?> loadResult = await RunViewLoadAsync(request, (Func<CancellationToken, Task<(List<AlbumInfo>, string)?>>)async delegate(CancellationToken token)
 			{
-				List<AlbumInfo> albums;
-				int totalCount;
-				(albums, totalCount) = await _apiClient.GetUserAlbumsAsync().ConfigureAwait(continueOnCapturedContext: false);
+				var (albums, totalCount) = await _apiClient.GetUserAlbumsAsync().ConfigureAwait(continueOnCapturedContext: false);
 				token.ThrowIfCancellationRequested();
 				List<AlbumInfo> normalized = albums ?? new List<AlbumInfo>();
 				string status = ((normalized.Count == 0) ? "暂无收藏的专辑" : $"加载完成，共 {totalCount} 个专辑");
@@ -5382,11 +6052,12 @@ private ToolStripMenuItem helpMenuItem;
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			if (TryHandleOperationCancelled(ex2, "加载收藏的专辑已取消"))
+			Exception ex3 = ex2;
+			if (TryHandleOperationCancelled(ex3, "加载收藏的专辑已取消"))
 			{
 				return;
 			}
-			Debug.WriteLine($"[LoadUserAlbums] 异常: {ex2}");
+			Debug.WriteLine($"[LoadUserAlbums] 异常: {ex3}");
 			throw;
 		}
 	}
@@ -5426,8 +6097,8 @@ private ToolStripMenuItem helpMenuItem;
 	private (List<ListItemInfo> Items, string StatusText) BuildRecentListenedSkeletonViewData()
 	{
 		List<ListItemInfo> item = BuildRecentListenedEntries();
-		string status = (_recentSummaryReady ? (BuildRecentListenedStatus() + "（缓存）") : "最近听过");
-		return (Items: item, StatusText: status);
+		string item2 = (_recentSummaryReady ? (BuildRecentListenedStatus() + "（缓存）") : "最近听过");
+		return (Items: item, StatusText: item2);
 	}
 
 	private async Task EnrichRecentListenedAsync(string viewSource, string accessibleName)
@@ -5446,17 +6117,18 @@ private ToolStripMenuItem helpMenuItem;
 			{
 				if (string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
 				{
-					int selected = (resultListView?.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : -1;
+					SafeListView safeListView = resultListView;
+					int num = ((safeListView != null && safeListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : (-1));
 					if (_currentListItems.Count == items.Count)
 					{
-						PatchListItems(items, showPagination: false, hasPreviousPage: false, hasNextPage: false, pendingFocusIndex: selected, incremental: true, preserveDisplayIndex: true);
+						PatchListItems(items, showPagination: false, hasPreviousPage: false, hasNextPage: false, num, incremental: true, preserveDisplayIndex: true);
 					}
 					else
 					{
 						DisplayListItems(items, viewSource, accessibleName, preserveSelection: true, announceHeader: false, suppressFocus: true);
-						if (selected >= 0)
+						if (num >= 0)
 						{
-							EnsureListSelectionWithoutFocus(Math.Min(selected, resultListView.Items.Count - 1));
+							EnsureListSelectionWithoutFocus(Math.Min(num, checked(resultListView.Items.Count - 1)));
 						}
 					}
 					UpdateStatusBar(status);
@@ -5466,9 +6138,10 @@ private ToolStripMenuItem helpMenuItem;
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			if (!TryHandleOperationCancelled(ex2, "加载最近听过已取消"))
+			Exception ex3 = ex2;
+			if (!TryHandleOperationCancelled(ex3, "加载最近听过已取消"))
 			{
-				Debug.WriteLine($"[RecentListened] 丰富失败: {ex2}");
+				Debug.WriteLine($"[RecentListened] 丰富失败: {ex3}");
 			}
 		}
 	}
@@ -5488,9 +6161,8 @@ private ToolStripMenuItem helpMenuItem;
 			if (!loadResult.IsCanceled)
 			{
 				(List<SongInfo> Items, string StatusText) data = loadResult.Value ?? BuildRecentSongsSkeletonViewData();
-				List<SongInfo> songs;
-				(songs, _) = data;
-				DisplaySongs(songs, showPagination: false, hasNextPage: false, 1, preserveSelection: true, request.ViewSource, request.AccessibleName, skipAvailabilityCheck: true, announceHeader: true, suppressFocus: false, allowSelection: true);
+				var (songs, _) = data;
+				DisplaySongs(songs, showPagination: false, hasNextPage: false, 1, preserveSelection: true, request.ViewSource, request.AccessibleName, skipAvailabilityCheck: true);
 				_currentPlaylist = null;
 				UpdateStatusBar(data.StatusText);
 				EnrichRecentSongsAsync(request.ViewSource, request.AccessibleName);
@@ -5532,17 +6204,18 @@ private ToolStripMenuItem helpMenuItem;
 			{
 				if (string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
 				{
-					int selected = (resultListView?.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : -1;
+					SafeListView safeListView = resultListView;
+					int num = ((safeListView != null && safeListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : (-1));
 					if (_currentSongs.Count == list.Count)
 					{
-						PatchSongs(list, startIndex: 1, skipAvailabilityCheck: false, showPagination: false, hasPreviousPage: false, hasNextPage: false, pendingFocusIndex: selected, allowSelection: false);
+						PatchSongs(list, 1, skipAvailabilityCheck: false, showPagination: false, hasPreviousPage: false, hasNextPage: false, num, allowSelection: false);
 					}
 					else
 					{
 						DisplaySongs(list, showPagination: false, hasNextPage: false, 1, preserveSelection: true, viewSource, accessibleName, skipAvailabilityCheck: false, announceHeader: false, suppressFocus: true);
-						if (selected >= 0)
+						if (num >= 0)
 						{
-							EnsureListSelectionWithoutFocus(Math.Min(selected, resultListView.Items.Count - 1));
+							EnsureListSelectionWithoutFocus(Math.Min(num, checked(resultListView.Items.Count - 1)));
 						}
 					}
 					_currentPlaylist = null;
@@ -5557,9 +6230,10 @@ private ToolStripMenuItem helpMenuItem;
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			if (!TryHandleOperationCancelled(ex2, "加载最近播放已取消"))
+			Exception ex3 = ex2;
+			if (!TryHandleOperationCancelled(ex3, "加载最近播放已取消"))
 			{
-				Debug.WriteLine($"[RecentPlay] 丰富最近播放失败: {ex2}");
+				Debug.WriteLine($"[RecentPlay] 丰富最近播放失败: {ex3}");
 			}
 		}
 	}
@@ -5573,9 +6247,7 @@ private ToolStripMenuItem helpMenuItem;
 			ViewLoadRequest request = new ViewLoadRequest("user_podcasts", "收藏的播客", "正在加载收藏的播客...", cancelActiveNavigation: true, pendingIndex);
 			ViewLoadResult<(List<PodcastRadioInfo> Items, string StatusText)?> loadResult = await RunViewLoadAsync(request, (Func<CancellationToken, Task<(List<PodcastRadioInfo>, string)?>>)async delegate(CancellationToken token)
 			{
-				List<PodcastRadioInfo> podcasts;
-				int totalCount;
-				(podcasts, totalCount) = await _apiClient.GetSubscribedPodcastsAsync(300).ConfigureAwait(continueOnCapturedContext: false);
+				var (podcasts, totalCount) = await _apiClient.GetSubscribedPodcastsAsync(300).ConfigureAwait(continueOnCapturedContext: false);
 				token.ThrowIfCancellationRequested();
 				List<PodcastRadioInfo> normalized = podcasts ?? new List<PodcastRadioInfo>();
 				string status = ((normalized.Count == 0) ? "暂无收藏的播客" : $"加载完成，共 {totalCount} 个播客");
@@ -5599,11 +6271,12 @@ private ToolStripMenuItem helpMenuItem;
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			if (TryHandleOperationCancelled(ex2, "加载收藏的播客已取消"))
+			Exception ex3 = ex2;
+			if (TryHandleOperationCancelled(ex3, "加载收藏的播客已取消"))
 			{
 				return;
 			}
-			Debug.WriteLine($"[LoadUserPodcasts] 异常: {ex2}");
+			Debug.WriteLine($"[LoadUserPodcasts] 异常: {ex3}");
 			throw;
 		}
 	}
@@ -5624,7 +6297,7 @@ private ToolStripMenuItem helpMenuItem;
 			{
 				(List<PodcastRadioInfo> Items, string StatusText) data = loadResult.Value ?? BuildRecentPodcastsSkeletonViewData();
 				List<PodcastRadioInfo> podcasts = data.Items ?? new List<PodcastRadioInfo>();
-				DisplayPodcasts(podcasts, showPagination: false, hasNextPage: false, 1, preserveSelection: true, request.ViewSource, request.AccessibleName, announceHeader: true, suppressFocus: false, allowSelection: true);
+				DisplayPodcasts(podcasts, showPagination: false, hasNextPage: false, 1, preserveSelection: true, request.ViewSource, request.AccessibleName);
 				UpdateStatusBar(data.StatusText);
 				EnrichRecentPodcastsAsync(request.ViewSource, request.AccessibleName);
 			}
@@ -5665,17 +6338,18 @@ private ToolStripMenuItem helpMenuItem;
 			{
 				if (string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
 				{
-					int selected = (resultListView?.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : -1;
+					SafeListView safeListView = resultListView;
+					int num = ((safeListView != null && safeListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : (-1));
 					if (_currentPodcasts.Count == list.Count)
 					{
-						PatchPodcasts(list, startIndex: 1, showPagination: false, hasPreviousPage: false, hasNextPage: false, pendingFocusIndex: selected, allowSelection: false);
+						PatchPodcasts(list, 1, showPagination: false, hasPreviousPage: false, hasNextPage: false, num, allowSelection: false);
 					}
 					else
 					{
-						DisplayPodcasts(list, showPagination: false, hasNextPage: false, 1, preserveSelection: true, viewSource, accessibleName, announceHeader: false, suppressFocus: true, allowSelection: true);
-						if (selected >= 0)
+						DisplayPodcasts(list, showPagination: false, hasNextPage: false, 1, preserveSelection: true, viewSource, accessibleName, announceHeader: false, suppressFocus: true);
+						if (num >= 0)
 						{
-							EnsureListSelectionWithoutFocus(Math.Min(selected, resultListView.Items.Count - 1));
+							EnsureListSelectionWithoutFocus(Math.Min(num, checked(resultListView.Items.Count - 1)));
 						}
 					}
 					if (list.Count == 0)
@@ -5689,9 +6363,10 @@ private ToolStripMenuItem helpMenuItem;
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			if (!TryHandleOperationCancelled(ex2, "加载最近播客已取消"))
+			Exception ex3 = ex2;
+			if (!TryHandleOperationCancelled(ex3, "加载最近播客已取消"))
 			{
-				Debug.WriteLine($"[RecentPodcasts] 丰富最近播客失败: {ex2}");
+				Debug.WriteLine($"[RecentPodcasts] 丰富最近播客失败: {ex3}");
 			}
 		}
 	}
@@ -5844,9 +6519,9 @@ private ToolStripMenuItem helpMenuItem;
 		}
 		lock (_podcastCategoryLock)
 		{
-			if (_podcastCategories.TryGetValue(categoryId, out var cat) && cat != null && !string.IsNullOrWhiteSpace(cat.Name))
+			if (_podcastCategories.TryGetValue(categoryId, out var value) && value != null && !string.IsNullOrWhiteSpace(value.Name))
 			{
-				return cat.Name;
+				return value.Name;
 			}
 		}
 		return string.Empty;
@@ -5867,9 +6542,8 @@ private ToolStripMenuItem helpMenuItem;
 			if (!loadResult.IsCanceled)
 			{
 				(List<PlaylistInfo> Items, string StatusText) data = loadResult.Value ?? BuildRecentPlaylistsSkeletonViewData();
-				List<PlaylistInfo> playlists;
-				(playlists, _) = data;
-				DisplayPlaylists(playlists, preserveSelection: true, request.ViewSource, request.AccessibleName, 1, showPagination: false, hasNextPage: false, announceHeader: true, suppressFocus: false, allowSelection: true);
+				var (playlists, _) = data;
+				DisplayPlaylists(playlists, preserveSelection: true, request.ViewSource, request.AccessibleName);
 				UpdateStatusBar(data.StatusText);
 				EnrichRecentPlaylistsAsync(request.ViewSource, request.AccessibleName);
 			}
@@ -5910,17 +6584,18 @@ private ToolStripMenuItem helpMenuItem;
 			{
 				if (string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
 				{
-					int selected = (resultListView?.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : -1;
+					SafeListView safeListView = resultListView;
+					int num = ((safeListView != null && safeListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : (-1));
 					if (_currentPlaylists.Count == list.Count)
 					{
-						PatchPlaylists(list, startIndex: 1, showPagination: false, hasPreviousPage: false, hasNextPage: false, pendingFocusIndex: selected, allowSelection: false);
+						PatchPlaylists(list, 1, showPagination: false, hasPreviousPage: false, hasNextPage: false, num, allowSelection: false);
 					}
 					else
 					{
 						DisplayPlaylists(list, preserveSelection: true, viewSource, accessibleName, 1, showPagination: false, hasNextPage: false, announceHeader: false, suppressFocus: true);
-						if (selected >= 0)
+						if (num >= 0)
 						{
-							EnsureListSelectionWithoutFocus(Math.Min(selected, resultListView.Items.Count - 1));
+							EnsureListSelectionWithoutFocus(Math.Min(num, checked(resultListView.Items.Count - 1)));
 						}
 					}
 					if (list.Count == 0)
@@ -5934,9 +6609,10 @@ private ToolStripMenuItem helpMenuItem;
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			if (!TryHandleOperationCancelled(ex2, "加载最近歌单已取消"))
+			Exception ex3 = ex2;
+			if (!TryHandleOperationCancelled(ex3, "加载最近歌单已取消"))
 			{
-				Debug.WriteLine($"[RecentPlaylists] 丰富最近歌单失败: {ex2}");
+				Debug.WriteLine($"[RecentPlaylists] 丰富最近歌单失败: {ex3}");
 			}
 		}
 	}
@@ -5956,9 +6632,8 @@ private ToolStripMenuItem helpMenuItem;
 			if (!loadResult.IsCanceled)
 			{
 				(List<AlbumInfo> Items, string StatusText) data = loadResult.Value ?? BuildRecentAlbumsSkeletonViewData();
-				List<AlbumInfo> albums;
-				(albums, _) = data;
-				DisplayAlbums(albums, preserveSelection: true, request.ViewSource, request.AccessibleName, 1, showPagination: false, hasNextPage: false, announceHeader: true, suppressFocus: false, allowSelection: true);
+				var (albums, _) = data;
+				DisplayAlbums(albums, preserveSelection: true, request.ViewSource, request.AccessibleName);
 				UpdateStatusBar(data.StatusText);
 				EnrichRecentAlbumsAsync(request.ViewSource, request.AccessibleName);
 			}
@@ -5999,17 +6674,18 @@ private ToolStripMenuItem helpMenuItem;
 			{
 				if (string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
 				{
-					int selected = (resultListView?.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : -1;
+					SafeListView safeListView = resultListView;
+					int num = ((safeListView != null && safeListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : (-1));
 					if (_currentAlbums.Count == list.Count)
 					{
-						PatchAlbums(list, startIndex: 1, showPagination: false, hasPreviousPage: false, hasNextPage: false, pendingFocusIndex: selected, allowSelection: false);
+						PatchAlbums(list, 1, showPagination: false, hasPreviousPage: false, hasNextPage: false, num, allowSelection: false);
 					}
 					else
 					{
 						DisplayAlbums(list, preserveSelection: true, viewSource, accessibleName, 1, showPagination: false, hasNextPage: false, announceHeader: false, suppressFocus: true);
-						if (selected >= 0)
+						if (num >= 0)
 						{
-							EnsureListSelectionWithoutFocus(Math.Min(selected, resultListView.Items.Count - 1));
+							EnsureListSelectionWithoutFocus(Math.Min(num, checked(resultListView.Items.Count - 1)));
 						}
 					}
 					if (list.Count == 0)
@@ -6023,9 +6699,10 @@ private ToolStripMenuItem helpMenuItem;
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			if (!TryHandleOperationCancelled(ex2, "加载最近专辑已取消"))
+			Exception ex3 = ex2;
+			if (!TryHandleOperationCancelled(ex3, "加载最近专辑已取消"))
 			{
-				Debug.WriteLine($"[RecentAlbums] 丰富最近专辑失败: {ex2}");
+				Debug.WriteLine($"[RecentAlbums] 丰富最近专辑失败: {ex3}");
 			}
 		}
 	}
@@ -6040,12 +6717,14 @@ private ToolStripMenuItem helpMenuItem;
 		{
 			return (Songs: _dailyRecommendSongsCache, Playlists: _dailyRecommendPlaylistsCache);
 		}
-		Task<List<SongInfo>> songsTask = _apiClient.GetDailyRecommendSongsAsync();
-		Task<List<PlaylistInfo>> playlistsTask = _apiClient.GetDailyRecommendPlaylistsAsync();
-		await Task.WhenAll(songsTask, playlistsTask).ConfigureAwait(continueOnCapturedContext: false);
-		token.ThrowIfCancellationRequested();
-		_dailyRecommendSongsCache = CloneList(songsTask.Result);
-		_dailyRecommendPlaylistsCache = CloneList(playlistsTask.Result);
+                Task<List<SongInfo>> songsTask = _apiClient.GetDailyRecommendSongsAsync();
+                Task<List<PlaylistInfo>> playlistsTask = _apiClient.GetDailyRecommendPlaylistsAsync();
+                await Task.WhenAll(songsTask, playlistsTask).ConfigureAwait(continueOnCapturedContext: false);
+                token.ThrowIfCancellationRequested();
+                List<SongInfo> songs = await songsTask.ConfigureAwait(false);
+                List<PlaylistInfo> playlists = await playlistsTask.ConfigureAwait(false);
+                _dailyRecommendSongsCache = CloneList(songs);
+                _dailyRecommendPlaylistsCache = CloneList(playlists);
 		_dailyRecommendSongsFetchedUtc = (_dailyRecommendPlaylistsFetchedUtc = DateTime.UtcNow);
 		_dailyRecommendCacheFetchedUtc = _dailyRecommendSongsFetchedUtc;
 		return (Songs: _dailyRecommendSongsCache, Playlists: _dailyRecommendPlaylistsCache);
@@ -6057,12 +6736,14 @@ private ToolStripMenuItem helpMenuItem;
 		{
 			return (Playlists: _personalizedPlaylistsCache, Songs: _personalizedNewSongsCache);
 		}
-		Task<List<PlaylistInfo>> playlistsTask = _apiClient.GetPersonalizedPlaylistsAsync();
-		Task<List<SongInfo>> songsTask = _apiClient.GetPersonalizedNewSongsAsync(20);
-		await Task.WhenAll(playlistsTask, songsTask).ConfigureAwait(continueOnCapturedContext: false);
-		token.ThrowIfCancellationRequested();
-		_personalizedPlaylistsCache = CloneList(playlistsTask.Result);
-		_personalizedNewSongsCache = CloneList(songsTask.Result);
+                Task<List<PlaylistInfo>> playlistsTask = _apiClient.GetPersonalizedPlaylistsAsync();
+                Task<List<SongInfo>> songsTask = _apiClient.GetPersonalizedNewSongsAsync(20);
+                await Task.WhenAll(playlistsTask, songsTask).ConfigureAwait(continueOnCapturedContext: false);
+                token.ThrowIfCancellationRequested();
+                List<PlaylistInfo> playlists = await playlistsTask.ConfigureAwait(false);
+                List<SongInfo> songs = await songsTask.ConfigureAwait(false);
+                _personalizedPlaylistsCache = CloneList(playlists);
+                _personalizedNewSongsCache = CloneList(songs);
 		_personalizedCacheFetchedUtc = DateTime.UtcNow;
 		return (Playlists: _personalizedPlaylistsCache, Songs: _personalizedNewSongsCache);
 	}
@@ -6087,7 +6768,7 @@ private ToolStripMenuItem helpMenuItem;
 						Type = ListItemType.Category,
 						CategoryId = "daily_recommend_songs",
 						CategoryName = "每日推荐歌曲",
-						ItemCount = ((songCount > 0) ? songCount : null),
+						ItemCount = ((songCount > 0) ? new int?(songCount) : ((int?)null)),
 						ItemUnit = ((songCount > 0) ? "首" : null)
 					},
 					new ListItemInfo
@@ -6095,7 +6776,7 @@ private ToolStripMenuItem helpMenuItem;
 						Type = ListItemType.Category,
 						CategoryId = "daily_recommend_playlists",
 						CategoryName = "每日推荐歌单",
-						ItemCount = ((playlistCount > 0) ? playlistCount : null),
+						ItemCount = ((playlistCount > 0) ? new int?(playlistCount) : ((int?)null)),
 						ItemUnit = ((playlistCount > 0) ? "个" : null)
 					}
 				};
@@ -6113,7 +6794,8 @@ private ToolStripMenuItem helpMenuItem;
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			Debug.WriteLine($"[LoadDailyRecommend] 异常: {ex2}");
+			Exception ex3 = ex2;
+			Debug.WriteLine($"[LoadDailyRecommend] 异常: {ex3}");
 			throw;
 		}
 	}
@@ -6138,7 +6820,7 @@ private ToolStripMenuItem helpMenuItem;
 						Type = ListItemType.Category,
 						CategoryId = "personalized_newsongs",
 						CategoryName = "推荐新歌",
-						ItemCount = ((songCount > 0) ? songCount : null),
+						ItemCount = ((songCount > 0) ? new int?(songCount) : ((int?)null)),
 						ItemUnit = ((songCount > 0) ? "首" : null)
 					},
 					new ListItemInfo
@@ -6146,7 +6828,7 @@ private ToolStripMenuItem helpMenuItem;
 						Type = ListItemType.Category,
 						CategoryId = "personalized_playlists",
 						CategoryName = "推荐歌单",
-						ItemCount = ((playlistCount > 0) ? playlistCount : null),
+						ItemCount = ((playlistCount > 0) ? new int?(playlistCount) : ((int?)null)),
 						ItemUnit = ((playlistCount > 0) ? "个" : null)
 					}
 				};
@@ -6164,7 +6846,8 @@ private ToolStripMenuItem helpMenuItem;
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			Debug.WriteLine($"[LoadPersonalized] 异常: {ex2}");
+			Exception ex3 = ex2;
+			Debug.WriteLine($"[LoadPersonalized] 异常: {ex3}");
 			throw;
 		}
 	}
@@ -6189,11 +6872,12 @@ private ToolStripMenuItem helpMenuItem;
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			if (TryHandleOperationCancelled(ex2, "加载排行榜已取消"))
+			Exception ex3 = ex2;
+			if (TryHandleOperationCancelled(ex3, "加载排行榜已取消"))
 			{
 				return;
 			}
-			Debug.WriteLine($"[LoadToplist] 异常: {ex2}");
+			Debug.WriteLine($"[LoadToplist] 异常: {ex3}");
 			throw;
 		}
 	}
@@ -6220,7 +6904,7 @@ private ToolStripMenuItem helpMenuItem;
 				{
 					if (!ShouldAbortViewRender(viewToken, "加载排行榜"))
 					{
-						DisplayPlaylists(playlists, preserveSelection: true, viewSource, accessibleName, 1, showPagination: false, hasNextPage: false, announceHeader: false, suppressFocus: false);
+						DisplayPlaylists(playlists, preserveSelection: true, viewSource, accessibleName, 1, showPagination: false, hasNextPage: false, announceHeader: false);
 						FocusListAfterEnrich(0);
 						if (playlists.Count == 0)
 						{
@@ -6286,11 +6970,12 @@ private ToolStripMenuItem helpMenuItem;
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			if (TryHandleOperationCancelled(ex2, "加载每日推荐歌曲已取消"))
+			Exception ex3 = ex2;
+			if (TryHandleOperationCancelled(ex3, "加载每日推荐歌曲已取消"))
 			{
 				return;
 			}
-			Debug.WriteLine($"[LoadDailyRecommendSongs] 异常: {ex2}");
+			Debug.WriteLine($"[LoadDailyRecommendSongs] 异常: {ex3}");
 			throw;
 		}
 	}
@@ -6309,7 +6994,7 @@ private ToolStripMenuItem helpMenuItem;
 					{
 						if (!ShouldAbortViewRender(viewToken, "每日推荐歌曲"))
 						{
-							DisplaySongs(cachedSongs, showPagination: false, hasNextPage: false, 1, preserveSelection: true, viewSource, accessibleName, skipAvailabilityCheck: false, announceHeader: false, suppressFocus: false);
+							DisplaySongs(cachedSongs, showPagination: false, hasNextPage: false, 1, preserveSelection: true, viewSource, accessibleName, skipAvailabilityCheck: false, announceHeader: false);
 							FocusListAfterEnrich(0);
 							UpdateStatusBar((cachedSongs.Count == 0) ? "暂无每日推荐歌曲" : $"每日推荐歌曲（缓存）共 {cachedSongs.Count} 首");
 						}
@@ -6333,7 +7018,7 @@ private ToolStripMenuItem helpMenuItem;
 				{
 					if (!ShouldAbortViewRender(viewToken, "每日推荐歌曲"))
 					{
-						DisplaySongs(songsResult, showPagination: false, hasNextPage: false, 1, preserveSelection: true, viewSource, accessibleName, skipAvailabilityCheck: false, announceHeader: false, suppressFocus: false);
+						DisplaySongs(songsResult, showPagination: false, hasNextPage: false, 1, preserveSelection: true, viewSource, accessibleName, skipAvailabilityCheck: false, announceHeader: false);
 						FocusListAfterEnrich(0);
 						if (songsResult.Count == 0)
 						{
@@ -6399,11 +7084,12 @@ private ToolStripMenuItem helpMenuItem;
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			if (TryHandleOperationCancelled(ex2, "加载每日推荐歌单已取消"))
+			Exception ex3 = ex2;
+			if (TryHandleOperationCancelled(ex3, "加载每日推荐歌单已取消"))
 			{
 				return;
 			}
-			Debug.WriteLine($"[LoadDailyRecommendPlaylists] 异常: {ex2}");
+			Debug.WriteLine($"[LoadDailyRecommendPlaylists] 异常: {ex3}");
 			throw;
 		}
 	}
@@ -6422,7 +7108,7 @@ private ToolStripMenuItem helpMenuItem;
 					{
 						if (!ShouldAbortViewRender(viewToken, "每日推荐歌单"))
 						{
-							DisplayPlaylists(cachedPlaylists, preserveSelection: true, viewSource, accessibleName, 1, showPagination: false, hasNextPage: false, announceHeader: false, suppressFocus: false);
+							DisplayPlaylists(cachedPlaylists, preserveSelection: true, viewSource, accessibleName, 1, showPagination: false, hasNextPage: false, announceHeader: false);
 							FocusListAfterEnrich(0);
 							UpdateStatusBar((cachedPlaylists.Count == 0) ? "暂无每日推荐歌单" : $"每日推荐歌单（缓存）共 {cachedPlaylists.Count} 个");
 						}
@@ -6432,10 +7118,10 @@ private ToolStripMenuItem helpMenuItem;
 				List<PlaylistInfo> playlistsResult = (await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.GetDailyRecommendPlaylistsAsync(), "daily_recommend:playlists", viewToken, delegate(int attempt, Exception _)
 				{
 					SafeInvoke(delegate
-				{
-					UpdateStatusBar($"加载每日推荐歌单失败，正在重试（第 {attempt} 次）...");
-				});
-			}).ConfigureAwait(continueOnCapturedContext: true)) ?? new List<PlaylistInfo>();
+					{
+						UpdateStatusBar($"加载每日推荐歌单失败，正在重试（第 {attempt} 次）...");
+					});
+				}).ConfigureAwait(continueOnCapturedContext: true)) ?? new List<PlaylistInfo>();
 				_dailyRecommendPlaylistsCache = CloneList(playlistsResult);
 				_dailyRecommendPlaylistsFetchedUtc = DateTime.UtcNow;
 				if (viewToken.IsCancellationRequested)
@@ -6446,7 +7132,7 @@ private ToolStripMenuItem helpMenuItem;
 				{
 					if (!ShouldAbortViewRender(viewToken, "每日推荐歌单"))
 					{
-						DisplayPlaylists(playlistsResult, preserveSelection: true, viewSource, accessibleName, 1, showPagination: false, hasNextPage: false, announceHeader: false, suppressFocus: false);
+						DisplayPlaylists(playlistsResult, preserveSelection: true, viewSource, accessibleName, 1, showPagination: false, hasNextPage: false, announceHeader: false);
 						FocusListAfterEnrich(0);
 						if (playlistsResult.Count == 0)
 						{
@@ -6512,11 +7198,12 @@ private ToolStripMenuItem helpMenuItem;
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			if (TryHandleOperationCancelled(ex2, "加载推荐歌单已取消"))
+			Exception ex3 = ex2;
+			if (TryHandleOperationCancelled(ex3, "加载推荐歌单已取消"))
 			{
 				return;
 			}
-			Debug.WriteLine($"[LoadPersonalizedPlaylists] 异常: {ex2}");
+			Debug.WriteLine($"[LoadPersonalizedPlaylists] 异常: {ex3}");
 			throw;
 		}
 	}
@@ -6535,7 +7222,7 @@ private ToolStripMenuItem helpMenuItem;
 					{
 						if (!ShouldAbortViewRender(viewToken, "推荐歌单"))
 						{
-							DisplayPlaylists(cachedPlaylists, preserveSelection: true, viewSource, accessibleName, 1, showPagination: false, hasNextPage: false, announceHeader: false, suppressFocus: false);
+							DisplayPlaylists(cachedPlaylists, preserveSelection: true, viewSource, accessibleName, 1, showPagination: false, hasNextPage: false, announceHeader: false);
 							FocusListAfterEnrich(0);
 							UpdateStatusBar((cachedPlaylists.Count == 0) ? "暂无推荐歌单" : $"推荐歌单（缓存）共 {cachedPlaylists.Count} 个");
 						}
@@ -6545,10 +7232,10 @@ private ToolStripMenuItem helpMenuItem;
 				List<PlaylistInfo> playlistsResult = (await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.GetPersonalizedPlaylistsAsync(), "personalized:playlists", viewToken, delegate(int attempt, Exception _)
 				{
 					SafeInvoke(delegate
-				{
-					UpdateStatusBar($"加载推荐歌单失败，正在重试（第 {attempt} 次）...");
-				});
-			}).ConfigureAwait(continueOnCapturedContext: true)) ?? new List<PlaylistInfo>();
+					{
+						UpdateStatusBar($"加载推荐歌单失败，正在重试（第 {attempt} 次）...");
+					});
+				}).ConfigureAwait(continueOnCapturedContext: true)) ?? new List<PlaylistInfo>();
 				_personalizedPlaylistsCache = CloneList(playlistsResult);
 				_personalizedCacheFetchedUtc = DateTime.UtcNow;
 				if (viewToken.IsCancellationRequested)
@@ -6559,7 +7246,7 @@ private ToolStripMenuItem helpMenuItem;
 				{
 					if (!ShouldAbortViewRender(viewToken, "推荐歌单"))
 					{
-						DisplayPlaylists(playlistsResult, preserveSelection: true, viewSource, accessibleName, 1, showPagination: false, hasNextPage: false, announceHeader: false, suppressFocus: false);
+						DisplayPlaylists(playlistsResult, preserveSelection: true, viewSource, accessibleName, 1, showPagination: false, hasNextPage: false, announceHeader: false);
 						FocusListAfterEnrich(0);
 						if (playlistsResult.Count == 0)
 						{
@@ -6625,11 +7312,12 @@ private ToolStripMenuItem helpMenuItem;
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			if (TryHandleOperationCancelled(ex2, "加载推荐新歌已取消"))
+			Exception ex3 = ex2;
+			if (TryHandleOperationCancelled(ex3, "加载推荐新歌已取消"))
 			{
 				return;
 			}
-			Debug.WriteLine($"[LoadPersonalizedNewSongs] 异常: {ex2}");
+			Debug.WriteLine($"[LoadPersonalizedNewSongs] 异常: {ex3}");
 			throw;
 		}
 	}
@@ -6648,7 +7336,7 @@ private ToolStripMenuItem helpMenuItem;
 					{
 						if (!ShouldAbortViewRender(viewToken, "推荐新歌"))
 						{
-							DisplaySongs(cachedSongs, showPagination: false, hasNextPage: false, 1, preserveSelection: true, viewSource, accessibleName, skipAvailabilityCheck: false, announceHeader: false, suppressFocus: false);
+							DisplaySongs(cachedSongs, showPagination: false, hasNextPage: false, 1, preserveSelection: true, viewSource, accessibleName, skipAvailabilityCheck: false, announceHeader: false);
 							FocusListAfterEnrich(0);
 							UpdateStatusBar((cachedSongs.Count == 0) ? "暂无推荐新歌" : $"推荐新歌（缓存）共 {cachedSongs.Count} 首");
 						}
@@ -6672,7 +7360,7 @@ private ToolStripMenuItem helpMenuItem;
 				{
 					if (!ShouldAbortViewRender(viewToken, "推荐新歌"))
 					{
-						DisplaySongs(songsResult, showPagination: false, hasNextPage: false, 1, preserveSelection: true, viewSource, accessibleName, skipAvailabilityCheck: false, announceHeader: false, suppressFocus: false);
+						DisplaySongs(songsResult, showPagination: false, hasNextPage: false, 1, preserveSelection: true, viewSource, accessibleName, skipAvailabilityCheck: false, announceHeader: false);
 						FocusListAfterEnrich(0);
 						if (songsResult.Count == 0)
 						{
@@ -6707,6 +7395,186 @@ private ToolStripMenuItem helpMenuItem;
 		}
 	}
 
+	private bool ShouldUseVirtualSongList(List<SongInfo> songs)
+	{
+		return false;
+	}
+
+	private void DisableVirtualSongList()
+	{
+		_isVirtualSongListActive = false;
+		_virtualSongs.Clear();
+		_virtualStartIndex = 1;
+		_virtualShowPagination = false;
+		_virtualHasPreviousPage = false;
+		_virtualHasNextPage = false;
+		ResetVirtualItemCache();
+		if (resultListView != null)
+		{
+			ResetListViewSelectionState();
+			if (resultListView.VirtualMode)
+			{
+				resultListView.VirtualMode = false;
+			}
+			resultListView.VirtualListSize = 0;
+		}
+	}
+
+	private void ConfigureVirtualSongList(List<SongInfo> songs, int startIndex, bool showPagination, bool hasPreviousPage, bool hasNextPage)
+	{
+		_isVirtualSongListActive = true;
+		_virtualSongs = songs ?? new List<SongInfo>();
+		_virtualStartIndex = Math.Max(1, startIndex);
+		_virtualShowPagination = showPagination;
+		_virtualHasPreviousPage = showPagination && hasPreviousPage;
+		_virtualHasNextPage = showPagination && hasNextPage;
+		ResetVirtualItemCache();
+		if (resultListView != null)
+		{
+			int virtualSongListSize = GetVirtualSongListSize();
+			if (virtualSongListSize <= 0)
+			{
+				ResetListViewSelectionState();
+			}
+			if (!resultListView.VirtualMode)
+			{
+				resultListView.VirtualMode = true;
+			}
+			resultListView.VirtualListSize = virtualSongListSize;
+			resultListView.Invalidate();
+		}
+	}
+
+	private int GetVirtualSongListSize()
+	{
+		int num = _virtualSongs?.Count ?? 0;
+		checked
+		{
+			if (_virtualShowPagination)
+			{
+				if (_virtualHasPreviousPage)
+				{
+					num++;
+				}
+				if (_virtualHasNextPage)
+				{
+					num++;
+				}
+			}
+			return num;
+		}
+	}
+
+	private void ResetVirtualItemCache()
+	{
+		_virtualCacheStartIndex = -1;
+		_virtualCacheEndIndex = -1;
+		_virtualItemCache = null;
+	}
+
+	private ListViewItem? TryGetCachedVirtualItem(int index)
+	{
+		if (_virtualItemCache == null)
+		{
+			return null;
+		}
+		if (index < _virtualCacheStartIndex || index > _virtualCacheEndIndex)
+		{
+			return null;
+		}
+		int num = checked(index - _virtualCacheStartIndex);
+		if (num < 0 || num >= _virtualItemCache.Length)
+		{
+			return null;
+		}
+		return _virtualItemCache[num];
+	}
+
+	private ListViewItem BuildVirtualItemByIndex(int index)
+	{
+		int num = _virtualSongs?.Count ?? 0;
+		if (index >= 0 && index < num)
+		{
+			return BuildVirtualSongItem(index);
+		}
+		int num2 = num;
+		if (_virtualShowPagination && _virtualHasPreviousPage)
+		{
+			if (index == num2)
+			{
+				return BuildPaginationItem("上一页", -2);
+			}
+			num2 = checked(num2 + 1);
+		}
+		if (_virtualShowPagination && _virtualHasNextPage && index == num2)
+		{
+			return BuildPaginationItem("下一页", -3);
+		}
+		return new ListViewItem(new string[6])
+		{
+			Tag = null
+		};
+	}
+
+	private ListViewItem BuildVirtualSongItem(int songIndex)
+	{
+		SongInfo songInfo = ((_virtualSongs != null && songIndex >= 0 && songIndex < _virtualSongs.Count) ? _virtualSongs[songIndex] : null);
+		if (songInfo == null)
+		{
+			return new ListViewItem(new string[6])
+			{
+				Tag = null
+			};
+		}
+		string text = (string.IsNullOrWhiteSpace(songInfo.Name) ? "未知" : songInfo.Name);
+		if (songInfo.RequiresVip)
+		{
+			text += "  [VIP]";
+		}
+		string formattedDuration = songInfo.FormattedDuration;
+		ListViewItem listViewItem = new ListViewItem(new string[6]
+		{
+			string.Empty,
+			FormatIndex(checked(_virtualStartIndex + songIndex)),
+			text,
+			string.IsNullOrWhiteSpace(songInfo.Artist) ? string.Empty : songInfo.Artist,
+			string.IsNullOrWhiteSpace(songInfo.Album) ? string.Empty : songInfo.Album,
+			formattedDuration
+		})
+		{
+			Tag = songIndex
+		};
+		if (songInfo.IsAvailable == false)
+		{
+			listViewItem.ForeColor = SystemColors.GrayText;
+			string text2 = (string.IsNullOrWhiteSpace(formattedDuration) ? "不可播放" : (formattedDuration + " (不可播放)"));
+			listViewItem.SubItems[5].Text = text2;
+			listViewItem.ToolTipText = "歌曲已下架或暂不可播放";
+		}
+		else
+		{
+			listViewItem.ForeColor = SystemColors.WindowText;
+			listViewItem.ToolTipText = null;
+		}
+		return listViewItem;
+	}
+
+	private static ListViewItem BuildPaginationItem(string text, int tag)
+	{
+		return new ListViewItem(new string[6]
+		{
+			string.Empty,
+			text,
+			string.Empty,
+			string.Empty,
+			string.Empty,
+			string.Empty
+		})
+		{
+			Tag = tag
+		};
+	}
+
 	private void DisplaySongs(List<SongInfo> songs, bool showPagination = false, bool hasNextPage = false, int startIndex = 1, bool preserveSelection = false, string? viewSource = null, string? accessibleName = null, bool skipAvailabilityCheck = false, bool announceHeader = true, bool suppressFocus = false, bool allowSelection = true)
 	{
 		ConfigureListViewDefault();
@@ -6715,11 +7583,10 @@ private ToolStripMenuItem helpMenuItem;
 		{
 			num = resultListView.SelectedIndices[0];
 		}
-		bool isPlaylistView = viewSource != null && viewSource.StartsWith("playlist:", StringComparison.OrdinalIgnoreCase);
-		_currentPlaylistOwnedByUser = isPlaylistView && _currentPlaylist != null && IsPlaylistOwnedByUser(_currentPlaylist, GetCurrentUserId());
-		List<SongInfo> songsToRender = CloneList(songs);
-		_currentSongs = songsToRender;
-		ApplySongLikeStates(songsToRender);
+		bool flag = viewSource?.StartsWith("playlist:", StringComparison.OrdinalIgnoreCase) ?? false;
+		_currentPlaylistOwnedByUser = flag && _currentPlaylist != null && IsPlaylistOwnedByUser(_currentPlaylist, GetCurrentUserId());
+		List<SongInfo> list = (_currentSongs = CloneList(songs));
+		ApplySongLikeStates(list);
 		_currentPlaylists.Clear();
 		_currentAlbums.Clear();
 		_currentArtists.Clear();
@@ -6727,104 +7594,110 @@ private ToolStripMenuItem helpMenuItem;
 		_currentPodcasts.Clear();
 		_currentPodcastSounds.Clear();
 		_currentPodcast = null;
+		bool flag2 = _currentPage > 1 || startIndex > 1;
+		bool flag3 = ShouldUseVirtualSongList(list);
 		resultListView.BeginUpdate();
-		resultListView.Items.Clear();
-		if (songsToRender == null || songsToRender.Count == 0)
+		ResetListViewSelectionState();
+		if (resultListView.VirtualMode)
 		{
-			resultListView.EndUpdate();
-			_currentPlaylistOwnedByUser = viewSource != null && viewSource.StartsWith("playlist:", StringComparison.OrdinalIgnoreCase) && _currentPlaylist != null && IsPlaylistOwnedByUser(_currentPlaylist, GetCurrentUserId());
-			SetViewContext(viewSource, accessibleName ?? "歌曲列表");
-			if (announceHeader)
-			{
-				AnnounceListViewHeaderIfNeeded(accessibleName ?? "歌曲列表");
-			}
-			return;
+			resultListView.VirtualListSize = 0;
 		}
+		resultListView.Items.Clear();
+		if (list == null || list.Count == 0)
+		{
+			EndListViewUpdateAndRefreshAccessibility();
+			_currentPlaylistOwnedByUser = viewSource != null && viewSource.StartsWith("playlist:", StringComparison.OrdinalIgnoreCase) && _currentPlaylist != null && IsPlaylistOwnedByUser(_currentPlaylist, GetCurrentUserId());
+                        ApplyListViewContext(viewSource, accessibleName, "歌曲列表", announceHeader);
+                        return;
+                }
+		bool flag4 = false;
 		int num2 = startIndex;
 		int num3 = 0;
 		checked
 		{
-			foreach (SongInfo song in songsToRender)
+			foreach (SongInfo item in list)
 			{
-				string text = (string.IsNullOrWhiteSpace(song.Name) ? "未知" : song.Name);
-				if (song.RequiresVip)
-				{
-					text += "  [VIP]";
-				}
-				ListViewItem listViewItem = new ListViewItem(new string[5]
-				{
-					FormatIndex(num2),
-					text,
-					string.IsNullOrWhiteSpace(song.Artist) ? string.Empty : song.Artist,
-					string.IsNullOrWhiteSpace(song.Album) ? string.Empty : song.Album,
-					song.FormattedDuration
-				});
+				ListViewItem listViewItem = new ListViewItem(new string[6]);
+				FillListViewItemFromSongInfo(listViewItem, item, num2);
 				listViewItem.Tag = num3;
-				if (song != null && song.IsAvailable == false)
-				{
-					listViewItem.ForeColor = SystemColors.GrayText;
-					string formattedDuration = song.FormattedDuration;
-					listViewItem.SubItems[4].Text = (string.IsNullOrWhiteSpace(formattedDuration) ? "不可播放" : (formattedDuration + " (不可播放)"));
-					listViewItem.ToolTipText = "歌曲已下架或暂不可播放";
-				}
 				resultListView.Items.Add(listViewItem);
 				num2++;
 				num3++;
 			}
-			bool flag = _currentPage > 1 || startIndex > 1;
 			if (showPagination)
 			{
-				if (flag)
+				if (flag2)
 				{
-					ListViewItem listViewItem2 = resultListView.Items.Add("上一页");
+					ListViewItem listViewItem2 = resultListView.Items.Add(new ListViewItem(new string[6]
+					{
+						string.Empty,
+						"上一页",
+						string.Empty,
+						string.Empty,
+						string.Empty,
+						string.Empty
+					}));
 					listViewItem2.Tag = -2;
 				}
 				if (hasNextPage)
 				{
-					ListViewItem listViewItem3 = resultListView.Items.Add("下一页");
+					ListViewItem listViewItem3 = resultListView.Items.Add(new ListViewItem(new string[6]
+					{
+						string.Empty,
+						"下一页",
+						string.Empty,
+						string.Empty,
+						string.Empty,
+						string.Empty
+					}));
 					listViewItem3.Tag = -3;
 				}
 			}
-			resultListView.EndUpdate();
-			string text2 = accessibleName;
-			if (string.IsNullOrWhiteSpace(text2))
+			EndListViewUpdateAndRefreshAccessibility();
+			string text = accessibleName;
+			if (string.IsNullOrWhiteSpace(text))
 			{
-				text2 = ((!string.IsNullOrEmpty(viewSource) && viewSource.StartsWith("search:", StringComparison.OrdinalIgnoreCase)) ? "搜索结果" : "歌曲列表");
+				text = ((!string.IsNullOrEmpty(viewSource) && viewSource.StartsWith("search:", StringComparison.OrdinalIgnoreCase)) ? "搜索结果" : "歌曲列表");
 			}
-			SetViewContext(viewSource, text2);
-			if (announceHeader)
+                        ApplyListViewContext(viewSource, text, announceHeader);
+			bool flag5 = false;
+			int num4 = -1;
+                        if (!string.IsNullOrWhiteSpace(_pendingSongFocusId))
+                        {
+                                num4 = _currentSongs.FindIndex((SongInfo s) => s != null && string.Equals(s.Id, _pendingSongFocusId, StringComparison.OrdinalIgnoreCase));
+                                if (num4 < 0)
+                                {
+                                        num4 = _currentSongs.FindIndex((SongInfo s) => s != null && s.IsCloudSong && !string.IsNullOrEmpty(s.CloudSongId) && string.Equals(s.CloudSongId, _pendingSongFocusId, StringComparison.OrdinalIgnoreCase));
+                                }
+                                flag5 = num4 >= 0;
+                        }
+                        bool deferPlaybackFocus = !string.IsNullOrWhiteSpace(_deferredPlaybackFocusViewSource) && string.Equals(_deferredPlaybackFocusViewSource, viewSource ?? _currentViewSource, StringComparison.OrdinalIgnoreCase);
+                        if (deferPlaybackFocus && !flag5)
+                        {
+                                suppressFocus = true;
+                        }
+                        else if (deferPlaybackFocus && flag5)
+                        {
+                                _deferredPlaybackFocusViewSource = null;
+                        }
+                        bool flag6 = _pendingSongFocusSatisfied && !string.IsNullOrWhiteSpace(_pendingSongFocusSatisfiedViewSource) && string.Equals(_pendingSongFocusSatisfiedViewSource, viewSource ?? _currentViewSource, StringComparison.OrdinalIgnoreCase);
+			if (allowSelection && resultListView.Items.Count > 0 && unchecked(!suppressFocus || flag5) && !IsListAutoFocusSuppressed && !flag6)
 			{
-				AnnounceListViewHeaderIfNeeded(text2);
-			}
-			bool matchedPendingSelection = false;
-			int pendingSelectionIndex = -1;
-			if (!string.IsNullOrWhiteSpace(_pendingSongFocusId))
-			{
-				pendingSelectionIndex = _currentSongs.FindIndex((SongInfo s) => s != null && string.Equals(s.Id, _pendingSongFocusId, StringComparison.OrdinalIgnoreCase));
-				if (pendingSelectionIndex < 0)
+				int num5 = -1;
+				bool flag7 = flag5;
+				if (flag5)
 				{
-					pendingSelectionIndex = _currentSongs.FindIndex((SongInfo s) => s != null && s.IsCloudSong && !string.IsNullOrEmpty(s.CloudSongId) && string.Equals(s.CloudSongId, _pendingSongFocusId, StringComparison.OrdinalIgnoreCase));
-				}
-				matchedPendingSelection = pendingSelectionIndex >= 0;
-			}
-			bool skipFocusDueToSatisfied = _pendingSongFocusSatisfied && !string.IsNullOrWhiteSpace(_pendingSongFocusSatisfiedViewSource) && string.Equals(_pendingSongFocusSatisfiedViewSource, viewSource ?? _currentViewSource, StringComparison.OrdinalIgnoreCase);
-			if (allowSelection && resultListView.Items.Count > 0 && (!suppressFocus || matchedPendingSelection) && !IsListAutoFocusSuppressed && !skipFocusDueToSatisfied)
-			{
-				int targetIndex = -1;
-				bool matchedPending = matchedPendingSelection;
-				if (matchedPendingSelection)
-				{
-					targetIndex = pendingSelectionIndex;
+					num5 = num4;
 					_pendingListFocusIndex = -1;
 					_pendingListFocusViewSource = null;
 				}
-				if (targetIndex < 0)
+				if (num5 < 0)
 				{
-					targetIndex = ((num >= 0) ? Math.Min(num, resultListView.Items.Count - 1) : 0);
+					num5 = ((num >= 0) ? Math.Min(num, resultListView.Items.Count - 1) : 0);
 				}
-				targetIndex = ResolvePendingListFocusIndex(targetIndex);
-				EnsureListSelectionWithoutFocus(targetIndex);
-				if (matchedPending)
+				num5 = ResolvePendingListFocusIndex(num5);
+				EnsureListSelectionWithoutFocus(num5);
+				if (flag7)
 				{
 					_pendingSongFocusId = null;
 					_pendingSongFocusViewSource = null;
@@ -6833,12 +7706,12 @@ private ToolStripMenuItem helpMenuItem;
 					if (string.Equals(viewSource, "user_cloud", StringComparison.OrdinalIgnoreCase))
 					{
 						_skipCloudRestoreOnce = true;
-						if (_currentSongs != null && targetIndex >= 0 && targetIndex < _currentSongs.Count)
+						if (_currentSongs != null && num5 >= 0 && num5 < _currentSongs.Count)
 						{
-							SongInfo focused = _currentSongs[targetIndex];
-							if (focused != null && focused.IsCloudSong && !string.IsNullOrEmpty(focused.CloudSongId))
+							SongInfo songInfo = _currentSongs[num5];
+							if (songInfo != null && songInfo.IsCloudSong && !string.IsNullOrEmpty(songInfo.CloudSongId))
 							{
-								_lastSelectedCloudSongId = focused.CloudSongId;
+								_lastSelectedCloudSongId = songInfo.CloudSongId;
 								_pendingCloudFocusId = null;
 							}
 						}
@@ -6851,7 +7724,7 @@ private ToolStripMenuItem helpMenuItem;
 			}
 			if (!skipAvailabilityCheck)
 			{
-				ScheduleAvailabilityCheck(songsToRender);
+				ScheduleAvailabilityCheck(list);
 			}
 		}
 	}
@@ -6864,13 +7737,151 @@ private ToolStripMenuItem helpMenuItem;
 		}
 	}
 
+	private static bool IsPlaceholderSong(SongInfo? song)
+	{
+		return song == null || string.IsNullOrWhiteSpace(song.Id);
+	}
+
+private static SongInfo CreatePlaceholderSong(string? viewSource)
+{
+        return new SongInfo
+        {
+                Name = "加载中 ...",
+                ViewSource = (viewSource ?? string.Empty)
+        };
+}
+
+private int ResolveSongIndexInCurrentSongs(SongInfo song)
+{
+        if (song == null || _currentSongs == null || _currentSongs.Count == 0)
+        {
+                return -1;
+        }
+        int index = _currentSongs.IndexOf(song);
+        if (index >= 0)
+        {
+                return index;
+        }
+        if (!string.IsNullOrWhiteSpace(song.Id))
+        {
+                index = _currentSongs.FindIndex((SongInfo s) => s != null && string.Equals(s.Id, song.Id, StringComparison.OrdinalIgnoreCase));
+        }
+        return index;
+}
+
+private void CancelPendingPlaceholderPlayback(string? reason = null)
+{
+        if (_pendingPlaceholderPlaybackIndex >= 0)
+        {
+                Debug.WriteLine($"[MainForm] 取消占位播放等待: index={_pendingPlaceholderPlaybackIndex}, reason={reason ?? "unknown"}");
+        }
+        _pendingPlaceholderPlaybackIndex = -1;
+        _pendingPlaceholderPlaybackViewSource = null;
+}
+
+private bool TryQueuePlaceholderPlayback(SongInfo song, int? songIndex = null)
+{
+        if (!IsPlaceholderSong(song))
+        {
+                return false;
+        }
+        int index = songIndex ?? ResolveSongIndexInCurrentSongs(song);
+        if (index < 0)
+        {
+                Debug.WriteLine("[MainForm] 占位歌曲播放请求无法定位索引，已忽略");
+                UpdateStatusBar("歌曲正在加载中，请稍候...");
+                return true;
+        }
+        string viewSource = song.ViewSource ?? _currentViewSource ?? string.Empty;
+        _pendingPlaceholderPlaybackIndex = index;
+        _pendingPlaceholderPlaybackViewSource = viewSource;
+        Debug.WriteLine($"[MainForm] 占位歌曲播放已排队: index={index}, viewSource={viewSource}");
+        UpdateStatusBar($"已选择加载中歌曲，等待加载完成后自动播放（第 {index + 1} 首）");
+        return true;
+}
+
+private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> updatedSongs)
+{
+        if (updatedSongs == null || updatedSongs.Count == 0 || _pendingPlaceholderPlaybackIndex < 0)
+        {
+                return;
+        }
+        if (!string.Equals(_pendingPlaceholderPlaybackViewSource, _currentViewSource, StringComparison.OrdinalIgnoreCase))
+        {
+                return;
+        }
+        if (!updatedSongs.TryGetValue(_pendingPlaceholderPlaybackIndex, out SongInfo song))
+        {
+                return;
+        }
+        if (IsPlaceholderSong(song))
+        {
+                return;
+        }
+        int index = _pendingPlaceholderPlaybackIndex;
+        CancelPendingPlaceholderPlayback("resolved");
+        Debug.WriteLine($"[MainForm] 占位歌曲已加载，开始播放: index={index}, id={song?.Id}");
+        if (base.IsHandleCreated)
+        {
+                BeginInvoke((Action)(async () =>
+                {
+                        if (song != null)
+                        {
+                                await PlaySong(song);
+                        }
+                }));
+        }
+        else if (song != null)
+        {
+                _ = PlaySong(song);
+        }
+}
+
+        private void FillListViewItemFromSongInfo(ListViewItem item, SongInfo? song, int displayIndex)
+        {
+                EnsureSubItemCount(item, 6);
+                if (IsPlaceholderSong(song))
+                {
+			item.SubItems[1].Text = FormatIndex(displayIndex);
+			item.SubItems[2].Text = "加载中 ...";
+			item.SubItems[3].Text = string.Empty;
+			item.SubItems[4].Text = string.Empty;
+			item.SubItems[5].Text = string.Empty;
+			item.ForeColor = SystemColors.WindowText;
+			item.ToolTipText = null;
+			return;
+		}
+		string text = (string.IsNullOrWhiteSpace(song.Name) ? "未知" : song.Name);
+		if (song.RequiresVip)
+		{
+			text += "  [VIP]";
+		}
+		item.SubItems[1].Text = FormatIndex(displayIndex);
+		item.SubItems[2].Text = text;
+		item.SubItems[3].Text = (string.IsNullOrWhiteSpace(song.Artist) ? string.Empty : song.Artist);
+		item.SubItems[4].Text = (string.IsNullOrWhiteSpace(song.Album) ? string.Empty : song.Album);
+		item.SubItems[5].Text = song.FormattedDuration;
+		if (song.IsAvailable == false)
+		{
+			item.ForeColor = SystemColors.GrayText;
+			string formattedDuration = song.FormattedDuration;
+			item.SubItems[5].Text = (string.IsNullOrWhiteSpace(formattedDuration) ? "不可播放" : (formattedDuration + " (不可播放)"));
+			item.ToolTipText = "歌曲已下架或暂不可播放";
+		}
+                else
+                {
+                        item.ForeColor = SystemColors.WindowText;
+                        item.ToolTipText = null;
+                }
+        }
+
 	private static List<T> CloneList<T>(IEnumerable<T> source)
 	{
 		if (source == null)
 		{
 			return new List<T>();
 		}
-		return (source is List<T> list) ? new List<T>(list) : new List<T>(source);
+		return (source is List<T> collection) ? new List<T>(collection) : new List<T>(source);
 	}
 
 	private string FormatIndex(int index)
@@ -6880,73 +7891,65 @@ private ToolStripMenuItem helpMenuItem;
 
 	private bool IsDefaultSequenceHiddenView()
 	{
-		// 分类 / 主页等列表默认不显示序号（使用 ListItemInfo 作为数据源）
-		return _currentListItems != null
-			&& _currentListItems.Count > 0
-			&& _currentSongs.Count == 0
-			&& _currentPlaylists.Count == 0
-			&& _currentAlbums.Count == 0
-			&& _currentPodcasts.Count == 0
-			&& _currentPodcastSounds.Count == 0
-			&& _currentArtists.Count == 0;
+		return _currentListItems != null && _currentListItems.Count > 0 && _currentSongs.Count == 0 && _currentPlaylists.Count == 0 && _currentAlbums.Count == 0 && _currentPodcasts.Count == 0 && _currentPodcastSounds.Count == 0 && _currentArtists.Count == 0;
 	}
 
 	private void RefreshSequenceDisplayInPlace()
 	{
-		if (!_hideSequenceNumbers && IsDefaultSequenceHiddenView())
+		if ((!_hideSequenceNumbers && IsDefaultSequenceHiddenView()) || resultListView == null || resultListView.Items.Count == 0)
 		{
-			// 该视图本就默认隐藏序号，关闭隐藏模式时也不主动显示
 			return;
 		}
-		if (resultListView == null || resultListView.Items.Count == 0)
+		if (_isVirtualSongListActive && resultListView.VirtualMode)
 		{
+			resultListView.Invalidate();
 			return;
 		}
 		resultListView.BeginUpdate();
-		try
+		checked
 		{
-			for (int i = 0; i < resultListView.Items.Count; i++)
+			try
 			{
-				ListViewItem item = resultListView.Items[i];
-				if (item == null)
+				for (int i = 0; i < resultListView.Items.Count; i++)
 				{
-					continue;
-				}
-				bool isPrev = (item.Tag is int t && t == -2) || string.Equals(item.Text, "上一页", StringComparison.Ordinal);
-				bool isNext = (item.Tag is int t2 && t2 == -3) || string.Equals(item.Text, "下一页", StringComparison.Ordinal);
-				if (_hideSequenceNumbers)
-				{
-					item.Text = isPrev ? "上一页" : (isNext ? "下一页" : string.Empty);
-				}
-				else
-				{
-					if (isPrev)
+					ListViewItem listViewItem = resultListView.Items[i];
+					if (listViewItem != null)
 					{
-						item.Text = "上一页";
-					}
-					else if (isNext)
-					{
-						item.Text = "下一页";
-					}
-					else
-					{
-						item.Text = (i + 1).ToString();
+						EnsureSubItemCount(listViewItem, 6);
+						string a = ((listViewItem.SubItems.Count > 1) ? listViewItem.SubItems[1].Text : listViewItem.Text);
+						bool flag = (listViewItem.Tag is int num && num == -2) || string.Equals(a, "上一页", StringComparison.Ordinal);
+						bool flag2 = (listViewItem.Tag is int num2 && num2 == -3) || string.Equals(a, "下一页", StringComparison.Ordinal);
+						if (_hideSequenceNumbers)
+						{
+							listViewItem.SubItems[1].Text = (flag ? "上一页" : (flag2 ? "下一页" : string.Empty));
+						}
+						else if (flag)
+						{
+							listViewItem.SubItems[1].Text = "上一页";
+						}
+						else if (flag2)
+						{
+							listViewItem.SubItems[1].Text = "下一页";
+						}
+						else
+						{
+							listViewItem.SubItems[1].Text = (i + 1).ToString();
+						}
 					}
 				}
 			}
-		}
-		finally
-		{
-			resultListView.EndUpdate();
+			finally
+			{
+				resultListView.EndUpdate();
+			}
 		}
 	}
 
 	private void PatchSongs(List<SongInfo> songs, int startIndex, bool skipAvailabilityCheck = false, bool showPagination = false, bool hasPreviousPage = false, bool hasNextPage = false, int pendingFocusIndex = -1, bool allowSelection = true)
 	{
 		int num = ((resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : pendingFocusIndex);
-		List<SongInfo> songsToRender = CloneList(songs);
-		_currentSongs = songsToRender;
-		ApplySongLikeStates(songsToRender);
+		List<SongInfo> list = (_currentSongs = CloneList(songs));
+		ApplySongLikeStates(list);
 		_currentPlaylists.Clear();
 		_currentAlbums.Clear();
 		_currentArtists.Clear();
@@ -6954,67 +7957,27 @@ private ToolStripMenuItem helpMenuItem;
 		_currentPodcasts.Clear();
 		_currentPodcastSounds.Clear();
 		_currentPodcast = null;
+		bool flag = _isVirtualSongListActive || ShouldUseVirtualSongList(list);
 		resultListView.BeginUpdate();
-		int count = songsToRender.Count;
+		bool flag2 = false;
+		int count = list.Count;
 		int count2 = resultListView.Items.Count;
 		int num2 = Math.Min(count, count2);
 		checked
 		{
 			for (int i = 0; i < num2; i++)
 			{
-				SongInfo songInfo = songsToRender[i];
+				SongInfo song = list[i];
 				ListViewItem listViewItem = resultListView.Items[i];
-				EnsureSubItemCount(listViewItem, 5);
-				string text = (string.IsNullOrWhiteSpace(songInfo.Name) ? "未知" : songInfo.Name);
-				if (songInfo.RequiresVip)
-				{
-					text += "  [VIP]";
-				}
-				listViewItem.Text = FormatIndex(startIndex + i);
-				listViewItem.SubItems[1].Text = text;
-				listViewItem.SubItems[2].Text = (string.IsNullOrWhiteSpace(songInfo.Artist) ? string.Empty : songInfo.Artist);
-				listViewItem.SubItems[3].Text = (string.IsNullOrWhiteSpace(songInfo.Album) ? string.Empty : songInfo.Album);
-				listViewItem.SubItems[4].Text = songInfo.FormattedDuration;
+				FillListViewItemFromSongInfo(listViewItem, song, startIndex + i);
 				listViewItem.Tag = i;
-				if (songInfo != null && songInfo.IsAvailable == false)
-				{
-					listViewItem.ForeColor = SystemColors.GrayText;
-					string formattedDuration = songInfo.FormattedDuration;
-					listViewItem.SubItems[4].Text = (string.IsNullOrWhiteSpace(formattedDuration) ? "不可播放" : (formattedDuration + " (不可播放)"));
-					listViewItem.ToolTipText = "歌曲已下架或暂不可播放";
-				}
-				else
-				{
-					listViewItem.ForeColor = SystemColors.WindowText;
-					listViewItem.ToolTipText = null;
-				}
 			}
 			for (int j = count2; j < count; j++)
 			{
-				SongInfo songInfo2 = songsToRender[j];
-				string text2 = (string.IsNullOrWhiteSpace(songInfo2.Name) ? "未知" : songInfo2.Name);
-				if (songInfo2.RequiresVip)
-				{
-					text2 += "  [VIP]";
-				}
-				ListViewItem listViewItem2 = new ListViewItem(new string[5]
-				{
-					FormatIndex(startIndex + j),
-					text2,
-					string.IsNullOrWhiteSpace(songInfo2.Artist) ? string.Empty : songInfo2.Artist,
-					string.IsNullOrWhiteSpace(songInfo2.Album) ? string.Empty : songInfo2.Album,
-					songInfo2.FormattedDuration
-				})
-				{
-					Tag = j
-				};
-				if (songInfo2 != null && songInfo2.IsAvailable == false)
-				{
-					listViewItem2.ForeColor = SystemColors.GrayText;
-					string formattedDuration2 = songInfo2.FormattedDuration;
-					listViewItem2.SubItems[4].Text = (string.IsNullOrWhiteSpace(formattedDuration2) ? "不可播放" : (formattedDuration2 + " (不可播放)"));
-					listViewItem2.ToolTipText = "歌曲已下架或暂不可播放";
-				}
+				SongInfo song2 = list[j];
+				ListViewItem listViewItem2 = new ListViewItem(new string[6]);
+				FillListViewItemFromSongInfo(listViewItem2, song2, startIndex + j);
+				listViewItem2.Tag = j;
 				resultListView.Items.Add(listViewItem2);
 			}
 			for (int num3 = resultListView.Items.Count - 1; num3 >= count; num3--)
@@ -7025,7 +7988,15 @@ private ToolStripMenuItem helpMenuItem;
 			{
 				if (hasPreviousPage)
 				{
-					ListViewItem value = new ListViewItem("上一页")
+					ListViewItem value = new ListViewItem(new string[6]
+					{
+						string.Empty,
+						"上一页",
+						string.Empty,
+						string.Empty,
+						string.Empty,
+						string.Empty
+					})
 					{
 						Tag = -2
 					};
@@ -7033,64 +8004,72 @@ private ToolStripMenuItem helpMenuItem;
 				}
 				if (hasNextPage)
 				{
-					ListViewItem value2 = new ListViewItem("下一页")
+					ListViewItem value2 = new ListViewItem(new string[6]
+					{
+						string.Empty,
+						"下一页",
+						string.Empty,
+						string.Empty,
+						string.Empty,
+						string.Empty
+					})
 					{
 						Tag = -3
 					};
 					resultListView.Items.Add(value2);
 				}
-		}
-		resultListView.EndUpdate();
-		if (allowSelection && resultListView.Items.Count > 0)
-		{
-			int targetIndex = -1;
-			bool matchedPending = false;
-			if (!string.IsNullOrWhiteSpace(_pendingSongFocusId))
+			}
+			EndListViewUpdateAndRefreshAccessibility();
+			if (allowSelection && resultListView.Items.Count > 0)
 			{
-				targetIndex = _currentSongs.FindIndex((SongInfo s) => s != null && string.Equals(s.Id, _pendingSongFocusId, StringComparison.OrdinalIgnoreCase));
-				if (targetIndex < 0)
+				int num4 = -1;
+				bool flag3 = false;
+				if (!string.IsNullOrWhiteSpace(_pendingSongFocusId))
 				{
-					targetIndex = _currentSongs.FindIndex((SongInfo s) => s != null && s.IsCloudSong && !string.IsNullOrEmpty(s.CloudSongId) && string.Equals(s.CloudSongId, _pendingSongFocusId, StringComparison.OrdinalIgnoreCase));
-				}
-				matchedPending = (targetIndex >= 0);
-			}
-			if (targetIndex < 0)
-			{
-				targetIndex = ((num >= 0) ? Math.Min(num, resultListView.Items.Count - 1) : 0);
-			}
-			if (matchedPending)
-			{
-				_pendingListFocusIndex = -1;
-				_pendingListFocusViewSource = null;
-			}
-			targetIndex = ResolvePendingListFocusIndex(targetIndex);
-			EnsureListSelectionWithoutFocus(targetIndex);
-			if (matchedPending)
-			{
-				_pendingSongFocusId = null;
-				_pendingSongFocusViewSource = null;
-				_pendingSongFocusSatisfied = true;
-				_pendingSongFocusSatisfiedViewSource = _currentViewSource;
-				if (string.Equals(_currentViewSource, "user_cloud", StringComparison.OrdinalIgnoreCase) && targetIndex >= 0 && targetIndex < _currentSongs.Count)
-				{
-					SongInfo focused = _currentSongs[targetIndex];
-					if (focused != null && focused.IsCloudSong && !string.IsNullOrEmpty(focused.CloudSongId))
+					num4 = _currentSongs.FindIndex((SongInfo s) => s != null && string.Equals(s.Id, _pendingSongFocusId, StringComparison.OrdinalIgnoreCase));
+					if (num4 < 0)
 					{
-						_lastSelectedCloudSongId = focused.CloudSongId;
-						_pendingCloudFocusId = null;
-						_skipCloudRestoreOnce = true;
+						num4 = _currentSongs.FindIndex((SongInfo s) => s != null && s.IsCloudSong && !string.IsNullOrEmpty(s.CloudSongId) && string.Equals(s.CloudSongId, _pendingSongFocusId, StringComparison.OrdinalIgnoreCase));
+					}
+					flag3 = num4 >= 0;
+				}
+				if (num4 < 0)
+				{
+					num4 = ((num >= 0) ? Math.Min(num, resultListView.Items.Count - 1) : 0);
+				}
+				if (flag3)
+				{
+					_pendingListFocusIndex = -1;
+					_pendingListFocusViewSource = null;
+				}
+				num4 = ResolvePendingListFocusIndex(num4);
+				EnsureListSelectionWithoutFocus(num4);
+				if (flag3)
+				{
+					_pendingSongFocusId = null;
+					_pendingSongFocusViewSource = null;
+					_pendingSongFocusSatisfied = true;
+					_pendingSongFocusSatisfiedViewSource = _currentViewSource;
+					if (string.Equals(_currentViewSource, "user_cloud", StringComparison.OrdinalIgnoreCase) && num4 >= 0 && num4 < _currentSongs.Count)
+					{
+						SongInfo songInfo = _currentSongs[num4];
+						if (songInfo != null && songInfo.IsCloudSong && !string.IsNullOrEmpty(songInfo.CloudSongId))
+						{
+							_lastSelectedCloudSongId = songInfo.CloudSongId;
+							_pendingCloudFocusId = null;
+							_skipCloudRestoreOnce = true;
+						}
+					}
+					if (resultListView != null && resultListView.CanFocus && !IsListAutoFocusSuppressed)
+					{
+						resultListView.Focus();
 					}
 				}
-				if (resultListView != null && resultListView.CanFocus && !IsListAutoFocusSuppressed)
-				{
-					resultListView.Focus();
-				}
 			}
-		}
-		if (!skipAvailabilityCheck)
-		{
-			ScheduleAvailabilityCheck(songsToRender);
-		}
+			if (!skipAvailabilityCheck)
+			{
+				ScheduleAvailabilityCheck(list);
+			}
 		}
 	}
 
@@ -7098,13 +8077,14 @@ private ToolStripMenuItem helpMenuItem;
 	{
 		if (!string.IsNullOrWhiteSpace(viewSource))
 		{
-			if (!string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
-			{
-				_pendingSongFocusSatisfied = false;
-				_pendingSongFocusSatisfiedViewSource = null;
-				_lastAnnouncedViewSource = null;
-				_lastAnnouncedHeader = null;
-			}
+                if (!string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
+                {
+                        _pendingSongFocusSatisfied = false;
+                        _pendingSongFocusSatisfiedViewSource = null;
+                        _lastAnnouncedViewSource = null;
+                        _lastAnnouncedHeader = null;
+                        CancelPendingPlaceholderPlayback("view changed");
+                }
 			_currentViewSource = viewSource;
 			_isHomePage = string.Equals(viewSource, "homepage", StringComparison.OrdinalIgnoreCase);
 		}
@@ -7116,34 +8096,66 @@ private ToolStripMenuItem helpMenuItem;
 		{
 			_currentMixedQueryKey = null;
 		}
-		if (!string.IsNullOrWhiteSpace(accessibleName))
-		{
-			resultListView.AccessibleName = accessibleName;
-		}
-		else if (string.IsNullOrWhiteSpace(resultListView.AccessibleName))
-		{
-			resultListView.AccessibleName = "列表内容";
-		}
-	}
+                if (!string.IsNullOrWhiteSpace(accessibleName))
+                {
+                        if (!string.Equals(resultListView.AccessibleName, accessibleName, StringComparison.Ordinal))
+                        {
+                                resultListView.AccessibleName = accessibleName;
+                        }
+                }
+                else if (string.IsNullOrWhiteSpace(resultListView.AccessibleName))
+                {
+                        resultListView.AccessibleName = "列表内容";
+                }
+        }
 
-	private void AnnounceListViewHeaderIfNeeded(string? accessibleName)
-	{
-		// 仅在列表实际拥有焦点时才朗读，避免应用启动时无意朗读标题
-		if (resultListView != null && resultListView.ContainsFocus)
-		{
-			string value = ((!string.IsNullOrWhiteSpace(accessibleName)) ? accessibleName : ((!string.IsNullOrWhiteSpace(resultListView.AccessibleName)) ? resultListView.AccessibleName : string.Empty));
-			if (!string.IsNullOrWhiteSpace(value))
+        private void AnnounceListViewHeaderIfNeeded(string? accessibleName)     
+        {
+                if (resultListView != null && resultListView.ContainsFocus)     
+                {
+			string text = ((!string.IsNullOrWhiteSpace(accessibleName)) ? accessibleName : ((!string.IsNullOrWhiteSpace(resultListView.AccessibleName)) ? resultListView.AccessibleName : string.Empty));
+			if (!string.IsNullOrWhiteSpace(text) && (string.IsNullOrWhiteSpace(_currentViewSource) || !string.Equals(_lastAnnouncedViewSource, _currentViewSource, StringComparison.OrdinalIgnoreCase) || !string.Equals(_lastAnnouncedHeader, text, StringComparison.Ordinal)))
 			{
-				if (!string.IsNullOrWhiteSpace(_currentViewSource) && string.Equals(_lastAnnouncedViewSource, _currentViewSource, StringComparison.OrdinalIgnoreCase) && string.Equals(_lastAnnouncedHeader, value, StringComparison.Ordinal))
-				{
-					return;
-				}
-				TtsHelper.SpeakText(value);
+				TtsHelper.SpeakText(text);
 				_lastAnnouncedViewSource = _currentViewSource;
-				_lastAnnouncedHeader = value;
-			}
-		}
-	}
+				_lastAnnouncedHeader = text;
+                        }
+                }
+        }
+
+        private static string ResolveAccessibleName(string? accessibleName, string fallbackName)
+        {
+                return string.IsNullOrWhiteSpace(accessibleName) ? fallbackName : accessibleName;
+        }
+
+        private void ApplyListViewContext(string? viewSource, string? accessibleName, string fallbackName, bool announceHeader)
+        {
+                string resolvedName = ResolveAccessibleName(accessibleName, fallbackName);
+                SetViewContext(viewSource, resolvedName);
+                if (announceHeader)
+                {
+                        AnnounceListViewHeaderIfNeeded(resolvedName);
+                }
+        }
+
+        private void ApplyListViewContext(string? viewSource, string resolvedName, bool announceHeader)
+        {
+                SetViewContext(viewSource, resolvedName);
+                if (announceHeader)
+                {
+                        AnnounceListViewHeaderIfNeeded(resolvedName);
+                }
+        }
+
+        private void ApplyStandardListViewSelection(int fallbackIndex, bool allowSelection, bool suppressFocus)
+        {
+                if (!allowSelection || suppressFocus || IsListAutoFocusSuppressed || resultListView == null || resultListView.Items.Count == 0)
+                {
+                        return;
+                }
+                fallbackIndex = ResolvePendingListFocusIndex(fallbackIndex);
+                EnsureListSelectionWithoutFocus(fallbackIndex);
+        }
 
 	private void ScheduleAvailabilityCheck(List<SongInfo> songs)
 	{
@@ -7175,8 +8187,7 @@ private ToolStripMenuItem helpMenuItem;
 			num = resultListView.SelectedIndices[0];
 		}
 		_currentSongs.Clear();
-		List<PlaylistInfo> playlistsToRender = CloneList(playlists);
-		_currentPlaylists = playlistsToRender;
+		List<PlaylistInfo> list = (_currentPlaylists = CloneList(playlists));
 		_currentPlaylist = null;
 		_currentPlaylistOwnedByUser = false;
 		_currentAlbums.Clear();
@@ -7186,32 +8197,30 @@ private ToolStripMenuItem helpMenuItem;
 		_currentPodcastSounds.Clear();
 		ApplyPlaylistSubscriptionState(_currentPlaylists);
 		resultListView.BeginUpdate();
+		ResetListViewSelectionState();
 		resultListView.Items.Clear();
-		if (playlistsToRender == null || playlistsToRender.Count == 0)
+		if (list == null || list.Count == 0)
 		{
-			resultListView.EndUpdate();
-			SetViewContext(viewSource, accessibleName ?? "歌单列表");
-			if (announceHeader)
-			{
-				AnnounceListViewHeaderIfNeeded(accessibleName ?? "歌单列表");
-			}
-			return;
+			EndListViewUpdateAndRefreshAccessibility();
+                        ApplyListViewContext(viewSource, accessibleName, "歌单列表", announceHeader);
+                        return;
 		}
 		int num2 = Math.Max(1, startIndex);
 		checked
 		{
-			foreach (PlaylistInfo playlist in playlistsToRender)
+			foreach (PlaylistInfo item in list)
 			{
-				string text = (string.IsNullOrWhiteSpace(playlist.Creator) ? string.Empty : playlist.Creator);
-				ListViewItem listViewItem = new ListViewItem(new string[5]
+				string text = (string.IsNullOrWhiteSpace(item.Creator) ? string.Empty : item.Creator);
+				ListViewItem listViewItem = new ListViewItem(new string[6]
 				{
+					string.Empty,
 					FormatIndex(num2),
-					playlist.Name ?? "未知",
+					item.Name ?? "未知",
 					text,
-					(playlist.TrackCount > 0) ? $"{playlist.TrackCount} 首" : string.Empty,
-					playlist.Description ?? string.Empty
+					(item.TrackCount > 0) ? $"{item.TrackCount} 首" : string.Empty,
+					item.Description ?? string.Empty
 				});
-				listViewItem.Tag = playlist;
+				listViewItem.Tag = item;
 				resultListView.Items.Add(listViewItem);
 				num2++;
 			}
@@ -7219,56 +8228,69 @@ private ToolStripMenuItem helpMenuItem;
 			{
 				if (startIndex > 1)
 				{
-					ListViewItem listViewItem2 = resultListView.Items.Add("上一页");
+					ListViewItem listViewItem2 = resultListView.Items.Add(new ListViewItem(new string[6]
+					{
+						string.Empty,
+						"上一页",
+						string.Empty,
+						string.Empty,
+						string.Empty,
+						string.Empty
+					}));
 					listViewItem2.Tag = -2;
 				}
 				if (hasNextPage)
 				{
-					ListViewItem listViewItem3 = resultListView.Items.Add("下一页");
+					ListViewItem listViewItem3 = resultListView.Items.Add(new ListViewItem(new string[6]
+					{
+						string.Empty,
+						"下一页",
+						string.Empty,
+						string.Empty,
+						string.Empty,
+						string.Empty
+					}));
 					listViewItem3.Tag = -3;
 				}
 			}
-			resultListView.EndUpdate();
+			EndListViewUpdateAndRefreshAccessibility();
 			string text2 = accessibleName;
 			if (string.IsNullOrWhiteSpace(text2))
 			{
 				text2 = "歌单列表";
 			}
-			SetViewContext(viewSource, text2);
-			if (announceHeader)
+                        ApplyListViewContext(viewSource, text2, announceHeader);
+			if (!allowSelection || resultListView.Items.Count <= 0 || (suppressFocus && string.IsNullOrWhiteSpace(_pendingSongFocusId)) || IsListAutoFocusSuppressed)
 			{
-				AnnounceListViewHeaderIfNeeded(text2);
+				return;
 			}
-			if (allowSelection && resultListView.Items.Count > 0 && (!suppressFocus || !string.IsNullOrWhiteSpace(_pendingSongFocusId)) && !IsListAutoFocusSuppressed)
+			int num3 = -1;
+			bool flag = false;
+			if (!string.IsNullOrWhiteSpace(_pendingSongFocusId))
 			{
-				int targetIndex = -1;
-				bool matchedPending = false;
-				if (!string.IsNullOrWhiteSpace(_pendingSongFocusId))
+                        num3 = _currentPlaylists.FindIndex((PlaylistInfo p) => p != null && string.Equals(p.Id, _pendingSongFocusId, StringComparison.OrdinalIgnoreCase));
+				flag = num3 >= 0;
+			}
+			if (num3 < 0)
+			{
+				num3 = ((num >= 0) ? Math.Min(num, resultListView.Items.Count - 1) : 0);
+			}
+			if (flag)
+			{
+				_pendingListFocusIndex = -1;
+				_pendingListFocusViewSource = null;
+			}
+			num3 = ResolvePendingListFocusIndex(num3);
+			EnsureListSelectionWithoutFocus(num3);
+			if (flag)
+			{
+				_pendingSongFocusId = null;
+				_pendingSongFocusViewSource = null;
+				_pendingSongFocusSatisfied = true;
+				_pendingSongFocusSatisfiedViewSource = viewSource ?? _currentViewSource;
+				if (resultListView != null && resultListView.CanFocus)
 				{
-					targetIndex = _currentPodcasts.FindIndex((PodcastRadioInfo p) => p != null && string.Equals(p.Id.ToString(), _pendingSongFocusId, StringComparison.OrdinalIgnoreCase));
-					matchedPending = targetIndex >= 0;
-				}
-				if (targetIndex < 0)
-				{
-					targetIndex = ((num >= 0) ? Math.Min(num, resultListView.Items.Count - 1) : 0);
-				}
-				if (matchedPending)
-				{
-					_pendingListFocusIndex = -1;
-					_pendingListFocusViewSource = null;
-				}
-				targetIndex = ResolvePendingListFocusIndex(targetIndex);
-				EnsureListSelectionWithoutFocus(targetIndex);
-				if (matchedPending)
-				{
-					_pendingSongFocusId = null;
-					_pendingSongFocusViewSource = null;
-					_pendingSongFocusSatisfied = true;
-					_pendingSongFocusSatisfiedViewSource = viewSource ?? _currentViewSource;
-					if (resultListView != null && resultListView.CanFocus)
-					{
-						resultListView.Focus();
-					}
+					resultListView.Focus();
 				}
 			}
 		}
@@ -7278,8 +8300,7 @@ private ToolStripMenuItem helpMenuItem;
 	{
 		int num = ((resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : pendingFocusIndex);
 		_currentSongs.Clear();
-		List<PlaylistInfo> playlistsToRender = CloneList(playlists);
-		_currentPlaylists = playlistsToRender;
+		List<PlaylistInfo> list = (_currentPlaylists = CloneList(playlists));
 		_currentAlbums.Clear();
 		_currentArtists.Clear();
 		_currentListItems.Clear();
@@ -7287,30 +8308,31 @@ private ToolStripMenuItem helpMenuItem;
 		_currentPodcastSounds.Clear();
 		ApplyPlaylistSubscriptionState(_currentPlaylists);
 		resultListView.BeginUpdate();
-		int count = playlistsToRender.Count;
+		int count = list.Count;
 		int count2 = resultListView.Items.Count;
 		int num2 = Math.Min(count, count2);
 		checked
 		{
 			for (int i = 0; i < num2; i++)
 			{
-				PlaylistInfo playlistInfo = playlistsToRender[i];
+				PlaylistInfo playlistInfo = list[i];
 				ListViewItem listViewItem = resultListView.Items[i];
-				EnsureSubItemCount(listViewItem, 5);
-				listViewItem.Text = FormatIndex(startIndex + i);
-				listViewItem.SubItems[1].Text = playlistInfo.Name ?? "未知";
-				listViewItem.SubItems[2].Text = (string.IsNullOrWhiteSpace(playlistInfo.Creator) ? string.Empty : playlistInfo.Creator);
-				listViewItem.SubItems[3].Text = ((playlistInfo.TrackCount > 0) ? $"{playlistInfo.TrackCount} 首" : string.Empty);
-				listViewItem.SubItems[4].Text = playlistInfo.Description ?? string.Empty;
+				EnsureSubItemCount(listViewItem, 6);
+				listViewItem.SubItems[1].Text = FormatIndex(startIndex + i);
+				listViewItem.SubItems[2].Text = playlistInfo.Name ?? "未知";
+				listViewItem.SubItems[3].Text = (string.IsNullOrWhiteSpace(playlistInfo.Creator) ? string.Empty : playlistInfo.Creator);
+				listViewItem.SubItems[4].Text = ((playlistInfo.TrackCount > 0) ? $"{playlistInfo.TrackCount} 首" : string.Empty);
+				listViewItem.SubItems[5].Text = playlistInfo.Description ?? string.Empty;
 				listViewItem.Tag = playlistInfo;
 				listViewItem.ForeColor = SystemColors.WindowText;
 				listViewItem.ToolTipText = null;
 			}
 			for (int j = count2; j < count; j++)
 			{
-				PlaylistInfo playlistInfo2 = playlistsToRender[j];
-				ListViewItem value = new ListViewItem(new string[5]
+				PlaylistInfo playlistInfo2 = list[j];
+				ListViewItem value = new ListViewItem(new string[6]
 				{
+					string.Empty,
 					FormatIndex(startIndex + j),
 					playlistInfo2.Name ?? "未知",
 					string.IsNullOrWhiteSpace(playlistInfo2.Creator) ? string.Empty : playlistInfo2.Creator,
@@ -7330,7 +8352,15 @@ private ToolStripMenuItem helpMenuItem;
 			{
 				if (hasPreviousPage)
 				{
-					ListViewItem value2 = new ListViewItem("上一页")
+					ListViewItem value2 = new ListViewItem(new string[6]
+					{
+						string.Empty,
+						"上一页",
+						string.Empty,
+						string.Empty,
+						string.Empty,
+						string.Empty
+					})
 					{
 						Tag = -2
 					};
@@ -7338,14 +8368,22 @@ private ToolStripMenuItem helpMenuItem;
 				}
 				if (hasNextPage)
 				{
-					ListViewItem value3 = new ListViewItem("下一页")
+					ListViewItem value3 = new ListViewItem(new string[6]
+					{
+						string.Empty,
+						"下一页",
+						string.Empty,
+						string.Empty,
+						string.Empty,
+						string.Empty
+					})
 					{
 						Tag = -3
 					};
 					resultListView.Items.Add(value3);
 				}
 			}
-			resultListView.EndUpdate();
+			EndListViewUpdateAndRefreshAccessibility();
 			if (allowSelection && resultListView.Items.Count > 0)
 			{
 				int fallbackIndex = ((num >= 0) ? Math.Min(num, resultListView.Items.Count - 1) : 0);
@@ -7367,8 +8405,7 @@ private ToolStripMenuItem helpMenuItem;
 		_currentPlaylists.Clear();
 		_currentAlbums.Clear();
 		_currentArtists.Clear();
-		List<ListItemInfo> listItemsToRender = CloneList(items);
-		_currentListItems = listItemsToRender;
+		List<ListItemInfo> list = (_currentListItems = CloneList(items));
 		_currentPodcasts.Clear();
 		_currentPodcastSounds.Clear();
 		_currentPodcast = null;
@@ -7390,19 +8427,16 @@ private ToolStripMenuItem helpMenuItem;
 				}
 			}
 			resultListView.BeginUpdate();
+			ResetListViewSelectionState();
 			resultListView.Items.Clear();
-			if (listItemsToRender == null || listItemsToRender.Count == 0)
+			if (list == null || list.Count == 0)
 			{
-				resultListView.EndUpdate();
-				SetViewContext(viewSource, accessibleName ?? "分类列表");
-				if (announceHeader)
-				{
-					AnnounceListViewHeaderIfNeeded(accessibleName ?? "分类列表");
-				}
-				return;
+				EndListViewUpdateAndRefreshAccessibility();
+                                ApplyListViewContext(viewSource, accessibleName, "分类列表", announceHeader);
+                                return;
 			}
 			int num2 = 1;
-			foreach (ListItemInfo item in listItemsToRender)
+			foreach (ListItemInfo item in list)
 			{
 				string text2 = item.Name ?? "未知";
 				string text3 = item.Creator ?? "";
@@ -7410,7 +8444,7 @@ private ToolStripMenuItem helpMenuItem;
 				string text5 = item.Description ?? string.Empty;
 				if (item.Type == ListItemType.Song)
 				{
-					SongInfo? song = item.Song;
+					SongInfo song = item.Song;
 					if (song != null && song.RequiresVip)
 					{
 						text2 += "  [VIP]";
@@ -7436,7 +8470,7 @@ private ToolStripMenuItem helpMenuItem;
 				case ListItemType.Podcast:
 				{
 					text3 = item.Podcast?.DjName ?? text3;
-					PodcastRadioInfo? podcast = item.Podcast;
+					PodcastRadioInfo podcast = item.Podcast;
 					text4 = ((podcast != null && podcast.ProgramCount > 0) ? $"{item.Podcast.ProgramCount} 个节目" : text4);
 					text5 = ((!string.IsNullOrWhiteSpace(text5)) ? text5 : (item.Podcast?.Description ?? string.Empty));
 					break;
@@ -7444,7 +8478,7 @@ private ToolStripMenuItem helpMenuItem;
 				case ListItemType.PodcastEpisode:
 				{
 					text3 = ((!string.IsNullOrWhiteSpace(text3)) ? text3 : ((!string.IsNullOrWhiteSpace(item.PodcastEpisode?.DjName)) ? (item.PodcastEpisode.RadioName + " / " + item.PodcastEpisode.DjName) : (item.PodcastEpisode?.RadioName ?? string.Empty)));
-					PodcastEpisodeInfo? podcastEpisode = item.PodcastEpisode;
+					PodcastEpisodeInfo podcastEpisode = item.PodcastEpisode;
 					if (podcastEpisode != null && podcastEpisode.PublishTime.HasValue)
 					{
 						text4 = item.PodcastEpisode.PublishTime.Value.ToString("yyyy-MM-dd");
@@ -7456,28 +8490,28 @@ private ToolStripMenuItem helpMenuItem;
 					break;
 				}
 				}
-				ListViewItem listViewItem = new ListViewItem(new string[5] { "", text2, text3, text4, text5 });
+				ListViewItem listViewItem = new ListViewItem(new string[6]
+				{
+					string.Empty,
+					string.Empty,
+					text2,
+					text3,
+					text4,
+					text5
+				});
 				listViewItem.Tag = item;
 				resultListView.Items.Add(listViewItem);
 				num2++;
 			}
-			resultListView.EndUpdate();
+			EndListViewUpdateAndRefreshAccessibility();
 			string text6 = accessibleName;
 			if (string.IsNullOrWhiteSpace(text6))
 			{
 				text6 = "分类列表";
 			}
-			SetViewContext(viewSource, text6);
-			if (announceHeader)
-			{
-				AnnounceListViewHeaderIfNeeded(text6);
-			}
-			if (allowSelection && !suppressFocus && !IsListAutoFocusSuppressed && resultListView.Items.Count > 0)
-			{
-				int targetIndex = ((num >= 0) ? Math.Min(num, resultListView.Items.Count - 1) : 0);
-				targetIndex = ResolvePendingListFocusIndex(targetIndex);
-				EnsureListSelectionWithoutFocus(targetIndex);
-			}
+                        ApplyListViewContext(viewSource, text6, announceHeader);
+                int fallbackIndex = ((num >= 0) ? Math.Min(num, resultListView.Items.Count - 1) : 0);
+                ApplyStandardListViewSelection(fallbackIndex, allowSelection, suppressFocus);
 		}
 	}
 
@@ -7488,6 +8522,8 @@ private ToolStripMenuItem helpMenuItem;
 		{
 			if (incremental && items != null && resultListView.Items.Count == _currentListItems.Count && _currentListItems.Count == items.Count)
 			{
+				int focusedListViewIndex = GetFocusedListViewIndex();
+				bool flag = false;
 				resultListView.BeginUpdate();
 				try
 				{
@@ -7504,23 +8540,31 @@ private ToolStripMenuItem helpMenuItem;
 							{
 								_homeItemIndexMap[listItemInfo.CategoryId] = i;
 							}
+							if (i == focusedListViewIndex)
+							{
+								flag = true;
+							}
 						}
 					}
-					return;
 				}
 				finally
 				{
-					resultListView.EndUpdate();
+					EndListViewUpdateAndRefreshAccessibility();
 				}
-		}
-		_currentSongs.Clear();
-		_currentPlaylists.Clear();
-		_currentAlbums.Clear();
-		_currentArtists.Clear();
-		_currentListItems = CloneList(items);
-		_currentPodcasts.Clear();
-		_currentPodcastSounds.Clear();
-		_currentPodcast = null;
+				if (flag)
+				{
+					QueueFocusedListViewItemRefreshAnnouncement(focusedListViewIndex);
+				}
+				return;
+			}
+			_currentSongs.Clear();
+			_currentPlaylists.Clear();
+			_currentAlbums.Clear();
+			_currentArtists.Clear();
+			_currentListItems = CloneList(items);
+			_currentPodcasts.Clear();
+			_currentPodcastSounds.Clear();
+			_currentPodcast = null;
 			ApplyListItemLibraryStates(_currentListItems);
 			_homeItemIndexMap.Clear();
 			if (string.Equals(_currentViewSource, "homepage", StringComparison.OrdinalIgnoreCase))
@@ -7544,14 +8588,15 @@ private ToolStripMenuItem helpMenuItem;
 			{
 				ListItemInfo listItem = _currentListItems[k];
 				ListViewItem item2 = resultListView.Items[k];
-				EnsureSubItemCount(item2, 5);
+				EnsureSubItemCount(item2, 6);
 				FillListViewItemFromListItemInfo(item2, listItem, k + 1, preserveDisplayIndex);
 			}
 			for (int l = count2; l < count; l++)
 			{
 				ListItemInfo listItem2 = _currentListItems[l];
-				ListViewItem listViewItem = new ListViewItem(new string[5]
+				ListViewItem listViewItem = new ListViewItem(new string[6]
 				{
+					string.Empty,
 					string.Empty,
 					string.Empty,
 					string.Empty,
@@ -7569,7 +8614,15 @@ private ToolStripMenuItem helpMenuItem;
 			{
 				if (hasPreviousPage)
 				{
-					ListViewItem value = new ListViewItem("上一页")
+					ListViewItem value = new ListViewItem(new string[6]
+					{
+						string.Empty,
+						"上一页",
+						string.Empty,
+						string.Empty,
+						string.Empty,
+						string.Empty
+					})
 					{
 						Tag = -2
 					};
@@ -7577,14 +8630,22 @@ private ToolStripMenuItem helpMenuItem;
 				}
 				if (hasNextPage)
 				{
-					ListViewItem value2 = new ListViewItem("下一页")
+					ListViewItem value2 = new ListViewItem(new string[6]
+					{
+						string.Empty,
+						"下一页",
+						string.Empty,
+						string.Empty,
+						string.Empty,
+						string.Empty
+					})
 					{
 						Tag = -3
 					};
 					resultListView.Items.Add(value2);
 				}
 			}
-			resultListView.EndUpdate();
+			EndListViewUpdateAndRefreshAccessibility();
 			if (resultListView.Items.Count > 0)
 			{
 				int fallbackIndex = ((num >= 0) ? Math.Min(num, resultListView.Items.Count - 1) : 0);
@@ -7660,9 +8721,7 @@ private ToolStripMenuItem helpMenuItem;
 				return false;
 			}
 			_loggedInUserId = userInfo.UserId;
-			List<PlaylistInfo> playlists;
-			int totalCount;
-			(playlists, totalCount) = await _apiClient.GetUserPlaylistsAsync(userInfo.UserId);
+			var (playlists, totalCount) = await _apiClient.GetUserPlaylistsAsync(userInfo.UserId);
 			token.ThrowIfCancellationRequested();
 			PlaylistInfo liked = playlists?.FirstOrDefault((PlaylistInfo p) => !string.IsNullOrEmpty(p.Name) && p.Name.IndexOf("喜欢的音乐", StringComparison.OrdinalIgnoreCase) >= 0);
 			int playlistCount = totalCount;
@@ -7672,7 +8731,7 @@ private ToolStripMenuItem helpMenuItem;
 			}
 			ApplyHomeItemUpdate("user_playlists", delegate(ListItemInfo info)
 			{
-				info.ItemCount = ((playlistCount > 0) ? playlistCount : null);
+				info.ItemCount = ((playlistCount > 0) ? new int?(playlistCount) : ((int?)null));
 				info.ItemUnit = ((playlistCount > 0) ? "个" : null);
 				info.CategoryDescription = null;
 			});
@@ -7680,7 +8739,7 @@ private ToolStripMenuItem helpMenuItem;
 			{
 				ApplyHomeItemUpdate("user_liked_songs", delegate(ListItemInfo info)
 				{
-					info.ItemCount = ((liked.TrackCount > 0) ? liked.TrackCount : null);
+					info.ItemCount = ((liked.TrackCount > 0) ? new int?(liked.TrackCount) : ((int?)null));
 					info.ItemUnit = ((liked.TrackCount > 0) ? "首" : null);
 					info.CategoryDescription = null;
 				});
@@ -7698,7 +8757,7 @@ private ToolStripMenuItem helpMenuItem;
 			token.ThrowIfCancellationRequested();
 			ApplyHomeItemUpdate("user_albums", delegate(ListItemInfo info)
 			{
-				info.ItemCount = ((albumCount > 0) ? albumCount : null);
+				info.ItemCount = ((albumCount > 0) ? new int?(albumCount) : ((int?)null));
 				info.ItemUnit = ((albumCount > 0) ? "张" : null);
 				info.CategoryDescription = null;
 			});
@@ -7716,7 +8775,7 @@ private ToolStripMenuItem helpMenuItem;
 			int count = artists?.TotalCount ?? artists?.Items.Count ?? 0;
 			ApplyHomeItemUpdate("artist_favorites", delegate(ListItemInfo info)
 			{
-				info.ItemCount = ((count > 0) ? count : null);
+				info.ItemCount = ((count > 0) ? new int?(count) : ((int?)null));
 				info.ItemUnit = ((count > 0) ? "位" : null);
 				info.CategoryDescription = null;
 			});
@@ -7733,7 +8792,7 @@ private ToolStripMenuItem helpMenuItem;
 			token.ThrowIfCancellationRequested();
 			ApplyHomeItemUpdate("user_podcasts", delegate(ListItemInfo info)
 			{
-				info.ItemCount = ((podcastCount > 0) ? podcastCount : null);
+				info.ItemCount = ((podcastCount > 0) ? new int?(podcastCount) : ((int?)null));
 				info.ItemUnit = ((podcastCount > 0) ? "个" : null);
 				info.CategoryDescription = null;
 			});
@@ -7760,7 +8819,7 @@ private ToolStripMenuItem helpMenuItem;
 			}
 			ApplyHomeItemUpdate("user_cloud", delegate(ListItemInfo info)
 			{
-				info.ItemCount = ((_cloudTotalCount > 0) ? _cloudTotalCount : null);
+				info.ItemCount = ((_cloudTotalCount > 0) ? new int?(_cloudTotalCount) : ((int?)null));
 				info.ItemUnit = ((_cloudTotalCount > 0) ? "首" : null);
 				info.CategoryDescription = ((_cloudMaxSize > 0 || _cloudTotalCount > 0) ? BuildCloudSummaryDescription(_cloudUsedSize, _cloudMaxSize) : null);
 			});
@@ -7785,7 +8844,7 @@ private ToolStripMenuItem helpMenuItem;
 			int count = toplist?.Count ?? 0;
 			ApplyHomeItemUpdate("toplist", delegate(ListItemInfo info)
 			{
-				info.ItemCount = ((count > 0) ? count : null);
+				info.ItemCount = ((count > 0) ? new int?(count) : ((int?)null));
 				info.ItemUnit = ((count > 0) ? "个" : null);
 				info.CategoryDescription = null;
 			});
@@ -7799,7 +8858,7 @@ private ToolStripMenuItem helpMenuItem;
 			int count = newAlbums?.Count ?? 0;
 			ApplyHomeItemUpdate("new_albums", delegate(ListItemInfo info)
 			{
-				info.ItemCount = ((count > 0) ? count : null);
+				info.ItemCount = ((count > 0) ? new int?(count) : ((int?)null));
 				info.ItemUnit = ((count > 0) ? "张" : null);
 				info.CategoryDescription = null;
 			});
@@ -7827,7 +8886,7 @@ private ToolStripMenuItem helpMenuItem;
 			}
 			ApplyHomeItemUpdate("podcast_categories", delegate(ListItemInfo info)
 			{
-				info.ItemCount = ((count > 0) ? count : null);
+				info.ItemCount = ((count > 0) ? new int?(count) : ((int?)null));
 				info.ItemUnit = ((count > 0) ? "个" : null);
 				info.CategoryDescription = null;
 			});
@@ -7989,6 +9048,10 @@ private ToolStripMenuItem helpMenuItem;
 				{
 					ListViewItem item = resultListView.Items[index];
 					FillListViewItemFromListItemInfo(item, clone, checked(index + 1), preserveDisplayIndex: true);
+					if (GetFocusedListViewIndex() == index)
+					{
+						QueueFocusedListViewItemRefreshAnnouncement(index);
+					}
 				}
 			});
 		}
@@ -8002,26 +9065,28 @@ private ToolStripMenuItem helpMenuItem;
 		string text4 = listItem.Description ?? string.Empty;
 		if (listItem.Type == ListItemType.Song)
 		{
-			SongInfo? song = listItem.Song;
+			SongInfo song = listItem.Song;
 			if (song != null && song.RequiresVip)
 			{
 				text += "  [VIP]";
 			}
 		}
 		bool flag = string.Equals(_currentViewSource, "homepage", StringComparison.OrdinalIgnoreCase);
-		if (!flag && (!preserveDisplayIndex || string.IsNullOrWhiteSpace(item.Text)))
+		EnsureSubItemCount(item, 6);
+		if (!flag && (!preserveDisplayIndex || string.IsNullOrWhiteSpace(item.SubItems[1].Text)))
 		{
-			item.Text = displayIndex.ToString();
+			item.SubItems[1].Text = displayIndex.ToString();
 		}
 		else if (flag)
 		{
-			item.Text = string.Empty;
+			item.SubItems[1].Text = string.Empty;
 		}
-		item.SubItems[1].Text = text;
-		item.SubItems[2].Text = text2;
-		item.SubItems[3].Text = text3;
-		item.SubItems[4].Text = text4;
+		item.SubItems[2].Text = text;
+		item.SubItems[3].Text = text2;
+		item.SubItems[4].Text = text3;
+		item.SubItems[5].Text = text4;
 		item.Tag = listItem;
+		UpdateListViewItemAccessibilityProperties(item, IsNvdaRunningCached());
 	}
 
 	private void ScheduleLibraryStateRefresh(bool includeLikedSongs = true, bool includePlaylists = true, bool includeAlbums = true, bool includePodcasts = true, bool includeArtists = true)
@@ -8233,9 +9298,9 @@ private ToolStripMenuItem helpMenuItem;
 				_likedSongsCacheValid = true;
 			}
 		}
-		catch (Exception arg)
+		catch (Exception value)
 		{
-			Debug.WriteLine($"[LibraryCache] 刷新喜欢的歌曲失败: {arg}");
+			Debug.WriteLine($"[LibraryCache] 刷新喜欢的歌曲失败: {value}");
 		}
 	}
 
@@ -8250,11 +9315,9 @@ private ToolStripMenuItem helpMenuItem;
 		{
 			int offset = 0;
 			List<PlaylistInfo> aggregated = new List<PlaylistInfo>();
-	while (true)
-	{
-				List<PlaylistInfo> playlists;
-				int total;
-				(playlists, total) = await _apiClient.GetUserPlaylistsAsync(userId, 1000, offset);
+			while (true)
+			{
+				var (playlists, total) = await _apiClient.GetUserPlaylistsAsync(userId, 1000, offset);
 				cancellationToken.ThrowIfCancellationRequested();
 				if (playlists == null || playlists.Count == 0)
 				{
@@ -8287,9 +9350,9 @@ private ToolStripMenuItem helpMenuItem;
 				}
 			}
 		}
-		catch (Exception arg)
+		catch (Exception value)
 		{
-			Debug.WriteLine($"[LibraryCache] 刷新歌单收藏状态失败: {arg}");
+			Debug.WriteLine($"[LibraryCache] 刷新歌单收藏状态失败: {value}");
 		}
 	}
 
@@ -8305,9 +9368,7 @@ private ToolStripMenuItem helpMenuItem;
 			List<AlbumInfo> aggregated = new List<AlbumInfo>();
 			while (true)
 			{
-				List<AlbumInfo> albums;
-				int total;
-				(albums, total) = await _apiClient.GetUserAlbumsAsync(100, offset);
+				var (albums, total) = await _apiClient.GetUserAlbumsAsync(100, offset);
 				cancellationToken.ThrowIfCancellationRequested();
 				if (albums == null || albums.Count == 0)
 				{
@@ -8332,9 +9393,9 @@ private ToolStripMenuItem helpMenuItem;
 				}
 			}
 		}
-		catch (Exception arg)
+		catch (Exception value)
 		{
-			Debug.WriteLine($"[LibraryCache] 刷新收藏专辑失败: {arg}");
+			Debug.WriteLine($"[LibraryCache] 刷新收藏专辑失败: {value}");
 		}
 	}
 
@@ -8350,9 +9411,7 @@ private ToolStripMenuItem helpMenuItem;
 			List<PodcastRadioInfo> aggregated = new List<PodcastRadioInfo>();
 			while (true)
 			{
-				List<PodcastRadioInfo> podcasts;
-				int total;
-				(podcasts, total) = await _apiClient.GetSubscribedPodcastsAsync(300, offset);
+				var (podcasts, total) = await _apiClient.GetSubscribedPodcastsAsync(300, offset);
 				cancellationToken.ThrowIfCancellationRequested();
 				if (podcasts == null || podcasts.Count == 0)
 				{
@@ -8377,9 +9436,9 @@ private ToolStripMenuItem helpMenuItem;
 				}
 			}
 		}
-		catch (Exception arg)
+		catch (Exception value)
 		{
-			Debug.WriteLine($"[LibraryCache] 刷新收藏播客失败: {arg}");
+			Debug.WriteLine($"[LibraryCache] 刷新收藏播客失败: {value}");
 		}
 	}
 
@@ -8420,9 +9479,9 @@ private ToolStripMenuItem helpMenuItem;
 				}
 			}
 		}
-		catch (Exception arg)
+		catch (Exception value)
 		{
-			Debug.WriteLine($"[LibraryCache] 刷新收藏歌手失败: {arg}");
+			Debug.WriteLine($"[LibraryCache] 刷新收藏歌手失败: {value}");
 		}
 	}
 
@@ -8863,8 +9922,7 @@ private ToolStripMenuItem helpMenuItem;
 		}
 		_currentSongs.Clear();
 		_currentPlaylists.Clear();
-		List<AlbumInfo> albumsToRender = CloneList(albums);
-		_currentAlbums = albumsToRender;
+		List<AlbumInfo> list = (_currentAlbums = CloneList(albums));
 		_currentArtists.Clear();
 		_currentListItems.Clear();
 		_currentPodcasts.Clear();
@@ -8872,32 +9930,30 @@ private ToolStripMenuItem helpMenuItem;
 		_currentPodcast = null;
 		ApplyAlbumSubscriptionState(_currentAlbums);
 		resultListView.BeginUpdate();
+		ResetListViewSelectionState();
 		resultListView.Items.Clear();
-		if (albumsToRender == null || albumsToRender.Count == 0)
+		if (list == null || list.Count == 0)
 		{
-			resultListView.EndUpdate();
-			SetViewContext(viewSource, accessibleName ?? "专辑列表");
-			if (announceHeader)
-			{
-				AnnounceListViewHeaderIfNeeded(accessibleName ?? "专辑列表");
-			}
-			return;
+			EndListViewUpdateAndRefreshAccessibility();
+                        ApplyListViewContext(viewSource, accessibleName, "专辑列表", announceHeader);
+                        return;
 		}
 		int num2 = startIndex;
 		checked
 		{
-			foreach (AlbumInfo album in albumsToRender)
+			foreach (AlbumInfo item in list)
 			{
-				(string, string, string) tuple = BuildAlbumDisplayLabels(album);
-				ListViewItem listViewItem = new ListViewItem(new string[5]
+				(string, string, string) tuple = BuildAlbumDisplayLabels(item);
+				ListViewItem listViewItem = new ListViewItem(new string[6]
 				{
+					string.Empty,
 					FormatIndex(num2),
-					album.Name ?? "未知",
+					item.Name ?? "未知",
 					tuple.Item1,
 					tuple.Item2,
 					tuple.Item3
 				});
-				listViewItem.Tag = album;
+				listViewItem.Tag = item;
 				resultListView.Items.Add(listViewItem);
 				num2++;
 			}
@@ -8905,32 +9961,40 @@ private ToolStripMenuItem helpMenuItem;
 			{
 				if (startIndex > 1)
 				{
-					ListViewItem listViewItem2 = resultListView.Items.Add("上一页");
+					ListViewItem listViewItem2 = resultListView.Items.Add(new ListViewItem(new string[6]
+					{
+						string.Empty,
+						"上一页",
+						string.Empty,
+						string.Empty,
+						string.Empty,
+						string.Empty
+					}));
 					listViewItem2.Tag = -2;
 				}
 				if (hasNextPage)
 				{
-					ListViewItem listViewItem3 = resultListView.Items.Add("下一页");
+					ListViewItem listViewItem3 = resultListView.Items.Add(new ListViewItem(new string[6]
+					{
+						string.Empty,
+						"下一页",
+						string.Empty,
+						string.Empty,
+						string.Empty,
+						string.Empty
+					}));
 					listViewItem3.Tag = -3;
 				}
 			}
-			resultListView.EndUpdate();
+			EndListViewUpdateAndRefreshAccessibility();
 			string text = accessibleName;
 			if (string.IsNullOrWhiteSpace(text))
 			{
 				text = "专辑列表";
 			}
-			SetViewContext(viewSource, text);
-			if (announceHeader)
-			{
-				AnnounceListViewHeaderIfNeeded(text);
-			}
-			if (allowSelection && !suppressFocus && !IsListAutoFocusSuppressed && resultListView.Items.Count > 0)
-			{
-				int targetIndex = ((num >= 0) ? Math.Min(num, resultListView.Items.Count - 1) : 0);
-				targetIndex = ResolvePendingListFocusIndex(targetIndex);
-				EnsureListSelectionWithoutFocus(targetIndex);
-			}
+                        ApplyListViewContext(viewSource, text, announceHeader);
+                int fallbackIndex = ((num >= 0) ? Math.Min(num, resultListView.Items.Count - 1) : 0);
+                ApplyStandardListViewSelection(fallbackIndex, allowSelection, suppressFocus);
 		}
 	}
 
@@ -8939,8 +10003,7 @@ private ToolStripMenuItem helpMenuItem;
 		int num = ((resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : pendingFocusIndex);
 		_currentSongs.Clear();
 		_currentPlaylists.Clear();
-		List<AlbumInfo> albumsToRender = CloneList(albums);
-		_currentAlbums = albumsToRender;
+		List<AlbumInfo> list = (_currentAlbums = CloneList(albums));
 		_currentArtists.Clear();
 		_currentListItems.Clear();
 		_currentPodcasts.Clear();
@@ -8948,30 +10011,31 @@ private ToolStripMenuItem helpMenuItem;
 		_currentPodcast = null;
 		ApplyAlbumSubscriptionState(_currentAlbums);
 		resultListView.BeginUpdate();
-		int count = albumsToRender.Count;
+		int count = list.Count;
 		int count2 = resultListView.Items.Count;
 		int num2 = Math.Min(count, count2);
 		checked
 		{
 			for (int i = 0; i < num2; i++)
 			{
-				AlbumInfo albumInfo = albumsToRender[i];
+				AlbumInfo albumInfo = list[i];
 				ListViewItem listViewItem = resultListView.Items[i];
-				EnsureSubItemCount(listViewItem, 5);
+				EnsureSubItemCount(listViewItem, 6);
 				(string, string, string) tuple = BuildAlbumDisplayLabels(albumInfo);
-				listViewItem.Text = FormatIndex(startIndex + i);
-				listViewItem.SubItems[1].Text = albumInfo.Name ?? "未知";
-				listViewItem.SubItems[2].Text = tuple.Item1;
-				listViewItem.SubItems[3].Text = tuple.Item2;
-				listViewItem.SubItems[4].Text = tuple.Item3;
+				listViewItem.SubItems[1].Text = FormatIndex(startIndex + i);
+				listViewItem.SubItems[2].Text = albumInfo.Name ?? "未知";
+				listViewItem.SubItems[3].Text = tuple.Item1;
+				listViewItem.SubItems[4].Text = tuple.Item2;
+				listViewItem.SubItems[5].Text = tuple.Item3;
 				listViewItem.Tag = albumInfo;
 			}
 			for (int j = count2; j < count; j++)
 			{
-				AlbumInfo albumInfo2 = albumsToRender[j];
+				AlbumInfo albumInfo2 = list[j];
 				(string, string, string) tuple2 = BuildAlbumDisplayLabels(albumInfo2);
-				ListViewItem value = new ListViewItem(new string[5]
+				ListViewItem value = new ListViewItem(new string[6]
 				{
+					string.Empty,
 					FormatIndex(startIndex + j),
 					albumInfo2.Name ?? "未知",
 					tuple2.Item1,
@@ -8991,7 +10055,15 @@ private ToolStripMenuItem helpMenuItem;
 			{
 				if (hasPreviousPage)
 				{
-					ListViewItem value2 = new ListViewItem("上一页")
+					ListViewItem value2 = new ListViewItem(new string[6]
+					{
+						string.Empty,
+						"上一页",
+						string.Empty,
+						string.Empty,
+						string.Empty,
+						string.Empty
+					})
 					{
 						Tag = -2
 					};
@@ -8999,14 +10071,22 @@ private ToolStripMenuItem helpMenuItem;
 				}
 				if (hasNextPage)
 				{
-					ListViewItem value3 = new ListViewItem("下一页")
+					ListViewItem value3 = new ListViewItem(new string[6]
+					{
+						string.Empty,
+						"下一页",
+						string.Empty,
+						string.Empty,
+						string.Empty,
+						string.Empty
+					})
 					{
 						Tag = -3
 					};
 					resultListView.Items.Add(value3);
 				}
 			}
-			resultListView.EndUpdate();
+			EndListViewUpdateAndRefreshAccessibility();
 			if (allowSelection && resultListView.Items.Count > 0)
 			{
 				int fallbackIndex = ((num >= 0) ? Math.Min(num, resultListView.Items.Count - 1) : 0);
@@ -9018,20 +10098,24 @@ private ToolStripMenuItem helpMenuItem;
 
 	private void ConfigureListViewForPodcasts()
 	{
-        columnHeader1.Text = string.Empty;
-        columnHeader2.Text = string.Empty;
-        columnHeader3.Text = string.Empty;
-        columnHeader4.Text = string.Empty;
-        columnHeader5.Text = string.Empty;
+		DisableVirtualSongList();
+		columnHeader0.Text = string.Empty;
+		columnHeader1.Text = string.Empty;
+		columnHeader2.Text = string.Empty;
+		columnHeader3.Text = string.Empty;
+		columnHeader4.Text = string.Empty;
+		columnHeader5.Text = string.Empty;
 	}
 
 	private void ConfigureListViewForPodcastEpisodes()
 	{
-        columnHeader1.Text = string.Empty;
-        columnHeader2.Text = string.Empty;
-        columnHeader3.Text = string.Empty;
-        columnHeader4.Text = string.Empty;
-        columnHeader5.Text = string.Empty;
+		DisableVirtualSongList();
+		columnHeader0.Text = string.Empty;
+		columnHeader1.Text = string.Empty;
+		columnHeader2.Text = string.Empty;
+		columnHeader3.Text = string.Empty;
+		columnHeader4.Text = string.Empty;
+		columnHeader5.Text = string.Empty;
 	}
 
 	private void DisplayPodcasts(List<PodcastRadioInfo> podcasts, bool showPagination = false, bool hasNextPage = false, int startIndex = 1, bool preserveSelection = false, string? viewSource = null, string? accessibleName = null, bool announceHeader = true, bool suppressFocus = false, bool allowSelection = true, bool includeNavigationRows = true)
@@ -9047,82 +10131,84 @@ private ToolStripMenuItem helpMenuItem;
 		_currentAlbums.Clear();
 		_currentArtists.Clear();
 		_currentListItems.Clear();
-		List<PodcastRadioInfo> podcastsToRender = CloneList(podcasts);
-		_currentPodcasts = podcastsToRender;
+		List<PodcastRadioInfo> list = (_currentPodcasts = CloneList(podcasts));
 		_currentPodcastSounds.Clear();
 		_currentPodcast = null;
 		ApplyPodcastSubscriptionState(_currentPodcasts);
 		resultListView.BeginUpdate();
+		ResetListViewSelectionState();
 		resultListView.Items.Clear();
-		if (podcastsToRender.Count == 0)
+		if (list.Count == 0)
 		{
-			resultListView.EndUpdate();
-			SetViewContext(viewSource, accessibleName ?? "播客列表");
-			if (announceHeader)
-			{
-				AnnounceListViewHeaderIfNeeded(accessibleName ?? "播客列表");
-			}
-			return;
+			EndListViewUpdateAndRefreshAccessibility();
+                        ApplyListViewContext(viewSource, accessibleName, "播客列表", announceHeader);
+                        return;
 		}
 		int num2 = startIndex;
-		checked
+		foreach (PodcastRadioInfo item in list)
 		{
-			foreach (PodcastRadioInfo currentPodcast in podcastsToRender)
+			string text = item?.DjName ?? string.Empty;
+			if (!string.IsNullOrWhiteSpace(item?.SecondCategory))
 			{
-				string text = currentPodcast?.DjName ?? string.Empty;
-				if (!string.IsNullOrWhiteSpace(currentPodcast?.SecondCategory))
-				{
-					text = (string.IsNullOrWhiteSpace(text) ? currentPodcast.SecondCategory : (text + " / " + currentPodcast.SecondCategory));
-				}
-				else if (!string.IsNullOrWhiteSpace(currentPodcast?.Category))
-				{
-					text = (string.IsNullOrWhiteSpace(text) ? currentPodcast.Category : (text + " / " + currentPodcast.Category));
-				}
-				string text2 = ((currentPodcast != null && currentPodcast.ProgramCount > 0) ? $"{currentPodcast.ProgramCount} 个节目" : string.Empty);
-				ListViewItem value = new ListViewItem(new string[5]
-				{
-					FormatIndex(num2),
-					currentPodcast?.Name ?? "未知",
-					text,
-					text2,
-					currentPodcast?.Description ?? string.Empty
-				})
-				{
-					Tag = currentPodcast
-				};
-				resultListView.Items.Add(value);
-				num2++;
+				text = (string.IsNullOrWhiteSpace(text) ? item.SecondCategory : (text + " / " + item.SecondCategory));
 			}
-			if (showPagination && includeNavigationRows)
+			else if (!string.IsNullOrWhiteSpace(item?.Category))
 			{
-				if (startIndex > 1)
-				{
-					ListViewItem listViewItem = resultListView.Items.Add("上一页");
-					listViewItem.Tag = -2;
-				}
-				if (hasNextPage)
-				{
-					ListViewItem listViewItem2 = resultListView.Items.Add("下一页");
-					listViewItem2.Tag = -3;
-				}
+				text = (string.IsNullOrWhiteSpace(text) ? item.Category : (text + " / " + item.Category));
 			}
-			resultListView.EndUpdate();
-			string accessibleName2 = accessibleName ?? "播客列表";
-			SetViewContext(viewSource, accessibleName2);
-			if (announceHeader)
+			string text2 = ((item != null && item.ProgramCount > 0) ? $"{item.ProgramCount} 个节目" : string.Empty);
+			ListViewItem value = new ListViewItem(new string[6]
 			{
-				AnnounceListViewHeaderIfNeeded(accessibleName2);
+				string.Empty,
+				FormatIndex(num2),
+				item?.Name ?? "未知",
+				text,
+				text2,
+				item?.Description ?? string.Empty
+			})
+			{
+				Tag = item
+			};
+			resultListView.Items.Add(value);
+			num2 = checked(num2 + 1);
+		}
+		if (showPagination && includeNavigationRows)
+		{
+			if (startIndex > 1)
+			{
+				ListViewItem listViewItem = resultListView.Items.Add(new ListViewItem(new string[6]
+				{
+					string.Empty,
+					"上一页",
+					string.Empty,
+					string.Empty,
+					string.Empty,
+					string.Empty
+				}));
+				listViewItem.Tag = -2;
 			}
-			if (allowSelection && !suppressFocus && !IsListAutoFocusSuppressed && resultListView.Items.Count > 0)
+			if (hasNextPage)
 			{
-				int targetIndex = ((num >= 0) ? Math.Min(num, resultListView.Items.Count - 1) : 0);
-				targetIndex = ResolvePendingListFocusIndex(targetIndex);
-				EnsureListSelectionWithoutFocus(targetIndex);
+				ListViewItem listViewItem2 = resultListView.Items.Add(new ListViewItem(new string[6]
+				{
+					string.Empty,
+					"下一页",
+					string.Empty,
+					string.Empty,
+					string.Empty,
+					string.Empty
+				}));
+				listViewItem2.Tag = -3;
 			}
 		}
+		EndListViewUpdateAndRefreshAccessibility();
+                        string accessibleName2 = accessibleName ?? "播客列表";
+                        ApplyListViewContext(viewSource, accessibleName2, announceHeader);
+        int fallbackIndex = ((num >= 0) ? Math.Min(num, checked(resultListView.Items.Count - 1)) : 0);
+        ApplyStandardListViewSelection(fallbackIndex, allowSelection, suppressFocus);
 	}
 
-private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool showPagination = false, bool hasPreviousPage = false, bool hasNextPage = false, int pendingFocusIndex = -1, bool allowSelection = true, bool includeNavigationRows = true)
+	private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool showPagination = false, bool hasPreviousPage = false, bool hasNextPage = false, int pendingFocusIndex = -1, bool allowSelection = true, bool includeNavigationRows = true)
 	{
 		int num = ((resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : pendingFocusIndex);
 		_currentSongs.Clear();
@@ -9130,22 +10216,21 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		_currentAlbums.Clear();
 		_currentArtists.Clear();
 		_currentListItems.Clear();
-		List<PodcastRadioInfo> podcastsToRender = CloneList(podcasts);
-		_currentPodcasts = podcastsToRender;
+		List<PodcastRadioInfo> list = (_currentPodcasts = CloneList(podcasts));
 		_currentPodcastSounds.Clear();
 		_currentPodcast = null;
 		ApplyPodcastSubscriptionState(_currentPodcasts);
 		resultListView.BeginUpdate();
-		int count = podcastsToRender.Count;
+		int count = list.Count;
 		int count2 = resultListView.Items.Count;
 		int num2 = Math.Min(count, count2);
 		checked
 		{
 			for (int i = 0; i < num2; i++)
 			{
-				PodcastRadioInfo podcastRadioInfo = podcastsToRender[i];
+				PodcastRadioInfo podcastRadioInfo = list[i];
 				ListViewItem listViewItem = resultListView.Items[i];
-				EnsureSubItemCount(listViewItem, 5);
+				EnsureSubItemCount(listViewItem, 6);
 				string text = podcastRadioInfo?.DjName ?? string.Empty;
 				if (!string.IsNullOrWhiteSpace(podcastRadioInfo?.SecondCategory))
 				{
@@ -9156,16 +10241,16 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 					text = (string.IsNullOrWhiteSpace(text) ? podcastRadioInfo.Category : (text + " / " + podcastRadioInfo.Category));
 				}
 				string text2 = ((podcastRadioInfo != null && podcastRadioInfo.ProgramCount > 0) ? $"{podcastRadioInfo.ProgramCount} 个节目" : string.Empty);
-				listViewItem.Text = (startIndex + i).ToString();
-				listViewItem.SubItems[1].Text = podcastRadioInfo?.Name ?? "未知";
-				listViewItem.SubItems[2].Text = text;
-				listViewItem.SubItems[3].Text = text2;
-				listViewItem.SubItems[4].Text = podcastRadioInfo?.Description ?? string.Empty;
+				listViewItem.SubItems[1].Text = (startIndex + i).ToString();
+				listViewItem.SubItems[2].Text = podcastRadioInfo?.Name ?? "未知";
+				listViewItem.SubItems[3].Text = text;
+				listViewItem.SubItems[4].Text = text2;
+				listViewItem.SubItems[5].Text = podcastRadioInfo?.Description ?? string.Empty;
 				listViewItem.Tag = podcastRadioInfo;
 			}
 			for (int j = count2; j < count; j++)
 			{
-				PodcastRadioInfo podcastRadioInfo2 = podcastsToRender[j];
+				PodcastRadioInfo podcastRadioInfo2 = list[j];
 				string text3 = podcastRadioInfo2?.DjName ?? string.Empty;
 				if (!string.IsNullOrWhiteSpace(podcastRadioInfo2?.SecondCategory))
 				{
@@ -9176,8 +10261,9 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 					text3 = (string.IsNullOrWhiteSpace(text3) ? podcastRadioInfo2.Category : (text3 + " / " + podcastRadioInfo2.Category));
 				}
 				string text4 = ((podcastRadioInfo2 != null && podcastRadioInfo2.ProgramCount > 0) ? $"{podcastRadioInfo2.ProgramCount} 个节目" : string.Empty);
-				ListViewItem value = new ListViewItem(new string[5]
+				ListViewItem value = new ListViewItem(new string[6]
 				{
+					string.Empty,
 					FormatIndex(startIndex + j),
 					podcastRadioInfo2?.Name ?? "未知",
 					text3,
@@ -9193,11 +10279,19 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			{
 				resultListView.Items.RemoveAt(num3);
 			}
-			if (showPagination && includeNavigationRows)
+			if (unchecked(showPagination && includeNavigationRows))
 			{
 				if (hasPreviousPage)
 				{
-					ListViewItem value2 = new ListViewItem("上一页")
+					ListViewItem value2 = new ListViewItem(new string[6]
+					{
+						string.Empty,
+						"上一页",
+						string.Empty,
+						string.Empty,
+						string.Empty,
+						string.Empty
+					})
 					{
 						Tag = -2
 					};
@@ -9205,14 +10299,22 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 				}
 				if (hasNextPage)
 				{
-					ListViewItem value3 = new ListViewItem("下一页")
+					ListViewItem value3 = new ListViewItem(new string[6]
+					{
+						string.Empty,
+						"下一页",
+						string.Empty,
+						string.Empty,
+						string.Empty,
+						string.Empty
+					})
 					{
 						Tag = -3
 					};
 					resultListView.Items.Add(value3);
 				}
 			}
-			resultListView.EndUpdate();
+			EndListViewUpdateAndRefreshAccessibility();
 			if (allowSelection && resultListView.Items.Count > 0)
 			{
 				int fallbackIndex = ((num >= 0) ? Math.Min(num, resultListView.Items.Count - 1) : 0);
@@ -9250,14 +10352,14 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		_currentListItems.Clear();
 		_currentPodcasts.Clear();
 		resultListView.BeginUpdate();
+		ResetListViewSelectionState();
 		resultListView.Items.Clear();
-		if (_currentPodcastSounds.Count == 0)
-		{
-			resultListView.EndUpdate();
-			SetViewContext(viewSource, accessibleName ?? "播客节目");
-			AnnounceListViewHeaderIfNeeded(accessibleName ?? "播客节目");
-			return;
-		}
+                if (_currentPodcastSounds.Count == 0)
+                {
+                        EndListViewUpdateAndRefreshAccessibility();
+                        ApplyListViewContext(viewSource, accessibleName, "播客节目", announceHeader: true);
+                        return;
+                }
 		int num2 = startIndex;
 		checked
 		{
@@ -9278,8 +10380,9 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 					string text3 = $"{currentPodcastSound.Duration:mm\\:ss}";
 					text2 = (string.IsNullOrEmpty(text2) ? text3 : (text2 + " | " + text3));
 				}
-				ListViewItem value = new ListViewItem(new string[5]
+				ListViewItem value = new ListViewItem(new string[6]
 				{
+					string.Empty,
 					FormatIndex(num2),
 					currentPodcastSound.Name ?? "未知",
 					text,
@@ -9296,53 +10399,68 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			{
 				if (startIndex > 1)
 				{
-					ListViewItem listViewItem = resultListView.Items.Add("上一页");
+					ListViewItem listViewItem = resultListView.Items.Add(new ListViewItem(new string[6]
+					{
+						string.Empty,
+						"上一页",
+						string.Empty,
+						string.Empty,
+						string.Empty,
+						string.Empty
+					}));
 					listViewItem.Tag = -2;
 				}
 				if (hasNextPage)
 				{
-					ListViewItem listViewItem2 = resultListView.Items.Add("下一页");
+					ListViewItem listViewItem2 = resultListView.Items.Add(new ListViewItem(new string[6]
+					{
+						string.Empty,
+						"下一页",
+						string.Empty,
+						string.Empty,
+						string.Empty,
+						string.Empty
+					}));
 					listViewItem2.Tag = -3;
 				}
 			}
-			resultListView.EndUpdate();
-			string accessibleName2 = accessibleName ?? "播客节目";
-			SetViewContext(viewSource, accessibleName2);
-			AnnounceListViewHeaderIfNeeded(accessibleName2);
-			if (!IsListAutoFocusSuppressed && resultListView.Items.Count > 0)
+                EndListViewUpdateAndRefreshAccessibility();
+                ApplyListViewContext(viewSource, accessibleName, "播客节目", announceHeader: true);
+			if (IsListAutoFocusSuppressed || resultListView.Items.Count <= 0)
 			{
-				int targetIndex = -1;
-				bool matchedPending = false;
-				if (!string.IsNullOrWhiteSpace(_pendingSongFocusId))
+				return;
+			}
+			int num3 = -1;
+			bool flag = false;
+			if (!string.IsNullOrWhiteSpace(_pendingSongFocusId))
+			{
+				num3 = _currentSongs.FindIndex((SongInfo s) => s != null && string.Equals(s.Id, _pendingSongFocusId, StringComparison.OrdinalIgnoreCase));
+				if (num3 < 0)
 				{
-					targetIndex = _currentSongs.FindIndex((SongInfo s) => s != null && string.Equals(s.Id, _pendingSongFocusId, StringComparison.OrdinalIgnoreCase));
-					if (targetIndex < 0)
-					{
-						targetIndex = _currentSongs.FindIndex((SongInfo s) => s != null && s.IsCloudSong && !string.IsNullOrEmpty(s.CloudSongId) && string.Equals(s.CloudSongId, _pendingSongFocusId, StringComparison.OrdinalIgnoreCase));
-					}
-					matchedPending = targetIndex >= 0;
+					num3 = _currentSongs.FindIndex((SongInfo s) => s != null && s.IsCloudSong && !string.IsNullOrEmpty(s.CloudSongId) && string.Equals(s.CloudSongId, _pendingSongFocusId, StringComparison.OrdinalIgnoreCase));
 				}
-				if (targetIndex < 0)
+				flag = num3 >= 0;
+			}
+			if (num3 < 0)
+			{
+				num3 = ((num >= 0) ? Math.Min(num, resultListView.Items.Count - 1) : 0);
+			}
+			if (flag)
+			{
+				_pendingListFocusIndex = -1;
+				_pendingListFocusViewSource = null;
+			}
+			num3 = ResolvePendingListFocusIndex(num3);
+			EnsureListSelectionWithoutFocus(num3);
+			if (flag)
+			{
+				_pendingSongFocusId = null;
+				_pendingSongFocusViewSource = null;
+				_pendingSongFocusSatisfied = true;
+				_pendingSongFocusSatisfiedViewSource = viewSource ?? _currentViewSource;
+				if (resultListView != null && resultListView.CanFocus)
 				{
-					targetIndex = ((num >= 0) ? Math.Min(num, resultListView.Items.Count - 1) : 0);
-				}
-				if (matchedPending)
-				{
-					_pendingListFocusIndex = -1;
-					_pendingListFocusViewSource = null;
-				}
-				targetIndex = ResolvePendingListFocusIndex(targetIndex);
-				EnsureListSelectionWithoutFocus(targetIndex);
-				if (matchedPending)
-				{
-					_pendingSongFocusId = null;
-					_pendingSongFocusViewSource = null;
-					_pendingSongFocusSatisfied = true;
-					_pendingSongFocusSatisfiedViewSource = viewSource ?? _currentViewSource;
-					if (resultListView != null && resultListView.CanFocus)
-					{
-						resultListView.Focus();
-					}
+					resultListView.Focus();
 				}
 			}
 		}
@@ -9350,11 +10468,11 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 
 	private async void resultListView_ItemActivate(object sender, EventArgs e)
 	{
-		if (resultListView.SelectedItems.Count == 0)
+		ListViewItem item = GetSelectedListViewItemSafe();
+		if (item == null)
 		{
 			return;
 		}
-		ListViewItem item = resultListView.SelectedItems[0];
 		object tag = item.Tag;
 		if (tag is ListItemInfo listItem)
 		{
@@ -9386,36 +10504,37 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			return;
 		}
 		tag = item.Tag;
-		if (tag is PodcastEpisodeInfo episodeInfo)
-		{
-			if (episodeInfo?.Song != null)
-			{
-				await PlaySong(episodeInfo.Song);
-			}
-			return;
-		}
+                if (tag is PodcastEpisodeInfo episodeInfo)
+                {
+                        if (episodeInfo?.Song != null)
+                        {
+                                AnnounceSongLoadingForActivation(episodeInfo.Song);
+                                await PlaySong(episodeInfo.Song);
+                        }
+                        return;
+                }
 		int data = ((item.Tag is int) ? ((int)item.Tag) : item.Index);
-		if (data == -2)
-		{
-			OnPrevPage();
-		}
-		else if (data == -3)
-		{
-			OnNextPage();
-		}
-		else if (data >= 0 && data < _currentSongs.Count)
-		{
-			await PlaySong(_currentSongs[data]);
-		}
-	}
+                if (data == -2)
+                {
+                        await OnPrevPageAsync();
+                }
+                else if (data == -3)
+                {
+                        await OnNextPageAsync();
+                }
+        else if (data >= 0 && data < _currentSongs.Count)
+        {
+                await PlaySongByIndex(data);
+        }
+}
 
 	private async void resultListView_DoubleClick(object sender, EventArgs e)
 	{
-		if (resultListView.SelectedItems.Count == 0)
+		ListViewItem item = GetSelectedListViewItemSafe();
+		if (item == null)
 		{
 			return;
 		}
-		ListViewItem item = resultListView.SelectedItems[0];
 		Debug.WriteLine($"[MainForm] DoubleClick, Tag={item.Tag}, Type={item.Tag?.GetType().Name}");
 		object tag = item.Tag;
 		if (tag is ListItemInfo listItem)
@@ -9451,16 +10570,17 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			return;
 		}
 		tag = item.Tag;
-		if (tag is PodcastEpisodeInfo episode)
-		{
-			if (episode?.Song != null)
-			{
-				await PlaySong(episode.Song);
-			}
-			return;
-		}
+                if (tag is PodcastEpisodeInfo episode)
+                {
+                        if (episode?.Song != null)
+                        {
+                                AnnounceSongLoadingForActivation(episode.Song);
+                                await PlaySong(episode.Song);
+                        }
+                        return;
+                }
 		tag = item.Tag;
-		int index = default(int);
+		int index = 0;
 		int num;
 		if (tag is int)
 		{
@@ -9468,29 +10588,30 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			if (index >= 0)
 			{
 				num = ((index < _currentSongs.Count) ? 1 : 0);
-				goto IL_0556;
+				goto IL_05c8;
 			}
 		}
 		num = 0;
-		goto IL_0556;
-		IL_0556:
-		if (num != 0)
-		{
-			SongInfo song = _currentSongs[index];
-			Debug.WriteLine("[MainForm] 双击播放歌曲: " + song?.Name);
-			await PlaySong(song);
-			return;
-		}
+		goto IL_05c8;
+		IL_05c8:
+        if (num != 0)
+        {
+                SongInfo song = _currentSongs[index];
+                Debug.WriteLine("[MainForm] 双击播放歌曲: " + song?.Name);
+                await PlaySongByIndex(index);
+                return;
+        }
 		tag = item.Tag;
-		if (tag is SongInfo song2)
-		{
-			Debug.WriteLine("[MainForm] 双击播放歌曲(直接Tag): " + song2?.Name);
-			await PlaySong(song2);
-		}
-	}
+                if (tag is SongInfo song2)
+                {
+                        Debug.WriteLine("[MainForm] 双击播放歌曲(直接Tag): " + song2?.Name);
+                        AnnounceSongLoadingForActivation(song2);
+                        await PlaySong(song2);
+                }
+        }
 
-	private async void OnPrevPage()
-	{
+        private async Task OnPrevPageAsync()
+        {
 		checked
 		{
 			if (!string.IsNullOrEmpty(_currentViewSource) && _currentViewSource.StartsWith("search:", StringComparison.OrdinalIgnoreCase))
@@ -9510,7 +10631,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			}
 			else if (!string.IsNullOrEmpty(_currentViewSource) && _currentViewSource.StartsWith("artist_songs:", StringComparison.OrdinalIgnoreCase))
 			{
-				ParseArtistListViewSource(_currentViewSource, out long artistId, out int offset, out string order);
+				ParseArtistListViewSource(_currentViewSource, out var artistId, out var offset, out var order);
 				if (offset <= 0)
 				{
 					UpdateStatusBar("已经是第一页");
@@ -9522,7 +10643,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			}
 			else if (!string.IsNullOrEmpty(_currentViewSource) && _currentViewSource.StartsWith("artist_albums:", StringComparison.OrdinalIgnoreCase))
 			{
-				ParseArtistListViewSource(_currentViewSource, out long artistId2, out int offset2, out string order2, "latest");
+				ParseArtistListViewSource(_currentViewSource, out var artistId2, out var offset2, out var order2, "latest");
 				if (offset2 <= 0)
 				{
 					UpdateStatusBar("已经是第一页");
@@ -9569,7 +10690,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 				}
 				else
 				{
-					await LoadPodcastsByCategoryAsync(categoryId, Math.Max(0, offset5 - PodcastCategoryPageSize), skipSave: true);
+					await LoadPodcastsByCategoryAsync(categoryId, Math.Max(0, offset5 - 50), skipSave: true);
 				}
 			}
 			else if (string.Equals(_currentViewSource, "user_cloud", StringComparison.OrdinalIgnoreCase))
@@ -9589,8 +10710,8 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		}
 	}
 
-	private async void OnNextPage()
-	{
+        private async Task OnNextPageAsync()
+        {
 		checked
 		{
 			if (!string.IsNullOrEmpty(_currentViewSource) && _currentViewSource.StartsWith("search:", StringComparison.OrdinalIgnoreCase))
@@ -9617,7 +10738,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 					UpdateStatusBar("已经是最后一页");
 					return;
 				}
-				ParseArtistListViewSource(_currentViewSource, out long artistId, out int offset, out string order);
+				ParseArtistListViewSource(_currentViewSource, out var artistId, out var offset, out var order);
 				int newOffset = offset + 100;
 				await LoadArtistSongsAsync(artistId, newOffset, skipSave: true, ResolveArtistSongsOrder(order));
 			}
@@ -9628,7 +10749,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 					UpdateStatusBar("已经是最后一页");
 					return;
 				}
-				ParseArtistListViewSource(_currentViewSource, out long artistId2, out int offset2, out string order2, "latest");
+				ParseArtistListViewSource(_currentViewSource, out var artistId2, out var offset2, out var order2, "latest");
 				int newOffset2 = offset2 + 100;
 				await LoadArtistAlbumsAsync(artistId2, newOffset2, skipSave: true, ResolveArtistAlbumSort(order2));
 			}
@@ -9662,7 +10783,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 					return;
 				}
 				ParsePodcastCategoryViewSource(_currentViewSource, out var categoryId, out var offset5);
-				int newOffset5 = offset5 + PodcastCategoryPageSize;
+				int newOffset5 = offset5 + 50;
 				await LoadPodcastsByCategoryAsync(categoryId, newOffset5, skipSave: true);
 			}
 			else if (string.Equals(_currentViewSource, "user_cloud", StringComparison.OrdinalIgnoreCase))
@@ -9688,7 +10809,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		{
 			return false;
 		}
-		ParseSearchViewSource(_currentViewSource, out string parsedType, out string parsedKeyword, out int parsedPage);
+		ParseSearchViewSource(_currentViewSource, out var parsedType, out var parsedKeyword, out var parsedPage);
 		string keyword = ((!string.IsNullOrWhiteSpace(parsedKeyword)) ? parsedKeyword : ((!string.IsNullOrWhiteSpace(_lastKeyword)) ? _lastKeyword : searchTextBox.Text.Trim()));
 		if (string.IsNullOrWhiteSpace(keyword))
 		{
@@ -9714,10 +10835,11 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		catch (Exception ex2)
 		{
 			Exception ex3 = ex2;
-			if (!TryHandleOperationCancelled(ex3, "搜索加载已取消"))
+			Exception ex4 = ex3;
+			if (!TryHandleOperationCancelled(ex4, "搜索加载已取消"))
 			{
-				Debug.WriteLine($"[Search] 重新加载搜索结果失败: {ex3}");
-				MessageBox.Show("无法重新加载搜索结果: " + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+				Debug.WriteLine($"[Search] 重新加载搜索结果失败: {ex4}");
+				MessageBox.Show("无法重新加载搜索结果: " + ex4.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 				UpdateStatusBar("搜索加载失败");
 			}
 			return false;
@@ -9768,7 +10890,8 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		catch (Exception ex2)
 		{
 			Exception ex3 = ex2;
-			Debug.WriteLine("[Lyrics] 加载失败: " + ex3.Message);
+			Exception ex4 = ex3;
+			Debug.WriteLine("[Lyrics] 加载失败: " + ex4.Message);
 			_lyricsDisplayManager.Clear();
 			_currentLyrics.Clear();
 			CancelPendingLyricSpeech(resetSuppression: true, stopGlobalTts: false);
@@ -9788,7 +10911,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		{
 			try
 			{
-				BeginInvoke(new Action(SyncPlayPauseButtonText));
+				BeginInvoke(SyncPlayPauseButtonText);
 				return;
 			}
 			catch (ObjectDisposedException)
@@ -9807,41 +10930,68 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			playPauseButton.Text = text;
 			Debug.WriteLine($"[SyncPlayPauseButtonText] 按钮文本已更新: {text} (状态={playbackState})");
 		}
-		if (trayPlayPauseMenuItem != null && !trayPlayPauseMenuItem.IsDisposed)
-		{
-			string text2 = ((playbackState == PlaybackState.Playing) ? "暂停(&P)" : "播放(&P)");
-			if (trayPlayPauseMenuItem.Text != text2)
-			{
-				trayPlayPauseMenuItem.Text = text2;
-				Debug.WriteLine("[SyncPlayPauseButtonText] 托盘菜单文本已更新: " + text2);
-			}
-		}
+		UpdateTrayPlayPauseMenuTextForState(playbackState);
 	}
 
-	private async void TogglePlayPause()
+	private void UpdateTrayPlayPauseMenuTextForState(PlaybackState playbackState)
 	{
-		if (_audioEngine == null)
+		if (trayPlayPauseMenuItem == null || trayPlayPauseMenuItem.IsDisposed)
 		{
 			return;
 		}
 
-		switch (_audioEngine.GetPlaybackState())
+		bool shouldShowPause = playbackState == PlaybackState.Playing
+			|| playbackState == PlaybackState.Buffering
+			|| playbackState == PlaybackState.Loading;
+		string text = shouldShowPause ? "暂停(&P)" : "播放(&P)";
+		if (trayPlayPauseMenuItem.Text != text)
 		{
-		case PlaybackState.Playing:
-			_audioEngine.Pause();
-			PersistPlaybackState(includeQueue: true);
-			break;
-		case PlaybackState.Paused:
-			_audioEngine.Resume();
-			break;
-		default:
-		case PlaybackState.Idle:
-		case PlaybackState.Stopped:
-			if (!await TryResumeLastPlaybackAsync())
+			trayPlayPauseMenuItem.Text = text;
+			Debug.WriteLine("[UpdateTrayPlayPauseMenuText] 托盘菜单文本已更新: " + text + " (状态=" + playbackState + ")");
+		}
+	}
+
+        private async Task TogglePlayPauseAsync()
+        {
+		if (_audioEngine == null)
+		{
+			return;
+		}
+		if (Interlocked.CompareExchange(ref _playPauseCommandInFlight, 1, 0) != 0)
+		{
+			Debug.WriteLine("[TogglePlayPause] 播放/暂停命令执行中，忽略重复请求");
+			return;
+		}
+		try
+		{
+			switch (_audioEngine.GetPlaybackState())
 			{
-				UpdateStatusBar("没有可恢复的播放记录");
+			case PlaybackState.Playing:
+				TryCancelPendingLongSeek(false);
+				PersistPlaybackState();
+				await Task.Run(delegate
+				{
+					_audioEngine.Pause();
+				}).ConfigureAwait(continueOnCapturedContext: true);
+				break;
+			case PlaybackState.Paused:
+				TryCancelPendingLongSeek(true);
+				await Task.Run(delegate
+				{
+					_audioEngine.Resume();
+				}).ConfigureAwait(continueOnCapturedContext: true);
+				break;
+			default:
+				if (!(await TryResumeLastPlaybackAsync()))
+				{
+					UpdateStatusBar("没有可恢复的播放记录");
+				}
+				break;
 			}
-			break;
+		}
+		finally
+		{
+			Interlocked.Exchange(ref _playPauseCommandInFlight, 0);
 		}
 	}
 
@@ -9859,119 +11009,10 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		}
 	}
 
-	private void playPauseButton_Click(object sender, EventArgs e)
-	{
-		TogglePlayPause();
-	}
-
-	private int CalculateTargetIndexAfterDeletion(int deletedIndex, int newListCount)
-	{
-		if (newListCount == 0)
-		{
-			return -1;
-		}
-		checked
-		{
-			int val = ((deletedIndex >= newListCount) ? (newListCount - 1) : deletedIndex);
-			return Math.Max(0, Math.Min(val, newListCount - 1));
-		}
-	}
-
-	private void EnsureListSelectionWithoutFocus(int targetIndex)
-	{
-		if (targetIndex < 0 || resultListView.Items.Count == 0)
-		{
-			return;
-		}
-		targetIndex = Math.Max(0, Math.Min(targetIndex, checked(resultListView.Items.Count - 1)));
-		resultListView.BeginUpdate();
-		try
-		{
-			resultListView.SelectedItems.Clear();
-			ListViewItem listViewItem = resultListView.Items[targetIndex];
-			listViewItem.Selected = true;
-			listViewItem.Focused = true;
-			listViewItem.EnsureVisible();
-		}
-		finally
-		{
-			resultListView.EndUpdate();
-		}
-	}
-
-	private void RestoreListViewFocus(int targetIndex)
-	{
-		targetIndex = ResolvePendingListFocusIndex(targetIndex);
-		EnsureListSelectionWithoutFocus(targetIndex);
-		if (resultListView.CanFocus)
-		{
-			resultListView.Focus();
-		}
-	}
-
-	private void FocusListAfterEnrich(int pendingFocusIndex)
-	{
-		if (_pendingSongFocusSatisfied && !string.IsNullOrWhiteSpace(_pendingSongFocusSatisfiedViewSource) && string.Equals(_pendingSongFocusSatisfiedViewSource, _currentViewSource, StringComparison.OrdinalIgnoreCase))
-		{
-			return;
-		}
-		if (!IsListAutoFocusSuppressed && resultListView.Items.Count != 0)
-		{
-			int targetIndex = ((pendingFocusIndex >= 0) ? pendingFocusIndex : ((resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : 0));
-			RestoreListViewFocus(targetIndex);
-		}
-	}
-
-	private void resultListView_SelectedIndexChanged(object sender, EventArgs e)
-	{
-		if (!base.Visible || resultListView.SelectedItems.Count <= 0)
-		{
-			return;
-		}
-		int num = resultListView.SelectedIndices[0];
-		if (_lastListViewFocusedIndex != num)
-		{
-			_lastListViewFocusedIndex = num;
-			Debug.WriteLine($"[MainForm] 用户选择变化，保存索引={num}");
-		}
-		if (string.Equals(_currentViewSource, "user_cloud", StringComparison.OrdinalIgnoreCase))
-		{
-			SongInfo songFromListViewItem = GetSongFromListViewItem(resultListView.SelectedItems[0]);
-			if (songFromListViewItem != null && songFromListViewItem.IsCloudSong && !string.IsNullOrEmpty(songFromListViewItem.CloudSongId))
-			{
-				_lastSelectedCloudSongId = songFromListViewItem.CloudSongId;
-			}
-		}
-	}
-
-	private void NotifyAccessibilityClients(Control control, AccessibleEvents accEvent, int childID)
-	{
-		if (control == null)
-		{
-			return;
-		}
-		try
-		{
-			MethodInfo method = typeof(Control).GetMethod("AccessibilityNotifyClients", BindingFlags.Instance | BindingFlags.NonPublic, null, new Type[2]
-			{
-				typeof(AccessibleEvents),
-				typeof(int)
-			}, null);
-			if (method != null)
-			{
-				method.Invoke(control, new object[2] { accEvent, childID });
-				Debug.WriteLine($"[AccessibilityHelper] 通知 {control.Name}: Event={accEvent}, ChildID={childID}");
-			}
-			else
-			{
-				Debug.WriteLine("[AccessibilityHelper] 无法找到 AccessibilityNotifyClients 方法");
-			}
-		}
-		catch (Exception ex)
-		{
-			Debug.WriteLine("[AccessibilityHelper] 反射调用失败: " + ex.Message);
-		}
-	}
+        private void playPauseButton_Click(object sender, EventArgs e)
+        {
+                TogglePlayPauseAsync().SafeFireAndForget("PlayPause button");
+        }
 
 	private void UpdatePlayButtonDescription(SongInfo? song)
 	{
@@ -10041,16 +11082,16 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 				return;
 			}
 		}
-		string b = ((string.IsNullOrWhiteSpace(playbackDescription) || playbackDescription == "播放/暂停") ? "易听" : ("易听 - " + playbackDescription));
-		if (!string.Equals(Text, b, StringComparison.Ordinal))
+		string text = ((string.IsNullOrWhiteSpace(playbackDescription) || playbackDescription == "播放/暂停") ? "易听" : ("易听 - " + playbackDescription));
+		if (!string.Equals(Text, text, StringComparison.Ordinal))
 		{
-			Text = b;
+			Text = text;
 		}
 	}
 
-	private void UpdateTimer_Tick(object sender, EventArgs e)
-	{
-		if (_audioEngine == null || _isUserDragging || (_seekManager != null && _seekManager.IsSeeking))
+        private void UpdateTimer_Tick(object sender, EventArgs e)
+        {
+		if (_audioEngine == null || _isUserDragging)
 		{
 			return;
 		}
@@ -10065,21 +11106,21 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 				progressTrackBar.TickFrequency = Math.Max(1, num / 20);
 			}
 			int num2 = checked((int)cachedPosition);
-			if (num2 >= 0 && num2 <= progressTrackBar.Maximum)
-			{
-				progressTrackBar.Value = num2;
-			}
-			string accessibleName = FormatTimeFromSeconds(cachedPosition) + " / " + FormatTimeFromSeconds(cachedDuration);
-			timeLabel.Text = accessibleName;
-			progressTrackBar.AccessibleName = accessibleName;
-		}
-		else
-		{
-			progressTrackBar.Maximum = 1000;
-			progressTrackBar.Value = 0;
-			progressTrackBar.TickFrequency = 50;
-			progressTrackBar.AccessibleName = "00:00 / 00:00";
-		}
+                if (num2 >= 0 && num2 <= progressTrackBar.Maximum)
+                {
+                        progressTrackBar.Value = num2;
+                }
+                string text = FormatTimeFromSeconds(cachedPosition) + " / " + FormatTimeFromSeconds(cachedDuration);
+                timeLabel.Text = text;
+                progressTrackBar.AccessibleName = text;
+        }
+        else
+        {
+                progressTrackBar.Maximum = 1000;
+                progressTrackBar.Value = 0;
+                progressTrackBar.TickFrequency = 50;
+                progressTrackBar.AccessibleName = "00:00 / 00:00";
+        }
 		if (_currentLyrics != null && _currentLyrics.Count > 0)
 		{
 			TimeSpan position = TimeSpan.FromSeconds(cachedPosition);
@@ -10090,48 +11131,49 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			}
 		}
 		PlaybackState cachedPlaybackState = GetCachedPlaybackState();
-		string text = ((cachedPlaybackState == PlaybackState.Playing) ? "暂停" : "播放");
-		if (playPauseButton.Text != text)
+		string text2 = ((cachedPlaybackState == PlaybackState.Playing) ? "暂停" : "播放");
+		if (playPauseButton.Text != text2)
 		{
-			playPauseButton.Text = text;
-			Debug.WriteLine($"[UpdateTimer_Tick] ⚠\ufe0f 检测到按钮文本不一致，已自动修正: {text} (状态={cachedPlaybackState})");
+			playPauseButton.Text = text2;
+			Debug.WriteLine($"[UpdateTimer_Tick] ⚠\ufe0f 检测到按钮文本不一致，已自动修正: {text2} (状态={cachedPlaybackState})");
 		}
+		UpdateTrayPlayPauseMenuTextForState(cachedPlaybackState);
 	}
 
-	private void progressTrackBar_MouseDown(object sender, MouseEventArgs e)
-	{
-		_isUserDragging = true;
-		Debug.WriteLine("[MainForm] 进度条拖动开始");
-	}
+        private void progressTrackBar_MouseDown(object sender, MouseEventArgs e)
+        {
+                _isUserDragging = true;
+                Debug.WriteLine("[MainForm] 进度条拖动开始");
+        }
 
-	private void progressTrackBar_Scroll(object sender, EventArgs e)
-	{
-		if (_audioEngine != null)
-		{
-			double cachedDuration = GetCachedDuration();
-			if (cachedDuration > 0.0)
-			{
-				double num = progressTrackBar.Value;
-				Debug.WriteLine($"[MainForm] 进度条 Scroll: {num:F1}s");
-            RequestSeekAndResetLyrics(num);
-			}
-		}
-	}
+        private void progressTrackBar_Scroll(object sender, EventArgs e)
+        {
+                if (_audioEngine != null)
+                {
+                        double cachedDuration = GetCachedDuration();
+                        if (cachedDuration > 0.0)
+                        {
+                                double num = progressTrackBar.Value;
+                                Debug.WriteLine($"[MainForm] 进度条 Scroll: {num:F1}s");
+                                RequestSeekAndResetLyrics(num);
+                        }
+                }
+        }
 
-	private void progressTrackBar_MouseUp(object sender, MouseEventArgs e)
-	{
-		_isUserDragging = false;
-		Debug.WriteLine("[MainForm] 进度条拖动结束");
-		if (_seekManager != null)
-		{
-			_seekManager.FinishSeek();
-		}
-	}
+        private void progressTrackBar_MouseUp(object sender, MouseEventArgs e)  
+        {
+                _isUserDragging = false;
+                Debug.WriteLine("[MainForm] 进度条拖动结束");
+                if (_seekManager != null)
+                {
+                        _seekManager.FinishSeek();
+                }
+        }
 
 	private void HandleDirectionalKeyDown(bool isRight)
 	{
-		bool noActivePlayback = _audioEngine == null || (!_audioEngine.IsPlaying && !_audioEngine.IsPaused);
-		if ((_isPlaybackLoading || _isSwitchingTrack) && noActivePlayback)
+		bool flag = _audioEngine == null || (!_audioEngine.IsPlaying && !_audioEngine.IsPaused);
+		if ((_isPlaybackLoading || _isSwitchingTrack) && flag)
 		{
 			Debug.WriteLine("[MainForm] " + (isRight ? "右" : "左") + "键快进快退被忽略：歌曲加载中");
 			return;
@@ -10174,11 +11216,11 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 
 	private void StartScrubKeyTimer()
 	{
-        if (_scrubKeyTimer != null && !_scrubKeyTimer.Enabled)
-        {
-            _scrubKeyTimer.Interval = 50; // 每秒20次，提升长按快进/快退的响应性
-            _scrubKeyTimer.Start();
-        }
+		if (_scrubKeyTimer != null && !_scrubKeyTimer.Enabled)
+		{
+			_scrubKeyTimer.Interval = 50;
+			_scrubKeyTimer.Start();
+		}
 	}
 
 	private void StopScrubKeyTimerIfIdle()
@@ -10207,57 +11249,58 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			{
 				if ((now - _leftKeyDownTime).TotalMilliseconds >= 350.0)
 				{
-                    _leftScrubActive = true;
-                    ScheduleSeek(-1.0, enableScrubbing: true);
-                }
-            }
-            else
-            {
-                ScheduleSeek(-1.0, enableScrubbing: true);
-            }
-        }
-        if (!_rightKeyPressed)
-        {
-            return;
+					_leftScrubActive = true;
+					ScheduleSeek(-1.0, enableScrubbing: true);
+				}
+			}
+			else
+			{
+				ScheduleSeek(-1.0, enableScrubbing: true);
+			}
 		}
-        if (!_rightScrubActive)
-        {
-            if ((now - _rightKeyDownTime).TotalMilliseconds >= 350.0)
-            {
-                _rightScrubActive = true;
-                ScheduleSeek(1.0, enableScrubbing: true);
-            }
-        }
-        else
-        {
-            ScheduleSeek(1.0, enableScrubbing: true);
-        }
-    }
+		if (!_rightKeyPressed)
+		{
+			return;
+		}
+		if (!_rightScrubActive)
+		{
+			if ((now - _rightKeyDownTime).TotalMilliseconds >= 350.0)
+			{
+				_rightScrubActive = true;
+				ScheduleSeek(1.0, enableScrubbing: true);
+			}
+		}
+		else
+		{
+			ScheduleSeek(1.0, enableScrubbing: true);
+		}
+	}
 
-    private void ScheduleSeek(double direction, bool enableScrubbing = false)
-    {
-        if (_audioEngine != null)
-        {
-            double cachedPosition = GetCachedPosition();
-            double cachedDuration = GetCachedDuration();
-            double num = ((direction > 0.0) ? Math.Min(cachedDuration, cachedPosition + Math.Abs(direction)) : Math.Max(0.0, cachedPosition + direction));
-            Debug.WriteLine($"[MainForm] 请求 Seek: {cachedPosition:F1}s → {num:F1}s (方向: {direction:+0;-0})");
-            RequestSeekAndResetLyrics(num, preview: enableScrubbing);
-        }
-    }
+	private void ScheduleSeek(double direction, bool enableScrubbing = false)
+	{
+		if (_audioEngine != null)
+		{
+			TryCancelPendingLongSeek();
+			double cachedPosition = GetCachedPosition();
+			double cachedDuration = GetCachedDuration();
+			double num = ((direction > 0.0) ? Math.Min(cachedDuration, cachedPosition + Math.Abs(direction)) : Math.Max(0.0, cachedPosition + direction));
+			Debug.WriteLine($"[MainForm] 请求 Seek: {cachedPosition:F1}s → {num:F1}s (方向: {direction:+0;-0})");
+			RequestSeekAndResetLyrics(num, enableScrubbing);
+		}
+	}
 
-    private void PerformSeek(double targetPosition)
-    {
-        Debug.WriteLine($"[MainForm] 进度条拖动 Seek: {targetPosition:F1}s");
-                RequestSeekAndResetLyrics(targetPosition);
-    }
+	private void PerformSeek(double targetPosition)
+	{
+		Debug.WriteLine($"[MainForm] 进度条拖动 Seek: {targetPosition:F1}s");
+		RequestSeekAndResetLyrics(targetPosition);
+	}
 
 	private void OnSeekCompleted(object sender, bool success)
 	{
 		Debug.WriteLine($"[MainForm] Seek 序列完成，成功: {success}");
 		if (progressTrackBar != null && progressTrackBar.InvokeRequired)
 		{
-			progressTrackBar.BeginInvoke((Action)delegate
+			progressTrackBar.BeginInvoke(delegate
 			{
 				UpdateProgressTrackBarAccessibleName();
 			});
@@ -10273,7 +11316,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		Debug.WriteLine($"[MainForm] 缓冲状态变化: {state}");
 		if (base.InvokeRequired)
 		{
-			BeginInvoke((Action)delegate
+			BeginInvoke(delegate
 			{
 				UpdatePlayButtonForBufferingState(state);
 			});
@@ -10313,37 +11356,37 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		}
 	}
 
-	private void UpdateProgressTrackBarAccessibleName()
-	{
-		try
-		{
-			if (_audioEngine != null)
-			{
-				double position = _audioEngine.GetPosition();
-				double duration = _audioEngine.GetDuration();
-				string text = FormatTime(TimeSpan.FromSeconds(position));
-				string text2 = FormatTime(TimeSpan.FromSeconds(duration));
-				progressTrackBar.AccessibleName = text + " / " + text2;
-			}
-		}
-		catch (Exception ex)
-		{
-			Debug.WriteLine("[MainForm] UpdateProgressTrackBarAccessibleName 异常: " + ex.Message);
-		}
-	}
+        private void UpdateProgressTrackBarAccessibleName()
+        {
+                try
+                {
+                        if (_audioEngine != null)
+                        {
+                                double position = _audioEngine.GetPosition();   
+                                double duration = _audioEngine.GetDuration();   
+                                string text = FormatTime(TimeSpan.FromSeconds(position));
+                                string text2 = FormatTime(TimeSpan.FromSeconds(duration));
+                                progressTrackBar.AccessibleName = text + " / " + text2;
+                        }
+                }
+                catch (Exception ex)
+                {
+                        Debug.WriteLine("[MainForm] UpdateProgressTrackBarAccessibleName 异常: " + ex.Message);
+                }
+        }
 
-	private void volumeTrackBar_Scroll(object sender, EventArgs e)
-	{
-		if (_audioEngine != null)
-		{
-			float num = (float)volumeTrackBar.Value / 100f;
-			_audioEngine.SetVolume(num);
-			string text = $"{volumeTrackBar.Value}%";
-			volumeLabel.Text = text;
-			_config.Volume = num;
-			SaveConfig();
-		}
-	}
+        private void volumeTrackBar_Scroll(object sender, EventArgs e)
+        {
+                if (_audioEngine != null)
+                {
+                        float num = (float)volumeTrackBar.Value / 100f;
+                        _audioEngine.SetVolume(num);
+                        string text = $"{volumeTrackBar.Value}%";
+                        volumeLabel.Text = text;
+                        _config.Volume = num;
+                        SaveConfig();
+                }
+        }
 
 	private void volumeTrackBar_KeyDown(object sender, KeyEventArgs e)
 	{
@@ -10372,14 +11415,14 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		}
 	}
 
-	private void progressTrackBar_KeyDown(object sender, KeyEventArgs e)
-	{
-		if (e.KeyCode == Keys.Up || e.KeyCode == Keys.Down || e.KeyCode == Keys.Left || e.KeyCode == Keys.Right || e.KeyCode == Keys.Prior || e.KeyCode == Keys.Next || e.KeyCode == Keys.Home || e.KeyCode == Keys.End)
-		{
-			e.Handled = true;
-			e.SuppressKeyPress = true;
-		}
-	}
+        private void progressTrackBar_KeyDown(object sender, KeyEventArgs e)
+        {
+                if (e.KeyCode == Keys.Up || e.KeyCode == Keys.Down || e.KeyCode == Keys.Left || e.KeyCode == Keys.Right || e.KeyCode == Keys.Prior || e.KeyCode == Keys.Next || e.KeyCode == Keys.Home || e.KeyCode == Keys.End)
+                {
+                        e.Handled = true;
+                        e.SuppressKeyPress = true;
+                }
+        }
 
 	private void OnAudioPositionChanged(object? sender, TimeSpan position)
 	{
@@ -10391,7 +11434,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 	{
 		if (base.InvokeRequired)
 		{
-			BeginInvoke((Action)delegate
+			BeginInvoke(delegate
 			{
 				OnLyricUpdated(sender, e);
 			});
@@ -10451,7 +11494,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		List<string> list2 = (from line in list
 			select line.Text into text
 			where !string.IsNullOrWhiteSpace(text)
-			select text).Distinct(StringComparer.Ordinal).ToList();
+			select text).Distinct<string>(StringComparer.Ordinal).ToList();
 		if (list2.Count != 0)
 		{
 			_lastLyricSpeechAnchor = time;
@@ -10541,19 +11584,34 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		_resumeLyricSpeechAtSeconds = targetPosition;
 	}
 
-    private void RequestSeekAndResetLyrics(double targetPosition, bool preview = false)
-    {
-        CancelPendingLyricSpeech(resetSuppression: false);
-        BeginLyricSeekSuppression(targetPosition);
-        _lastLyricPlaybackPosition = TimeSpan.FromSeconds(targetPosition);
-        if (_seekManager != null)
-        {
-            _seekManager.RequestSeek(targetPosition, preview);
-        }
-        else
-        {
-            _audioEngine?.SetPosition(targetPosition);
-        }
+	private void RequestSeekAndResetLyrics(double targetPosition, bool preview = false)
+	{
+		TryCancelPendingLongSeek();
+		CancelPendingLyricSpeech(resetSuppression: false);
+		BeginLyricSeekSuppression(targetPosition);
+		_lastLyricPlaybackPosition = TimeSpan.FromSeconds(targetPosition);
+		if (_seekManager != null)
+		{
+			_seekManager.RequestSeek(targetPosition, preview);
+		}
+		else
+		{
+			_audioEngine?.SetPosition(targetPosition);
+		}
+	}
+
+	private bool TryCancelPendingLongSeek(bool? resumePlayback = null)
+	{
+		if (_seekManager == null || _audioEngine == null)
+		{
+			return false;
+		}
+		if (!_seekManager.IsSeekingLong && !_seekManager.HasPendingDeferredSeek)
+		{
+			return false;
+		}
+		Debug.WriteLine("[MainForm] 检测到长跳等待，执行取消/恢复播放状态");
+		return _seekManager.CancelPendingLongSeek(resumePlayback);
 	}
 
 	private void AudioEngine_PlaybackStopped(object sender, EventArgs e)
@@ -10562,7 +11620,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		if (base.InvokeRequired)
 		{
 			Debug.WriteLine("[MainForm] 需要切换到 UI 线程");
-			BeginInvoke((Action)delegate
+			BeginInvoke(delegate
 			{
 				AudioEngine_PlaybackStopped(sender, e);
 			});
@@ -10586,7 +11644,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			Debug.WriteLine("[MainForm WARNING] 单曲循环后备处理被调用，歌曲: " + currentSong?.Name);
 			if (currentSong != null)
 			{
-				PlaySongDirectAsync(currentSong);
+                                PlaySongDirectAsync(currentSong).SafeFireAndForget("Loop one fallback");
 			}
 			else
 			{
@@ -10596,7 +11654,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		else if (!suppressAutoAdvance)
 		{
 			Debug.WriteLine("[MainForm] 调用 PlayNext() (自动播放)");
-			PlayNext(isManual: false);
+                        PlayNextAsync(isManual: false).SafeFireAndForget("Auto advance");
 		}
 	}
 
@@ -10607,7 +11665,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		{
 			try
 			{
-				BeginInvoke((Action)delegate
+				BeginInvoke(delegate
 				{
 					AudioEngine_PlaybackEnded(sender, e);
 				});
@@ -10638,7 +11696,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		else
 		{
 			Debug.WriteLine("[MainForm] 调用 PlayNext() (自动播放)");
-			PlayNext(isManual: false);
+                        PlayNextAsync(isManual: false).SafeFireAndForget("Auto advance");
 		}
 	}
 
@@ -10652,7 +11710,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		{
 			try
 			{
-				BeginInvoke((Action)delegate
+				BeginInvoke(delegate
 				{
 					AudioEngine_GaplessTransitionCompleted(sender, e);
 				});
@@ -10714,8 +11772,8 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		}
 	}
 
-	private async void PlaySongDirectAsync(SongInfo song)
-	{
+        private async Task PlaySongDirectAsync(SongInfo song)
+        {
 		if (song == null)
 		{
 			throw new ArgumentNullException("song");
@@ -10725,12 +11783,12 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			Debug.WriteLine("[MainForm] PlaySongDirectAsync 开始播放: " + song.Name);
 			await PlaySongDirectWithCancellation(song);
 		}
-		catch (Exception ex)
-		{
-			Debug.WriteLine("[MainForm ERROR] PlaySongDirectAsync 异常: " + ex.Message);
-			UpdateStatusBar("播放失败: " + ex.Message);
-		}
-	}
+                catch (Exception ex)
+                {
+                        Debug.WriteLine("[MainForm ERROR] PlaySongDirectAsync 异常: " + ex.Message);
+                        AnnouncePlaybackFailure(ex.Message);
+                }
+        }
 
 	private void ClearAllSongUrlCache()
 	{
@@ -10794,10 +11852,10 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 
 	private async Task<bool> RecursivePreloadNextAvailableAsync(QualityLevel quality, int maxAttempts = 10)
 	{
+		SongUrlInfo songUrl = null;
+		string resolvedUrl = null;
 		checked
 		{
-			SongUrlInfo songUrl = default(SongUrlInfo);
-			string resolvedUrl = default(string);
 			for (int attempt = 0; attempt < maxAttempts; attempt++)
 			{
 				SongInfo nextSong = PredictNextSong();
@@ -10812,9 +11870,8 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 					Debug.WriteLine("[MainForm] \ud83d\udd0d 歌曲未检查过（IsAvailable=null），执行有效性检查: " + nextSong.Name);
 					try
 					{
-						Dictionary<string, SongUrlInfo> urlResult = await _apiClient.GetSongUrlAsync(new string[1] { nextSong.Id }, quality).ConfigureAwait(continueOnCapturedContext: false);
 						int num;
-						if (urlResult != null && urlResult.TryGetValue(nextSong.Id, out songUrl))
+						if ((await _apiClient.GetSongUrlAsync(new string[1] { nextSong.Id }, quality).ConfigureAwait(continueOnCapturedContext: false))?.TryGetValue(nextSong.Id, out songUrl) ?? false)
 						{
 							if (songUrl != null)
 							{
@@ -10822,7 +11879,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 								if (resolvedUrl != null)
 								{
 									num = ((resolvedUrl.Length > 0) ? 1 : 0);
-									goto IL_0203;
+									goto IL_02c3;
 								}
 							}
 							num = 0;
@@ -10831,8 +11888,8 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 						{
 							num = 0;
 						}
-						goto IL_0203;
-						IL_0203:
+						goto IL_02c3;
+						IL_02c3:
 						if (num != 0)
 						{
 							FreeTrialInfo trialInfo = songUrl.FreeTrialInfo;
@@ -10843,19 +11900,33 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 							{
 								Debug.WriteLine(unchecked($"[MainForm] \ud83c\udfb5 试听版本（预加载检查）: {nextSong.Name}, 片段: {trialStart / 1000}s - {trialEnd / 1000}s"));
 							}
+							long resolvedSize = songUrl.Size;
+							if (resolvedSize <= 0)
+							{
+								long contentLength = (await HttpRangeHelper.CheckRangeSupportAsync(resolvedUrl, null, CancellationToken.None, nextSong.CustomHeaders).ConfigureAwait(continueOnCapturedContext: false)).Item2;
+								if (contentLength > 0)
+								{
+									resolvedSize = contentLength;
+								}
+							}
+							if (resolvedSize <= 0)
+							{
+								resolvedSize = StreamSizeEstimator.EstimateSizeFromBitrate(songUrl.Br, nextSong.Duration);
+							}
 							nextSong.IsAvailable = true;
 							nextSong.Url = resolvedUrl;
-							string resolvedLevel = (nextSong.Level = songUrl.Level ?? quality.ToString().ToLowerInvariant());
-							nextSong.Size = songUrl.Size;
+							string text = (nextSong.Level = songUrl.Level ?? quality.ToString().ToLowerInvariant());
+							string resolvedLevel = text;
+							nextSong.Size = resolvedSize;
 							nextSong.IsTrial = isTrial;
 							nextSong.TrialStart = trialStart;
 							nextSong.TrialEnd = trialEnd;
 							string actualLevel = resolvedLevel.ToLowerInvariant();
-							nextSong.SetQualityUrl(actualLevel, resolvedUrl, songUrl.Size, isAvailable: true, isTrial, trialStart, trialEnd);
+							nextSong.SetQualityUrl(actualLevel, resolvedUrl, resolvedSize, isAvailable: true, isTrial, trialStart, trialEnd);
 							Debug.WriteLine($"[MainForm] ✓ 歌曲可用并已缓存: {nextSong.Name}, 音质: {actualLevel}, 试听: {isTrial}");
 							songUrl = null;
 							resolvedUrl = null;
-							goto IL_0483;
+							goto IL_06f0;
 						}
 						nextSong.IsAvailable = false;
 						Debug.WriteLine("[MainForm] ✗ 歌曲不可用: " + nextSong.Name + "，尝试下一首");
@@ -10863,13 +11934,14 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 					catch (Exception ex)
 					{
 						Exception ex2 = ex;
-						Debug.WriteLine("[MainForm] 检查可用性异常: " + nextSong.Name + ", " + ex2.Message);
+						Exception ex3 = ex2;
+						Debug.WriteLine("[MainForm] 检查可用性异常: " + nextSong.Name + ", " + ex3.Message);
 						nextSong.IsAvailable = false;
 					}
 					continue;
 				}
-				goto IL_0483;
-				IL_0483:
+				goto IL_06f0;
+				IL_06f0:
 				if (nextSong.IsAvailable == false)
 				{
 					Debug.WriteLine("[MainForm] ⏭\ufe0f 跳过不可用歌曲: " + nextSong.Name + "，继续查找");
@@ -10897,7 +11969,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 					return true;
 				}
 				Debug.WriteLine("[MainForm] ⚠\ufe0f 预加载失败: " + nextSong.Name + "，尝试下一首（不标记不可用，允许后续重试）");
-				if (nextSong.IsAvailable != false)
+				if (nextSong.IsAvailable == false)
 				{
 				}
 			}
@@ -10941,7 +12013,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 				int unavailable = 0;
 				await _apiClient.BatchCheckSongsAvailabilityStreamAsync(ids, selectedQuality, delegate(string songId, bool isAvailable)
 				{
-					if (!cancellationToken.IsCancellationRequested && songLookup.TryGetValue(songId, out SongInfo value))
+					if (!cancellationToken.IsCancellationRequested && songLookup.TryGetValue(songId, out var value))
 					{
 						value.IsAvailable = isAvailable;
 						if (isAvailable)
@@ -10971,20 +12043,257 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		}
 	}
 
-	private void UpdateStatusBar(string? message)
-	{
-		if (message != null)
-		{
-			if (statusStrip1.InvokeRequired)
+        private void UpdateStatusBar(string? message)
+        {
+                if (message != null)
+                {
+                        if (statusStrip1.InvokeRequired)
 			{
 				statusStrip1.Invoke(new Action<string>(UpdateStatusBar), message);
 			}
-			else if (statusStrip1.Items.Count > 0)
-			{
-				((ToolStripStatusLabel)statusStrip1.Items[0]).Text = message;
-			}
-		}
-	}
+                        else if (statusStrip1.Items.Count > 0)
+                        {
+                                ((ToolStripStatusLabel)statusStrip1.Items[0]).Text = message;
+                                UpdateStatusStripAccessibility(message);
+                                UpdateStatusBarProxyText(message);
+                        }
+                }
+        }
+
+        private void UpdateStatusBarProxyText(string message)
+        {
+                string text = message ?? string.Empty;
+                if (!string.Equals(_lastStatusBarDebugText, text, StringComparison.Ordinal))
+                {
+                        _lastStatusBarDebugText = text;
+                        DebugLogger.Log(DebugLogger.LogLevel.Info, "A11yStatusBar",
+                                $"Status text updated: '{text}'");
+                }
+                if (_statusBarProxy != null)
+                {
+                        _statusBarProxy.UpdateStatusText(text);
+                }
+                if (_nativeStatusBar != null)
+                {
+                        TryCreateNativeStatusBarWindow("UpdateStatusBarProxyText");
+                        _nativeStatusBar.UpdateStatusText(text);
+                }
+        }
+
+        private void InitializeStatusBarProxy()
+        {
+                if (_statusBarProxy != null || statusStrip1 == null)
+                {
+                        if (statusStrip1 == null)
+                        {
+                                DebugLogger.Log(DebugLogger.LogLevel.Warning, "A11yStatusBar",
+                                        "InitializeStatusBarProxy skipped: statusStrip1 is null.");
+                        }
+                        return;
+                }
+                DebugLogger.Log(DebugLogger.LogLevel.Info, "A11yStatusBar",
+                        $"InitializeStatusBarProxy: statusStrip Visible={statusStrip1.Visible}, Bounds={statusStrip1.Bounds}");
+                try
+                {
+                        DebugLogger.Log(DebugLogger.LogLevel.Info, "A11yStatusBar",
+                                $"StatusStrip A11y: Role={statusStrip1.AccessibleRole}, Name='{statusStrip1.AccessibleName}', Desc='{statusStrip1.AccessibleDescription}', Text='{statusStrip1.Text}'");
+                }
+                catch (Exception ex)
+                {
+                        DebugLogger.LogException("A11yStatusBar", ex, "读取 StatusStrip 可访问性信息失败");
+                }
+                _statusBarProxy = new StatusBarProxy
+                {
+                        Name = "statusBarProxy",
+                        Visible = true
+                };
+                base.Controls.Add(_statusBarProxy);
+                _statusBarProxy.BringToFront();
+                if (_nativeStatusBar == null)
+                {
+                        _nativeStatusBar = new NativeStatusBarWindow();
+                }
+                TryCreateNativeStatusBarWindow("InitializeStatusBarProxy");
+                SyncStatusBarProxyBounds();
+                _statusBarProxy.UpdateStatusText(toolStripStatusLabel1?.Text ?? string.Empty);
+                _nativeStatusBar?.UpdateStatusText(toolStripStatusLabel1?.Text ?? string.Empty);
+                DebugLogger.Log(DebugLogger.LogLevel.Info, "A11yStatusBar",
+                        $"StatusBarProxy created: Handle={_statusBarProxy.Handle}, Bounds={_statusBarProxy.Bounds}");
+                if (_nativeStatusBar != null)
+                {
+                        DebugLogger.Log(DebugLogger.LogLevel.Info, "A11yStatusBar",
+                                $"NativeStatusBarWindow state: Handle=0x{_nativeStatusBar.Handle.ToInt64():X}, Bounds={_nativeStatusBar.Bounds}, Created={_nativeStatusBar.IsCreated}");
+                }
+                statusStrip1.SizeChanged += StatusStrip1_BoundsChanged;
+                statusStrip1.LocationChanged += StatusStrip1_BoundsChanged;
+        }
+
+        private void TryCreateNativeStatusBarWindow(string stage)
+        {
+                if (_nativeStatusBar == null)
+                {
+                        return;
+                }
+                if (!IsHandleCreated)
+                {
+                        if (!_nativeStatusBarCreateDeferredLogged)
+                        {
+                                _nativeStatusBarCreateDeferredLogged = true;
+                                DebugLogger.Log(DebugLogger.LogLevel.Info, "A11yStatusBar",
+                                        $"NativeStatusBarWindow create deferred ({stage}): form handle not created yet.");
+                        }
+                        return;
+                }
+                if (!Visible)
+                {
+                        if (!_nativeStatusBarCreateDeferredLogged)
+                        {
+                                _nativeStatusBarCreateDeferredLogged = true;
+                                DebugLogger.Log(DebugLogger.LogLevel.Info, "A11yStatusBar",
+                                        $"NativeStatusBarWindow create deferred ({stage}): form not visible yet.");
+                        }
+                        return;
+                }
+                if (!_nativeStatusBar.IsCreated)
+                {
+                        if (_nativeStatusBar.Bounds.IsEmpty)
+                        {
+                                Rectangle pendingBounds = CalculateNativeStatusBarBounds();
+                                _nativeStatusBar.UpdateBounds(pendingBounds);
+                        }
+                        _nativeStatusBar.EnsureCreated(Handle);
+                        DebugLogger.Log(DebugLogger.LogLevel.Info, "A11yStatusBar",
+                                $"NativeStatusBarWindow created ({stage}): Handle=0x{_nativeStatusBar.Handle.ToInt64():X}, Bounds={_nativeStatusBar.Bounds}");
+                }
+        }
+
+        private void LogStatusBarSnapshot(string stage)
+        {
+                try
+                {
+                        string statusStripInfo = (statusStrip1 == null)
+                                ? "null"
+                                : $"Visible={statusStrip1.Visible}, Bounds={statusStrip1.Bounds}";
+                        string proxyInfo = (_statusBarProxy == null)
+                                ? "null"
+                                : $"Visible={_statusBarProxy.Visible}, Bounds={_statusBarProxy.Bounds}";
+                        string nativeInfo = (_nativeStatusBar == null)
+                                ? "null"
+                                : $"Created={_nativeStatusBar.IsCreated}, Bounds={_nativeStatusBar.Bounds}";
+                        string accBoundsInfo = "n/a";
+                        string clientBoundsInfo = "n/a";
+                        try
+                        {
+                                accBoundsInfo = AccessibilityObject?.Bounds.ToString() ?? "null";
+                        }
+                        catch
+                        {
+                                accBoundsInfo = "error";
+                        }
+                        try
+                        {
+                                clientBoundsInfo = RectangleToScreen(ClientRectangle).ToString();
+                        }
+                        catch
+                        {
+                                clientBoundsInfo = "error";
+                        }
+                        DebugLogger.Log(DebugLogger.LogLevel.Info, "A11yStatusBar",
+                                $"Status bar snapshot ({stage}): statusStrip={statusStripInfo}, proxy={proxyInfo}, native={nativeInfo}, accBounds={accBoundsInfo}, clientBounds={clientBoundsInfo}");
+                }
+                catch (Exception ex)
+                {
+                        DebugLogger.LogException("A11yStatusBar", ex, "Status bar snapshot failed");
+                }
+        }
+
+        private void StatusStrip1_BoundsChanged(object sender, EventArgs e)
+        {
+                SyncStatusBarProxyBounds();
+        }
+
+        private void MainForm_SizeChanged(object sender, EventArgs e)
+        {
+                SyncStatusBarProxyBounds();
+        }
+
+        private void SyncStatusBarProxyBounds()
+        {
+                int proxyHeight = 2;
+                int width = ClientSize.Width;
+                int x = 0;
+                int y = Math.Max(0, ClientSize.Height - proxyHeight);
+                if (statusStrip1 != null && statusStrip1.Visible)
+                {
+                        width = statusStrip1.Width;
+                        x = statusStrip1.Left;
+                        y = Math.Max(0, statusStrip1.Bottom - proxyHeight);
+                }
+                if (_statusBarProxy != null)
+                {
+                        _statusBarProxy.SetBounds(x, y, width, proxyHeight);
+                        _statusBarProxy.BringToFront();
+                        if (_lastStatusBarProxyBounds != _statusBarProxy.Bounds)
+                        {
+                                _lastStatusBarProxyBounds = _statusBarProxy.Bounds;
+                                DebugLogger.Log(DebugLogger.LogLevel.Info, "A11yStatusBar",
+                                        $"StatusBarProxy bounds updated: {_statusBarProxy.Bounds}");
+                        }
+                }
+                if (_nativeStatusBar != null)
+                {
+                        Rectangle nativeBounds = CalculateNativeStatusBarBounds();
+                        TryCreateNativeStatusBarWindow("SyncStatusBarProxyBounds");
+                        _nativeStatusBar.UpdateBounds(nativeBounds);
+                        if (_lastNativeStatusBarBounds != nativeBounds)
+                        {
+                                _lastNativeStatusBarBounds = nativeBounds;
+                                DebugLogger.Log(DebugLogger.LogLevel.Info, "A11yStatusBar",
+                                        $"NativeStatusBarWindow bounds updated: {nativeBounds}");
+                        }
+                }
+        }
+
+        private Rectangle CalculateNativeStatusBarBounds()
+        {
+                int width = ClientSize.Width;
+                int x = 0;
+                int nativeHeight = statusStrip1?.Height ?? 0;
+                if (nativeHeight <= 0)
+                {
+                        nativeHeight = 1;
+                }
+                if (statusStrip1 != null && statusStrip1.Visible)
+                {
+                        width = statusStrip1.Width;
+                        x = statusStrip1.Left;
+                }
+                int nativeY = Math.Max(0, (statusStrip1 != null && statusStrip1.Visible)
+                        ? statusStrip1.Top
+                        : (ClientSize.Height - nativeHeight));
+                return new Rectangle(x, nativeY, width, nativeHeight);
+        }
+
+        private void AnnounceStatusBarMessage(string? message)
+        {
+                if (message == null)
+                {
+                        return;
+                }
+                if (statusStrip1.InvokeRequired)
+                {
+                        statusStrip1.Invoke(new Action<string>(AnnounceStatusBarMessage), message);
+                        return;
+                }
+                UpdateStatusBar(message);
+                AnnounceStatusStripAccessibility(message);
+        }
+
+        private void AnnouncePlaybackFailure(string? reason = null)
+        {
+                string text = string.IsNullOrWhiteSpace(reason) ? "播放失败" : ("播放失败: " + reason);
+                AnnounceStatusBarMessage(text);
+        }
 
 	private long? GetCurrentSourceId(SongInfo song)
 	{
@@ -11081,69 +12390,42 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 	{
 		checked
 		{
-			int num = (int)(seconds / 60.0);
-			int num2 = (int)(seconds % 60.0);
-			return $"{num:D2}:{num2:D2}";
+			int value = (int)(seconds / 60.0);
+			int value2 = (int)(seconds % 60.0);
+			return $"{value:D2}:{value2:D2}";
 		}
 	}
 
-	[DllImport("user32.dll")]
-	private static extern bool GetComboBoxInfo(IntPtr hwndCombo, ref COMBOBOXINFO info);
+[DllImport("user32.dll")]
+private static extern bool SetForegroundWindow(nint hWnd);
 
 	[DllImport("user32.dll")]
-	private static extern IntPtr SetFocus(IntPtr hWnd);
+	private static extern bool ShowWindow(nint hWnd, int nCmdShow);
 
-	[DllImport("user32.dll")]
-	private static extern bool SetForegroundWindow(IntPtr hWnd);
-
-	[DllImport("user32.dll")]
-	private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-
-	private void FocusComboEditChild(ComboBox combo)
-	{
-		if (combo != null && !combo.IsDisposed)
-		{
-			COMBOBOXINFO info = new COMBOBOXINFO
-			{
-				cbSize = Marshal.SizeOf(typeof(COMBOBOXINFO))
-			};
-			if (GetComboBoxInfo(combo.Handle, ref info) && info.hwndItem != IntPtr.Zero)
-			{
-				SetFocus(info.hwndItem);
-			}
-		}
-	}
-
-	private void searchTypeComboBox_KeyPress(object sender, KeyPressEventArgs e)
-	{
-		e.Handled = true;
-	}
-
-	private void searchTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
-	{
-		if (searchTypeComboBox.SelectedIndex >= 0)
-		{
-			string text = searchTypeComboBox.SelectedItem?.ToString() ?? string.Empty;
-			if (!string.IsNullOrWhiteSpace(text))
-			{
-				_lastExplicitSearchType = text;
-			}
-			_isMixedSearchTypeActive = false;
-			UpdateSearchTypeAccessibleAnnouncement(text);
-		}
-	}
-
-	private void searchTypeComboBox_DropDownClosed(object sender, EventArgs e)
-	{
-		FocusComboEditChild(searchTypeComboBox);
-		AccessibilityNotifyClients(AccessibleEvents.Focus, -1);
-	}
-
-	private void searchTypeComboBox_Enter(object sender, EventArgs e)
-	{
-		FocusComboEditChild(searchTypeComboBox);
-		AccessibilityNotifyClients(AccessibleEvents.Focus, -1);
-	}
+private void searchTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
+{
+        if (_suppressSearchTypeComboEvents)
+        {
+                return;
+        }
+        if (searchTypeComboBox.SelectedIndex >= 0)
+        {
+                string text = searchTypeComboBox.SelectedItem?.ToString() ?? string.Empty;
+                if (string.Equals(text, MixedSearchTypeDisplayName, StringComparison.OrdinalIgnoreCase))
+                {
+                        _isMixedSearchTypeActive = true;
+                }
+                else
+                {
+                        if (!string.IsNullOrWhiteSpace(text))
+                        {
+                                _lastExplicitSearchType = text;
+                        }
+                        _isMixedSearchTypeActive = false;
+                        HideMixedSearchTypeOption();
+                }
+        }
+}
 
 	private void MainForm_KeyDown(object sender, KeyEventArgs e)
 	{
@@ -11167,22 +12449,22 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			ComboBox comboBox = searchTypeComboBox;
 			if (comboBox == null || !comboBox.ContainsFocus)
 			{
-				goto IL_00df;
+				goto IL_00f2;
 			}
 		}
 		if (e.KeyCode == Keys.Space || e.KeyCode == Keys.Left || e.KeyCode == Keys.Right)
 		{
 			return;
 		}
-		goto IL_00df;
-		IL_00df:
+		goto IL_00f2;
+		IL_00f2:
 		checked
 		{
 			if (e.KeyCode == Keys.Space)
 			{
 				e.Handled = true;
 				e.SuppressKeyPress = true;
-				TogglePlayPause();
+                                TogglePlayPauseAsync().SafeFireAndForget("KeyDown Space");
 			}
 			else if (e.KeyCode == Keys.Left)
 			{
@@ -11220,13 +12502,13 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			{
 				e.Handled = true;
 				e.SuppressKeyPress = true;
-				PlayPrevious();
+                                PlayPreviousAsync().SafeFireAndForget("KeyDown MediaPrevious");
 			}
 			else if (e.KeyCode == Keys.F4)
 			{
 				e.Handled = true;
 				e.SuppressKeyPress = true;
-				PlayNext();
+                                PlayNextAsync().SafeFireAndForget("KeyDown MediaNext");
 			}
 			else if (e.KeyCode == Keys.F5)
 			{
@@ -11252,17 +12534,17 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 				e.SuppressKeyPress = true;
 				ShowJumpToPositionDialog();
 			}
-			else if (e.KeyCode == Keys.PageDown)
+			else if (e.KeyCode == Keys.Next)
 			{
 				e.Handled = true;
 				e.SuppressKeyPress = true;
-				OnNextPage();
+                                OnNextPageAsync().SafeFireAndForget("KeyDown PageDown");
 			}
-			else if (e.KeyCode == Keys.PageUp)
+			else if (e.KeyCode == Keys.Prior)
 			{
 				e.Handled = true;
 				e.SuppressKeyPress = true;
-				OnPrevPage();
+                                OnPrevPageAsync().SafeFireAndForget("KeyDown PageUp");
 			}
 		}
 	}
@@ -11355,7 +12637,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			BringToFront();
 			Activate();
 			SetForegroundWindow(base.Handle);
-			BeginInvoke((Action)delegate
+			BeginInvoke(delegate
 			{
 				Control control = null;
 				if (resultListView != null && resultListView.CanFocus)
@@ -11366,9 +12648,9 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 						int targetIndex = _lastListViewFocusedIndex;
 						if (targetIndex < 0 || targetIndex >= resultListView.Items.Count)
 						{
-							if (resultListView.SelectedItems.Count > 0)
+							if (HasListViewSelection())
 							{
-								targetIndex = resultListView.SelectedIndices[0];
+								targetIndex = GetSelectedListViewIndex();
 								Debug.WriteLine($"[RestoreFromTray] 使用当前选中索引={targetIndex}");
 							}
 							else
@@ -11381,8 +12663,8 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 						{
 							Debug.WriteLine($"[RestoreFromTray] 使用保存的焦点索引={targetIndex}");
 						}
-						resultListView.SelectedItems.Clear();
-						BeginInvoke((Action)delegate
+						ClearListViewSelection();
+						BeginInvoke(delegate
 						{
 							if (targetIndex >= 0 && targetIndex < resultListView.Items.Count)
 							{
@@ -11417,11 +12699,10 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 					playPauseButton.Focus();
 					NotifyAccessibilityClients(playPauseButton, AccessibleEvents.Focus, -1);
 				}
-				if (control != null)
-				{
-					AccessibilityNotifyClients(AccessibleEvents.Focus, -1);
-					Debug.WriteLine("[RestoreFromTray] 焦点已设置到: " + control.Name);
-				}
+					if (control != null)
+					{
+						Debug.WriteLine("[RestoreFromTray] 焦点已设置到: " + control.Name);
+					}
 			});
 		}
 		catch (Exception ex)
@@ -11438,7 +12719,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		}
 		else if (e.Button == MouseButtons.Right)
 		{
-			ShowTrayContextMenu(Cursor.Position);
+			ShowTrayContextMenu(System.Windows.Forms.Cursor.Position);
 		}
 	}
 
@@ -11455,7 +12736,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 					EnsureConfigInitialized();
 					if (base.InvokeRequired)
 					{
-						Invoke((Action)delegate
+						Invoke(delegate
 						{
 							UpdateLoginMenuItemText();
 							RefreshQualityMenuAvailability();
@@ -11467,11 +12748,12 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 								{
 									try
 									{
-										await (Task)Invoke((Func<Task>)(() => LoadHomePageAsync()));
+										await Invoke((Func<Task>)(() => LoadHomePageAsync()));
 									}
 									catch (Exception ex3)
 									{
-										Exception homeEx = ex3;
+										Exception ex4 = ex3;
+										Exception homeEx = ex4;
 										Debug.WriteLine("[LoginMenuItem] 退出登录后刷新主页失败: " + homeEx.Message);
 									}
 								});
@@ -11498,7 +12780,8 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 								}
 								catch (Exception ex3)
 								{
-									Exception homeEx = ex3;
+									Exception ex4 = ex3;
+									Exception homeEx = ex4;
 									Debug.WriteLine("[LoginMenuItem] 退出登录后刷新主页失败: " + homeEx.Message);
 								}
 							});
@@ -11548,8 +12831,8 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 				}
 			};
 			Debug.WriteLine("[LoginMenuItem] 调用loginForm.ShowDialog()...");
-			DialogResult dialogResult = loginForm.ShowDialog(this);
-			Debug.WriteLine($"[LoginMenuItem] ShowDialog()返回，结果={dialogResult}");
+			DialogResult value = loginForm.ShowDialog(this);
+			Debug.WriteLine($"[LoginMenuItem] ShowDialog()返回，结果={value}");
 			Debug.WriteLine("[LoginMenuItem] ========== 登录流程结束 ==========");
 		}
 		catch (Exception ex2)
@@ -11569,32 +12852,30 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		Debug.WriteLine("[UpdateLoginMenuItemText] Nickname=" + (_accountState?.Nickname ?? "null"));
 		Debug.WriteLine("[UpdateLoginMenuItemText] AvatarUrl=" + (_accountState?.AvatarUrl ?? "null"));
 		Debug.WriteLine($"[UpdateLoginMenuItemText] VipType={_accountState?.VipType ?? 0}");
-		if (flag)
-		{
-			string text = _accountState?.Nickname;
-			string text2 = (string.IsNullOrEmpty(text) ? "用户信息" : text);
-			Debug.WriteLine("[UpdateLoginMenuItemText] 设置菜单项为: " + text2);
-			loginMenuItem.Text = text2;
-			loginMenuItem.AccessibleName = text2;
-			loginMenuItem.AccessibleDescription = "当前登录账号: " + text2 + "，详细信息";
-		}
-		else
-		{
-			Debug.WriteLine("[UpdateLoginMenuItemText] 设置菜单项为: 登录");
-			loginMenuItem.Text = "登录";
-			loginMenuItem.AccessibleName = "登录";
-			loginMenuItem.AccessibleDescription = "点击打开登录对话框";
-		}
+                if (flag)
+                {
+                        string text = _accountState?.Nickname;
+                        string text2 = (string.IsNullOrEmpty(text) ? "用户信息" : text);
+                        Debug.WriteLine("[UpdateLoginMenuItemText] 设置菜单项为: " + text2);
+                        loginMenuItem.Text = text2;
+                }
+                else
+                {
+                        Debug.WriteLine("[UpdateLoginMenuItemText] 设置菜单项为: 登录");
+                        loginMenuItem.Text = "登录";
+                }
 	}
 
 	private static string GetVipDescription(int vipType)
 	{
-		return vipType switch
+		if (1 == 0)
 		{
-			11 => "黑胶VIP", 
-			10 => "豪华VIP", 
-			_ => (vipType > 0) ? "普通VIP" : "普通用户", 
-		};
+		}
+		string result = ((vipType == 10) ? "豪华VIP" : ((vipType != 11) ? ((vipType > 0) ? "普通VIP" : "普通用户") : "黑胶VIP"));
+		if (1 == 0)
+		{
+		}
+		return result;
 	}
 
 	private void ApplyLoginState(LoginSuccessEventArgs args)
@@ -11606,7 +12887,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		}
 		if (base.InvokeRequired)
 		{
-			Invoke((Action)delegate
+			Invoke(delegate
 			{
 				ApplyLoginState(args);
 			});
@@ -11682,7 +12963,8 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 				catch (Exception ex2)
 				{
 					Exception ex3 = ex2;
-					Debug.WriteLine("[LoginMenuItem] 登录后同步资料失败: " + ex3.Message);
+					Exception ex4 = ex3;
+					Debug.WriteLine("[LoginMenuItem] 登录后同步资料失败: " + ex4.Message);
 				}
 			});
 		}
@@ -11696,7 +12978,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 				{
 					if (base.InvokeRequired)
 					{
-						await (Task)Invoke((Func<Task>)async delegate
+						await Invoke((Func<Task>)async delegate
 						{
 							await LoadHomePageAsync();
 						});
@@ -11708,7 +12990,8 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 				}
 				catch (Exception ex2)
 				{
-					Exception homeEx = ex2;
+					Exception ex3 = ex2;
+					Exception homeEx = ex3;
 					Debug.WriteLine("[LoginMenuItem] 刷新主页失败: " + homeEx.Message);
 				}
 			});
@@ -11761,26 +13044,26 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		RestoreFromTray();
 	}
 
-	private void trayPlayPauseMenuItem_Click(object sender, EventArgs e)
-	{
-		TogglePlayPause();
-	}
+        private void trayPlayPauseMenuItem_Click(object sender, EventArgs e)    
+        {
+                TogglePlayPauseAsync().SafeFireAndForget("Tray play/pause");
+        }
 
-	private void trayPrevMenuItem_Click(object sender, EventArgs e)
-	{
-		PlayPrevious();
-	}
+        private void trayPrevMenuItem_Click(object sender, EventArgs e)
+        {
+                PlayPreviousAsync().SafeFireAndForget("Tray previous");
+        }
 
-	private void trayNextMenuItem_Click(object sender, EventArgs e)
-	{
-		PlayNext();
-	}
+        private void trayNextMenuItem_Click(object sender, EventArgs e)
+        {
+                PlayNextAsync().SafeFireAndForget("Tray next");
+        }
 
 	private void trayExitMenuItem_Click(object sender, EventArgs e)
 	{
 		Debug.WriteLine("[trayExitMenuItem] 退出菜单项被点击");
 		_isApplicationExitRequested = true;
-		BeginInvoke((Action)delegate
+		BeginInvoke(delegate
 		{
 			Debug.WriteLine("[trayExitMenuItem] 延迟执行退出...");
 			Close();
@@ -11819,7 +13102,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		{
 			return;
 		}
-		BeginInvoke((Action)delegate
+		BeginInvoke(delegate
 		{
 			try
 			{
@@ -11850,7 +13133,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		{
 			try
 			{
-				BeginInvoke((Action)delegate
+				BeginInvoke(delegate
 				{
 					_contextMenuHost.HideHost();
 					Debug.WriteLine("[TrayContextMenu] 宿主窗口已隐藏");
@@ -11867,7 +13150,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		}
 		try
 		{
-			BeginInvoke((Action)delegate
+			BeginInvoke(delegate
 			{
 				if (base.CanFocus)
 				{
@@ -11884,17 +13167,17 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 
 	private void playPauseMenuItem_Click(object sender, EventArgs e)
 	{
-		TogglePlayPause();
+		TogglePlayPauseAsync().SafeFireAndForget("Menu play/pause");
 	}
 
 	private void prevMenuItem_Click(object sender, EventArgs e)
 	{
-		PlayPrevious();
+		PlayPreviousAsync().SafeFireAndForget("Menu previous");
 	}
 
 	private void nextMenuItem_Click(object sender, EventArgs e)
 	{
-		PlayNext();
+		PlayNextAsync().SafeFireAndForget("Menu next");
 	}
 
 	private void jumpToPositionMenuItem_Click(object sender, EventArgs e)
@@ -11909,8 +13192,8 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 
 	private void ShowJumpToPositionDialog()
 	{
-		bool noActivePlayback = _audioEngine == null || (!_audioEngine.IsPlaying && !_audioEngine.IsPaused);
-		if ((_isPlaybackLoading || _isSwitchingTrack) && noActivePlayback)
+		bool flag = _audioEngine == null || (!_audioEngine.IsPlaying && !_audioEngine.IsPaused);
+		if ((_isPlaybackLoading || _isSwitchingTrack) && flag)
 		{
 			Debug.WriteLine("[MainForm] F12跳转被忽略：歌曲加载中");
 			return;
@@ -11922,6 +13205,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		}
 		try
 		{
+			TryCancelPendingLongSeek();
 			double position = _audioEngine.GetPosition();
 			double duration = _audioEngine.GetDuration();
 			if (duration <= 0.0)
@@ -11959,7 +13243,8 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			MessageBox.Show(this, "无法获取输出设备列表: " + ex2.Message, "输出设备", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+			Exception ex3 = ex2;
+			MessageBox.Show(this, "无法获取输出设备列表: " + ex3.Message, "输出设备", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 			return;
 		}
 		if (devices.Count == 0)
@@ -11984,9 +13269,10 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			MessageBox.Show(this, "切换输出设备超时。", "输出设备", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
 			return;
 		}
-		catch (Exception ex4)
+		catch (Exception ex)
 		{
-			MessageBox.Show(this, "切换输出设备失败: " + ex4.Message, "输出设备", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
+			Exception ex5 = ex;
+			MessageBox.Show(this, "切换输出设备失败: " + ex5.Message, "输出设备", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
 			return;
 		}
 		if (!switchResult.IsSuccess)
@@ -12053,22 +13339,22 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 
 	private void UpdatePlaybackOrderMenuCheck()
 	{
-		SetMenuItemCheckedState(sequentialMenuItem, _config.PlaybackOrder == "顺序播放", "顺序播放");
-		SetMenuItemCheckedState(loopMenuItem, _config.PlaybackOrder == "列表循环", "列表循环");
-		SetMenuItemCheckedState(loopOneMenuItem, _config.PlaybackOrder == "单曲循环", "单曲循环");
-		SetMenuItemCheckedState(randomMenuItem, _config.PlaybackOrder == "随机播放", "随机播放");
+        SetMenuItemCheckedState(sequentialMenuItem, _config.PlaybackOrder == "顺序播放");
+        SetMenuItemCheckedState(loopMenuItem, _config.PlaybackOrder == "列表循环");
+        SetMenuItemCheckedState(loopOneMenuItem, _config.PlaybackOrder == "单曲循环");
+        SetMenuItemCheckedState(randomMenuItem, _config.PlaybackOrder == "随机播放");
 	}
 
 	private void UpdateQualityMenuCheck()
 	{
 		string defaultQuality = _config.DefaultQuality;
-		SetMenuItemCheckedState(standardQualityMenuItem, defaultQuality == "标准音质", "标准音质");
-		SetMenuItemCheckedState(highQualityMenuItem, defaultQuality == "极高音质", "极高音质");
-		SetMenuItemCheckedState(losslessQualityMenuItem, defaultQuality == "无损音质", "无损音质");
-		SetMenuItemCheckedState(hiresQualityMenuItem, defaultQuality == "Hi-Res音质", "Hi-Res音质");
-		SetMenuItemCheckedState(surroundHDQualityMenuItem, defaultQuality == "高清环绕声", "高清环绕声");
-		SetMenuItemCheckedState(dolbyQualityMenuItem, defaultQuality == "沉浸环绕声", "沉浸环绕声");
-		SetMenuItemCheckedState(masterQualityMenuItem, defaultQuality == "超清母带", "超清母带");
+        SetMenuItemCheckedState(standardQualityMenuItem, defaultQuality == "标准音质");
+        SetMenuItemCheckedState(highQualityMenuItem, defaultQuality == "极高音质");
+        SetMenuItemCheckedState(losslessQualityMenuItem, defaultQuality == "无损音质");
+        SetMenuItemCheckedState(hiresQualityMenuItem, defaultQuality == "Hi-Res音质");
+        SetMenuItemCheckedState(surroundHDQualityMenuItem, defaultQuality == "高清环绕声");
+        SetMenuItemCheckedState(dolbyQualityMenuItem, defaultQuality == "沉浸环绕声");
+        SetMenuItemCheckedState(masterQualityMenuItem, defaultQuality == "超清母带");
 	}
 
 	private void RefreshQualityMenuAvailability()
@@ -12123,7 +13409,12 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 
 	private void qualityMenuItem_Click(object sender, EventArgs e)
 	{
-		if (sender is ToolStripMenuItem { Text: var text } && !(_config.DefaultQuality == text))
+		if (!(sender is ToolStripMenuItem toolStripMenuItem))
+		{
+			return;
+		}
+		string text = toolStripMenuItem.Text;
+		if (!(_config.DefaultQuality == text))
 		{
 			string defaultQuality = _config.DefaultQuality;
 			_config.DefaultQuality = text;
@@ -12158,66 +13449,104 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		{
 			return false;
 		}
-        try
+                try
+                {
+                        string baseDirectory = Utils.PathHelper.ApplicationRootDirectory;
+                        string installRoot = ResolveUpdateRootDirectory(baseDirectory);
+
+                        string updaterPath = Path.Combine(installRoot, "YTPlayer.Updater.exe");
+                        if (!File.Exists(updaterPath) && !string.Equals(installRoot, baseDirectory, StringComparison.OrdinalIgnoreCase))
+                        {
+                                updaterPath = Path.Combine(baseDirectory, "YTPlayer.Updater.exe");
+                        }
+
+                        if (!File.Exists(updaterPath))
+                        {
+                                MessageBox.Show(this, "未找到更新程序 YTPlayer.Updater.exe，请重新安装或修复。", "更新失败", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
+                                return false;
+                        }
+
+                        string text2 = CreateUpdateSessionDirectory();
+                        string text3 = Path.Combine(text2, Path.GetFileName(updaterPath));
+                        File.Copy(updaterPath, text3, overwrite: true);
+
+                        CopyUpdaterDependency(Path.Combine(installRoot, "libs", "YTPlayer.Updater.exe.config"), text2);
+                        string text4 = Path.Combine(text2, "libs");
+                        CopyUpdaterDependency("Newtonsoft.Json.dll", text4);
+                        CopyUpdaterDependency("Newtonsoft.Json.xml", text4);
+                        CopyUpdaterLibDirectory(text4, installRoot);
+
+                        string text5 = Path.Combine(text2, "update-plan.json");
+                        plan.SaveTo(text5);
+                        string text6 = SerializeCommandLineArguments();
+                        StringBuilder stringBuilder = new StringBuilder();
+                        stringBuilder.Append("--plan \"" + text5 + "\" ");
+                        stringBuilder.Append("--target \"" + installRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + "\" ");
+                        string currentExe = Process.GetCurrentProcess().MainModule?.FileName ?? Path.Combine(baseDirectory, "YTPlayer.exe");
+                        stringBuilder.Append("--main \"" + currentExe + "\" ");
+                        stringBuilder.Append($"--pid {Process.GetCurrentProcess().Id} ");
+                        if (!string.IsNullOrEmpty(text6))
+                        {
+                                stringBuilder.Append("--main-args \"" + text6 + "\" ");
+                        }
+                        ProcessStartInfo startInfo = new ProcessStartInfo
+                        {
+                                FileName = text3,
+                                Arguments = stringBuilder.ToString(),
+                                UseShellExecute = false,
+                                WorkingDirectory = text2
+                        };
+                        startInfo.EnvironmentVariables["YTPLAYER_ROOT"] = installRoot;
+                        startInfo.EnvironmentVariables["YTPLAYER_TARGET"] = installRoot;
+                        Process process = Process.Start(startInfo);
+                        if (process == null)
+                        {
+                                throw new InvalidOperationException("无法启动更新程序。");
+                        }
+                        _isApplicationExitRequested = true;
+                        string planVersionLabel = GetPlanVersionLabel(plan);
+                        UpdateStatusBar("正在准备更新至 " + planVersionLabel);
+                        Task.Run(async delegate
+                        {
+                                await Task.Delay(300).ConfigureAwait(false);
+                                SafeInvoke(delegate
+                                {
+                                        Close();
+                                });
+                        });
+                        return true;
+                }
+                catch (Exception ex)
+                {
+                        MessageBox.Show(this, "启动更新程序失败：" + ex.Message, "更新失败", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+                        return false;
+                }
+        }
+
+        private static string ResolveUpdateRootDirectory(string baseDirectory)
         {
-            string baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
-            string text = Path.Combine(baseDirectory, "YTPlayer.Updater.exe");
-            if (!File.Exists(text))
-            {
-				MessageBox.Show(this, "未找到更新程序 YTPlayer.Updater.exe，请重新安装或修复。", "更新失败", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
-				return false;
-			}
-            string text2 = CreateUpdateSessionDirectory();
-            string text3 = Path.Combine(text2, Path.GetFileName(text));
-            File.Copy(text, text3, overwrite: true);
-            CopyUpdaterDependency(Path.Combine(baseDirectory, "YTPlayer.Updater.exe.config"), text2);
-            string sessionLibs = Path.Combine(text2, "libs");
-            CopyUpdaterDependency("Newtonsoft.Json.dll", sessionLibs);
-            CopyUpdaterDependency("Newtonsoft.Json.xml", sessionLibs);
-            CopyUpdaterLibDirectory(sessionLibs);
-            string text4 = Path.Combine(text2, "update-plan.json");
-            plan.SaveTo(text4);
-            string text5 = SerializeCommandLineArguments();
-            StringBuilder stringBuilder = new StringBuilder();
-            stringBuilder.Append("--plan \"" + text4 + "\" ");
-			stringBuilder.Append("--target \"" + baseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + "\" ");
-			stringBuilder.Append("--main \"" + Application.ExecutablePath + "\" ");
-			stringBuilder.Append($"--pid {Process.GetCurrentProcess().Id} ");
-			if (!string.IsNullOrEmpty(text5))
-			{
-				stringBuilder.Append("--main-args \"" + text5 + "\" ");
-			}
-			ProcessStartInfo startInfo = new ProcessStartInfo
-			{
-				FileName = text3,
-				Arguments = stringBuilder.ToString(),
-				UseShellExecute = false,
-				WorkingDirectory = text2
-			};
-			Process process = Process.Start(startInfo);
-			if (process == null)
-			{
-				throw new InvalidOperationException("无法启动更新程序。");
-			}
-			_isApplicationExitRequested = true;
-			string planVersionLabel = GetPlanVersionLabel(plan);
-			UpdateStatusBar("正在准备更新至 " + planVersionLabel);
-			Task.Run(delegate
-			{
-				Thread.Sleep(300);
-				SafeInvoke(delegate
-				{
-					Close();
-				});
-			});
-			return true;
-		}
-		catch (Exception ex)
-		{
-			MessageBox.Show(this, "启动更新程序失败：" + ex.Message, "更新失败", MessageBoxButtons.OK, MessageBoxIcon.Hand);
-			return false;
-		}
-	}
+                if (string.IsNullOrWhiteSpace(baseDirectory))
+                {
+                        return baseDirectory;
+                }
+                try
+                {
+                        string trimmed = baseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                        string leaf = Path.GetFileName(trimmed);
+                        if (string.Equals(leaf, "libs", StringComparison.OrdinalIgnoreCase))
+                        {
+                                string? parent = Path.GetDirectoryName(trimmed);
+                                if (!string.IsNullOrWhiteSpace(parent))
+                                {
+                                        return parent;
+                                }
+                        }
+                }
+                catch
+                {
+                }
+                return baseDirectory;
+        }
 
 	private static string CreateUpdateSessionDirectory()
 	{
@@ -12227,52 +13556,49 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		return text;
 	}
 
-    private static void CopyUpdaterDependency(string sourceFileOrName, string destinationDirectory)
-    {
-        string resolvedSource = sourceFileOrName;
-        if (!File.Exists(resolvedSource))
-        {
-            // 允许直接传入文件名，优先尝试 libs 目录
-            resolvedSource = PathHelper.ResolveFromLibsOrBase(Path.GetFileName(sourceFileOrName));
-        }
+	private static void CopyUpdaterDependency(string sourceFileOrName, string destinationDirectory)
+	{
+		string text = sourceFileOrName;
+		if (!File.Exists(text))
+		{
+			text = PathHelper.ResolveFromLibsOrBase(Path.GetFileName(sourceFileOrName));
+		}
+		if (!File.Exists(text))
+		{
+			Debug.WriteLine("[Updater] 依赖未找到: " + sourceFileOrName);
+			return;
+		}
+		Directory.CreateDirectory(destinationDirectory);
+		string destFileName = Path.Combine(destinationDirectory, Path.GetFileName(text));
+		File.Copy(text, destFileName, overwrite: true);
+	}
 
-        if (!File.Exists(resolvedSource))
+        private static void CopyUpdaterLibDirectory(string destinationLibs, string sourceRoot)
         {
-            Debug.WriteLine($"[Updater] 依赖未找到: {sourceFileOrName}");
-            return;
-        }
-
-        Directory.CreateDirectory(destinationDirectory);
-        string destFileName = Path.Combine(destinationDirectory, Path.GetFileName(resolvedSource));
-        File.Copy(resolvedSource, destFileName, overwrite: true);
-    }
-
-    /// <summary>
-    /// 将当前安装目录下的 libs 目录完整复制到临时更新会话，保证更新器在独立工作目录下也能解析所有依赖。
-    /// </summary>
-    private static void CopyUpdaterLibDirectory(string destinationLibs)
-    {
-        try
-        {
-            string sourceLibs = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "libs");
-            if (!Directory.Exists(sourceLibs))
-            {
-                return;
-            }
-
-            foreach (string sourcePath in Directory.GetFiles(sourceLibs, "*.*", SearchOption.AllDirectories))
-            {
-                string relative = sourcePath.Substring(sourceLibs.Length).TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-                string destPath = Path.Combine(destinationLibs, relative);
-                Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
-                File.Copy(sourcePath, destPath, overwrite: true);
-            }
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[Updater] 复制 libs 目录失败: {ex.Message}");
-        }
-    }
+                try
+                {
+                        string text = Path.Combine(sourceRoot, "libs");
+                        if (!Directory.Exists(text))
+                        {
+                                text = Path.Combine(Utils.PathHelper.ApplicationRootDirectory, "libs");
+                        }
+                        if (Directory.Exists(text))
+                        {
+                                string[] files = Directory.GetFiles(text, "*.*", SearchOption.AllDirectories);
+                                foreach (string text2 in files)
+                                {
+                                        string path = text2.Substring(text.Length).TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                                        string text3 = Path.Combine(destinationLibs, path);
+                                        Directory.CreateDirectory(Path.GetDirectoryName(text3));
+                                        File.Copy(text2, text3, overwrite: true);
+                                }
+                        }
+                }
+                catch (Exception ex)
+                {
+                        Debug.WriteLine("[Updater] 复制 libs 目录失败: " + ex.Message);
+                }
+	}
 
 	private static string SerializeCommandLineArguments()
 	{
@@ -12331,23 +13657,25 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			catch (Exception ex2)
 			{
 				Exception ex3 = ex2;
-				DebugLogger.LogException("Update", ex3, "自动检查更新失败（忽略）");
+				Exception ex4 = ex3;
+				DebugLogger.LogException("Update", ex4, "自动检查更新失败（忽略）");
 			}
 		}, token);
 	}
 
-    private async Task CheckForUpdatesSilentlyAsync(CancellationToken cancellationToken)
-    {
-        using UpdateServiceClient client = new UpdateServiceClient(UpdateConstants.DefaultEndpoint, "YTPlayer", VersionInfo.Version);
-        UpdateCheckResult result = await PollUpdateStatusSilentlyAsync(client, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-        UpdateAsset asset = UpdateFormatting.SelectPreferredAsset(result.Response.Data?.Assets);
-        if ((result.Response.Data?.UpdateAvailable ?? false) && asset != null)
+        private async Task CheckForUpdatesSilentlyAsync(CancellationToken cancellationToken)
         {
-            UpdatePlan plan = UpdatePlan.FromResponse(result.Response, asset, VersionInfo.Version);
-            string versionLabel = UpdateFormatting.FormatVersionLabel(plan, result.Response.Data?.Latest?.SemanticVersion);
-            ShowAutoUpdatePrompt(plan, versionLabel);
+                string currentVersion = VersionInfo.Version;
+                using UpdateServiceClient client = new UpdateServiceClient("https://yt.chenz.cloud/update.php", "YTPlayer", currentVersion);
+                UpdateCheckResult result = await PollUpdateStatusSilentlyAsync(client, currentVersion, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+                UpdateAsset asset = UpdateFormatting.SelectPreferredAsset(result.Response.Data?.Assets);
+                if ((result.Response.Data?.UpdateAvailable ?? false) && asset != null)
+                {
+                        UpdatePlan plan = UpdatePlan.FromResponse(result.Response, asset, currentVersion);
+                        string versionLabel = UpdateFormatting.FormatVersionLabel(plan, result.Response.Data?.Latest?.SemanticVersion);
+                        ShowAutoUpdatePrompt(plan, versionLabel);
+                }
         }
-    }
 
 	private void ShowAutoUpdatePrompt(UpdatePlan plan, string? versionLabel)
 	{
@@ -12368,21 +13696,21 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		});
 	}
 
-    private static async Task<UpdateCheckResult> PollUpdateStatusSilentlyAsync(UpdateServiceClient client, CancellationToken cancellationToken)
-    {
-        UpdateCheckResult result;
-        while (true)
+        private static async Task<UpdateCheckResult> PollUpdateStatusSilentlyAsync(UpdateServiceClient client, string currentVersion, CancellationToken cancellationToken)
         {
-            result = await client.CheckForUpdatesAsync(VersionInfo.Version, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-            if (!result.ShouldPollForCompletion)
-            {
-                break;
-            }
-            int delaySeconds = NormalizeUpdatePollDelay(result.GetRecommendedPollDelaySeconds());
-            await Task.Delay(TimeSpan.FromSeconds(delaySeconds), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-        }
-        return result;
-    }
+                UpdateCheckResult result;
+                while (true)
+                {
+                        result = await client.CheckForUpdatesAsync(currentVersion, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+                        if (!result.ShouldPollForCompletion)
+                        {
+                                break;
+                        }
+			int delaySeconds = NormalizeUpdatePollDelay(result.GetRecommendedPollDelaySeconds());
+			await Task.Delay(TimeSpan.FromSeconds(delaySeconds), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+		}
+		return result;
+	}
 
 	private static int NormalizeUpdatePollDelay(int seconds)
 	{
@@ -12419,39 +13747,56 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		await ToggleSequenceNumberHiddenAsync();
 	}
 
-	private void ToggleAutoReadLyrics()
+	private void hideControlBarMenuItem_Click(object sender, EventArgs e)
 	{
-		_autoReadLyrics = !_autoReadLyrics;
-		if (!_autoReadLyrics)
-		{
-			CancelPendingLyricSpeech();
-		}
-		try
-		{
-			autoReadLyricsMenuItem.Checked = _autoReadLyrics;
-			autoReadLyricsMenuItem.Text = (_autoReadLyrics ? "关闭歌词朗读\tF11" : "打开歌词朗读\tF11");
-		}
-		catch
-		{
-		}
-		string message = (_autoReadLyrics ? "已开启歌词朗读" : "已关闭歌词朗读");
-		TtsHelper.SpeakText(message);
-		UpdateStatusBar(message);
+		ToggleControlBarHidden();
+	}
+
+private void ToggleAutoReadLyrics()
+{
+        _autoReadLyrics = !_autoReadLyrics;
+        if (!_autoReadLyrics)
+        {
+                CancelPendingLyricSpeech();
+        }
+        try
+        {
+                SetMenuItemCheckedState(autoReadLyricsMenuItem, _autoReadLyrics);
+                autoReadLyricsMenuItem.Text = (_autoReadLyrics ? "关闭歌词朗读\tF11" : "打开歌词朗读\tF11");
+        }
+        catch
+        {
+        }
+		string text = (_autoReadLyrics ? "已开启歌词朗读" : "已关闭歌词朗读");
+		TtsHelper.SpeakText(text);
+		UpdateStatusBar(text);
 		Debug.WriteLine("[TTS] 歌词朗读: " + (_autoReadLyrics ? "开启" : "关闭"));
 		SaveConfig();
 	}
 
-	private void UpdateHideSequenceMenuItemText()
-	{
-		try
-		{
-			hideSequenceMenuItem.Checked = _hideSequenceNumbers;
-			hideSequenceMenuItem.Text = (_hideSequenceNumbers ? "显示序号\tF8" : "隐藏序号\tF8");
-		}
-		catch
-		{
-		}
-	}
+private void UpdateHideSequenceMenuItemText()
+{
+        try
+        {
+                SetMenuItemCheckedState(hideSequenceMenuItem, _hideSequenceNumbers);
+                hideSequenceMenuItem.Text = (_hideSequenceNumbers ? "显示序号\tF8" : "隐藏序号\tF8");
+        }
+        catch
+        {
+        }
+}
+
+private void UpdateHideControlBarMenuItemText()
+{
+        try
+        {
+                SetMenuItemCheckedState(hideControlBarMenuItem, _hideControlBar);
+                hideControlBarMenuItem.Text = (_hideControlBar ? "显示控制栏\tF7" : "隐藏控制栏\tF7");
+        }
+        catch
+        {
+        }
+}
 
 	private async Task ToggleSequenceNumberHiddenAsync()
 	{
@@ -12464,6 +13809,39 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		Debug.WriteLine("[TTS] 序号隐藏: " + (_hideSequenceNumbers ? "开启" : "关闭"));
 		SaveConfig();
 		await Task.CompletedTask;
+	}
+
+	private void ApplyControlBarVisibility()
+	{
+		if (controlPanel == null)
+		{
+			return;
+		}
+		bool containsFocus = controlPanel.ContainsFocus;
+		controlPanel.Visible = !_hideControlBar;
+		if (_hideControlBar && containsFocus)
+		{
+			if (resultListView != null && resultListView.CanFocus)
+			{
+				resultListView.Focus();
+			}
+			else if (searchTextBox != null && searchTextBox.CanFocus)
+			{
+				searchTextBox.Focus();
+			}
+		}
+	}
+
+	private void ToggleControlBarHidden()
+	{
+		_hideControlBar = !_hideControlBar;
+		UpdateHideControlBarMenuItemText();
+		ApplyControlBarVisibility();
+		string text = (_hideControlBar ? "已隐藏控制栏" : "已显示控制栏");
+		TtsHelper.SpeakText(text);
+		UpdateStatusBar(text);
+		Debug.WriteLine("[TTS] 控制栏隐藏: " + (_hideControlBar ? "开启" : "关闭"));
+		SaveConfig();
 	}
 
 	private void insertPlayMenuItem_Click(object sender, EventArgs e)
@@ -12498,17 +13876,42 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		}
 		string playlistId = playlist.Id;
 		string playlistName = (string.IsNullOrWhiteSpace(playlist.Name) ? ("\ufffd赥 " + playlistId) : playlist.Name);
-		string viewSource = (string.IsNullOrWhiteSpace(operationName) ? ("playlist:" + playlistId) : operationName);
-		List<SongInfo> skeletonSongs = playlist.Songs ?? new List<SongInfo>();
-		foreach (SongInfo song in skeletonSongs)
-		{
-			if (string.IsNullOrWhiteSpace(song.ViewSource))
-			{
-				song.ViewSource = viewSource;
-			}
-		}
-		string statusText = ((skeletonSongs.Count != 0) ? $"\ufffd赥: {playlistName}\ufffd\ufffd\ufffd\ufffd {skeletonSongs.Count} \ufffd\u05f8\ufffd\ufffd\ufffd (\ufffdǼ\ufffd)" : ((playlist.TrackCount > 0) ? $"\ufffd赥: {playlistName}\ufffd\ufffd\ufffd\ufffd {playlist.TrackCount} \ufffd\u05f8\ufffd\ufffd\ufffd (\ufffdǼ\ufffd, \ufffd\ufffdȱ\ufffd\ufffd\ufffd\ufffd)" : ("\ufffd赥: " + playlistName + "\ufffd\ufffdû\ufffd\ufffd\ufffdκν\ufffd\ufffd\ufffd")));
-		return (playlist, skeletonSongs, statusText);
+		          string viewSource = (string.IsNullOrWhiteSpace(operationName) ? ("playlist:" + playlistId) : operationName);
+          List<SongInfo> skeletonSongs = playlist.Songs ?? new List<SongInfo>();
+          int loadedCount = skeletonSongs.Count;
+          foreach (SongInfo song in skeletonSongs)
+          {
+                  if (string.IsNullOrWhiteSpace(song.ViewSource))
+                  {
+                          song.ViewSource = viewSource;
+                  }
+          }
+          if (TryGetLongPlaylistPlaceholderState(playlist, skeletonSongs, out List<SongInfo> placeholderSongs))
+          {
+                  skeletonSongs = placeholderSongs;
+                  playlist.Songs = skeletonSongs;
+          }
+          string statusText;
+          if (loadedCount > 0)
+          {
+                  if (playlist.TrackCount > 0 && loadedCount < playlist.TrackCount)
+                  {
+                          statusText = $"歌单: {playlistName} · 已加载 {loadedCount}/{playlist.TrackCount} 首";
+                  }
+                  else
+                  {
+                          statusText = $"歌单: {playlistName} · 共 {loadedCount} 首";
+                  }
+          }
+          else if (playlist.TrackCount > 0)
+          {
+                  statusText = $"歌单: {playlistName} · 共 {playlist.TrackCount} 首";
+          }
+          else
+          {
+                  statusText = "歌单: " + playlistName + " 暂无歌曲";
+          }
+          return (playlist, skeletonSongs, statusText);
 	}
 
 	private async Task<(PlaylistInfo Playlist, List<SongInfo> Songs, string StatusText)?> BuildPlaylistSongsViewDataAsync(Func<CancellationToken, Task<PlaylistInfo?>> playlistFactory, string operationName, CancellationToken cancellationToken)
@@ -12528,7 +13931,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			throw new InvalidOperationException("歌单缺少有效的标识。");
 		}
 		string playlistId = playlist.Id;
-		List<SongInfo> resolvedSongs = (await FetchWithRetryUntilCancel<List<SongInfo>>(operationName: string.IsNullOrWhiteSpace(operationName) ? ("playlist:" + playlistId) : operationName, operation: (CancellationToken ct) => _apiClient.GetPlaylistSongsAsync(playlistId), cancellationToken: cancellationToken, onRetry: delegate(int attempt, Exception _)
+		List<SongInfo> resolvedSongs = (await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.GetPlaylistSongsAsync(playlistId), string.IsNullOrWhiteSpace(operationName) ? ("playlist:" + playlistId) : operationName, cancellationToken, delegate(int attempt, Exception _)
 		{
 			SafeInvoke(delegate
 			{
@@ -12588,7 +13991,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			throw new InvalidOperationException("专辑缺少有效的标识。");
 		}
 		string albumId = album.Id;
-		List<SongInfo> resolvedSongs = (await FetchWithRetryUntilCancel<List<SongInfo>>(operationName: string.IsNullOrWhiteSpace(operationName) ? ("album:" + albumId) : operationName, operation: (CancellationToken ct) => _apiClient.GetAlbumSongsAsync(albumId), cancellationToken: cancellationToken, onRetry: delegate(int attempt, Exception _)
+		List<SongInfo> resolvedSongs = (await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.GetAlbumSongsAsync(albumId), string.IsNullOrWhiteSpace(operationName) ? ("album:" + albumId) : operationName, cancellationToken, delegate(int attempt, Exception _)
 		{
 			SafeInvoke(delegate
 			{
@@ -12603,15 +14006,15 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 	private static string BuildPlaylistStatusText(PlaylistInfo playlist, int songCount, bool enriched)
 	{
 		string text = (string.IsNullOrWhiteSpace(playlist?.Name) ? ("歌单 " + playlist?.Id) : playlist.Name);
-		string arg = (enriched ? "（已丰富）" : string.Empty);
-		return (songCount <= 0) ? (text + " 暂无歌曲") : $"歌单: {text} · {songCount} 首{arg}";
+		string value = (enriched ? "（已丰富）" : string.Empty);
+		return (songCount <= 0) ? (text + " 暂无歌曲") : $"歌单: {text} · {songCount} 首{value}";
 	}
 
 	private static string BuildAlbumStatusText(AlbumInfo album, int songCount, bool enriched)
 	{
 		string text = (string.IsNullOrWhiteSpace(album?.Name) ? ("专辑 " + album?.Id) : album.Name);
-		string arg = (enriched ? "（已丰富）" : string.Empty);
-		return (songCount <= 0) ? (text + " 暂无歌曲") : $"专辑: {text} · {songCount} 首{arg}";
+		string value = (enriched ? "（已丰富）" : string.Empty);
+		return (songCount <= 0) ? (text + " 暂无歌曲") : $"专辑: {text} · {songCount} 首{value}";
 	}
 
 	private static List<SongInfo> MergeSongsById(IReadOnlyList<SongInfo> skeleton, List<SongInfo> enriched, string? viewSource)
@@ -12690,62 +14093,518 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		return songInfo;
 	}
 
+	private static List<SongInfo> BuildPlaylistPlaceholderSongs(int totalCount, string? viewSource)
+	{
+		int num = Math.Max(0, totalCount);
+		List<SongInfo> list = new List<SongInfo>(num);
+		for (int i = 0; i < num; i = checked(i + 1))
+		{
+			list.Add(CreatePlaceholderSong(viewSource));
+		}
+		return list;
+	}
+
+	private bool TryGetLongPlaylistPlaceholderState(PlaylistInfo playlist, List<SongInfo> skeletonSongs, out List<SongInfo> placeholderSongs)
+	{
+		placeholderSongs = new List<SongInfo>();
+		if (playlist == null)
+		{
+			return false;
+		}
+		int trackCount = playlist.TrackCount;
+		if (trackCount < LongPlaylistSongThreshold || trackCount <= 0)
+		{
+			return false;
+		}
+		int num = skeletonSongs?.Count ?? 0;
+		bool flag = false;
+		if (skeletonSongs != null && skeletonSongs.Count > 0)
+		{
+			foreach (SongInfo skeletonSong in skeletonSongs)
+			{
+				if (IsPlaceholderSong(skeletonSong))
+				{
+					flag = true;
+					break;
+				}
+			}
+		}
+		if (num >= trackCount && !flag)
+		{
+			return false;
+		}
+		placeholderSongs = BuildPlaylistPlaceholderSongs(trackCount, skeletonSongs?.FirstOrDefault()?.ViewSource);
+		if (skeletonSongs != null && skeletonSongs.Count > 0)
+		{
+			int num2 = Math.Min(trackCount, skeletonSongs.Count);
+			for (int i = 0; i < num2; i = checked(i + 1))
+			{
+				SongInfo songInfo = skeletonSongs[i];
+				if (songInfo != null && !string.IsNullOrWhiteSpace(songInfo.Id))
+				{
+					placeholderSongs[i] = songInfo;
+				}
+			}
+		}
+		return true;
+	}
+
+	private void ApplyPlaceholderSongsToCurrentPlaylist(PlaylistInfo playlist, List<SongInfo> placeholders)
+	{
+		if (playlist != null && placeholders != null)
+		{
+			playlist.Songs = placeholders;
+		}
+	}
+
+	private bool TryApplyLongPlaylistPlaceholdersInPlace(PlaylistInfo playlist, List<SongInfo> placeholders)
+	{
+		if (placeholders == null || resultListView == null)
+		{
+			return false;
+		}
+		int count = resultListView.Items.Count;
+		if (count <= 0 || placeholders.Count < count)
+		{
+			return false;
+		}
+		if (_currentSongs == null || _currentSongs.Count < count)
+		{
+			return false;
+		}
+		checked
+		{
+			for (int i = 0; i < count; i++)
+			{
+				string text = placeholders[i]?.Id ?? string.Empty;
+				string text2 = _currentSongs[i]?.Id ?? string.Empty;
+				if ((!string.IsNullOrWhiteSpace(text) || !string.IsNullOrWhiteSpace(text2)) && !string.Equals(text, text2, StringComparison.OrdinalIgnoreCase))
+				{
+					return false;
+				}
+			}
+			int selectedListViewIndex = GetSelectedListViewIndex();
+			int num = -1;
+			try
+			{
+				num = resultListView.TopItem?.Index ?? (-1);
+			}
+			catch
+			{
+				num = -1;
+			}
+			_currentSongs = placeholders;
+			ApplySongLikeStates(_currentSongs);
+			if (playlist != null && playlist.Songs != _currentSongs)
+			{
+				playlist.Songs = _currentSongs;
+			}
+			resultListView.BeginUpdate();
+			try
+			{
+				for (int j = count; j < placeholders.Count; j++)
+				{
+					ListViewItem listViewItem = new ListViewItem(new string[6]);
+					FillListViewItemFromSongInfo(listViewItem, placeholders[j], j + 1);
+					listViewItem.Tag = j;
+					resultListView.Items.Add(listViewItem);
+				}
+			}
+			finally
+			{
+				resultListView.EndUpdate();
+			}
+			if (selectedListViewIndex >= 0 && selectedListViewIndex < resultListView.Items.Count && !HasListViewSelection())
+			{
+				try
+				{
+					ListViewItem listViewItem2 = resultListView.Items[selectedListViewIndex];
+					listViewItem2.Selected = true;
+					listViewItem2.Focused = true;
+				}
+				catch
+				{
+				}
+			}
+			if (num >= 0 && num < resultListView.Items.Count)
+			{
+				try
+				{
+					resultListView.Items[num].EnsureVisible();
+				}
+				catch
+				{
+				}
+			}
+			ListViewItem selectedListViewItemSafe = GetSelectedListViewItemSafe();
+			if (selectedListViewItemSafe != null)
+			{
+				UpdateListViewItemAccessibilityProperties(selectedListViewItemSafe, IsNvdaRunningCached());
+			}
+			return true;
+		}
+	}
+
+	private async Task<List<string>> FetchPlaylistTrackIdsAsync(string playlistId, CancellationToken cancellationToken)
+	{
+		List<string> ids = new List<string>();
+		if (string.IsNullOrWhiteSpace(playlistId))
+		{
+			return ids;
+		}
+		Dictionary<string, object> infoData = new Dictionary<string, object>
+		{
+			{ "id", playlistId },
+			{ "n", 1 },
+			{ "s", 8 }
+		};
+		JObject infoResponse = await _apiClient.PostWeApiAsync<JObject>("/v3/playlist/detail", infoData, 0, skipErrorHandling: false, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+		int code = infoResponse["code"]?.Value<int>() ?? 0;
+		if (code != 200)
+		{
+			string msg = infoResponse["message"]?.Value<string>() ?? "未知错误";
+			throw new Exception($"获取歌单详情失败: code={code}, message={msg}");
+		}
+		JArray trackIds = infoResponse["playlist"]?["trackIds"] as JArray;
+		if (trackIds == null || trackIds.Count == 0)
+		{
+			return ids;
+		}
+		foreach (JToken item in trackIds)
+		{
+			string id = item?["id"]?.ToString();
+			if (!string.IsNullOrWhiteSpace(id))
+			{
+				ids.Add(id);
+			}
+		}
+		return ids;
+	}
+
+	private async Task<List<SongInfo>> FetchPlaylistSongsByIdsBatchAsync(List<string> ids, CancellationToken cancellationToken)
+	{
+		if (ids == null || ids.Count == 0)
+		{
+			return new List<SongInfo>();
+		}
+		List<string> filtered = ids.Where((string id) => !string.IsNullOrWhiteSpace(id)).ToList();
+		if (filtered.Count == 0)
+		{
+			return new List<SongInfo>();
+		}
+		return await _apiClient.GetSongsByIdsAsync(filtered, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+	}
+
 	private async Task EnrichCurrentPlaylistSongsAsync(PlaylistInfo playlist, List<SongInfo> skeleton, string viewSource, string accessibleName)
 	{
 		CancellationToken viewToken = GetCurrentViewContentToken();
-		try
+		checked
 		{
-			List<SongInfo> songs = await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.GetPlaylistSongsAsync(playlist.Id, ct), viewSource, viewToken, delegate(int attempt, Exception _)
+			try
 			{
-				SafeInvoke(delegate
+				if (playlist == null || string.IsNullOrWhiteSpace(playlist.Id))
 				{
-					UpdateStatusBar($"重新获取歌单失败，正在重试第 {attempt} 次...");
-				});
-			}).ConfigureAwait(continueOnCapturedContext: false);
-			if (viewToken.IsCancellationRequested || songs == null)
-			{
-				return;
-			}
-			List<SongInfo> merged = MergeSongsById(skeleton ?? new List<SongInfo>(), songs, viewSource);
-			await ExecuteOnUiThreadAsync(delegate
-			{
-				if (string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
+					return;
+				}
+				string playlistName = (string.IsNullOrWhiteSpace(playlist.Name) ? ("歌单 " + playlist.Id) : playlist.Name);
+				if (TryGetLongPlaylistPlaceholderState(playlist, skeleton, out var _))
 				{
-					int pendingFocusIndex = (resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : -1;
-					bool sameIds = _currentSongs != null && _currentSongs.Count == merged.Count;
-					if (sameIds)
+					List<string> trackIds = new List<string>();
+					try
 					{
-						for (int i = 0; i < merged.Count; i++)
+						trackIds = await FetchWithRetryUntilCancel((CancellationToken ct) => FetchPlaylistTrackIdsAsync(playlist.Id, ct), "playlist:trackIds:" + playlist.Id, viewToken, delegate(int attempt, Exception _)
 						{
-							string? a = _currentSongs[i]?.Id;
-							string? b = merged[i]?.Id;
-							if (!string.Equals(a, b, StringComparison.OrdinalIgnoreCase))
+							SafeInvoke(delegate
 							{
-								sameIds = false;
-								break;
-							}
+								UpdateStatusBar($"重新获取歌单曲目失败，正在重试第 {attempt} 次...");
+							});
+						}).ConfigureAwait(continueOnCapturedContext: false);
+					}
+					catch (Exception ex)
+					{
+						Exception ex2 = ex;
+						if (!TryHandleOperationCancelled(ex2, "打开歌单已取消"))
+						{
+							Debug.WriteLine($"[EnrichPlaylist] 获取歌单 trackIds 失败: {ex2}");
 						}
 					}
-					if (sameIds)
+					if (viewToken.IsCancellationRequested)
 					{
-						// 局部刷新，保留选择和滚动位置
-						PatchSongs(merged, 1, skipAvailabilityCheck: true, showPagination: false, hasPreviousPage: false, hasNextPage: false, pendingFocusIndex: pendingFocusIndex, allowSelection: true);
+						return;
 					}
-					else
+					if (trackIds != null && trackIds.Count > 0)
 					{
-						DisplaySongs(merged, showPagination: false, hasNextPage: false, 1, preserveSelection: true, viewSource, accessibleName, skipAvailabilityCheck: true);
+						int totalCount = ((trackIds.Count > 0) ? trackIds.Count : playlist.TrackCount);
+						if (totalCount > 0)
+						{
+                                                        Dictionary<string, int> idIndexMap = new Dictionary<string, int>(totalCount, StringComparer.OrdinalIgnoreCase);
+                                                        for (int i = 0; i < trackIds.Count; i++)
+                                                        {
+                                                                string id = trackIds[i];
+                                                                if (!string.IsNullOrWhiteSpace(id) && !idIndexMap.ContainsKey(id))
+                                                                {
+                                                                        idIndexMap.Add(id, i);
+                                                                }
+                                                        }
+                                                        CachePlaylistTrackIndexMap(viewSource, idIndexMap);
+												int pendingFocusIndexFromIds = -1;
+												if (!string.IsNullOrWhiteSpace(_pendingSongFocusId) && string.Equals(_pendingSongFocusViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
+												{
+													idIndexMap.TryGetValue(_pendingSongFocusId, out pendingFocusIndexFromIds);
+												}
+												List<SongInfo> placeholders = BuildPlaylistPlaceholderSongs(totalCount, skeleton?.FirstOrDefault()?.ViewSource ?? viewSource);
+							if (skeleton != null && skeleton.Count > 0)
+							{
+								foreach (SongInfo song in skeleton)
+								{
+									if (song != null && !string.IsNullOrWhiteSpace(song.Id) && idIndexMap.TryGetValue(song.Id, out var index))
+									{
+										placeholders[index] = MergeSongFields(song, song, viewSource);
+									}
+								}
+							}
+							bool isCurrentView = true;
+							await ExecuteOnUiThreadAsync(delegate
+							{
+								if (!string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
+								{
+									isCurrentView = false;
+								}
+								else
+								{
+									ApplyPlaceholderSongsToCurrentPlaylist(playlist, placeholders);
+									if (!TryApplyLongPlaylistPlaceholdersInPlace(playlist, placeholders))
+									{
+										RequestListFocus(null, -1);
+										DisplaySongs(placeholders, showPagination: false, hasNextPage: false, 1, preserveSelection: true, viewSource, accessibleName, skipAvailabilityCheck: true, announceHeader: false);
+									}
+																if (playlist.Songs != _currentSongs)
+																{
+																	playlist.Songs = _currentSongs;
+																}
+																if (pendingFocusIndexFromIds >= 0 && resultListView != null && !IsListAutoFocusSuppressed && pendingFocusIndexFromIds < resultListView.Items.Count)
+																{
+																	int focusedIndex = GetFocusedListViewIndex();
+																	if (focusedIndex != pendingFocusIndexFromIds)
+																	{
+																		EnsureListSelectionWithoutFocus(pendingFocusIndexFromIds);
+																		if (resultListView.CanFocus)
+																		{
+																			resultListView.Focus();
+																		}
+																	}
+																	_pendingSongFocusId = null;
+																	_pendingSongFocusViewSource = null;
+																	_pendingSongFocusSatisfied = true;
+                                                                                _pendingSongFocusSatisfiedViewSource = viewSource;
+                                                                                _deferredPlaybackFocusViewSource = null;
+																}
+															}
+														}).ConfigureAwait(continueOnCapturedContext: false);
+							if (!isCurrentView || viewToken.IsCancellationRequested)
+							{
+								return;
+							}
+							List<SongInfo> currentSongs = _currentSongs ?? placeholders;
+							bool[] loadedFlags = new bool[totalCount];
+							int loadedCount = 0;
+							for (int i2 = 0; i2 < totalCount; i2++)
+							{
+								string expectedId = trackIds[i2];
+								if (i2 < currentSongs.Count)
+								{
+									SongInfo existing = currentSongs[i2];
+									if (existing != null && !string.IsNullOrWhiteSpace(existing.Id) && string.Equals(existing.Id, expectedId, StringComparison.OrdinalIgnoreCase))
+									{
+										loadedFlags[i2] = true;
+										loadedCount++;
+									}
+								}
+							}
+							UpdateStatusBar($"歌单: {playlistName} · 已加载 {loadedCount}/{totalCount} 首");
+							List<int> pendingBatchStarts = new List<int>();
+							for (int start = 0; start < totalCount; start += 200)
+							{
+								int end = Math.Min(start + 200, totalCount);
+								bool hasMissing = false;
+								for (int i3 = start; i3 < end; i3++)
+								{
+									if (!loadedFlags[i3])
+									{
+										hasMissing = true;
+										break;
+									}
+								}
+								if (hasMissing)
+								{
+									pendingBatchStarts.Add(start);
+								}
+							}
+							int batchFetched = 0;
+							while (pendingBatchStarts.Count > 0)
+							{
+								viewToken.ThrowIfCancellationRequested();
+								int selectedIndex = await GetSelectedListViewIndexAsync().ConfigureAwait(continueOnCapturedContext: false);
+								int selectedBatchStart = ((selectedIndex >= 0) ? (unchecked(selectedIndex / 200) * 200) : (-1));
+								int batchStart = ((selectedBatchStart >= 0 && pendingBatchStarts.Contains(selectedBatchStart)) ? selectedBatchStart : pendingBatchStarts[0]);
+								pendingBatchStarts.Remove(batchStart);
+								int batchEnd = Math.Min(batchStart + 200, totalCount);
+								List<string> batchIds = new List<string>();
+								for (int i4 = batchStart; i4 < batchEnd; i4++)
+								{
+									if (!loadedFlags[i4])
+									{
+										string id2 = trackIds[i4];
+										if (!string.IsNullOrWhiteSpace(id2))
+										{
+											batchIds.Add(id2);
+										}
+									}
+								}
+								if (batchIds.Count == 0)
+								{
+									continue;
+								}
+								if (batchFetched > 0)
+								{
+									await Task.Delay(1500, viewToken).ConfigureAwait(continueOnCapturedContext: false);
+								}
+								batchFetched++;
+								List<SongInfo> fetchedSongs = await FetchPlaylistSongsByIdsBatchAsync(batchIds, viewToken).ConfigureAwait(continueOnCapturedContext: false);
+								if (viewToken.IsCancellationRequested || fetchedSongs == null || fetchedSongs.Count == 0)
+								{
+									continue;
+								}
+								Dictionary<int, SongInfo> fetchedByIndex = new Dictionary<int, SongInfo>();
+								foreach (SongInfo song2 in fetchedSongs)
+								{
+									if (song2 != null && !string.IsNullOrWhiteSpace(song2.Id) && idIndexMap.TryGetValue(song2.Id, out var index2) && index2 >= 0 && index2 < totalCount)
+									{
+										fetchedByIndex[index2] = song2;
+									}
+								}
+								if (fetchedByIndex.Count == 0)
+								{
+									continue;
+								}
+								ApplySongLikeStates(fetchedByIndex.Values);
+								List<SongInfo> mergedSongs = new List<SongInfo>();
+								bool viewStillCurrent = true;
+								await ExecuteOnUiThreadAsync(delegate
+								{
+									if (!string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
+									{
+										viewStillCurrent = false;
+									}
+									else
+									{
+										Dictionary<int, SongInfo> dictionary = new Dictionary<int, SongInfo>();
+										foreach (KeyValuePair<int, SongInfo> item in fetchedByIndex)
+										{
+											int key = item.Key;
+											if (key >= 0 && key < _currentSongs.Count)
+											{
+												SongInfo skeleton2 = _currentSongs[key];
+												SongInfo value = MergeSongFields(skeleton2, item.Value, viewSource);
+												_currentSongs[key] = value;
+												dictionary[key] = value;
+												if (!loadedFlags[key])
+												{
+													loadedFlags[key] = true;
+													int num = loadedCount;
+													loadedCount = num + 1;
+												}
+											}
+										}
+										if (dictionary.Count > 0)
+										{
+											PatchSongItemsInPlace(dictionary);
+											mergedSongs = dictionary.Values.ToList();
+										}
+										if (playlist.Songs != _currentSongs)
+										{
+											playlist.Songs = _currentSongs;
+										}
+									}
+								}).ConfigureAwait(continueOnCapturedContext: false);
+								if (!viewStillCurrent)
+								{
+									return;
+								}
+								if (mergedSongs.Count > 0)
+								{
+									UpdatePlaybackQueueSongs(mergedSongs);
+								}
+								UpdateStatusBar($"歌单: {playlistName} · 已加载 {loadedCount}/{totalCount} 首");
+							}
+							if (viewToken.IsCancellationRequested)
+							{
+								return;
+							}
+							await ExecuteOnUiThreadAsync(delegate
+							{
+								if (string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
+								{
+									UpdateStatusBar(BuildPlaylistStatusText(playlist, _currentSongs.Count, enriched: true));
+									ScheduleAvailabilityCheck(_currentSongs);
+								}
+							}).ConfigureAwait(continueOnCapturedContext: false);
+							return;
+						}
 					}
-					UpdateStatusBar(BuildPlaylistStatusText(playlist, merged.Count, enriched: true));
-					ScheduleAvailabilityCheck(merged);
 				}
-			}).ConfigureAwait(continueOnCapturedContext: false);
-		}
-		catch (Exception ex)
-		{
-			Exception ex2 = ex;
-			if (!TryHandleOperationCancelled(ex2, "打开歌单已取消"))
+				List<SongInfo> songs = await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.GetPlaylistSongsAsync(playlist.Id, ct), viewSource, viewToken, delegate(int attempt, Exception _)
+				{
+					SafeInvoke(delegate
+					{
+						UpdateStatusBar($"重新获取歌单失败，正在重试第 {attempt} 次...");
+					});
+				}).ConfigureAwait(continueOnCapturedContext: false);
+				if (viewToken.IsCancellationRequested || songs == null)
+				{
+					return;
+				}
+				List<SongInfo> merged = MergeSongsById(skeleton ?? new List<SongInfo>(), songs, viewSource);
+				await ExecuteOnUiThreadAsync(delegate
+				{
+					if (string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
+					{
+						int pendingFocusIndex = ((resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : (-1));
+						bool flag = _currentSongs != null && _currentSongs.Count == merged.Count;
+						if (flag)
+						{
+							for (int j = 0; j < merged.Count; j++)
+							{
+								string a = _currentSongs[j]?.Id;
+								string b = merged[j]?.Id;
+								if (!string.Equals(a, b, StringComparison.OrdinalIgnoreCase))
+								{
+									flag = false;
+									break;
+								}
+							}
+						}
+						if (flag)
+						{
+							PatchSongs(merged, 1, skipAvailabilityCheck: true, showPagination: false, hasPreviousPage: false, hasNextPage: false, pendingFocusIndex);
+						}
+						else
+						{
+							DisplaySongs(merged, showPagination: false, hasNextPage: false, 1, preserveSelection: true, viewSource, accessibleName, skipAvailabilityCheck: true);
+						}
+						UpdateStatusBar(BuildPlaylistStatusText(playlist, merged.Count, enriched: true));
+						ScheduleAvailabilityCheck(merged);
+					}
+				}).ConfigureAwait(continueOnCapturedContext: false);
+			}
+			catch (Exception ex)
 			{
-				Debug.WriteLine($"[EnrichPlaylist] 丰富歌单失败: {ex2}");
+				Exception ex3 = ex;
+				Exception ex4 = ex3;
+				if (!TryHandleOperationCancelled(ex4, "打开歌单已取消"))
+				{
+					Debug.WriteLine($"[EnrichPlaylist] 丰富歌单失败: {ex4}");
+				}
 			}
 		}
 	}
@@ -12771,24 +14630,24 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			{
 				if (string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
 				{
-					int pendingFocusIndex = (resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : -1;
-					bool sameIds = _currentSongs != null && _currentSongs.Count == merged.Count;
-					if (sameIds)
+					int pendingFocusIndex = ((resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : (-1));
+					bool flag = _currentSongs != null && _currentSongs.Count == merged.Count;
+					if (flag)
 					{
-						for (int i = 0; i < merged.Count; i++)
+						for (int i = 0; i < merged.Count; i = checked(i + 1))
 						{
-							string? a = _currentSongs[i]?.Id;
-							string? b = merged[i]?.Id;
+							string a = _currentSongs[i]?.Id;
+							string b = merged[i]?.Id;
 							if (!string.Equals(a, b, StringComparison.OrdinalIgnoreCase))
 							{
-								sameIds = false;
+								flag = false;
 								break;
 							}
 						}
 					}
-					if (sameIds)
+					if (flag)
 					{
-						PatchSongs(merged, 1, skipAvailabilityCheck: true, showPagination: false, hasPreviousPage: false, hasNextPage: false, pendingFocusIndex: pendingFocusIndex, allowSelection: true);
+						PatchSongs(merged, 1, skipAvailabilityCheck: true, showPagination: false, hasPreviousPage: false, hasNextPage: false, pendingFocusIndex);
 					}
 					else
 					{
@@ -12802,9 +14661,10 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			if (!TryHandleOperationCancelled(ex2, "打开专辑已取消"))
+			Exception ex3 = ex2;
+			if (!TryHandleOperationCancelled(ex3, "打开专辑已取消"))
 			{
-				Debug.WriteLine($"[EnrichAlbum] 丰富专辑失败: {ex2}");
+				Debug.WriteLine($"[EnrichAlbum] 丰富专辑失败: {ex3}");
 			}
 		}
 	}
@@ -12844,7 +14704,8 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 					return;
 				}
 				(PlaylistInfo Playlist, List<SongInfo> Songs, string StatusText) viewData = data.Value;
-				(_currentPlaylist, _, _) = viewData;
+				(PlaylistInfo, List<SongInfo>, string) tuple = viewData;
+				_currentPlaylist = tuple.Item1;
 				_currentPlaylistOwnedByUser = IsPlaylistOwnedByUser(_currentPlaylist, GetCurrentUserId());
 				DisplaySongs(viewData.Songs, showPagination: false, hasNextPage: false, 1, preserveSelection, viewSource, accessibleName, skipAvailabilityCheck: true);
 				UpdateStatusBar(viewData.StatusText);
@@ -12854,10 +14715,11 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			if (!TryHandleOperationCancelled(ex2, "打开歌单已取消"))
+			Exception ex3 = ex2;
+			if (!TryHandleOperationCancelled(ex3, "打开歌单已取消"))
 			{
-				Debug.WriteLine($"[MainForm] 打开歌单失败: {ex2}");
-				MessageBox.Show("打开歌单失败: " + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+				Debug.WriteLine($"[MainForm] 打开歌单失败: {ex3}");
+				MessageBox.Show("打开歌单失败: " + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 				UpdateStatusBar("打开歌单失败");
 			}
 		}
@@ -12906,10 +14768,11 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			if (!TryHandleOperationCancelled(ex2, "打开专辑已取消"))
+			Exception ex3 = ex2;
+			if (!TryHandleOperationCancelled(ex3, "打开专辑已取消"))
 			{
-				Debug.WriteLine($"[MainForm] 打开专辑失败: {ex2}");
-				MessageBox.Show("打开专辑失败: " + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+				Debug.WriteLine($"[MainForm] 打开专辑失败: {ex3}");
+				MessageBox.Show("打开专辑失败: " + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 				UpdateStatusBar("打开专辑失败");
 			}
 		}
@@ -12958,10 +14821,11 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			if (!TryHandleOperationCancelled(ex2, "加载歌单已取消"))
+			Exception ex3 = ex2;
+			if (!TryHandleOperationCancelled(ex3, "加载歌单已取消"))
 			{
-				Debug.WriteLine($"[LoadPlaylistById] 异常: {ex2}");
-				MessageBox.Show("加载歌单失败: " + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+				Debug.WriteLine($"[LoadPlaylistById] 异常: {ex3}");
+				MessageBox.Show("加载歌单失败: " + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 				UpdateStatusBar("加载歌单失败");
 			}
 		}
@@ -13009,10 +14873,11 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			if (!TryHandleOperationCancelled(ex2, "打开专辑已取消"))
+			Exception ex3 = ex2;
+			if (!TryHandleOperationCancelled(ex3, "打开专辑已取消"))
 			{
-				Debug.WriteLine($"[LoadAlbumById] 异常: {ex2}");
-				MessageBox.Show("打开专辑失败: " + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+				Debug.WriteLine($"[LoadAlbumById] 异常: {ex3}");
+				MessageBox.Show("打开专辑失败: " + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 				UpdateStatusBar("打开专辑失败");
 			}
 		}
@@ -13039,10 +14904,11 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		catch (Exception ex2)
 		{
 			Exception ex3 = ex2;
-			if (!TryHandleOperationCancelled(ex3, "搜索加载已取消"))
+			Exception ex4 = ex3;
+			if (!TryHandleOperationCancelled(ex4, "搜索加载已取消"))
 			{
-				Debug.WriteLine($"[LoadSearchResults] 异常: {ex3}");
-				MessageBox.Show("加载搜索结果失败: " + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+				Debug.WriteLine($"[LoadSearchResults] 异常: {ex4}");
+				MessageBox.Show("加载搜索结果失败: " + ex4.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 				UpdateStatusBar("加载搜索结果失败");
 			}
 		}
@@ -13087,14 +14953,16 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 
 	private NavigationHistoryItem CreateCurrentState()
 	{
+		int selectedListViewIndex = GetSelectedListViewIndex();
+		ListViewItem selectedListViewItemSafe = GetSelectedListViewItemSafe();
 		NavigationHistoryItem navigationHistoryItem = new NavigationHistoryItem
 		{
 			ViewSource = _currentViewSource,
 			ViewName = resultListView.AccessibleName,
-			SelectedIndex = ((resultListView.SelectedItems.Count > 0) ? resultListView.SelectedItems[0].Index : (-1)),
+			SelectedIndex = selectedListViewIndex,
 			SelectedDataIndex = -1
 		};
-		if (resultListView.SelectedItems.Count > 0 && resultListView.SelectedItems[0].Tag is int num && num >= 0)
+		if (selectedListViewItemSafe != null && selectedListViewItemSafe.Tag is int num && num >= 0)
 		{
 			navigationHistoryItem.SelectedDataIndex = num;
 		}
@@ -13115,7 +14983,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		else if (_currentViewSource.StartsWith("search:", StringComparison.OrdinalIgnoreCase))
 		{
 			navigationHistoryItem.PageType = "search";
-			ParseSearchViewSource(_currentViewSource, out string searchType, out string keyword, out int page);
+			ParseSearchViewSource(_currentViewSource, out var searchType, out var keyword, out var page);
 			navigationHistoryItem.SearchType = ((!string.IsNullOrWhiteSpace(searchType)) ? searchType : _currentSearchType);
 			navigationHistoryItem.SearchKeyword = ((!string.IsNullOrWhiteSpace(keyword)) ? keyword : _lastKeyword);
 			navigationHistoryItem.CurrentPage = ((page > 0) ? page : _currentPage);
@@ -13135,7 +15003,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		else if (_currentViewSource.StartsWith("artist_songs:", StringComparison.OrdinalIgnoreCase))
 		{
 			navigationHistoryItem.PageType = "artist_songs";
-			ParseArtistListViewSource(_currentViewSource, out long artistId, out int offset, out string order);
+			ParseArtistListViewSource(_currentViewSource, out var artistId, out var offset, out var order);
 			navigationHistoryItem.ArtistId = artistId;
 			navigationHistoryItem.ArtistOffset = offset;
 			navigationHistoryItem.ArtistOrder = order;
@@ -13144,7 +15012,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		else if (_currentViewSource.StartsWith("artist_albums:", StringComparison.OrdinalIgnoreCase))
 		{
 			navigationHistoryItem.PageType = "artist_albums";
-			ParseArtistListViewSource(_currentViewSource, out long artistId2, out int offset2, out string order2, "latest");
+			ParseArtistListViewSource(_currentViewSource, out var artistId2, out var offset2, out var order2, "latest");
 			navigationHistoryItem.ArtistId = artistId2;
 			navigationHistoryItem.ArtistOffset = offset2;
 			navigationHistoryItem.ArtistAlbumSort = order2;
@@ -13203,11 +15071,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		searchType = string.Empty;
 		keyword = string.Empty;
 		page = 1;
-		if (string.IsNullOrWhiteSpace(viewSource))
-		{
-			return;
-		}
-		if (!viewSource.StartsWith("search:", StringComparison.OrdinalIgnoreCase))
+		if (string.IsNullOrWhiteSpace(viewSource) || !viewSource.StartsWith("search:", StringComparison.OrdinalIgnoreCase))
 		{
 			return;
 		}
@@ -13233,6 +15097,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			text2 = "podcast";
 			text = text.Substring("podcast:".Length);
 		}
+		bool flag = false;
 		if (1 == 0)
 		{
 		}
@@ -13247,7 +15112,9 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		if (1 == 0)
 		{
 		}
-		searchType = text3;
+		string text4 = text3;
+		bool flag2 = false;
+		searchType = text4;
 		int num = text.LastIndexOf(":page", StringComparison.OrdinalIgnoreCase);
 		checked
 		{
@@ -13364,7 +15231,10 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			{
 				_pendingBackNavigation = false;
 				Debug.WriteLine("[Navigation] 处理 pendingBack");
-				_ = Task.Run(async () => await GoBackAsync());
+				Task.Run(async delegate
+				{
+					await GoBackAsync();
+				});
 			}
 		}
 	}
@@ -13488,12 +15358,12 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 				if (resolvedIndex >= 0 && resolvedIndex < resultListView.Items.Count)
 				{
 					resultListView.BeginUpdate();
-					resultListView.SelectedItems.Clear();
+					ClearListViewSelection();
 					ListViewItem targetItem = resultListView.Items[resolvedIndex];
 					targetItem.Selected = true;
 					targetItem.Focused = true;
 					targetItem.EnsureVisible();
-					resultListView.EndUpdate();
+					EndListViewUpdateAndRefreshAccessibility();
 					resultListView.Focus();
 					_lastListViewFocusedIndex = resolvedIndex;
 				}
@@ -13507,8 +15377,9 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			catch (Exception ex)
 			{
 				Exception ex2 = ex;
-				Debug.WriteLine($"[Navigation] 恢复状态失败: {ex2}");
-				MessageBox.Show("返回失败: " + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+				Exception ex3 = ex2;
+				Debug.WriteLine($"[Navigation] 恢复状态失败: {ex3}");
+				MessageBox.Show("返回失败: " + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 				UpdateStatusBar("返回失败");
 				_currentViewSource = previousViewSource;
 				return false;
@@ -13759,13 +15630,13 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 				ToolStripMenuItem toolStripMenuItem2 = artistAlbumsSortMenuItem;
 				if (toolStripMenuItem2 == null || !toolStripMenuItem2.Visible)
 				{
-					goto IL_038b;
+					goto IL_03a8;
 				}
 			}
 		}
 		showViewSection = true;
-		goto IL_038b;
-		IL_038b:
+		goto IL_03a8;
+		IL_03a8:
 		toolStripSeparatorView.Visible = showViewSection;
 	}
 
@@ -13849,28 +15720,123 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 				return playbackSnapshot.QueueSource;
 			}
 		}
-		if (!string.IsNullOrWhiteSpace(_currentViewSource))
+		if (!string.IsNullOrWhiteSpace(_currentViewSource) && IsSongInCurrentView(song))
 		{
 			return _currentViewSource;
 		}
 		return null;
 	}
 
-	private void RequestSongFocus(string? viewSource, SongInfo? song)
-	{
-		if (song == null || string.IsNullOrWhiteSpace(viewSource))
+        private bool IsSongInCurrentView(SongInfo? song)
+        {
+                if (song == null || _currentSongs == null || _currentSongs.Count == 0)
+                {
+                        return false;
+                }
+		checked
 		{
-			return;
-		}
-		if (!string.IsNullOrWhiteSpace(song.Id))
-		{
-			_pendingSongFocusId = song.Id;
-			_pendingSongFocusViewSource = viewSource;
-		}
-		if (song.IsCloudSong && !string.IsNullOrEmpty(song.CloudSongId) && string.Equals(viewSource, "user_cloud", StringComparison.OrdinalIgnoreCase))
-		{
-			_pendingCloudFocusId = song.CloudSongId;
-			_lastSelectedCloudSongId = song.CloudSongId;
+			if (!string.IsNullOrWhiteSpace(song.Id))
+			{
+				for (int i = 0; i < _currentSongs.Count; i++)
+				{
+					if (string.Equals(_currentSongs[i]?.Id, song.Id, StringComparison.OrdinalIgnoreCase))
+					{
+						return true;
+					}
+				}
+			}
+			if (song.IsCloudSong && !string.IsNullOrWhiteSpace(song.CloudSongId))
+			{
+				for (int j = 0; j < _currentSongs.Count; j++)
+				{
+					SongInfo songInfo = _currentSongs[j];
+					if (songInfo != null && songInfo.IsCloudSong && !string.IsNullOrWhiteSpace(songInfo.CloudSongId) && string.Equals(songInfo.CloudSongId, song.CloudSongId, StringComparison.OrdinalIgnoreCase))
+					{
+						return true;
+					}
+				}
+			}
+                        return false;
+                }
+        }
+
+        private void CachePlaylistTrackIndexMap(string? viewSource, Dictionary<string, int> indexMap)
+        {
+                if (string.IsNullOrWhiteSpace(viewSource) || indexMap == null || indexMap.Count == 0)
+                {
+                        return;
+                }
+                if (!_playlistTrackIndexMapCache.ContainsKey(viewSource))
+                {
+                        if (_playlistTrackIndexMapOrder.Count >= PlaylistTrackIndexMapCacheLimit)
+                        {
+                                string oldest = _playlistTrackIndexMapOrder.Dequeue();
+                                _playlistTrackIndexMapCache.Remove(oldest);
+                        }
+                        _playlistTrackIndexMapOrder.Enqueue(viewSource);
+                }
+                _playlistTrackIndexMapCache[viewSource] = indexMap;
+        }
+
+        private int ResolveSongIndexFromCache(string? viewSource, SongInfo? song)
+        {
+                if (song == null || string.IsNullOrWhiteSpace(viewSource) || _playlistTrackIndexMapCache.Count == 0)
+                {
+                        return -1;
+                }
+                if (!string.IsNullOrWhiteSpace(song.Id) && _playlistTrackIndexMapCache.TryGetValue(viewSource, out var map) && map != null && map.TryGetValue(song.Id, out var index))
+                {
+                        return index;
+                }
+                return -1;
+        }
+
+        private int FindSongIndexInList(IReadOnlyList<SongInfo> songs, SongInfo? song)
+        {
+                if (songs == null || song == null)
+                {
+                        return -1;
+                }
+                if (!string.IsNullOrWhiteSpace(song.Id))
+                {
+                        for (int i = 0; i < songs.Count; i++)
+                        {
+                                if (string.Equals(songs[i]?.Id, song.Id, StringComparison.OrdinalIgnoreCase))
+                                {
+                                        return i;
+                                }
+                        }
+                }
+                if (song.IsCloudSong && !string.IsNullOrWhiteSpace(song.CloudSongId))
+                {
+                        for (int j = 0; j < songs.Count; j++)
+                        {
+                                SongInfo songInfo = songs[j];
+                                if (songInfo != null && songInfo.IsCloudSong && !string.IsNullOrWhiteSpace(songInfo.CloudSongId) && string.Equals(songInfo.CloudSongId, song.CloudSongId, StringComparison.OrdinalIgnoreCase))
+                                {
+                                        return j;
+                                }
+                        }
+                }
+                return -1;
+        }
+
+        private void RequestSongFocus(string? viewSource, SongInfo? song)
+        {
+                if (song != null && !string.IsNullOrWhiteSpace(viewSource))
+                {
+                        _pendingSongFocusSatisfied = false;
+                        _pendingSongFocusSatisfiedViewSource = null;
+                        if (!string.IsNullOrWhiteSpace(song.Id))
+                        {
+                                _pendingSongFocusId = song.Id;
+                                _pendingSongFocusViewSource = viewSource;
+                        }
+			if (song.IsCloudSong && !string.IsNullOrEmpty(song.CloudSongId) && string.Equals(viewSource, "user_cloud", StringComparison.OrdinalIgnoreCase))
+			{
+				_pendingCloudFocusId = song.CloudSongId;
+				_lastSelectedCloudSongId = song.CloudSongId;
+			}
 		}
 	}
 
@@ -13882,34 +15848,33 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		}
 		int page = 1;
 		int offset = 0;
-		const int pageSize = 50;
-		while (true)
+		checked
 		{
-			cancellationToken.ThrowIfCancellationRequested();
-			CloudSongPageResult pageResult = await _apiClient.GetCloudSongsAsync(pageSize, offset, cancellationToken);
-			if (pageResult?.Songs != null)
+			do
 			{
-				int idx = pageResult.Songs.FindIndex((SongInfo s) => s != null && s.IsCloudSong && string.Equals(s.CloudSongId, song.CloudSongId, StringComparison.OrdinalIgnoreCase));
-				if (idx >= 0)
+				cancellationToken.ThrowIfCancellationRequested();
+				CloudSongPageResult pageResult = await _apiClient.GetCloudSongsAsync(50, offset, cancellationToken);
+				if (pageResult?.Songs != null)
 				{
-					_cloudPage = page;
-					_pendingCloudFocusId = song.CloudSongId;
-					_lastSelectedCloudSongId = song.CloudSongId;
-					return true;
+					int idx = pageResult.Songs.FindIndex((SongInfo s) => s != null && s.IsCloudSong && string.Equals(s.CloudSongId, song.CloudSongId, StringComparison.OrdinalIgnoreCase));
+					if (idx >= 0)
+					{
+						_cloudPage = page;
+						_pendingCloudFocusId = song.CloudSongId;
+						_lastSelectedCloudSongId = song.CloudSongId;
+						return true;
+					}
 				}
+				if (pageResult == null || !pageResult.HasMore)
+				{
+					break;
+				}
+				page++;
+				offset += 50;
 			}
-			if (pageResult == null || !pageResult.HasMore)
-			{
-				break;
-			}
-			page++;
-			offset += pageSize;
-			if (page > 200)
-			{
-				break;
-			}
+			while (page <= 200);
+			return false;
 		}
-		return false;
 	}
 
 	private async Task<bool> NavigateByViewSourceAsync(string viewSource, SongInfo currentSong)
@@ -13918,10 +15883,46 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		{
 			return false;
 		}
-		try
-		{
-			SaveNavigationState();
-			RequestSongFocus(viewSource, currentSong);
+                try
+                {
+                        SaveNavigationState();
+                RequestSongFocus(viewSource, currentSong);
+                PlaybackSnapshot playbackSnapshot = _playbackQueue?.CaptureSnapshot();
+                if (playbackSnapshot != null && playbackSnapshot.QueueIndex >= 0 && !string.IsNullOrWhiteSpace(playbackSnapshot.QueueSource) && string.Equals(playbackSnapshot.QueueSource, viewSource, StringComparison.OrdinalIgnoreCase))
+                {
+                        int pendingIndex = playbackSnapshot.QueueIndex;
+                        ConfigModel configModel = _config ?? EnsureConfigInitialized();
+                        bool resolved = false;
+                        if (configModel != null && configModel.LastPlayingSourceIndex >= 0 && !string.IsNullOrWhiteSpace(configModel.LastPlayingSource) && !string.IsNullOrWhiteSpace(configModel.LastPlayingSongId) && currentSong != null && string.Equals(configModel.LastPlayingSource, viewSource, StringComparison.OrdinalIgnoreCase) && string.Equals(configModel.LastPlayingSongId, currentSong.Id, StringComparison.OrdinalIgnoreCase))
+                        {
+                                pendingIndex = configModel.LastPlayingSourceIndex;
+                                resolved = true;
+                        }
+                        if (!resolved && currentSong != null)
+                        {
+                                int cachedIndex = ResolveSongIndexFromCache(viewSource, currentSong);
+                                if (cachedIndex >= 0)
+                                {
+                                        pendingIndex = cachedIndex;
+                                        resolved = true;
+                                }
+                        }
+                        if (resolved)
+                        {
+                                _deferredPlaybackFocusViewSource = null;
+                                RequestListFocus(viewSource, pendingIndex, fromPlayback: true);
+                        }
+                        else if (viewSource.StartsWith("playlist:", StringComparison.OrdinalIgnoreCase) && currentSong != null && !string.IsNullOrWhiteSpace(currentSong.Id))
+                        {
+                                _deferredPlaybackFocusViewSource = viewSource;
+                                RequestListFocus(null, -1);
+                        }
+                        else
+                        {
+                                _deferredPlaybackFocusViewSource = null;
+                                RequestListFocus(viewSource, pendingIndex, fromPlayback: true);
+                        }
+                }
 			if (string.Equals(viewSource, "homepage", StringComparison.OrdinalIgnoreCase))
 			{
 				await LoadHomePageAsync(skipSave: true);
@@ -13942,17 +15943,17 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			else if (viewSource.StartsWith("artist_entries:", StringComparison.OrdinalIgnoreCase))
 			{
 				long artistId = ParseArtistIdFromViewSource(viewSource, "artist_entries:");
-				if (artistId <= 0)
-				{
-					await LoadArtistCategoryTypesAsync(skipSave: true);
-				}
-				else
+				if (artistId > 0)
 				{
 					await OpenArtistAsync(new ArtistInfo
 					{
 						Id = artistId,
 						Name = (currentSong.Artist ?? string.Empty)
 					}, skipSave: true);
+				}
+				else
+				{
+					await LoadArtistCategoryTypesAsync(skipSave: true);
 				}
 			}
 			else if (viewSource.StartsWith("artist_songs_top:", StringComparison.OrdinalIgnoreCase) || viewSource.StartsWith("artist_top:", StringComparison.OrdinalIgnoreCase))
@@ -13965,12 +15966,12 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			}
 			else if (viewSource.StartsWith("artist_songs:", StringComparison.OrdinalIgnoreCase))
 			{
-				ParseArtistListViewSource(viewSource, out long artistId3, out int offset, out string order);
+				ParseArtistListViewSource(viewSource, out var artistId3, out var offset, out var order);
 				await LoadArtistSongsAsync(artistId3, offset, skipSave: true, ResolveArtistSongsOrder(order));
 			}
 			else if (viewSource.StartsWith("artist_albums:", StringComparison.OrdinalIgnoreCase))
 			{
-				ParseArtistListViewSource(viewSource, out long artistId4, out int offset2, out string order2, "latest");
+				ParseArtistListViewSource(viewSource, out var artistId4, out var offset2, out var order2, "latest");
 				await LoadArtistAlbumsAsync(artistId4, offset2, skipSave: true, ResolveArtistAlbumSort(order2));
 			}
 			else if (string.Equals(viewSource, "artist_favorites", StringComparison.OrdinalIgnoreCase))
@@ -14013,7 +16014,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			}
 			else if (viewSource.StartsWith("search:", StringComparison.OrdinalIgnoreCase))
 			{
-				ParseSearchViewSource(viewSource, out string searchType, out string keyword, out int page);
+				ParseSearchViewSource(viewSource, out var searchType, out var keyword, out var page);
 				if (string.IsNullOrWhiteSpace(keyword))
 				{
 					keyword = _lastKeyword;
@@ -14023,14 +16024,13 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			}
 			else if (string.Equals(viewSource, "recent_play", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "recent_playlists", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "recent_albums", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "recent_listened", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "recent_podcasts", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "daily_recommend", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "personalized", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "toplist", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "daily_recommend_songs", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "daily_recommend_playlists", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "personalized_playlists", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "personalized_newsongs", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "highquality_playlists", StringComparison.OrdinalIgnoreCase) || viewSource.StartsWith("playlist_cat_", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "playlist_category", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "new_songs", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "new_songs_all", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "new_songs_chinese", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "new_songs_western", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "new_songs_japan", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "new_songs_korea", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "new_albums", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "user_liked_songs", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "user_playlists", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "user_albums", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "user_podcasts", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "user_cloud", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "artist_favorites", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "artist_categories", StringComparison.OrdinalIgnoreCase) || viewSource.StartsWith("artist_top_", StringComparison.OrdinalIgnoreCase) || viewSource.StartsWith("artist_songs_", StringComparison.OrdinalIgnoreCase) || viewSource.StartsWith("artist_albums_", StringComparison.OrdinalIgnoreCase) || viewSource.StartsWith("artist_type_", StringComparison.OrdinalIgnoreCase) || viewSource.StartsWith("artist_area_", StringComparison.OrdinalIgnoreCase))
 			{
-				if (string.Equals(viewSource, "user_cloud", StringComparison.OrdinalIgnoreCase))
+				if (!string.Equals(viewSource, "user_cloud", StringComparison.OrdinalIgnoreCase))
 				{
-					bool found = await JumpToCloudSongAsync(currentSong);
-					await LoadCloudSongsAsync(skipSave: true, preserveSelection: found);
+					await LoadCategoryContent(viewSource, skipSave: true);
 				}
 				else
 				{
-					await LoadCategoryContent(viewSource, skipSave: true);
+					await LoadCloudSongsAsync(skipSave: true, await JumpToCloudSongAsync(currentSong));
 				}
 			}
 			else if (viewSource.StartsWith("url:song:", StringComparison.OrdinalIgnoreCase))
@@ -14059,11 +16059,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 
 	private void FocusSongInCurrentView(SongInfo song)
 	{
-		if (_pendingSongFocusSatisfied && !string.IsNullOrWhiteSpace(_currentViewSource) && string.Equals(_pendingSongFocusSatisfiedViewSource, _currentViewSource, StringComparison.OrdinalIgnoreCase))
-		{
-			return;
-		}
-		if (song == null || resultListView == null || _currentSongs == null || _currentSongs.Count == 0)
+		if ((_pendingSongFocusSatisfied && !string.IsNullOrWhiteSpace(_currentViewSource) && string.Equals(_pendingSongFocusSatisfiedViewSource, _currentViewSource, StringComparison.OrdinalIgnoreCase)) || song == null || resultListView == null || _currentSongs == null || _currentSongs.Count == 0)
 		{
 			return;
 		}
@@ -14077,7 +16073,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			resultListView.BeginUpdate();
 			try
 			{
-				resultListView.SelectedItems.Clear();
+				ClearListViewSelection();
 				ListViewItem listViewItem = resultListView.Items[num];
 				listViewItem.Selected = true;
 				listViewItem.Focused = true;
@@ -14086,7 +16082,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			}
 			finally
 			{
-				resultListView.EndUpdate();
+				EndListViewUpdateAndRefreshAccessibility();
 			}
 			if (resultListView.CanFocus && !IsListAutoFocusSuppressed)
 			{
@@ -14105,20 +16101,20 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		{
 			return tag;
 		}
-		if (resultListView.SelectedItems.Count == 0)
+		ListViewItem selectedListViewItemSafe = GetSelectedListViewItemSafe();
+		if (selectedListViewItemSafe == null)
 		{
 			return null;
 		}
-		ListViewItem listViewItem = resultListView.SelectedItems[0];
-		if (listViewItem.Tag is int num && num >= 0 && num < _currentSongs.Count)
+		if (selectedListViewItemSafe.Tag is int num && num >= 0 && num < _currentSongs.Count)
 		{
 			return _currentSongs[num];
 		}
-		if (listViewItem.Tag is SongInfo result)
+		if (selectedListViewItemSafe.Tag is SongInfo result)
 		{
 			return result;
 		}
-		if (listViewItem.Tag is ListItemInfo listItemInfo)
+		if (selectedListViewItemSafe.Tag is ListItemInfo listItemInfo)
 		{
 			if (listItemInfo.Type == ListItemType.Song)
 			{
@@ -14129,7 +16125,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 				return listItemInfo.PodcastEpisode?.Song;
 			}
 		}
-		if (listViewItem.Tag is PodcastEpisodeInfo podcastEpisodeInfo)
+		if (selectedListViewItemSafe.Tag is PodcastEpisodeInfo podcastEpisodeInfo)
 		{
 			return podcastEpisodeInfo.Song;
 		}
@@ -14148,16 +16144,16 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		{
 			return tag;
 		}
-		if (resultListView.SelectedItems.Count == 0)
+		ListViewItem selectedListViewItemSafe = GetSelectedListViewItemSafe();
+		if (selectedListViewItemSafe == null)
 		{
 			return null;
 		}
-		ListViewItem listViewItem = resultListView.SelectedItems[0];
-		if (listViewItem.Tag is PlaylistInfo result)
+		if (selectedListViewItemSafe.Tag is PlaylistInfo result)
 		{
 			return result;
 		}
-		if (listViewItem.Tag is ListItemInfo { Type: ListItemType.Playlist } listItemInfo)
+		if (selectedListViewItemSafe.Tag is ListItemInfo { Type: ListItemType.Playlist } listItemInfo)
 		{
 			return listItemInfo.Playlist;
 		}
@@ -14170,16 +16166,16 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		{
 			return tag;
 		}
-		if (resultListView.SelectedItems.Count == 0)
+		ListViewItem selectedListViewItemSafe = GetSelectedListViewItemSafe();
+		if (selectedListViewItemSafe == null)
 		{
 			return null;
 		}
-		ListViewItem listViewItem = resultListView.SelectedItems[0];
-		if (listViewItem.Tag is AlbumInfo result)
+		if (selectedListViewItemSafe.Tag is AlbumInfo result)
 		{
 			return result;
 		}
-		if (listViewItem.Tag is ListItemInfo { Type: ListItemType.Album } listItemInfo)
+		if (selectedListViewItemSafe.Tag is ListItemInfo { Type: ListItemType.Album } listItemInfo)
 		{
 			return listItemInfo.Album;
 		}
@@ -14194,7 +16190,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		}
 		if (_isCurrentPlayingMenuActive)
 		{
-			SongInfo? currentPlayingMenuSong = _currentPlayingMenuSong;
+			SongInfo currentPlayingMenuSong = _currentPlayingMenuSong;
 			if (currentPlayingMenuSong != null && currentPlayingMenuSong.IsPodcastEpisode)
 			{
 				PodcastRadioInfo podcastRadioInfo = ResolvePodcastFromSong(_currentPlayingMenuSong);
@@ -14204,14 +16200,14 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 				}
 			}
 		}
-		if (resultListView.SelectedItems.Count > 0)
+		ListViewItem selectedListViewItemSafe = GetSelectedListViewItemSafe();
+		if (selectedListViewItemSafe != null)
 		{
-			ListViewItem listViewItem = resultListView.SelectedItems[0];
-			if (listViewItem.Tag is PodcastRadioInfo result)
+			if (selectedListViewItemSafe.Tag is PodcastRadioInfo result)
 			{
 				return result;
 			}
-			if (listViewItem.Tag is PodcastEpisodeInfo episode)
+			if (selectedListViewItemSafe.Tag is PodcastEpisodeInfo episode)
 			{
 				PodcastRadioInfo podcastRadioInfo2 = ResolvePodcastFromEpisode(episode);
 				if (podcastRadioInfo2 != null)
@@ -14219,7 +16215,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 					return podcastRadioInfo2;
 				}
 			}
-			if (listViewItem.Tag is ListItemInfo listItemInfo)
+			if (selectedListViewItemSafe.Tag is ListItemInfo listItemInfo)
 			{
 				if (listItemInfo.Type == ListItemType.Podcast && listItemInfo.Podcast != null)
 				{
@@ -14234,7 +16230,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 					}
 				}
 			}
-			if (listViewItem.Tag is SongInfo { IsPodcastEpisode: not false } songInfo)
+			if (selectedListViewItemSafe.Tag is SongInfo { IsPodcastEpisode: not false } songInfo)
 			{
 				PodcastRadioInfo podcastRadioInfo4 = ResolvePodcastFromSong(songInfo);
 				if (podcastRadioInfo4 != null)
@@ -14242,7 +16238,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 					return podcastRadioInfo4;
 				}
 			}
-			if (listViewItem.Tag is int num && num >= 0 && num < _currentSongs.Count)
+			if (selectedListViewItemSafe.Tag is int num && num >= 0 && num < _currentSongs.Count)
 			{
 				SongInfo songInfo2 = _currentSongs[num];
 				if (songInfo2 != null && songInfo2.IsPodcastEpisode)
@@ -14270,22 +16266,22 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		}
 		if (_isCurrentPlayingMenuActive)
 		{
-			SongInfo? currentPlayingMenuSong = _currentPlayingMenuSong;
+			SongInfo currentPlayingMenuSong = _currentPlayingMenuSong;
 			if (currentPlayingMenuSong != null && currentPlayingMenuSong.IsPodcastEpisode)
 			{
 				return ResolvePodcastEpisodeFromSong(_currentPlayingMenuSong);
 			}
 		}
-		if (resultListView.SelectedItems.Count == 0)
+		ListViewItem selectedListViewItemSafe = GetSelectedListViewItemSafe();
+		if (selectedListViewItemSafe == null)
 		{
 			return null;
 		}
-		ListViewItem listViewItem = resultListView.SelectedItems[0];
-		if (listViewItem.Tag is PodcastEpisodeInfo result)
+		if (selectedListViewItemSafe.Tag is PodcastEpisodeInfo result)
 		{
 			return result;
 		}
-		if (listViewItem.Tag is ListItemInfo listItemInfo)
+		if (selectedListViewItemSafe.Tag is ListItemInfo listItemInfo)
 		{
 			if (listItemInfo.Type == ListItemType.PodcastEpisode && listItemInfo.PodcastEpisode != null)
 			{
@@ -14293,18 +16289,18 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			}
 			if (listItemInfo.Type == ListItemType.Song)
 			{
-				SongInfo? song = listItemInfo.Song;
+				SongInfo song = listItemInfo.Song;
 				if (song != null && song.IsPodcastEpisode)
 				{
 					return ResolvePodcastEpisodeFromSong(listItemInfo.Song);
 				}
 			}
 		}
-		if (listViewItem.Tag is SongInfo { IsPodcastEpisode: not false } songInfo)
+		if (selectedListViewItemSafe.Tag is SongInfo { IsPodcastEpisode: not false } songInfo)
 		{
 			return ResolvePodcastEpisodeFromSong(songInfo);
 		}
-		if (listViewItem.Tag is int num && num >= 0 && num < _currentSongs.Count)
+		if (selectedListViewItemSafe.Tag is int num && num >= 0 && num < _currentSongs.Count)
 		{
 			SongInfo songInfo2 = _currentSongs[num];
 			if (songInfo2 != null && songInfo2.IsPodcastEpisode)
@@ -14491,16 +16487,20 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 
 	private PodcastEpisodeInfo? GetPodcastEpisodeBySelectedIndex()
 	{
-		if (!IsPodcastEpisodeView() || resultListView.SelectedItems.Count == 0)
+		if (!IsPodcastEpisodeView())
 		{
 			return null;
 		}
-		ListViewItem listViewItem = resultListView.SelectedItems[0];
-		if (listViewItem.Tag is int num && num < 0)
+		ListViewItem selectedListViewItemSafe = GetSelectedListViewItemSafe();
+		if (selectedListViewItemSafe == null)
 		{
 			return null;
 		}
-		int index = listViewItem.Index;
+		if (selectedListViewItemSafe.Tag is int num && num < 0)
+		{
+			return null;
+		}
+		int index = selectedListViewItemSafe.Index;
 		if (index >= 0 && index < _currentPodcastSounds.Count)
 		{
 			return _currentPodcastSounds[index];
@@ -14512,23 +16512,25 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 	{
 		if (podcastSortLatestMenuItem != null && podcastSortSerialMenuItem != null)
 		{
-			SetMenuItemCheckedState(podcastSortLatestMenuItem, !_podcastSortState.CurrentOption, "按最新排序");
-			SetMenuItemCheckedState(podcastSortSerialMenuItem, _podcastSortState.CurrentOption, "按节目顺序排序");
-			if (podcastSortMenuItem != null)
-			{
-				string text = (_podcastSortState.CurrentOption ? "节目顺序" : "按最新");
-				podcastSortMenuItem.Text = "排序（" + text + "）";
-				podcastSortMenuItem.AccessibleDescription = _podcastSortState.AccessibleDescription;
-			}
+                SetMenuItemCheckedState(podcastSortLatestMenuItem, !_podcastSortState.CurrentOption);
+                SetMenuItemCheckedState(podcastSortSerialMenuItem, _podcastSortState.CurrentOption);
+                if (podcastSortMenuItem != null)
+                {
+                        string text = (_podcastSortState.CurrentOption ? "节目顺序" : "按最新");
+                        podcastSortMenuItem.Text = "排序（" + text + "）";
+                }
 		}
 	}
 
-	private void EnsureSortMenuCheckMargins()
-	{
-		EnsureSortMenuCheckMargin(artistSongsSortMenuItem);
-		EnsureSortMenuCheckMargin(artistAlbumsSortMenuItem);
-		EnsureSortMenuCheckMargin(podcastSortMenuItem);
-	}
+private void EnsureSortMenuCheckMargins()
+{
+        EnsureSortMenuCheckMargin(artistSongsSortMenuItem);
+        EnsureSortMenuCheckMargin(artistAlbumsSortMenuItem);
+        EnsureSortMenuCheckMargin(podcastSortMenuItem);
+        EnsureSortMenuCheckMargin(playbackMenuItem);
+        EnsureSortMenuCheckMargin(qualityMenuItem);
+        EnsureSortMenuCheckMargin(playControlMenuItem);
+}
 
 	private void EnsureSortMenuCheckMargin(ToolStripMenuItem? menuItem)
 	{
@@ -14542,14 +16544,13 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 	{
 		if (artistSongsSortHotMenuItem != null && artistSongsSortTimeMenuItem != null)
 		{
-			SetMenuItemCheckedState(artistSongsSortHotMenuItem, _artistSongSortState.EqualsOption(ArtistSongSortOption.Hot), "按热门排序");
-			SetMenuItemCheckedState(artistSongsSortTimeMenuItem, _artistSongSortState.EqualsOption(ArtistSongSortOption.Time), "按发布时间排序");
-			if (artistSongsSortMenuItem != null)
-			{
-				string text = (_artistSongSortState.EqualsOption(ArtistSongSortOption.Hot) ? "按热门" : "按发布时间");
-				artistSongsSortMenuItem.Text = "单曲排序（" + text + "）";
-				artistSongsSortMenuItem.AccessibleDescription = _artistSongSortState.AccessibleDescription;
-			}
+                SetMenuItemCheckedState(artistSongsSortHotMenuItem, _artistSongSortState.EqualsOption(ArtistSongSortOption.Hot));
+                SetMenuItemCheckedState(artistSongsSortTimeMenuItem, _artistSongSortState.EqualsOption(ArtistSongSortOption.Time));
+                if (artistSongsSortMenuItem != null)
+                {
+                        string text = (_artistSongSortState.EqualsOption(ArtistSongSortOption.Hot) ? "按热门" : "按发布时间");
+                        artistSongsSortMenuItem.Text = "单曲排序（" + text + "）";
+                }
 		}
 	}
 
@@ -14557,29 +16558,24 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 	{
 		if (artistAlbumsSortLatestMenuItem != null && artistAlbumsSortOldestMenuItem != null)
 		{
-			SetMenuItemCheckedState(artistAlbumsSortLatestMenuItem, _artistAlbumSortState.EqualsOption(ArtistAlbumSortOption.Latest), "按最新发布排序");
-			SetMenuItemCheckedState(artistAlbumsSortOldestMenuItem, _artistAlbumSortState.EqualsOption(ArtistAlbumSortOption.Oldest), "按最早发布排序");
-			if (artistAlbumsSortMenuItem != null)
-			{
-				string text = (_artistAlbumSortState.EqualsOption(ArtistAlbumSortOption.Latest) ? "按最新" : "按最早");
-				artistAlbumsSortMenuItem.Text = "专辑排序（" + text + "）";
-				artistAlbumsSortMenuItem.AccessibleDescription = _artistAlbumSortState.AccessibleDescription;
-			}
+                SetMenuItemCheckedState(artistAlbumsSortLatestMenuItem, _artistAlbumSortState.EqualsOption(ArtistAlbumSortOption.Latest));
+                SetMenuItemCheckedState(artistAlbumsSortOldestMenuItem, _artistAlbumSortState.EqualsOption(ArtistAlbumSortOption.Oldest));
+                if (artistAlbumsSortMenuItem != null)
+                {
+                        string text = (_artistAlbumSortState.EqualsOption(ArtistAlbumSortOption.Latest) ? "按最新" : "按最早");
+                        artistAlbumsSortMenuItem.Text = "专辑排序（" + text + "）";
+                }
 		}
 	}
 
-	private static void SetMenuItemCheckedState(ToolStripMenuItem? menuItem, bool isChecked, string baseAccessibleName)
-	{
-		if (menuItem != null)
-		{
-			menuItem.Checked = isChecked;
-			menuItem.CheckState = (isChecked ? CheckState.Checked : CheckState.Unchecked);
-			if (!string.IsNullOrWhiteSpace(baseAccessibleName))
-			{
-				menuItem.AccessibleName = (isChecked ? (baseAccessibleName + " 已选中") : baseAccessibleName);
-			}
-		}
-	}
+private static void SetMenuItemCheckedState(ToolStripMenuItem? menuItem, bool isChecked)
+{
+        if (menuItem != null)
+        {
+                menuItem.Checked = isChecked;
+                menuItem.CheckState = (isChecked ? CheckState.Checked : CheckState.Unchecked);
+        }
+}
 
 	private async Task<(long ArtistId, string ArtistName)> ResolvePrimaryArtistAsync(SongInfo song)
 	{
@@ -14589,7 +16585,8 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		}
 		if (song.ArtistIds != null && song.ArtistIds.Count > 0)
 		{
-			return new ValueTuple<long, string>(item2: ((song.ArtistNames != null && song.ArtistNames.Count > 0) ? song.ArtistNames[0] : song.Artist) ?? string.Empty, item1: song.ArtistIds[0]);
+			string item = ((song.ArtistNames != null && song.ArtistNames.Count > 0) ? song.ArtistNames[0] : song.Artist) ?? string.Empty;
+			return (ArtistId: song.ArtistIds[0], ArtistName: item);
 		}
 		if (string.IsNullOrWhiteSpace(song.Id))
 		{
@@ -14618,7 +16615,8 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			}
 			if (detail.ArtistIds != null && detail.ArtistIds.Count > 0)
 			{
-				return new ValueTuple<long, string>(item2: ((detail.ArtistNames != null && detail.ArtistNames.Count > 0) ? detail.ArtistNames[0] : detail.Artist) ?? string.Empty, item1: detail.ArtistIds[0]);
+				string item = ((detail.ArtistNames != null && detail.ArtistNames.Count > 0) ? detail.ArtistNames[0] : detail.Artist) ?? string.Empty;
+				return (ArtistId: detail.ArtistIds[0], ArtistName: item);
 			}
 		}
 		return (ArtistId: 0L, ArtistName: string.Empty);
@@ -14674,7 +16672,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			return true;
 		}
 		QualityLevel quality = GetCurrentQuality();
-		bool available = default(bool);
+		bool available = false;
 		if ((await _apiClient.BatchCheckSongsAvailabilityAsync(new string[1] { song.Id }, quality))?.TryGetValue(song.Id, out available) ?? false)
 		{
 			song.IsAvailable = available;
@@ -14706,7 +16704,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 
 	private async Task<Dictionary<string, SongUrlInfo>> FetchSongUrlsInBatchesAsync(IEnumerable<string> songIds, bool skipAvailabilityCheck = true)
 	{
-		List<string> ids = songIds.Where((string id) => !string.IsNullOrWhiteSpace(id)).Distinct(StringComparer.Ordinal).ToList();
+		List<string> ids = songIds.Where((string id) => !string.IsNullOrWhiteSpace(id)).Distinct<string>(StringComparer.Ordinal).ToList();
 		Dictionary<string, SongUrlInfo> result = new Dictionary<string, SongUrlInfo>(StringComparer.Ordinal);
 		if (ids.Count == 0)
 		{
@@ -14851,15 +16849,16 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			catch (ExternalException ex)
 			{
 				ExternalException ex2 = ex;
-				MessageBox.Show("复制链接失败：" + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+				ExternalException ex3 = ex2;
+				MessageBox.Show("复制链接失败：" + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 				UpdateStatusBar("复制链接失败");
 				return;
 			}
 			UpdateStatusBar("歌曲网页链接已复制到剪贴板");
 		}
-		catch (Exception ex3)
+		catch (Exception ex4)
 		{
-			MessageBox.Show("分享歌曲失败：" + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+			MessageBox.Show("分享歌曲失败：" + ex4.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 			UpdateStatusBar("歌曲分享失败");
 		}
 	}
@@ -14894,15 +16893,16 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			catch (ExternalException ex)
 			{
 				ExternalException ex2 = ex;
-				MessageBox.Show("复制链接失败：" + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+				ExternalException ex3 = ex2;
+				MessageBox.Show("复制链接失败：" + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 				UpdateStatusBar("复制链接失败");
 				return;
 			}
 			UpdateStatusBar("歌曲直链已复制到剪贴板");
 		}
-		catch (Exception ex3)
+		catch (Exception ex4)
 		{
-			MessageBox.Show("分享歌曲直链失败：" + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+			MessageBox.Show("分享歌曲直链失败：" + ex4.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 			UpdateStatusBar("歌曲分享失败");
 		}
 	}
@@ -14984,7 +16984,8 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 				}
 				catch (Exception ex)
 				{
-					Exception refreshEx = ex;
+					Exception ex2 = ex;
+					Exception refreshEx = ex2;
 					Debug.WriteLine($"[UI] 刷新创建和收藏的歌单列表失败: {refreshEx}");
 				}
 			}
@@ -14994,9 +16995,9 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 				UpdateStatusBar("创建歌单失败");
 			}
 		}
-		catch (Exception ex2)
+		catch (Exception ex3)
 		{
-			MessageBox.Show("创建歌单失败: " + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+			MessageBox.Show("创建歌单失败: " + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 			UpdateStatusBar("创建歌单失败");
 		}
 	}
@@ -15056,7 +17057,8 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 				}
 				catch (Exception ex)
 				{
-					Exception refreshEx = ex;
+					Exception ex2 = ex;
+					Exception refreshEx = ex2;
 					Debug.WriteLine($"[UI] 刷新创建和收藏的歌单列表失败: {refreshEx}");
 					return;
 				}
@@ -15064,16 +17066,16 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			MessageBox.Show("取消收藏失败，请检查网络或稍后重试。", "失败", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 			UpdateStatusBar("取消收藏失败");
 		}
-		catch (Exception ex2)
+		catch (Exception ex3)
 		{
-			MessageBox.Show("取消收藏失败: " + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+			MessageBox.Show("取消收藏失败: " + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 			UpdateStatusBar("取消收藏失败");
 		}
 	}
 
 	private async void deletePlaylistMenuItem_Click(object sender, EventArgs e)
 	{
-		object obj = ((resultListView.SelectedItems.Count > 0) ? resultListView.SelectedItems[0] : null)?.Tag;
+		object obj = GetSelectedListViewItemSafe()?.Tag;
 		if (!(obj is PlaylistInfo playlist))
 		{
 			return;
@@ -15099,7 +17101,8 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 				}
 				catch (Exception ex)
 				{
-					Exception refreshEx = ex;
+					Exception ex2 = ex;
+					Exception refreshEx = ex2;
 					Debug.WriteLine($"[UI] 刷新创建和收藏的歌单列表失败: {refreshEx}");
 					return;
 				}
@@ -15107,9 +17110,9 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			MessageBox.Show("删除歌单失败，请检查网络或稍后重试。", "失败", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 			UpdateStatusBar("删除歌单失败");
 		}
-		catch (Exception ex2)
+		catch (Exception ex3)
 		{
-			MessageBox.Show("删除歌单失败: " + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+			MessageBox.Show("删除歌单失败: " + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 			UpdateStatusBar("删除歌单失败");
 		}
 	}
@@ -15261,9 +17264,9 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 				UpdateStatusBar("页面已刷新");
 			}
 		}
-		catch (Exception arg)
+		catch (Exception value)
 		{
-			Debug.WriteLine($"[Refresh] 刷新失败: {arg}");
+			Debug.WriteLine($"[Refresh] 刷新失败: {value}");
 			UpdateStatusBar("刷新失败");
 		}
 	}
@@ -15323,7 +17326,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 	{
 		if (!string.IsNullOrWhiteSpace(_currentViewSource) && _currentViewSource.StartsWith("artist_albums:", StringComparison.OrdinalIgnoreCase))
 		{
-			ParseArtistListViewSource(_currentViewSource, out long artistId, out int _, out string currentOrderToken, "latest");
+			ParseArtistListViewSource(_currentViewSource, out var artistId, out var _, out var currentOrderToken, "latest");
 			ArtistAlbumSortOption currentSort = ResolveArtistAlbumSort(currentOrderToken);
 			if (_artistAlbumSortState.EqualsOption(targetSort) && currentSort == targetSort)
 			{
@@ -15340,7 +17343,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 	{
 		if (!string.IsNullOrWhiteSpace(_currentViewSource) && _currentViewSource.StartsWith("artist_songs:", StringComparison.OrdinalIgnoreCase))
 		{
-			ParseArtistListViewSource(_currentViewSource, out long artistId, out int _, out string currentOrderToken);
+			ParseArtistListViewSource(_currentViewSource, out var artistId, out var _, out var currentOrderToken);
 			ArtistSongSortOption currentOrder = ResolveArtistSongsOrder(currentOrderToken);
 			if (_artistSongSortState.EqualsOption(targetOrder) && currentOrder == targetOrder)
 			{
@@ -15481,7 +17484,8 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 				}
 				catch (Exception ex)
 				{
-					Exception refreshEx = ex;
+					Exception ex2 = ex;
+					Exception refreshEx = ex2;
 					Debug.WriteLine($"[UI] 刷新收藏的专辑列表失败: {refreshEx}");
 					return;
 				}
@@ -15489,9 +17493,9 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			MessageBox.Show("取消收藏失败，请检查网络或稍后重试。", "失败", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 			UpdateStatusBar("取消收藏失败");
 		}
-		catch (Exception ex2)
+		catch (Exception ex3)
 		{
-			MessageBox.Show("取消收藏失败: " + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+			MessageBox.Show("取消收藏失败: " + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 			UpdateStatusBar("取消收藏失败");
 		}
 	}
@@ -15526,10 +17530,10 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		{
 			return _loggedInUserId;
 		}
-		long parsedId = ParseUserIdFromAccountState(_accountState);
-		if (parsedId > 0)
+		long num = ParseUserIdFromAccountState(_accountState);
+		if (num > 0)
 		{
-			CacheLoggedInUserId(parsedId);
+			CacheLoggedInUserId(num);
 			return _loggedInUserId;
 		}
 		return 0L;
@@ -15539,17 +17543,18 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 	{
 		if (state == null)
 		{
-			return 0;
+			return 0L;
 		}
-		if (long.TryParse(state.UserId, out var parsed) && parsed > 0)
+		if (long.TryParse(state.UserId, out var result) && result > 0)
 		{
-			return parsed;
+			return result;
 		}
-		if (state.AccountDetail?.UserId > 0)
+		UserAccountInfo? accountDetail = state.AccountDetail;
+		if (accountDetail != null && accountDetail.UserId > 0)
 		{
 			return state.AccountDetail.UserId;
 		}
-		return 0;
+		return 0L;
 	}
 
 	private void CacheLoggedInUserId(long userId)
@@ -15579,8 +17584,8 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		}
 		if (!string.IsNullOrWhiteSpace(playlistId))
 		{
-			PlaylistInfo match = _currentPlaylists?.FirstOrDefault((PlaylistInfo p) => string.Equals(p?.Id, playlistId, StringComparison.OrdinalIgnoreCase)) ?? null;
-			if (match != null && IsPlaylistOwnedByUser(match, currentUserId))
+			PlaylistInfo playlistInfo = _currentPlaylists?.FirstOrDefault((PlaylistInfo p) => string.Equals(p?.Id, playlistId, StringComparison.OrdinalIgnoreCase)) ?? null;
+			if (playlistInfo != null && IsPlaylistOwnedByUser(playlistInfo, currentUserId))
 			{
 				return true;
 			}
@@ -15610,14 +17615,15 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 	{
 		_isFormClosing = true;
 		_isApplicationExitRequested = true;
-		PersistPlaybackState(includeQueue: true);
+		PersistPlaybackState();
 		StopInitialHomeLoadLoop("窗口关闭");
-		_autoUpdateCheckCts?.Cancel();
-		_autoUpdateCheckCts?.Dispose();
-		_autoUpdateCheckCts = null;
-		CancelPendingLyricSpeech();
-		base.OnFormClosing(e);
-		CompleteActivePlaybackSession(PlaybackEndReason.Stopped);
+                _autoUpdateCheckCts?.Cancel();
+                _autoUpdateCheckCts?.Dispose();
+                _autoUpdateCheckCts = null;
+                CancelPendingLyricSpeech();
+                base.OnFormClosing(e);
+                _nativeStatusBar?.Destroy();
+                CompleteActivePlaybackSession(PlaybackEndReason.Stopped);
 		try
 		{
 			_playbackCancellation?.Cancel();
@@ -15791,25 +17797,17 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 
 	private static string GetQualityLevelString(QualityLevel quality)
 	{
-		switch (quality)
+		return quality switch
 		{
-		case QualityLevel.Standard:
-			return "standard";
-		case QualityLevel.High:
-			return "exhigh";
-		case QualityLevel.Lossless:
-			return "lossless";
-		case QualityLevel.HiRes:
-			return "hires";
-		case QualityLevel.SurroundHD:
-			return "jyeffect";
-		case QualityLevel.Dolby:
-			return "sky";
-		case QualityLevel.Master:
-			return "jymaster";
-		default:
-			return "standard";
-		}
+			QualityLevel.Standard => "standard", 
+			QualityLevel.High => "exhigh", 
+			QualityLevel.Lossless => "lossless", 
+			QualityLevel.HiRes => "hires", 
+			QualityLevel.SurroundHD => "jyeffect", 
+			QualityLevel.Dolby => "sky", 
+			QualityLevel.Master => "jymaster", 
+			_ => "standard", 
+		};
 	}
 
 	private async Task<bool> TryApplyUnblockAsync(SongInfo song, string targetQualityLevel, CancellationToken cancellationToken)
@@ -15818,147 +17816,209 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		{
 			return false;
 		}
-
-		// 解封流程使用独立的取消逻辑，避免播放流程的取消信号提前中断第三方匹配
-		using var unblockTimeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-		CancellationToken unblockToken = unblockTimeoutCts.Token;
-
-		// 灰色/下架歌曲往往缺少时长、专辑、艺人等信息，先尽量补全再去匹配第三方源，提升命中率
-		if ((song.Duration <= 0 || string.IsNullOrWhiteSpace(song.AlbumId) || song.ArtistNames == null || song.ArtistNames.Count == 0) && _apiClient != null)
+		checked
 		{
-			try
+			using CancellationTokenSource unblockTimeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(8L));
+			CancellationToken unblockToken = unblockTimeoutCts.Token;
+			if ((song.Duration <= 0 || string.IsNullOrWhiteSpace(song.AlbumId) || song.ArtistNames == null || song.ArtistNames.Count == 0) && _apiClient != null)
 			{
-				var detail = (await _apiClient.GetSongDetailAsync(new[] { song.Id }).ConfigureAwait(false))?.FirstOrDefault();
-				if (detail != null)
+				try
 				{
-					if (song.Duration <= 0 && detail.Duration > 0)
+					SongInfo detail = (await _apiClient.GetSongDetailAsync(new string[1] { song.Id }).ConfigureAwait(continueOnCapturedContext: false))?.FirstOrDefault();
+					if (detail != null)
 					{
-						song.Duration = detail.Duration;
-					}
-					if (string.IsNullOrWhiteSpace(song.AlbumId) && !string.IsNullOrWhiteSpace(detail.AlbumId))
-					{
-						song.AlbumId = detail.AlbumId;
-					}
-					if (string.IsNullOrWhiteSpace(song.Album) && !string.IsNullOrWhiteSpace(detail.Album))
-					{
-						song.Album = detail.Album;
-					}
-					if ((song.ArtistNames == null || song.ArtistNames.Count == 0) && detail.ArtistNames != null && detail.ArtistNames.Count > 0)
-					{
-						song.ArtistNames = new List<string>(detail.ArtistNames);
-						song.Artist = string.Join("/", song.ArtistNames);
-					}
-					if ((song.ArtistIds == null || song.ArtistIds.Count == 0) && detail.ArtistIds != null && detail.ArtistIds.Count > 0)
-					{
-						song.ArtistIds = new List<long>(detail.ArtistIds);
-					}
-					if (string.IsNullOrWhiteSpace(song.PicUrl) && !string.IsNullOrWhiteSpace(detail.PicUrl))
-					{
-						song.PicUrl = detail.PicUrl;
+						if (song.Duration <= 0 && detail.Duration > 0)
+						{
+							song.Duration = detail.Duration;
+						}
+						if (string.IsNullOrWhiteSpace(song.AlbumId) && !string.IsNullOrWhiteSpace(detail.AlbumId))
+						{
+							song.AlbumId = detail.AlbumId;
+						}
+						if (string.IsNullOrWhiteSpace(song.Album) && !string.IsNullOrWhiteSpace(detail.Album))
+						{
+							song.Album = detail.Album;
+						}
+						if ((song.ArtistNames == null || song.ArtistNames.Count == 0) && detail.ArtistNames != null && detail.ArtistNames.Count > 0)
+						{
+							song.ArtistNames = new List<string>(detail.ArtistNames);
+							song.Artist = string.Join("/", song.ArtistNames);
+						}
+						if ((song.ArtistIds == null || song.ArtistIds.Count == 0) && detail.ArtistIds != null && detail.ArtistIds.Count > 0)
+						{
+							song.ArtistIds = new List<long>(detail.ArtistIds);
+						}
+						if (string.IsNullOrWhiteSpace(song.PicUrl) && !string.IsNullOrWhiteSpace(detail.PicUrl))
+						{
+							song.PicUrl = detail.PicUrl;
+						}
 					}
 				}
+				catch (Exception ex)
+				{
+					Exception ex2 = ex;
+					Debug.WriteLine("[Unblock] å\u008f–æ\u00a0·æ\u008d¢è\u00af\u0086ç»†èŠ‚æ•°æ\u008d®å¤±è\u00b4¥ï¼ˆå¿½ç•¥ï¼‰: " + ex2.Message);
+				}
 			}
-			catch (Exception ex)
+			UnblockService.UnblockMatchResult result;
+			try
 			{
-				Debug.WriteLine("[Unblock] å–æ ·æ¢è¯ç»†èŠ‚æ•°æ®å¤±è´¥ï¼ˆå¿½ç•¥ï¼‰: " + ex.Message);
+				result = await _unblockService.TryMatchAsync(song, unblockToken).ConfigureAwait(continueOnCapturedContext: false);
 			}
-		}
-
-		UnblockService.UnblockMatchResult? result = null;
-		try
-		{
-			result = await _unblockService.TryMatchAsync(song, unblockToken).ConfigureAwait(false);
-		}
-		catch (Exception ex)
-		{
-			Debug.WriteLine($"[Unblock] 解封异常（忽略继续官方流程）: {ex.Message}");
-			return false;
-		}
-		if (result == null || string.IsNullOrWhiteSpace(result.Url))
-		{
-			return false;
-		}
-
-		var headers = result.Headers != null
-			? new Dictionary<string, string>(result.Headers, StringComparer.OrdinalIgnoreCase)
-			: null;
-
-		long size = result.Size > 0 ? result.Size : song.Size;
-		if (size <= 0)
-		{
-			var (_, contentLength) = await HttpRangeHelper.CheckRangeSupportAsync(result.Url, null, unblockToken, headers).ConfigureAwait(false);
-			if (contentLength > 0)
+			catch (Exception ex3)
 			{
-				size = contentLength;
+				Debug.WriteLine("[Unblock] 解封异常（忽略继续官方流程）: " + ex3.Message);
+				return false;
 			}
-		}
-		if (size <= 0)
-		{
-			size = song.Size > 0 ? song.Size : 16 * 1024 * 1024;
-		}
-		string level = string.IsNullOrWhiteSpace(targetQualityLevel) ? GetQualityLevelString(GetCurrentQuality()) : targetQualityLevel;
-
-		song.IsAvailable = true;
-		song.IsTrial = false;
-		song.TrialStart = 0;
-		song.TrialEnd = 0;
-		song.IsUnblocked = true;
-		song.UnblockSource = result.Source ?? string.Empty;
-		song.CustomHeaders = headers;
-		if (result.DurationMs.HasValue && song.Duration <= 0)
-		{
-			song.Duration = (int)Math.Max(0, result.DurationMs.Value / 1000);
-		}
-
-		song.SetQualityUrl(level, result.Url, size, isAvailable: true, isTrial: false, trialStart: 0, trialEnd: 0);
-		song.Url = result.Url;
-		song.Level = level;
-		song.Size = size;
-
-		OptimizedHttpClientFactory.PreWarmConnection(song.Url);
-		Debug.WriteLine($"[Unblock] ✓ 解封成功: {song.Name} ({song.UnblockSource}), level={level}, size={size}");
-		return true;
-	}
-
-	private async Task PlaySong(SongInfo song)
-	{
-		Debug.WriteLine("[MainForm] PlaySong 被调用（用户主动播放）: song=" + song?.Name);
-		if (song != null)
-		{
-			PlaybackSelectionResult selection = _playbackQueue.ManualSelect(song, _currentSongs, _currentViewSource);
-			switch (selection.Route)
+			if (result == null || string.IsNullOrWhiteSpace(result.Url))
 			{
-			case PlaybackRoute.Queue:
-			case PlaybackRoute.ReturnToQueue:
-				Debug.WriteLine($"[MainForm] 队列播放: 来源={_playbackQueue.QueueSource}, 索引={selection.QueueIndex}, 刷新={selection.QueueChanged}");
-				UpdateFocusForQueue(selection.QueueIndex, selection.Song);
-				break;
-			case PlaybackRoute.Injection:
-			case PlaybackRoute.PendingInjection:
-				Debug.WriteLine($"[MainForm] 插播播放: {song.Name}, 插播索引={selection.InjectionIndex}");
-				UpdateFocusForInjection(song, selection.InjectionIndex);
-				break;
-			default:
-				Debug.WriteLine("[MainForm] 播放选择未产生有效路由");
-				break;
+				return false;
 			}
-			await PlaySongDirectWithCancellation(song).ConfigureAwait(continueOnCapturedContext: false);
+			Dictionary<string, string> headers = ((result.Headers != null) ? new Dictionary<string, string>(result.Headers, StringComparer.OrdinalIgnoreCase) : null);
+			string level = (string.IsNullOrWhiteSpace(targetQualityLevel) ? GetQualityLevelString(GetCurrentQuality()) : targetQualityLevel);
+			int durationSeconds = StreamSizeEstimator.NormalizeDurationSeconds(song.Duration);
+			if (result.DurationMs.HasValue && result.DurationMs.Value > 0)
+			{
+				int resultSeconds = StreamSizeEstimator.NormalizeDurationSeconds((int)Math.Round((double)result.DurationMs.Value / 1000.0));
+				if (resultSeconds > 0 && (durationSeconds <= 0 || Math.Abs(resultSeconds - durationSeconds) > 1))
+				{
+					song.Duration = resultSeconds;
+					durationSeconds = resultSeconds;
+					Debug.WriteLine($"[Unblock] 使用解封时长: {durationSeconds}s");
+				}
+			}
+			long size = ((result.Size > 0) ? result.Size : song.Size);
+			if (size <= 0)
+			{
+				using CancellationTokenSource sizeCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+				sizeCts.CancelAfter(TimeSpan.FromSeconds(10L));
+				long contentLength = await HttpRangeHelper.TryGetContentLengthAsync(result.Url, headers, sizeCts.Token, TimeSpan.FromSeconds(8L)).ConfigureAwait(continueOnCapturedContext: false);
+				if (contentLength > 0)
+				{
+					size = contentLength;
+					Debug.WriteLine($"[Unblock] Content-Length: {contentLength}");
+				}
+			}
+			if (size <= 0)
+			{
+				int bitrate = result.BitRate.GetValueOrDefault();
+				if (bitrate <= 0)
+				{
+					bitrate = StreamSizeEstimator.GetApproxBitrateForLevel(level);
+				}
+				size = StreamSizeEstimator.EstimateSizeFromBitrate(bitrate, durationSeconds);
+				if (size > 0)
+				{
+					Debug.WriteLine($"[Unblock] 估算大小: {size} (bitrate={bitrate}, duration={durationSeconds}s)");
+				}
+			}
+			if (size <= 0)
+			{
+				size = ((song.Size > 0) ? song.Size : 16777216);
+				Debug.WriteLine($"[Unblock] 大小兜底: {size}");
+			}
+			song.IsAvailable = true;
+			song.IsTrial = false;
+			song.TrialStart = 0L;
+			song.TrialEnd = 0L;
+			song.IsUnblocked = true;
+			song.UnblockSource = result.Source ?? string.Empty;
+			song.CustomHeaders = headers;
+			song.SetQualityUrl(level, result.Url, size, isAvailable: true, isTrial: false, 0L, 0L);
+			song.Url = result.Url;
+			song.Level = level;
+			song.Size = size;
+			OptimizedHttpClientFactory.PreWarmConnection(song.Url);
+			Debug.WriteLine($"[Unblock] ✓ 解封成功: {song.Name} ({song.UnblockSource}), level={level}, size={size}");
+			return true;
 		}
 	}
 
-	private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlayback = false)
-	{
-		Debug.WriteLine($"[MainForm] PlaySongDirectWithCancellation 被调用: song={song?.Name}, isAutoPlayback={isAutoPlayback}");
-		if (_isApplicationExitRequested)
-		{
-			Debug.WriteLine("[MainForm] 退出已请求，跳过播放请求");
-			return;
-		}
-		if (_audioEngine == null || song == null)
-		{
-			Debug.WriteLine("[MainForm ERROR] _audioEngine is null or song is null");
-			return;
-		}
+private async Task PlaySong(SongInfo song)
+{
+        Debug.WriteLine("[MainForm] PlaySong 被调用（用户主动播放）: song=" + song?.Name);
+        if (song == null)
+        {
+                return;
+        }
+        CancelPendingPlaceholderPlayback("new play request");
+        if (TryQueuePlaceholderPlayback(song))
+        {
+                return;
+        }
+        PlaybackSelectionResult selection = _playbackQueue.ManualSelect(song, _currentSongs, _currentViewSource);
+        switch (selection.Route)
+        {
+        case PlaybackRoute.Queue:
+        case PlaybackRoute.ReturnToQueue:
+                Debug.WriteLine($"[MainForm] 队列播放: 来源={_playbackQueue.QueueSource}, 索引={selection.QueueIndex}, 刷新={selection.QueueChanged}");
+                UpdateFocusForQueue(selection.QueueIndex, selection.Song);
+                break;
+        case PlaybackRoute.Injection:
+        case PlaybackRoute.PendingInjection:
+                Debug.WriteLine($"[MainForm] 插播播放: {song.Name}, 插播索引={selection.InjectionIndex}");
+                UpdateFocusForInjection(song, selection.InjectionIndex);
+                break;
+        default:
+                Debug.WriteLine("[MainForm] 播放选择未产生有效路由");
+                break;
+        }
+        await PlaySongDirectWithCancellation(song).ConfigureAwait(continueOnCapturedContext: false);
+}
+
+private void AnnounceSongLoadingForActivation(SongInfo song)
+{
+        if (song == null)
+        {
+                return;
+        }
+        string statusText;
+        if (IsPlaceholderSong(song))
+        {
+                statusText = "歌曲正在加载中，请稍候...";
+        }
+        else
+        {
+                string name = (string.IsNullOrWhiteSpace(song.Name) ? "歌曲" : song.Name);
+                statusText = "正在获取歌曲数据: " + name;
+        }
+        AnnounceStatusBarMessage(statusText);
+}
+
+private Task PlaySongByIndex(int index)
+{
+        if (_currentSongs == null || index < 0 || index >= _currentSongs.Count)
+        {
+                return Task.CompletedTask;
+        }
+        SongInfo song = _currentSongs[index];
+        AnnounceSongLoadingForActivation(song);
+        CancelPendingPlaceholderPlayback("new play request");
+        if (TryQueuePlaceholderPlayback(song, index))
+        {
+                return Task.CompletedTask;
+        }
+        return PlaySong(song);
+}
+
+private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlayback = false)
+{
+        Debug.WriteLine($"[MainForm] PlaySongDirectWithCancellation 被调用: song={song?.Name}, isAutoPlayback={isAutoPlayback}");
+        if (_isApplicationExitRequested)
+        {
+                Debug.WriteLine("[MainForm] 退出已请求，跳过播放请求");
+                return;
+        }
+        if (_audioEngine == null || song == null)
+        {
+                Debug.WriteLine("[MainForm ERROR] _audioEngine is null or song is null");
+                return;
+        }
+        CancelPendingPlaceholderPlayback("new playback");
+        if (TryQueuePlaceholderPlayback(song))
+        {
+                return;
+        }
 		_playbackCancellation?.Cancel();
 		_playbackCancellation?.Dispose();
 		_playbackCancellation = new CancellationTokenSource();
@@ -15985,7 +18045,6 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			Debug.WriteLine("[MainForm] 退出/取消标记，跳过播放主流程");
 			return;
 		}
-
 		_isSwitchingTrack = true;
 		try
 		{
@@ -16007,10 +18066,12 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		if (playRequestVersion != 0L && !IsCurrentPlayRequest(playRequestVersion))
 		{
 			Debug.WriteLine($"[MainForm] 忽略过期播放请求的加载状态更新: version={playRequestVersion}");
-			return;
 		}
-		SetPlaybackLoadingState(isLoading, statusMessage);
-		UpdateStatusBar(statusMessage);
+		else
+		{
+			SetPlaybackLoadingState(isLoading, statusMessage);
+			UpdateStatusBar(statusMessage);
+		}
 	}
 
 	private async Task<bool> ShowPurchaseLinkDialogAsync(SongInfo song, CancellationToken cancellationToken)
@@ -16028,7 +18089,7 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 		}
 		if (base.InvokeRequired)
 		{
-			BeginInvoke(new Action(ShowDialog));
+			BeginInvoke(ShowDialog);
 		}
 		else
 		{
@@ -16090,210 +18151,225 @@ private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool
 			QualityLevel selectedQuality = NeteaseApiClient.GetQualityLevelFromName(defaultQualityName);
 			string selectedQualityLevel = selectedQuality.ToString().ToLower();
 			bool needRefreshUrl = string.IsNullOrEmpty(song.Url) || song.IsTrial;
+			SongUrlInfo songUrl;
+			long resolvedSize;
+			bool isTrial;
+			long trialStart;
+			long trialEnd;
 			if (song.IsAvailable == false)
 			{
 				Debug.WriteLine("[MainForm] 歌曲资源不可用（预检缓存）: " + song.Name);
-				if (await TryApplyUnblockAsync(song, GetQualityLevelString(GetCurrentQuality()), cancellationToken).ConfigureAwait(false))
+				if (!(await TryApplyUnblockAsync(song, GetQualityLevelString(GetCurrentQuality()), cancellationToken).ConfigureAwait(continueOnCapturedContext: false)))
 				{
-					goto UrlResolved;
-				}
-				UpdateLoadingState(isLoading: false, "歌曲不存在，已跳过", playRequestVersion);
-				loadingStateActive = false;
-				HandleSongResourceNotFoundDuringPlayback(song, isAutoPlayback);
-				return;
-			}
-			if (!needRefreshUrl && !string.IsNullOrEmpty(song.Level))
-			{
-				string cachedLevel = song.Level.ToLower();
-				if (cachedLevel != selectedQualityLevel)
-				{
-					Debug.WriteLine("[MainForm] ⚠ 音质不一致（缓存: " + song.Level + ", 当前选择: " + selectedQualityLevel + "），重新获取URL");
-					song.Url = null;
-					song.Level = null;
-					song.Size = 0L;
-					needRefreshUrl = true;
-				}
-				else
-				{
-					Debug.WriteLine("[MainForm] ✓ 音质一致性检查通过: " + song.Name + ", 音质: " + song.Level);
+					UpdateLoadingState(isLoading: false, "歌曲不存在，已跳过", playRequestVersion);
+					loadingStateActive = false;
+					HandleSongResourceNotFoundDuringPlayback(song, isAutoPlayback);
+					return;
 				}
 			}
-			if (needRefreshUrl)
+			else
 			{
-				QualityUrlInfo cachedQuality = song.GetQualityUrl(selectedQualityLevel);
-				if (cachedQuality != null && !string.IsNullOrEmpty(cachedQuality.Url))
+				if (!needRefreshUrl && !string.IsNullOrEmpty(song.Level))
 				{
-					if (cachedQuality.IsTrial)
+					string cachedLevel = song.Level.ToLower();
+					if (cachedLevel != selectedQualityLevel)
 					{
-						Debug.WriteLine($"[MainForm] ⚠️ 命中试听版缓存，播放前尝试解封: {song.Name}, 音质: {selectedQualityLevel}");
-						if (await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(false))
+						Debug.WriteLine("[MainForm] ⚠ 音质不一致（缓存: " + song.Level + ", 当前选择: " + selectedQualityLevel + "），重新获取URL");
+						song.Url = null;
+						song.Level = null;
+						song.Size = 0L;
+						needRefreshUrl = true;
+					}
+					else
+					{
+						Debug.WriteLine("[MainForm] ✓ 音质一致性检查通过: " + song.Name + ", 音质: " + song.Level);
+					}
+				}
+				if (needRefreshUrl)
+				{
+					QualityUrlInfo cachedQuality = song.GetQualityUrl(selectedQualityLevel);
+					if (cachedQuality != null && !string.IsNullOrEmpty(cachedQuality.Url) && cachedQuality.IsTrial)
+					{
+						Debug.WriteLine("[MainForm] ⚠\ufe0f 命中试听版缓存，播放前尝试解封: " + song.Name + ", 音质: " + selectedQualityLevel);
+						if (await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(continueOnCapturedContext: false))
 						{
-							goto UrlResolved;
+							goto IL_17c9;
 						}
 						Debug.WriteLine("[MainForm] 试听版缓存未解封成功，丢弃缓存并重新拉取官方链接");
 						cachedQuality = null;
 					}
-				}
-				if (cachedQuality != null && !string.IsNullOrEmpty(cachedQuality?.Url))
-				{
-					Debug.WriteLine($"[MainForm] ✓ 命中多音质缓存: {song.Name}, 音质: {selectedQualityLevel}, 试听: {cachedQuality.IsTrial}");
-					song.Url = cachedQuality.Url;
-					song.Level = cachedQuality.Level;
-					song.Size = cachedQuality.Size;
-					song.IsTrial = cachedQuality.IsTrial;
-					song.TrialStart = cachedQuality.TrialStart;
-					song.TrialEnd = cachedQuality.TrialEnd;
-				}
-				else
-				{
-					Debug.WriteLine("[MainForm] 无URL缓存，重新获取: " + song.Name + ", 目标音质: " + defaultQualityName);
-					if (cancellationToken.IsCancellationRequested)
+					if (cachedQuality != null && !string.IsNullOrEmpty(cachedQuality?.Url))
 					{
-						UpdateLoadingState(isLoading: false, "播放已取消", playRequestVersion);
-						loadingStateActive = false;
-						return;
+						Debug.WriteLine($"[MainForm] ✓ 命中多音质缓存: {song.Name}, 音质: {selectedQualityLevel}, 试听: {cachedQuality.IsTrial}");
+						song.Url = cachedQuality.Url;
+						song.Level = cachedQuality.Level;
+						song.Size = cachedQuality.Size;
+						song.IsTrial = cachedQuality.IsTrial;
+						song.TrialStart = cachedQuality.TrialStart;
+						song.TrialEnd = cachedQuality.TrialEnd;
 					}
-
-					// 若尚未检查可用性，先执行一次（登录/未登录都检查）
-					if (!song.IsAvailable.HasValue)
+					else
 					{
-						bool available = await EnsureSongAvailabilityAsync(song, selectedQuality, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-						if (!available)
+						Debug.WriteLine("[MainForm] 无URL缓存，重新获取: " + song.Name + ", 目标音质: " + defaultQualityName);
+						if (cancellationToken.IsCancellationRequested)
 						{
-							Debug.WriteLine("[MainForm] 单曲可用性检查判定为不可用: " + song.Name);
-							if (await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(false))
-							{
-								goto UrlResolved;
-							}
-							UpdateLoadingState(isLoading: false, "歌曲不存在，已跳过", playRequestVersion);
+							UpdateLoadingState(isLoading: false, "播放已取消", playRequestVersion);
 							loadingStateActive = false;
-							HandleSongResourceNotFoundDuringPlayback(song, isAutoPlayback);
 							return;
 						}
-					}
-
-					Dictionary<string, SongUrlInfo> urlResult;
-					try
-					{
-						urlResult = await GetSongUrlWithRetryAsync(new string[1] { song.Id }, selectedQuality, cancellationToken, 3, suppressStatusUpdates: false, skipAvailabilityCheck: false).ConfigureAwait(continueOnCapturedContext: false);
-					}
-					catch (SongResourceNotFoundException ex)
-					{
-						Debug.WriteLine("[MainForm] 获取播放链接时检测到歌曲缺失: " + ex.Message);
-						song.IsAvailable = false;
-						if (await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(false))
+						if (!song.IsAvailable.HasValue && !(await EnsureSongAvailabilityAsync(song, selectedQuality, cancellationToken).ConfigureAwait(continueOnCapturedContext: false)))
 						{
-							goto UrlResolved;
-						}
-						UpdateLoadingState(isLoading: false, "歌曲不存在，已跳过", playRequestVersion);
-						loadingStateActive = false;
-						HandleSongResourceNotFoundDuringPlayback(song, isAutoPlayback);
-						return;
-					}
-					catch (PaidAlbumNotPurchasedException ex2)
-					{
-						Debug.WriteLine("[MainForm] 歌曲属于付费专辑且未购买: " + ex2.Message);
-						UpdateLoadingState(isLoading: false, "此歌曲属于付费数字专辑，需购买后才能播放。", playRequestVersion);
-						loadingStateActive = false;
-						if (!(_accountState?.IsLoggedIn ?? false) || string.IsNullOrWhiteSpace(song.Id))
-						{
-							SafeInvoke(delegate
+							Debug.WriteLine("[MainForm] 单曲可用性检查判定为不可用: " + song.Name);
+							if (!(await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(continueOnCapturedContext: false)))
 							{
-								MessageBox.Show(this, "该歌曲属于付费数字专辑，你需要登录/注册网易云音乐官方客户端购买后，登录本应用重试。", "需要购买", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
-							});
-							UpdateStatusBar("无法播放：未购买付费专辑");
-						}
-						else if (await ShowPurchaseLinkDialogAsync(song, cancellationToken).ConfigureAwait(continueOnCapturedContext: false))
-						{
-							UpdateStatusBar("已打开官方购买页面，请完成购买后重新播放。");
+								UpdateLoadingState(isLoading: false, "歌曲不存在，已跳过", playRequestVersion);
+								loadingStateActive = false;
+								HandleSongResourceNotFoundDuringPlayback(song, isAutoPlayback);
+								return;
+							}
 						}
 						else
 						{
-							UpdateStatusBar("购买已取消");
-						}
-						return;
-					}
-					catch (OperationCanceledException)
-					{
-						Debug.WriteLine("[MainForm] 播放链接获取被取消");
-						UpdateLoadingState(isLoading: false, "播放已取消", playRequestVersion);
-						loadingStateActive = false;
-						return;
-					}
-					catch (Exception ex4)
-					{
-						Debug.WriteLine("[MainForm] 获取播放链接失败: " + ex4.Message);
-						if (await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(false))
-						{
-							goto UrlResolved;
-						}
-						UpdateLoadingState(isLoading: false, "获取播放链接失败", playRequestVersion);
-						loadingStateActive = false;
-						SafeInvoke(delegate
-						{
-							MessageBox.Show(this, "无法获取播放链接，请尝试播放其他歌曲", "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
-						});
-						UpdateStatusBar("获取播放链接失败");
-						return;
-					}
-					if (cancellationToken.IsCancellationRequested)
-					{
-						UpdateLoadingState(isLoading: false, "播放已取消", playRequestVersion);
-						loadingStateActive = false;
-						return;
-					}
-					if (!urlResult.TryGetValue(song.Id, out SongUrlInfo songUrl) || string.IsNullOrEmpty(songUrl?.Url))
-					{
-						Debug.WriteLine("[MainForm] 官方返回 URL 为空，尝试解封: " + song.Name);
-						if (await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(false))
-						{
-							goto UrlResolved;
-						}
-						UpdateLoadingState(isLoading: false, "获取播放链接失败", playRequestVersion);
-						loadingStateActive = false;
-						MessageBox.Show("无法获取播放链接，请尝试播放其他歌曲", "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
-						UpdateStatusBar("获取播放链接失败");
-						return;
-					}
-					bool isTrial = songUrl.FreeTrialInfo != null;
-					long trialStart = songUrl.FreeTrialInfo?.Start ?? 0;
-					long trialEnd = songUrl.FreeTrialInfo?.End ?? 0;
-					if (isTrial)
-					{
-						Debug.WriteLine($"[MainForm] \ud83c\udfb5 试听版本: {song.Name}, 片段: {trialStart / 1000}s - {trialEnd / 1000}s");
-						// 先尝试解封
-						if (await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(false))
-						{
-							goto UrlResolved;
-						}
-						// 若试听片段无效则视为不可播放，跳过并尝试解封/下一首
-						if (trialEnd <= trialStart || songUrl.Size <= 0)
-						{
-							Debug.WriteLine($"[MainForm] ⚠️ 试听片段无效（start={trialStart}, end={trialEnd}, size={songUrl.Size}），视为资源不可用");
-							song.IsAvailable = false;
-							if (await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(false))
+							Dictionary<string, SongUrlInfo> urlResult;
+							try
 							{
-								goto UrlResolved;
+								urlResult = await GetSongUrlWithRetryAsync(new string[1] { song.Id }, selectedQuality, cancellationToken, 3).ConfigureAwait(continueOnCapturedContext: false);
 							}
-							UpdateLoadingState(isLoading: false, "歌曲不存在，已跳过", playRequestVersion);
-							loadingStateActive = false;
-							HandleSongResourceNotFoundDuringPlayback(song, isAutoPlayback);
-							return;
+							catch (SongResourceNotFoundException ex)
+							{
+								Debug.WriteLine("[MainForm] 获取播放链接时检测到歌曲缺失: " + ex.Message);
+								song.IsAvailable = false;
+								if (await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(continueOnCapturedContext: false))
+								{
+									goto IL_17c9;
+								}
+								UpdateLoadingState(isLoading: false, "歌曲不存在，已跳过", playRequestVersion);
+								loadingStateActive = false;
+								HandleSongResourceNotFoundDuringPlayback(song, isAutoPlayback);
+								return;
+							}
+							catch (PaidAlbumNotPurchasedException ex2)
+							{
+								Debug.WriteLine("[MainForm] 歌曲属于付费专辑且未购买: " + ex2.Message);
+								UpdateLoadingState(isLoading: false, "此歌曲属于付费数字专辑，需购买后才能播放。", playRequestVersion);
+								loadingStateActive = false;
+								if (!(_accountState?.IsLoggedIn ?? false) || string.IsNullOrWhiteSpace(song.Id))
+								{
+									SafeInvoke(delegate
+									{
+										MessageBox.Show(this, "该歌曲属于付费数字专辑，你需要登录/注册网易云音乐官方客户端购买后，登录本应用重试。", "需要购买", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+									});
+									UpdateStatusBar("无法播放：未购买付费专辑");
+								}
+								else if (await ShowPurchaseLinkDialogAsync(song, cancellationToken).ConfigureAwait(continueOnCapturedContext: false))
+								{
+									UpdateStatusBar("已打开官方购买页面，请完成购买后重新播放。");
+								}
+								else
+								{
+									UpdateStatusBar("购买已取消");
+								}
+								return;
+							}
+							catch (OperationCanceledException)
+							{
+								Debug.WriteLine("[MainForm] 播放链接获取被取消");
+								UpdateLoadingState(isLoading: false, "播放已取消", playRequestVersion);
+								loadingStateActive = false;
+								return;
+							}
+							catch (Exception ex4)
+							{
+								Debug.WriteLine("[MainForm] 获取播放链接失败: " + ex4.Message);
+								if (await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(continueOnCapturedContext: false))
+								{
+									goto IL_17c9;
+								}
+								UpdateLoadingState(isLoading: false, "获取播放链接失败", playRequestVersion);
+								loadingStateActive = false;
+								SafeInvoke(delegate
+								{
+									MessageBox.Show(this, "无法获取播放链接，请尝试播放其他歌曲", "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+								});
+								UpdateStatusBar("获取播放链接失败");
+								return;
+							}
+							if (cancellationToken.IsCancellationRequested)
+							{
+								UpdateLoadingState(isLoading: false, "播放已取消", playRequestVersion);
+								loadingStateActive = false;
+								return;
+							}
+							if (!urlResult.TryGetValue(song.Id, out songUrl) || string.IsNullOrEmpty(songUrl?.Url))
+							{
+								Debug.WriteLine("[MainForm] 官方返回 URL 为空，尝试解封: " + song.Name);
+								if (!(await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(continueOnCapturedContext: false)))
+								{
+									UpdateLoadingState(isLoading: false, "获取播放链接失败", playRequestVersion);
+									loadingStateActive = false;
+									MessageBox.Show("无法获取播放链接，请尝试播放其他歌曲", "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+									UpdateStatusBar("获取播放链接失败");
+									return;
+								}
+							}
+							else
+							{
+								resolvedSize = songUrl.Size;
+								if (resolvedSize <= 0)
+								{
+									long contentLength = (await HttpRangeHelper.CheckRangeSupportAsync(songUrl.Url, null, cancellationToken, song.CustomHeaders).ConfigureAwait(continueOnCapturedContext: false)).Item2;
+									if (contentLength > 0)
+									{
+										resolvedSize = contentLength;
+									}
+								}
+								if (resolvedSize <= 0)
+								{
+									resolvedSize = StreamSizeEstimator.EstimateSizeFromBitrate(songUrl.Br, song.Duration);
+								}
+								isTrial = songUrl.FreeTrialInfo != null;
+								trialStart = songUrl.FreeTrialInfo?.Start ?? 0;
+								trialEnd = songUrl.FreeTrialInfo?.End ?? 0;
+								if (!isTrial)
+								{
+									goto IL_1612;
+								}
+								Debug.WriteLine($"[MainForm] \ud83c\udfb5 试听版本: {song.Name}, 片段: {trialStart / 1000}s - {trialEnd / 1000}s");
+								if (!(await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(continueOnCapturedContext: false)))
+								{
+									if (trialEnd > trialStart && resolvedSize > 0)
+									{
+										goto IL_1612;
+									}
+									Debug.WriteLine($"[MainForm] ⚠\ufe0f 试听片段无效（start={trialStart}, end={trialEnd}, size={resolvedSize}），视为资源不可用");
+									song.IsAvailable = false;
+									if (!(await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(continueOnCapturedContext: false)))
+									{
+										UpdateLoadingState(isLoading: false, "歌曲不存在，已跳过", playRequestVersion);
+										loadingStateActive = false;
+										HandleSongResourceNotFoundDuringPlayback(song, isAutoPlayback);
+										return;
+									}
+								}
+							}
 						}
 					}
-					string actualLevel = songUrl.Level?.ToLower() ?? selectedQualityLevel;
-					song.SetQualityUrl(actualLevel, songUrl.Url, songUrl.Size, isAvailable: true, isTrial, trialStart, trialEnd);
-					Debug.WriteLine($"[MainForm] ✓ 已缓存音质URL: {song.Name}, 音质: {actualLevel}, 大小: {songUrl.Size}, 试听: {isTrial}");
-					song.Url = songUrl.Url;
-					song.Level = songUrl.Level;
-					song.Size = songUrl.Size;
-					song.IsTrial = isTrial;
-					song.TrialStart = trialStart;
-					song.TrialEnd = trialEnd;
-					OptimizedHttpClientFactory.PreWarmConnection(song.Url);
 				}
 			}
-UrlResolved:
+			goto IL_17c9;
+			IL_1612:
+			string actualLevel = songUrl.Level?.ToLower() ?? selectedQualityLevel;
+			song.SetQualityUrl(actualLevel, songUrl.Url, resolvedSize, isAvailable: true, isTrial, trialStart, trialEnd);
+			Debug.WriteLine($"[MainForm] ✓ 已缓存音质URL: {song.Name}, 音质: {actualLevel}, 大小: {resolvedSize}, 试听: {isTrial}");
+			song.Url = songUrl.Url;
+			song.Level = songUrl.Level;
+			song.Size = resolvedSize;
+			song.IsTrial = isTrial;
+			song.TrialStart = trialStart;
+			song.TrialEnd = trialEnd;
+			OptimizedHttpClientFactory.PreWarmConnection(song.Url);
+			goto IL_17c9;
+			IL_17c9:
 			if (cancellationToken.IsCancellationRequested)
 			{
 				UpdateLoadingState(isLoading: false, "播放已取消", playRequestVersion);
@@ -16306,13 +18382,14 @@ UrlResolved:
 			Debug.WriteLine("[MainForm] 已清空旧歌词，准备播放新歌曲");
 			bool playResult = await _audioEngine.PlayAsync(song, cancellationToken, preloadedData);
 			Debug.WriteLine($"[MainForm] _audioEngine.PlayAsync() 返回: {playResult}");
-			if (!playResult)
-			{
-				UpdateLoadingState(isLoading: false, "播放失败", playRequestVersion);
-				loadingStateActive = false;
-				Debug.WriteLine("[MainForm ERROR] 播放失败");
-				return;
-			}
+                        if (!playResult)
+                        {
+                                UpdateLoadingState(isLoading: false, "播放失败", playRequestVersion);
+                                loadingStateActive = false;
+                                Debug.WriteLine("[MainForm ERROR] 播放失败");
+                                AnnouncePlaybackFailure();
+                                return;
+                        }
 			if (_seekManager != null)
 			{
 				if (_audioEngine.CurrentCacheManager != null)
@@ -16380,7 +18457,7 @@ UrlResolved:
 			{
 				RefreshNextSongPreload();
 			});
-			PersistPlaybackState(includeQueue: true);
+			PersistPlaybackState();
 		}
 		catch (OperationCanceledException)
 		{
@@ -16390,15 +18467,16 @@ UrlResolved:
 		catch (Exception ex6)
 		{
 			Exception ex7 = ex6;
+			Exception ex8 = ex7;
 			if (!cancellationToken.IsCancellationRequested)
 			{
-				Debug.WriteLine("[MainForm ERROR] PlaySongDirect 异常: " + ex7.Message);
-				Debug.WriteLine("[MainForm ERROR] 堆栈: " + ex7.StackTrace);
-				UpdateLoadingState(isLoading: false, "播放失败", playRequestVersion);
-				MessageBox.Show("播放失败: " + ex7.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
-				UpdateStatusBar("播放失败");
-			}
-		}
+                                Debug.WriteLine("[MainForm ERROR] PlaySongDirect 异常: " + ex8.Message);
+                                Debug.WriteLine("[MainForm ERROR] 堆栈: " + ex8.StackTrace);
+                                UpdateLoadingState(isLoading: false, "播放失败", playRequestVersion);
+                                MessageBox.Show("播放失败: " + ex8.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+                                AnnouncePlaybackFailure(ex8.Message);
+                        }
+                }
 		finally
 		{
 			if (loadingStateActive)
@@ -16408,8 +18486,8 @@ UrlResolved:
 		}
 	}
 
-	private async void PlayPrevious(bool isManual = true)
-	{
+        private async Task PlayPreviousAsync(bool isManual = true)
+        {
 		Debug.WriteLine($"[MainForm] PlayPrevious 被调用 (isManual={isManual})");
 		PlayMode playMode = _audioEngine?.PlayMode ?? PlayMode.Loop;
 		SongInfo currentSong = _audioEngine?.CurrentSong;
@@ -16418,7 +18496,13 @@ UrlResolved:
 			_playbackQueue.AdvanceForPlayback(currentSong, playMode, _currentViewSource);
 			Debug.WriteLine("[MainForm] 已同步播放队列到当前歌曲: " + currentSong.Name);
 		}
-		if (isManual && await TryPlayManualDirectionalAsync(isNext: false))
+		bool flag = isManual;
+		bool flag2 = flag;
+		if (flag2)
+		{
+			flag2 = await TryPlayManualDirectionalAsync(isNext: false);
+		}
+		if (flag2)
 		{
 			return;
 		}
@@ -16441,8 +18525,8 @@ UrlResolved:
 		}
 	}
 
-	private async void PlayNext(bool isManual = true)
-	{
+        private async Task PlayNextAsync(bool isManual = true)
+        {
 		Debug.WriteLine($"[MainForm] PlayNext 被调用 (isManual={isManual})");
 		PlayMode playMode = _audioEngine?.PlayMode ?? PlayMode.Loop;
 		SongInfo currentSong = _audioEngine?.CurrentSong;
@@ -16451,7 +18535,13 @@ UrlResolved:
 			_playbackQueue.AdvanceForPlayback(currentSong, playMode, _currentViewSource);
 			Debug.WriteLine("[MainForm] 已同步播放队列到当前歌曲: " + currentSong.Name);
 		}
-		if (isManual && await TryPlayManualDirectionalAsync(isNext: true))
+		bool flag = isManual;
+		bool flag2 = flag;
+		if (flag2)
+		{
+			flag2 = await TryPlayManualDirectionalAsync(isNext: true);
+		}
+		if (flag2)
 		{
 			return;
 		}
@@ -16526,13 +18616,13 @@ UrlResolved:
 			ManualNavigationAvailability availability = await PrepareSongForManualNavigationAsync(result);
 			if (availability == ManualNavigationAvailability.Success)
 			{
-				if (!isNext)
+				if (isNext)
 				{
-					await ExecutePlayPreviousResultAsync(result);
+					await ExecutePlayNextResultAsync(result);
 				}
 				else
 				{
-					await ExecutePlayNextResultAsync(result);
+					await ExecutePlayPreviousResultAsync(result);
 				}
 				return true;
 			}
@@ -16605,11 +18695,24 @@ UrlResolved:
 		try
 		{
 			Dictionary<string, SongUrlInfo> urlResult = await GetSongUrlWithRetryAsync(new string[1] { song.Id }, selectedQuality, CancellationToken.None, 3, suppressStatusUpdates: true);
-			if (urlResult != null && urlResult.TryGetValue(song.Id, out SongUrlInfo songUrl) && !string.IsNullOrEmpty(songUrl?.Url))
+			if (urlResult != null && urlResult.TryGetValue(song.Id, out var songUrl) && !string.IsNullOrEmpty(songUrl?.Url))
 			{
+				long resolvedSize = songUrl.Size;
+				if (resolvedSize <= 0)
+				{
+					long contentLength = (await HttpRangeHelper.CheckRangeSupportAsync(songUrl.Url, null, CancellationToken.None, song.CustomHeaders).ConfigureAwait(continueOnCapturedContext: false)).Item2;
+					if (contentLength > 0)
+					{
+						resolvedSize = contentLength;
+					}
+				}
+				if (resolvedSize <= 0)
+				{
+					resolvedSize = StreamSizeEstimator.EstimateSizeFromBitrate(songUrl.Br, song.Duration);
+				}
 				song.Url = songUrl.Url;
 				song.Level = songUrl.Level;
-				song.Size = songUrl.Size;
+				song.Size = resolvedSize;
 				return ManualNavigationAvailability.Success;
 			}
 			return ManualNavigationAvailability.Missing;
@@ -16710,11 +18813,10 @@ UrlResolved:
 	{
 		if (song != null)
 		{
-			// 缓存不可用状态，防止后续重复尝试
 			song.IsAvailable = false;
 			if (base.InvokeRequired)
 			{
-				BeginInvoke(new Action(ExecuteOnUiThread));
+				BeginInvoke(ExecuteOnUiThread);
 			}
 			else
 			{
@@ -16728,18 +18830,18 @@ UrlResolved:
 			{
 				text = song.Name + " - " + song.Artist;
 			}
-			bool flag = RemoveSongFromQueueAndCaches(song);
-			Debug.WriteLine($"[MainForm] RemoveSongById({song.Id}) => {flag}");
+			bool value = RemoveSongFromQueueAndCaches(song);
+			Debug.WriteLine($"[MainForm] RemoveSongById({song.Id}) => {value}");
 			if (isAutoPlayback)
 			{
 				string message = (string.IsNullOrEmpty(text) ? "已跳过无法播放的歌曲（官方资源不存在）" : ("已跳过：" + text + "（官方资源不存在）"));
 				UpdateStatusBar(message);
 				Debug.WriteLine("[MainForm] 跳过缺失歌曲(自动): " + song.Id + " - " + text);
-				bool flag2 = _playbackQueue.CurrentQueue.Count > 0;
-				bool flag3 = _playbackQueue.HasPendingInjection || _playbackQueue.IsInInjection;
-				if (flag2 || flag3)
+				bool flag = _playbackQueue.CurrentQueue.Count > 0;
+				bool flag2 = _playbackQueue.HasPendingInjection || _playbackQueue.IsInInjection;
+				if (flag || flag2)
 				{
-					PlayNext(isManual: false);
+                                        PlayNextAsync(isManual: false).SafeFireAndForget("Auto skip missing");
 				}
 				else
 				{
@@ -16780,13 +18882,11 @@ UrlResolved:
 		int num = queueIndex;
 		if (expectedSong != null && _currentSongs != null)
 		{
-			for (int i = 0; i < _currentSongs.Count; i = checked(i + 1))
+			num = _currentSongs.FindIndex((SongInfo s) => s != null && string.Equals(s.Id, expectedSong.Id, StringComparison.OrdinalIgnoreCase));
+			if (num < 0)
 			{
-				if (_currentSongs[i]?.Id == expectedSong.Id)
-				{
-					num = i;
-					break;
-				}
+				Debug.WriteLine("[MainForm] 焦点不跟随: 当前视图未包含正在播放的歌曲 " + expectedSong.Id);
+				return;
 			}
 		}
 		if (queueSource == _currentViewSource && num >= 0 && num < resultListView.Items.Count)
@@ -17022,7 +19122,7 @@ UrlResolved:
 		{
 			return song.PodcastRadioId;
 		}
-		PodcastRadioInfo? currentPodcast = _currentPodcast;
+		PodcastRadioInfo currentPodcast = _currentPodcast;
 		if (currentPodcast != null && currentPodcast.Id > 0)
 		{
 			return _currentPodcast.Id;
@@ -17106,15 +19206,15 @@ UrlResolved:
 			{
 				if (base.InvokeRequired)
 				{
-					Invoke((Action)delegate
+					Invoke(delegate
 					{
-						PlayNext();
+                                        PlayNextAsync().SafeFireAndForget("Command queue next");
 						success = true;
 					});
 				}
 				else
 				{
-					PlayNext();
+                                PlayNextAsync().SafeFireAndForget("Command queue next");
 					success = true;
 				}
 			}, ct).ConfigureAwait(continueOnCapturedContext: false);
@@ -17123,7 +19223,8 @@ UrlResolved:
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			return CommandResult.Error(ex2);
+			Exception ex3 = ex2;
+			return CommandResult.Error(ex3);
 		}
 	}
 
@@ -17136,15 +19237,15 @@ UrlResolved:
 			{
 				if (base.InvokeRequired)
 				{
-					Invoke((Action)delegate
+					Invoke(delegate
 					{
-						PlayPrevious();
+                                        PlayPreviousAsync().SafeFireAndForget("Command queue previous");
 						success = true;
 					});
 				}
 				else
 				{
-					PlayPrevious();
+                                PlayPreviousAsync().SafeFireAndForget("Command queue previous");
 					success = true;
 				}
 			}, ct).ConfigureAwait(continueOnCapturedContext: false);
@@ -17153,7 +19254,8 @@ UrlResolved:
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			return CommandResult.Error(ex2);
+			Exception ex3 = ex2;
+			return CommandResult.Error(ex3);
 		}
 	}
 
@@ -17292,6 +19394,7 @@ UrlResolved:
 			playPauseButton.Enabled = true;
 			break;
 		}
+		UpdateTrayPlayPauseMenuTextForState(state);
 	}
 
 	private void SafeInvoke(Action action)
@@ -17320,7 +19423,7 @@ UrlResolved:
 		}
 		else
 		{
-			if (!TryResolveSongIdForLibraryActions(song, "收藏歌曲", out string targetSongId))
+			if (!TryResolveSongIdForLibraryActions(song, "收藏歌曲", out var targetSongId))
 			{
 				return;
 			}
@@ -17341,7 +19444,8 @@ UrlResolved:
 			}
 			catch (Exception ex)
 			{
-				MessageBox.Show("收藏歌曲失败: " + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+				Exception ex2 = ex;
+				MessageBox.Show("收藏歌曲失败: " + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 				UpdateStatusBar("歌曲收藏失败");
 			}
 		}
@@ -17365,7 +19469,7 @@ UrlResolved:
 			ShowContextSongMissingMessage("取消收藏的歌曲");
 			return false;
 		}
-		if (!TryResolveSongIdForLibraryActions(song, "取消收藏歌曲", out string targetSongId))
+		if (!TryResolveSongIdForLibraryActions(song, "取消收藏歌曲", out var targetSongId))
 		{
 			return false;
 		}
@@ -17385,7 +19489,8 @@ UrlResolved:
 					}
 					catch (Exception ex)
 					{
-						Exception refreshEx = ex;
+						Exception ex2 = ex;
+						Exception refreshEx = ex2;
 						Debug.WriteLine($"[UI] 刷新我喜欢的音乐列表失败: {refreshEx}");
 					}
 				}
@@ -17394,9 +19499,9 @@ UrlResolved:
 			MessageBox.Show("取消收藏失败，请检查网络或稍后重试。", "失败", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 			UpdateStatusBar("取消收藏失败");
 		}
-		catch (Exception ex2)
+		catch (Exception ex3)
 		{
-			MessageBox.Show("取消收藏失败: " + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+			MessageBox.Show("取消收藏失败: " + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 			UpdateStatusBar("取消收藏失败");
 		}
 		return false;
@@ -17425,14 +19530,14 @@ UrlResolved:
 			return;
 		}
 		string playlistIdValue = playlistId;
-		ListViewItem selectedItem = ((resultListView.SelectedItems.Count > 0) ? resultListView.SelectedItems[0] : null);
+		ListViewItem selectedItem = GetSelectedListViewItemSafe();
 		if (selectedItem == null)
 		{
 			return;
 		}
 		SongInfo song = null;
 		object tag = selectedItem.Tag;
-		int index = default(int);
+		int index = 0;
 		int num;
 		if (tag is int)
 		{
@@ -17440,12 +19545,12 @@ UrlResolved:
 			if (index >= 0)
 			{
 				num = ((index < _currentSongs.Count) ? 1 : 0);
-				goto IL_0202;
+				goto IL_0215;
 			}
 		}
 		num = 0;
-		goto IL_0202;
-		IL_0202:
+		goto IL_0215;
+		IL_0215:
 		if (num != 0)
 		{
 			song = _currentSongs[index];
@@ -17458,7 +19563,7 @@ UrlResolved:
 				song = songInfo;
 			}
 		}
-		if (song == null || !TryResolveSongIdForLibraryActions(song, "从歌单中移除歌曲", out string targetSongId))
+		if (song == null || !TryResolveSongIdForLibraryActions(song, "从歌单中移除歌曲", out var targetSongId))
 		{
 			return;
 		}
@@ -17474,11 +19579,12 @@ UrlResolved:
 					try
 					{
 						await OpenPlaylist(_currentPlaylist, skipSave: true, preserveSelection: true);
+						return;
 					}
-					catch (Exception ex)
+					catch (Exception value)
 					{
-						Exception refreshEx = ex;
-						Debug.WriteLine($"[UI] 刷新歌单失败: {refreshEx}");
+						Debug.WriteLine($"[UI] 刷新歌单失败: {value}");
+						return;
 					}
 				}
 			}
@@ -17490,8 +19596,7 @@ UrlResolved:
 		}
 		catch (Exception ex)
 		{
-			Exception ex2 = ex;
-			MessageBox.Show("从歌单中移除歌曲失败: " + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+			MessageBox.Show("从歌单中移除歌曲失败: " + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 			UpdateStatusBar("移除失败");
 		}
 	}
@@ -17510,7 +19615,7 @@ UrlResolved:
 		}
 		else
 		{
-			if (!TryResolveSongIdForLibraryActions(song, "添加到歌单", out string targetSongId))
+			if (!TryResolveSongIdForLibraryActions(song, "添加到歌单", out var targetSongId))
 			{
 				return;
 			}
@@ -17541,7 +19646,8 @@ UrlResolved:
 			}
 			catch (Exception ex)
 			{
-				MessageBox.Show("添加歌曲到歌单失败: " + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+				Exception ex2 = ex;
+				MessageBox.Show("添加歌曲到歌单失败: " + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 				UpdateStatusBar("添加失败");
 			}
 		}
@@ -17642,8 +19748,9 @@ UrlResolved:
 			if (folderBrowserDialog.ShowDialog() == DialogResult.OK)
 			{
 				string text = (configModel.DownloadDirectory = folderBrowserDialog.SelectedPath);
+				string text2 = text;
 				_configManager.Save(configModel);
-				MessageBox.Show("下载目录已更改为：\n" + text, "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+				MessageBox.Show("下载目录已更改为：\n" + text2, "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
 			}
 		}
 		catch (Exception ex)
@@ -17796,11 +19903,11 @@ UrlResolved:
 
 	internal async void DownloadPlaylist_Click(object? sender, EventArgs e)
 	{
-		if (resultListView.SelectedItems.Count == 0)
+		ListViewItem selectedItem = GetSelectedListViewItemSafe();
+		if (selectedItem == null)
 		{
 			return;
 		}
-		ListViewItem selectedItem = resultListView.SelectedItems[0];
 		object tag = selectedItem.Tag;
 		if (!(tag is PlaylistInfo playlist))
 		{
@@ -17810,8 +19917,8 @@ UrlResolved:
 		{
 			try
 			{
-				Cursor originalCursor = Cursor.Current;
-				Cursor.Current = Cursors.WaitCursor;
+				Cursor originalCursor = System.Windows.Forms.Cursor.Current;
+				System.Windows.Forms.Cursor.Current = Cursors.WaitCursor;
 				try
 				{
 					PlaylistInfo playlistDetail = await _apiClient.GetPlaylistDetailAsync(playlist.Id);
@@ -17842,7 +19949,7 @@ UrlResolved:
 				}
 				finally
 				{
-					Cursor.Current = originalCursor;
+					System.Windows.Forms.Cursor.Current = originalCursor;
 				}
 			}
 			catch (Exception ex)
@@ -17854,11 +19961,11 @@ UrlResolved:
 
 	internal async void DownloadAlbum_Click(object? sender, EventArgs e)
 	{
-		if (resultListView.SelectedItems.Count == 0)
+		ListViewItem selectedItem = GetSelectedListViewItemSafe();
+		if (selectedItem == null)
 		{
 			return;
 		}
-		ListViewItem selectedItem = resultListView.SelectedItems[0];
 		object tag = selectedItem.Tag;
 		if (!(tag is AlbumInfo album))
 		{
@@ -17868,8 +19975,8 @@ UrlResolved:
 		{
 			try
 			{
-				Cursor originalCursor = Cursor.Current;
-				Cursor.Current = Cursors.WaitCursor;
+				Cursor originalCursor = System.Windows.Forms.Cursor.Current;
+				System.Windows.Forms.Cursor.Current = Cursors.WaitCursor;
 				try
 				{
 					List<SongInfo> songs = await _apiClient.GetAlbumSongsAsync(album.Id);
@@ -17901,7 +20008,7 @@ UrlResolved:
 				}
 				finally
 				{
-					Cursor.Current = originalCursor;
+					System.Windows.Forms.Cursor.Current = originalCursor;
 				}
 			}
 			catch (Exception ex)
@@ -17923,8 +20030,8 @@ UrlResolved:
 		{
 			try
 			{
-				Cursor originalCursor = Cursor.Current;
-				Cursor.Current = Cursors.WaitCursor;
+				Cursor originalCursor = System.Windows.Forms.Cursor.Current;
+				System.Windows.Forms.Cursor.Current = Cursors.WaitCursor;
 				try
 				{
 					List<PodcastEpisodeInfo> episodes = await FetchAllPodcastEpisodesAsync(podcast.Id);
@@ -17998,7 +20105,7 @@ UrlResolved:
 				}
 				finally
 				{
-					Cursor.Current = originalCursor;
+					System.Windows.Forms.Cursor.Current = originalCursor;
 				}
 			}
 			catch (Exception ex)
@@ -18026,11 +20133,11 @@ UrlResolved:
 
 	internal async void DownloadCategory_Click(object? sender, EventArgs e)
 	{
-		if (resultListView.SelectedItems.Count == 0)
+		ListViewItem selectedItem = GetSelectedListViewItemSafe();
+		if (selectedItem == null)
 		{
 			return;
 		}
-		ListViewItem selectedItem = resultListView.SelectedItems[0];
 		object tag = selectedItem.Tag;
 		ListItemInfo listItem = tag as ListItemInfo;
 		if (listItem == null || listItem.Type != ListItemType.Category)
@@ -18039,8 +20146,8 @@ UrlResolved:
 		}
 		try
 		{
-			Cursor originalCursor = Cursor.Current;
-			Cursor.Current = Cursors.WaitCursor;
+			Cursor originalCursor = System.Windows.Forms.Cursor.Current;
+			System.Windows.Forms.Cursor.Current = Cursors.WaitCursor;
 			try
 			{
 				string categoryId = listItem.CategoryId;
@@ -18105,8 +20212,7 @@ UrlResolved:
 							throw new Exception("请先登录");
 						}
 						long userId = long.Parse(_accountState.UserId);
-						List<PlaylistInfo> playlists;
-						(playlists, _) = await _apiClient.GetUserPlaylistsAsync(userId);
+						var (playlists, _) = await _apiClient.GetUserPlaylistsAsync(userId);
 						if (playlists == null || playlists.Count == 0)
 						{
 							throw new Exception("您还没有歌单");
@@ -18151,9 +20257,8 @@ UrlResolved:
 					totalTasks = await DownloadAlbumListCategory(categoryName, async delegate
 					{
 						(List<AlbumInfo>, int) tuple = await _apiClient.GetUserAlbumsAsync();
-						List<AlbumInfo> albums;
-						(albums, _) = tuple;
-						_ = tuple.Item2;
+						var (albums, _) = tuple;
+						_ = tuple;
 						if (albums == null || albums.Count == 0)
 						{
 							throw new Exception("您还没有收藏专辑");
@@ -18231,7 +20336,7 @@ UrlResolved:
 						{
 							throw new Exception("暂无周榜单听歌记录");
 						}
-						return playRecords.Select<(SongInfo, int), SongInfo>(((SongInfo song, int playCount) r) => r.song).ToList();
+						return playRecords.Select(((SongInfo song, int playCount) r) => r.song).ToList();
 					}, quality);
 					break;
 				case "user_play_record_all":
@@ -18247,14 +20352,13 @@ UrlResolved:
 						{
 							throw new Exception("暂无全部时间听歌记录");
 						}
-						return playRecords.Select<(SongInfo, int), SongInfo>(((SongInfo song, int playCount) r) => r.song).ToList();
+						return playRecords.Select(((SongInfo song, int playCount) r) => r.song).ToList();
 					}, quality);
 					break;
 				case "highquality_playlists":
 					totalTasks = await DownloadPlaylistListCategory(categoryName, async delegate
 					{
-						List<PlaylistInfo> playlists;
-						(playlists, _, _) = await _apiClient.GetHighQualityPlaylistsAsync("全部", 50, 0L);
+						var (playlists, _, _) = await _apiClient.GetHighQualityPlaylistsAsync("全部", 50, 0L);
 						if (playlists == null || playlists.Count == 0)
 						{
 							throw new Exception("获取精品歌单失败");
@@ -18394,7 +20498,8 @@ UrlResolved:
 						List<ListItemInfo> list = new List<ListItemInfo>();
 						string[] array = new string[10] { "华语", "流行", "摇滚", "民谣", "电子", "轻音乐", "影视原声", "ACG", "怀旧", "治愈" };
 						string[] array2 = array;
-						foreach (string text in array2)
+						string[] array3 = array2;
+						foreach (string text in array3)
 						{
 							list.Add(new ListItemInfo
 							{
@@ -18435,8 +20540,7 @@ UrlResolved:
 						string catName = categoryId.Substring("playlist_cat_".Length);
 						totalTasks = await DownloadPlaylistListCategory(catName, async delegate
 						{
-							List<PlaylistInfo> playlists;
-							(playlists, _, _) = await _apiClient.GetPlaylistsByCategoryAsync(catName);
+							var (playlists, _, _) = await _apiClient.GetPlaylistsByCategoryAsync(catName);
 							if (playlists == null || playlists.Count == 0)
 							{
 								throw new Exception("获取" + catName + "歌单失败");
@@ -18455,7 +20559,7 @@ UrlResolved:
 			}
 			finally
 			{
-				Cursor.Current = originalCursor;
+				System.Windows.Forms.Cursor.Current = originalCursor;
 			}
 		}
 		catch (Exception ex)
@@ -18526,7 +20630,8 @@ UrlResolved:
 				string baseDirectory = (string.IsNullOrEmpty(parentDirectory) ? categoryName : Path.Combine(parentDirectory, categoryName));
 				string subDirectory = Path.Combine(baseDirectory, playlist.Name);
 				List<int> originalIndices = Enumerable.Range(1, playlistDetail.Songs.Count).ToList();
-				totalTasks = checked(totalTasks + (await _downloadManager.AddBatchDownloadAsync(playlistDetail.Songs, quality, playlist.Name, subDirectory, originalIndices)).Count);
+				int num = totalTasks;
+				totalTasks = checked(num + (await _downloadManager.AddBatchDownloadAsync(playlistDetail.Songs, quality, playlist.Name, subDirectory, originalIndices)).Count);
 			}
 		}
 		return totalTasks;
@@ -18561,7 +20666,8 @@ UrlResolved:
 				string albumFolderName = album.Name + " - " + album.Artist;
 				string subDirectory = Path.Combine(baseDirectory, albumFolderName);
 				List<int> originalIndices = Enumerable.Range(1, songs.Count).ToList();
-				totalTasks = checked(totalTasks + (await _downloadManager.AddBatchDownloadAsync(songs, quality, albumFolderName, subDirectory, originalIndices)).Count);
+				int num = totalTasks;
+				totalTasks = checked(num + (await _downloadManager.AddBatchDownloadAsync(songs, quality, albumFolderName, subDirectory, originalIndices)).Count);
 			}
 		}
 		return totalTasks;
@@ -18583,8 +20689,8 @@ UrlResolved:
 		}
 		List<ListItemInfo> selectedSubCategories = dialog.SelectedIndices.Select((int i) => subCategories[i]).ToList();
 		int totalTasks = 0;
-		Cursor originalCursor = Cursor.Current;
-		Cursor.Current = Cursors.WaitCursor;
+		Cursor originalCursor = System.Windows.Forms.Cursor.Current;
+		System.Windows.Forms.Cursor.Current = Cursors.WaitCursor;
 		try
 		{
 			foreach (ListItemInfo subCategory in selectedSubCategories)
@@ -18653,7 +20759,7 @@ UrlResolved:
 							{
 								throw new Exception("暂无周榜单听歌记录");
 							}
-							return playRecords.Select<(SongInfo, int), SongInfo>(((SongInfo song, int playCount) r) => r.song).ToList();
+							return playRecords.Select(((SongInfo song, int playCount) r) => r.song).ToList();
 						}, quality, categoryName, showDialog: false);
 						break;
 					case "user_play_record_all":
@@ -18669,7 +20775,7 @@ UrlResolved:
 							{
 								throw new Exception("暂无全部时间听歌记录");
 							}
-							return playRecords.Select<(SongInfo, int), SongInfo>(((SongInfo song, int playCount) r) => r.song).ToList();
+							return playRecords.Select(((SongInfo song, int playCount) r) => r.song).ToList();
 						}, quality, categoryName, showDialog: false);
 						break;
 					case "new_songs_all":
@@ -18733,8 +20839,7 @@ UrlResolved:
 							string catName = subCategoryId.Substring("playlist_cat_".Length);
 							taskCount = await DownloadPlaylistListCategory(catName, async delegate
 							{
-								List<PlaylistInfo> playlists;
-								(playlists, _, _) = await _apiClient.GetPlaylistsByCategoryAsync(catName);
+								var (playlists, _, _) = await _apiClient.GetPlaylistsByCategoryAsync(catName);
 								if (playlists == null || playlists.Count == 0)
 								{
 									throw new Exception("获取" + catName + "歌单失败");
@@ -18761,7 +20866,7 @@ UrlResolved:
 		}
 		finally
 		{
-			Cursor.Current = originalCursor;
+			System.Windows.Forms.Cursor.Current = originalCursor;
 		}
 	}
 
@@ -18817,8 +20922,8 @@ UrlResolved:
 				{
 					return;
 				}
-				Cursor originalCursor = Cursor.Current;
-				Cursor.Current = Cursors.WaitCursor;
+				Cursor originalCursor = System.Windows.Forms.Cursor.Current;
+				System.Windows.Forms.Cursor.Current = Cursors.WaitCursor;
 				try
 				{
 					QualityLevel quality = GetCurrentQuality();
@@ -18832,7 +20937,8 @@ UrlResolved:
 							if (playlistDetail?.Songs != null && playlistDetail.Songs.Count > 0)
 							{
 								List<int> originalIndices = Enumerable.Range(1, playlistDetail.Songs.Count).ToList();
-								totalTasks += (await _downloadManager.AddBatchDownloadAsync(playlistDetail.Songs, quality, playlist2.Name, playlist2.Name, originalIndices)).Count;
+								int num = totalTasks;
+								totalTasks = num + (await _downloadManager.AddBatchDownloadAsync(playlistDetail.Songs, quality, playlist2.Name, playlist2.Name, originalIndices)).Count;
 							}
 						}
 						else if (item is AlbumInfo album2)
@@ -18842,7 +20948,8 @@ UrlResolved:
 							{
 								string albumName = album2.Name + " - " + album2.Artist;
 								List<int> originalIndices2 = Enumerable.Range(1, songs.Count).ToList();
-								totalTasks += (await _downloadManager.AddBatchDownloadAsync(songs, quality, albumName, albumName, originalIndices2)).Count;
+								int num2 = totalTasks;
+								totalTasks = num2 + (await _downloadManager.AddBatchDownloadAsync(songs, quality, albumName, albumName, originalIndices2)).Count;
 							}
 						}
 					}
@@ -18850,13 +20957,14 @@ UrlResolved:
 				}
 				finally
 				{
-					Cursor.Current = originalCursor;
+					System.Windows.Forms.Cursor.Current = originalCursor;
 				}
 			}
 			catch (Exception ex)
 			{
 				Exception ex2 = ex;
-				MessageBox.Show("批量下载失败：" + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+				Exception ex3 = ex2;
+				MessageBox.Show("批量下载失败：" + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 			}
 		}
 	}
@@ -18888,35 +20996,39 @@ UrlResolved:
 
 	private void ConfigureListViewDefault()
 	{
-        columnHeader1.Text = string.Empty;
-        columnHeader2.Text = string.Empty;
-        columnHeader3.Text = string.Empty;
-        columnHeader4.Text = string.Empty;
-        columnHeader5.Text = string.Empty;
+		DisableVirtualSongList();
+		columnHeader0.Text = string.Empty;
+		columnHeader1.Text = string.Empty;
+		columnHeader2.Text = string.Empty;
+		columnHeader3.Text = string.Empty;
+		columnHeader4.Text = string.Empty;
+		columnHeader5.Text = string.Empty;
 	}
 
 	private void ConfigureListViewForArtists()
 	{
-        columnHeader1.Text = string.Empty;
-        columnHeader2.Text = string.Empty;
-        columnHeader3.Text = string.Empty;
-        columnHeader4.Text = string.Empty;
-        columnHeader5.Text = string.Empty;
+		DisableVirtualSongList();
+		columnHeader0.Text = string.Empty;
+		columnHeader1.Text = string.Empty;
+		columnHeader2.Text = string.Empty;
+		columnHeader3.Text = string.Empty;
+		columnHeader4.Text = string.Empty;
+		columnHeader5.Text = string.Empty;
 	}
 
 	private static string BuildArtistStatsLabel(int musicCount, int albumCount)
 	{
-		bool hasMusic = musicCount > 0;
-		bool hasAlbum = albumCount > 0;
-		if (hasMusic && hasAlbum)
+		bool flag = musicCount > 0;
+		bool flag2 = albumCount > 0;
+		if (flag && flag2)
 		{
 			return $"歌曲 {musicCount} / 专辑 {albumCount}";
 		}
-		if (hasMusic)
+		if (flag)
 		{
 			return $"歌曲 {musicCount}";
 		}
-		if (hasAlbum)
+		if (flag2)
 		{
 			return $"专辑 {albumCount}";
 		}
@@ -18936,8 +21048,7 @@ UrlResolved:
 		{
 			num = resultListView.SelectedIndices[0];
 		}
-		List<ArtistInfo> artistsToRender = CloneList(artists);
-		_currentArtists = artistsToRender;
+		List<ArtistInfo> list = (_currentArtists = CloneList(artists));
 		_currentSongs.Clear();
 		_currentPlaylists.Clear();
 		_currentAlbums.Clear();
@@ -18945,13 +21056,14 @@ UrlResolved:
 		_currentPodcasts.Clear();
 		_currentPodcastSounds.Clear();
 		_currentPodcast = null;
-		ApplyArtistSubscriptionStates(artistsToRender);
-		bool flag = artistsToRender.Count > 0;
+		ApplyArtistSubscriptionStates(list);
+		bool flag = list.Count > 0;
 		resultListView.BeginUpdate();
 		checked
 		{
 			try
 			{
+				ResetListViewSelectionState();
 				resultListView.Items.Clear();
 				if (ShouldAbortViewRender(currentViewContentToken, "DisplayArtists"))
 				{
@@ -18960,35 +21072,36 @@ UrlResolved:
 				if (flag)
 				{
 					int num2 = startIndex;
-					foreach (ArtistInfo currentArtist in artistsToRender)
+					foreach (ArtistInfo item in list)
 					{
 						if (ShouldAbortViewRender(currentViewContentToken, "DisplayArtists"))
 						{
 							return;
 						}
-						if ((currentArtist.MusicCount <= 0 || currentArtist.AlbumCount <= 0) && TryGetCachedArtistStats(currentArtist.Id, out (int, int) stats))
+						if ((item.MusicCount <= 0 || item.AlbumCount <= 0) && TryGetCachedArtistStats(item.Id, out (int, int) stats))
 						{
-							if (currentArtist.MusicCount <= 0)
+							if (item.MusicCount <= 0)
 							{
-								(currentArtist.MusicCount, _) = stats;
+								(item.MusicCount, _) = stats;
 							}
-							if (currentArtist.AlbumCount <= 0)
-						{
-							currentArtist.AlbumCount = stats.Item2;
+							if (item.AlbumCount <= 0)
+							{
+								item.AlbumCount = stats.Item2;
+							}
 						}
-					}
-					string text = BuildArtistStatsLabel(currentArtist.MusicCount, currentArtist.AlbumCount);
-					string text2 = ((!string.IsNullOrWhiteSpace(currentArtist.Description)) ? currentArtist.Description : currentArtist.BriefDesc);
-					ListViewItem value = new ListViewItem(new string[5]
-					{
-						FormatIndex(num2),
-						currentArtist.Name ?? "未知",
+						string text = BuildArtistStatsLabel(item.MusicCount, item.AlbumCount);
+						string text2 = ((!string.IsNullOrWhiteSpace(item.Description)) ? item.Description : item.BriefDesc);
+						ListViewItem value = new ListViewItem(new string[6]
+						{
+							string.Empty,
+							FormatIndex(num2),
+							item.Name ?? "未知",
 							text,
 							text2 ?? string.Empty,
 							string.Empty
 						})
 						{
-							Tag = currentArtist
+							Tag = item
 						};
 						resultListView.Items.Add(value);
 						num2++;
@@ -18997,12 +21110,28 @@ UrlResolved:
 					{
 						if (startIndex > 1)
 						{
-							ListViewItem listViewItem = resultListView.Items.Add("上一页");
+							ListViewItem listViewItem = resultListView.Items.Add(new ListViewItem(new string[6]
+							{
+								string.Empty,
+								"上一页",
+								string.Empty,
+								string.Empty,
+								string.Empty,
+								string.Empty
+							}));
 							listViewItem.Tag = -2;
 						}
 						if (hasNextPage)
 						{
-							ListViewItem listViewItem2 = resultListView.Items.Add("下一页");
+							ListViewItem listViewItem2 = resultListView.Items.Add(new ListViewItem(new string[6]
+							{
+								string.Empty,
+								"下一页",
+								string.Empty,
+								string.Empty,
+								string.Empty,
+								string.Empty
+							}));
 							listViewItem2.Tag = -3;
 						}
 					}
@@ -19010,53 +21139,39 @@ UrlResolved:
 			}
 			finally
 			{
-				resultListView.EndUpdate();
+				EndListViewUpdateAndRefreshAccessibility();
 			}
 			if (ShouldAbortViewRender(currentViewContentToken, "DisplayArtists"))
 			{
 				return;
 			}
 			ConfigureListViewForArtists();
-			if (!flag)
-			{
-				SetViewContext(viewSource, accessibleName ?? "歌手列表");
-				return;
-			}
-			ScheduleArtistStatsRefresh(_currentArtists);
-			string text3 = accessibleName ?? string.Empty;
-			if (string.IsNullOrWhiteSpace(text3))
-			{
-				text3 = "歌手列表";
-			}
-			SetViewContext(viewSource, text3);
-			if (allowSelection && !suppressFocus && !IsListAutoFocusSuppressed && resultListView.Items.Count > 0)
-			{
-				int targetIndex = ((num >= 0) ? Math.Min(num, resultListView.Items.Count - 1) : 0);
-				targetIndex = ResolvePendingListFocusIndex(targetIndex);
-				EnsureListSelectionWithoutFocus(targetIndex);
-			}
+                if (!flag)
+                {
+                        ApplyListViewContext(viewSource, accessibleName, "歌手列表", announceHeader);
+                        return;
+                }
+                ScheduleArtistStatsRefresh(_currentArtists);
+                ApplyListViewContext(viewSource, accessibleName, "歌手列表", announceHeader);
+                int fallbackIndex = ((num >= 0) ? Math.Min(num, resultListView.Items.Count - 1) : 0);
+                ApplyStandardListViewSelection(fallbackIndex, allowSelection, suppressFocus);
 		}
 	}
 
-	/// <summary>
-	/// 确保单曲的可用性已被检查并写入缓存（登录/未登录均执行）。
-	/// </summary>
 	private async Task<bool> EnsureSongAvailabilityAsync(SongInfo song, QualityLevel quality, CancellationToken cancellationToken)
 	{
 		if (song == null || string.IsNullOrWhiteSpace(song.Id))
 		{
 			return false;
 		}
-
 		if (song.IsAvailable.HasValue)
 		{
 			return song.IsAvailable.Value;
 		}
-
 		try
 		{
-			var result = await _apiClient.BatchCheckSongsAvailabilityAsync(new[] { song.Id }, quality).ConfigureAwait(false);
-			if (result != null && result.TryGetValue(song.Id, out bool isAvailable))
+			bool isAvailable = default(bool);
+			if ((await _apiClient.BatchCheckSongsAvailabilityAsync(new string[1] { song.Id }, quality).ConfigureAwait(continueOnCapturedContext: false))?.TryGetValue(song.Id, out isAvailable) ?? false)
 			{
 				song.IsAvailable = isAvailable;
 				return isAvailable;
@@ -19064,10 +21179,8 @@ UrlResolved:
 		}
 		catch (Exception ex)
 		{
-			Debug.WriteLine($"[StreamCheck] 单曲可用性检查失败（忽略，按可用继续）: {ex.Message}");
+			Debug.WriteLine("[StreamCheck] 单曲可用性检查失败（忽略，按可用继续）: " + ex.Message);
 		}
-
-		// 未能确认时，保持未知，返回 true 让后续流程继续尝试
 		return true;
 	}
 
@@ -19080,8 +21193,7 @@ UrlResolved:
 		}
 		ResetPendingListFocusIfViewChanged(_currentViewSource);
 		int num = ((resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : pendingFocusIndex);
-		List<ArtistInfo> artistsToRender = CloneList(artists);
-		_currentArtists = artistsToRender;
+		List<ArtistInfo> list = (_currentArtists = CloneList(artists));
 		_currentSongs.Clear();
 		_currentPlaylists.Clear();
 		_currentAlbums.Clear();
@@ -19089,21 +21201,21 @@ UrlResolved:
 		_currentPodcasts.Clear();
 		_currentPodcastSounds.Clear();
 		_currentPodcast = null;
-		ApplyArtistSubscriptionStates(artistsToRender);
-		bool flag = artistsToRender.Count > 0;
+		ApplyArtistSubscriptionStates(list);
+		bool flag = list.Count > 0;
 		resultListView.BeginUpdate();
 		checked
 		{
 			try
 			{
-				int count = artistsToRender.Count;
+				int count = list.Count;
 				int count2 = resultListView.Items.Count;
 				int num2 = Math.Min(count, count2);
 				for (int i = 0; i < num2; i++)
 				{
-					ArtistInfo artistInfo = artistsToRender[i];
+					ArtistInfo artistInfo = list[i];
 					ListViewItem listViewItem = resultListView.Items[i];
-					EnsureSubItemCount(listViewItem, 5);
+					EnsureSubItemCount(listViewItem, 6);
 					if ((artistInfo.MusicCount <= 0 || artistInfo.AlbumCount <= 0) && TryGetCachedArtistStats(artistInfo.Id, out (int, int) stats))
 					{
 						if (artistInfo.MusicCount <= 0)
@@ -19117,11 +21229,11 @@ UrlResolved:
 					}
 					string text = BuildArtistStatsLabel(artistInfo.MusicCount, artistInfo.AlbumCount);
 					string text2 = ((!string.IsNullOrWhiteSpace(artistInfo.Description)) ? artistInfo.Description : artistInfo.BriefDesc);
-					listViewItem.Text = FormatIndex(startIndex + i);
-					listViewItem.SubItems[1].Text = artistInfo.Name ?? "未知";
-					listViewItem.SubItems[2].Text = text;
-					listViewItem.SubItems[3].Text = text2 ?? string.Empty;
-					listViewItem.SubItems[4].Text = string.Empty;
+					listViewItem.SubItems[1].Text = FormatIndex(startIndex + i);
+					listViewItem.SubItems[2].Text = artistInfo.Name ?? "未知";
+					listViewItem.SubItems[3].Text = text;
+					listViewItem.SubItems[4].Text = text2 ?? string.Empty;
+					listViewItem.SubItems[5].Text = string.Empty;
 					listViewItem.Tag = artistInfo;
 				}
 				for (int j = count2; j < count; j++)
@@ -19140,8 +21252,9 @@ UrlResolved:
 					}
 					string text3 = BuildArtistStatsLabel(artistInfo2.MusicCount, artistInfo2.AlbumCount);
 					string text4 = ((!string.IsNullOrWhiteSpace(artistInfo2.Description)) ? artistInfo2.Description : artistInfo2.BriefDesc);
-					ListViewItem value = new ListViewItem(new string[5]
+					ListViewItem value = new ListViewItem(new string[6]
 					{
+						string.Empty,
 						FormatIndex(startIndex + j),
 						artistInfo2.Name ?? "未知",
 						text3,
@@ -19161,7 +21274,15 @@ UrlResolved:
 				{
 					if (hasPreviousPage)
 					{
-						ListViewItem value2 = new ListViewItem("上一页")
+						ListViewItem value2 = new ListViewItem(new string[6]
+						{
+							string.Empty,
+							"上一页",
+							string.Empty,
+							string.Empty,
+							string.Empty,
+							string.Empty
+						})
 						{
 							Tag = -2
 						};
@@ -19169,7 +21290,15 @@ UrlResolved:
 					}
 					if (hasNextPage)
 					{
-						ListViewItem value3 = new ListViewItem("下一页")
+						ListViewItem value3 = new ListViewItem(new string[6]
+						{
+							string.Empty,
+							"下一页",
+							string.Empty,
+							string.Empty,
+							string.Empty,
+							string.Empty
+						})
 						{
 							Tag = -3
 						};
@@ -19179,19 +21308,18 @@ UrlResolved:
 			}
 			finally
 			{
-				resultListView.EndUpdate();
+				EndListViewUpdateAndRefreshAccessibility();
 			}
-			// 补齐歌手统计（搜索结果的歌曲/专辑数初始通常为 0）
-			if (!ShouldAbortViewRender(currentViewContentToken, "PatchArtists") && flag)
-			{
-				ScheduleArtistStatsRefresh(_currentArtists);
-			}
-			if (!ShouldAbortViewRender(currentViewContentToken, "PatchArtists") && allowSelection && resultListView.Items.Count > 0)
-			{
-				int fallbackIndex = ((num >= 0) ? Math.Min(num, resultListView.Items.Count - 1) : 0);
-				fallbackIndex = ResolvePendingListFocusIndex(fallbackIndex);
-				EnsureListSelectionWithoutFocus(fallbackIndex);
-			}
+		}
+		if (!ShouldAbortViewRender(currentViewContentToken, "PatchArtists") && flag)
+		{
+			ScheduleArtistStatsRefresh(_currentArtists);
+		}
+		if (!ShouldAbortViewRender(currentViewContentToken, "PatchArtists") && allowSelection && resultListView.Items.Count > 0)
+		{
+			int fallbackIndex = ((num >= 0) ? Math.Min(num, checked(resultListView.Items.Count - 1)) : 0);
+			fallbackIndex = ResolvePendingListFocusIndex(fallbackIndex);
+			EnsureListSelectionWithoutFocus(fallbackIndex);
 		}
 	}
 
@@ -19228,7 +21356,9 @@ UrlResolved:
 				{
 					ApplyArtistDetailToArtist(artist, _currentArtistDetail);
 				}
-				return new ArtistEntryViewData(items: BuildArtistEntryItems(artist, _currentArtistDetail), statusText: "已打开歌手：" + displayName, artist: artist, detail: _currentArtistDetail);
+				List<ListItemInfo> items = BuildArtistEntryItems(artist, _currentArtistDetail);
+				string statusText = "已打开歌手：" + displayName;
+				return new ArtistEntryViewData(artist, _currentArtistDetail, items, statusText);
 			}, "加载歌手已取消").ConfigureAwait(continueOnCapturedContext: true);
 			if (!loadResult.IsCanceled)
 			{
@@ -19342,8 +21472,9 @@ UrlResolved:
 				return string.IsNullOrWhiteSpace(detail.Name) ? $"歌手 {artistId}" : detail.Name;
 			}
 		}
-		catch (Exception arg)
+		catch (Exception ex)
 		{
+			Exception arg = ex;
 			Debug.WriteLine($"[Artist] 获取歌手信息失败: {arg}");
 		}
 		return $"歌手 {artistId}";
@@ -19364,7 +21495,8 @@ UrlResolved:
 				List<SongInfo> songs = await _apiClient.GetArtistTopSongsAsync(artistId).ConfigureAwait(continueOnCapturedContext: false);
 				token.ThrowIfCancellationRequested();
 				List<SongInfo> normalized = songs ?? new List<SongInfo>();
-				return new ArtistSongsViewData(statusText: (normalized.Count == 0) ? (artistName + " 暂无热门歌曲") : $"已加载 {artistName} 热门 {normalized.Count} 首", songs: normalized, hasMore: false, offset: 0, totalCount: normalized.Count);
+				string statusText = ((normalized.Count == 0) ? (artistName + " 暂无热门歌曲") : $"已加载 {artistName} 热门 {normalized.Count} 首");
+				return new ArtistSongsViewData(normalized, hasMore: false, 0, normalized.Count, statusText);
 			}, "加载歌手热门歌曲已取消").ConfigureAwait(continueOnCapturedContext: true);
 			if (!loadResult.IsCanceled)
 			{
@@ -19379,8 +21511,9 @@ UrlResolved:
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			Debug.WriteLine($"[Artist] 加载热门歌曲失败: {ex2}");
-			MessageBox.Show("加载热门歌曲失败：" + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+			Exception ex3 = ex2;
+			Debug.WriteLine($"[Artist] 加载热门歌曲失败: {ex3}");
+			MessageBox.Show("加载热门歌曲失败：" + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 			UpdateStatusBar("加载热门歌曲失败");
 		}
 	}
@@ -19409,7 +21542,8 @@ UrlResolved:
 					(List<SongInfo> Songs, bool HasMore, int TotalCount) result = await _apiClient.GetArtistSongsAsync(artistId, 100, offset, orderToken).ConfigureAwait(continueOnCapturedContext: false);
 					List<SongInfo> songs = result.Songs ?? new List<SongInfo>();
 					token.ThrowIfCancellationRequested();
-					return new ArtistSongsViewData(statusText: (songs.Count == 0) ? (artistName + " 暂无歌曲") : $"已加载 {artistName} 的歌曲 {offset + 1}-{offset + songs.Count} / {result.TotalCount}首", songs: songs, hasMore: result.HasMore, offset: offset, totalCount: result.TotalCount);
+					string statusText = ((songs.Count == 0) ? (artistName + " 暂无歌曲") : $"已加载 {artistName} 的歌曲 {offset + 1}-{offset + songs.Count} / {result.TotalCount}首");
+					return new ArtistSongsViewData(songs, result.HasMore, offset, result.TotalCount, statusText);
 				}, "加载歌手歌曲已取消").ConfigureAwait(continueOnCapturedContext: true);
 				if (!loadResult.IsCanceled)
 				{
@@ -19425,8 +21559,9 @@ UrlResolved:
 			catch (Exception ex)
 			{
 				Exception ex2 = ex;
-				Debug.WriteLine($"[Artist] 加载歌曲失败: {ex2}");
-				MessageBox.Show("加载歌手的歌曲失败：" + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+				Exception ex3 = ex2;
+				Debug.WriteLine($"[Artist] 加载歌曲失败: {ex3}");
+				MessageBox.Show("加载歌手的歌曲失败：" + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 				UpdateStatusBar("加载歌手的歌曲失败");
 			}
 		}
@@ -19448,7 +21583,7 @@ UrlResolved:
 					_artistAlbumSortState.SetOption(sortOverride.Value);
 				}
 				ArtistAlbumSortOption sortOption = _artistAlbumSortState.CurrentOption;
-				string viewSource = string.Format(arg1: MapArtistAlbumSort(sortOption), format: "artist_albums:{0}:order{1}:offset{2}", arg0: artistId, arg2: offset);
+				string viewSource = string.Format("artist_albums:{0}:order{1}:offset{2}", arg1: MapArtistAlbumSort(sortOption), arg0: artistId, arg2: offset);
 				string accessibleName = artistName + " 的专辑";
 				ViewLoadRequest request = new ViewLoadRequest(viewSource, accessibleName, "正在加载 " + artistName + " 的专辑...", !skipSave);
 				ViewLoadResult<ArtistAlbumsViewData?> loadResult = await RunViewLoadAsync(request, async delegate(CancellationToken token)
@@ -19474,7 +21609,8 @@ UrlResolved:
 						_currentArtistAlbumsTotalCount = totalCount;
 					}
 					token.ThrowIfCancellationRequested();
-					return new ArtistAlbumsViewData(statusText: (albums.Count == 0) ? (artistName + " 暂无专辑") : $"已加载 {artistName} 专辑 {normalizedOffset + 1}-{normalizedOffset + albums.Count} / {totalCount}张", albums: albums, hasMore: hasMore, offset: normalizedOffset, totalCount: totalCount, sort: sortOption);
+					string statusText = ((albums.Count == 0) ? (artistName + " 暂无专辑") : $"已加载 {artistName} 专辑 {normalizedOffset + 1}-{normalizedOffset + albums.Count} / {totalCount}张");
+					return new ArtistAlbumsViewData(albums, hasMore, normalizedOffset, totalCount, sortOption, statusText);
 				}, "加载歌手专辑已取消").ConfigureAwait(continueOnCapturedContext: true);
 				if (!loadResult.IsCanceled)
 				{
@@ -19491,8 +21627,9 @@ UrlResolved:
 			catch (Exception ex)
 			{
 				Exception ex2 = ex;
-				Debug.WriteLine($"[Artist] 加载专辑失败: {ex2}");
-				MessageBox.Show("加载歌手专辑失败：" + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+				Exception ex3 = ex2;
+				Debug.WriteLine($"[Artist] 加载专辑失败: {ex3}");
+				MessageBox.Show("加载歌手专辑失败：" + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 				UpdateStatusBar("加载歌手专辑失败");
 			}
 		}
@@ -19543,8 +21680,9 @@ UrlResolved:
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			Debug.WriteLine($"[Artist] 加载收藏歌手失败: {ex2}");
-			MessageBox.Show("加载收藏的歌手失败：" + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+			Exception ex3 = ex2;
+			Debug.WriteLine($"[Artist] 加载收藏歌手失败: {ex3}");
+			MessageBox.Show("加载收藏的歌手失败：" + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 			UpdateStatusBar("加载收藏歌手失败");
 		}
 	}
@@ -19636,8 +21774,9 @@ UrlResolved:
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			Debug.WriteLine($"[Artist] 加载分类歌手失败: {ex2}");
-			MessageBox.Show("加载歌手分类失败：" + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+			Exception ex3 = ex2;
+			Debug.WriteLine($"[Artist] 加载分类歌手失败: {ex3}");
+			MessageBox.Show("加载歌手分类失败：" + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 			UpdateStatusBar("加载歌手分类失败");
 		}
 	}
@@ -19692,16 +21831,16 @@ UrlResolved:
 
 	private ArtistInfo? GetSelectedArtistFromSelection()
 	{
-		if (resultListView.SelectedItems.Count == 0)
+		ListViewItem selectedListViewItemSafe = GetSelectedListViewItemSafe();
+		if (selectedListViewItemSafe == null)
 		{
 			return null;
 		}
-		ListViewItem listViewItem = resultListView.SelectedItems[0];
-		if (listViewItem.Tag is ArtistInfo result)
+		if (selectedListViewItemSafe.Tag is ArtistInfo result)
 		{
 			return result;
 		}
-		if (listViewItem.Tag is ListItemInfo { Type: ListItemType.Artist } listItemInfo)
+		if (selectedListViewItemSafe.Tag is ListItemInfo { Type: ListItemType.Artist } listItemInfo)
 		{
 			return listItemInfo.Artist;
 		}
@@ -19841,25 +21980,37 @@ UrlResolved:
 		}
 	}
 
-	private void UpdateArtistStatsInView(long artistId, int musicCount, int albumCount)
-	{
-		SafeInvoke(delegate
-		{
-			foreach (ListViewItem item in resultListView.Items)
-			{
-				if (item.Tag is ArtistInfo artistInfo && artistInfo.Id == artistId)
-				{
-					artistInfo.MusicCount = musicCount;
-					artistInfo.AlbumCount = albumCount;
-					if (item.SubItems.Count > 2)
-					{
-						item.SubItems[2].Text = BuildArtistStatsLabel(musicCount, albumCount);
-					}
-					break;
-				}
-			}
-		});
-	}
+        private void UpdateArtistStatsInView(long artistId, int musicCount, int albumCount)
+        {
+                SafeInvoke(delegate
+                {
+                        int focusedListViewIndex = GetFocusedListViewIndex();
+                        bool shouldAnnounce = false;
+                        foreach (ListViewItem item in resultListView.Items)
+                        {
+                                if (item.Tag is ArtistInfo artistInfo && artistInfo.Id == artistId)
+                                {
+                                        artistInfo.MusicCount = musicCount;
+                                        artistInfo.AlbumCount = albumCount;
+                                        EnsureSubItemCount(item, 6);
+                                        if (item.SubItems.Count > 3)
+                                        {
+                                                item.SubItems[3].Text = BuildArtistStatsLabel(musicCount, albumCount);
+                                                UpdateListViewItemAccessibilityProperties(item, IsNvdaRunningCached());
+                                                if (item.Index == focusedListViewIndex)
+                                                {
+                                                        shouldAnnounce = true;
+                                                }
+                                        }
+                                        break;
+                                }
+                        }
+                        if (shouldAnnounce)
+                        {
+                                QueueFocusedListViewItemRefreshAnnouncement(focusedListViewIndex);
+                        }
+                });
+        }
 
 	private void ScheduleArtistStatsRefresh(IEnumerable<ArtistInfo> artists)
 	{
@@ -19867,8 +22018,6 @@ UrlResolved:
 		{
 			return;
 		}
-		// 这里不能只刷前 20 条，否则搜索结果（通常 100 条）的大部分歌手永远停留在 0。
-		// 统一收集当前视图里所有缺少统计的歌手，逐个异步刷新并写回列表。
 		List<ArtistInfo> pending = (from a in artists?.Where((ArtistInfo a) => a != null && a.Id > 0 && (a.MusicCount <= 0 || a.AlbumCount <= 0))
 			group a by a.Id into g
 			select g.First()).ToList();
@@ -19908,9 +22057,9 @@ UrlResolved:
 						{
 							try
 							{
-								ArtistDetail detail = await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.GetArtistDetailAsync(artist.Id, includeIntroduction: false), $"artist_stats:{artist.Id}", token, delegate(int attempt, Exception ex6)
+								ArtistDetail detail = await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.GetArtistDetailAsync(artist.Id, includeIntroduction: false), $"artist_stats:{artist.Id}", token, delegate(int attempt, Exception ex7)
 								{
-									Debug.WriteLine($"[Artist] 刷新歌手统计失败（第 {attempt} 次）: {ex6.Message}");
+									Debug.WriteLine($"[Artist] 刷新歌手统计失败（第 {attempt} 次）: {ex7.Message}");
 								}).ConfigureAwait(continueOnCapturedContext: false);
 								if (detail != null)
 								{
@@ -19925,7 +22074,8 @@ UrlResolved:
 							catch (Exception ex2)
 							{
 								Exception ex3 = ex2;
-								Debug.WriteLine("[Artist] 刷新歌手统计放弃: " + ex3.Message);
+								Exception ex4 = ex3;
+								Debug.WriteLine("[Artist] 刷新歌手统计放弃: " + ex4.Message);
 							}
 							finally
 							{
@@ -19972,7 +22122,8 @@ UrlResolved:
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			Debug.WriteLine($"[Artist] 刷新列表失败: {ex2}");
+			Exception ex3 = ex2;
+			Debug.WriteLine($"[Artist] 刷新列表失败: {ex3}");
 		}
 	}
 
@@ -20112,10 +22263,7 @@ UrlResolved:
 		{
 			while (hasMore && safety < 200)
 			{
-				List<AlbumInfo> albums;
-				bool more;
-				int total;
-				(albums, more, total) = await _apiClient.GetArtistAlbumsAsync(artistId, 100, offset);
+				var (albums, more, total) = await _apiClient.GetArtistAlbumsAsync(artistId, 100, offset);
 				if (albums == null || albums.Count == 0)
 				{
 					break;
@@ -20133,7 +22281,7 @@ UrlResolved:
 
 	private async Task<(List<AlbumInfo> Albums, int NormalizedOffset, bool HasMore)> LoadArtistAlbumsAscendingPageAsync(long artistId, int offset)
 	{
-		if (!_artistAlbumsAscendingCache.TryGetValue(artistId, out List<AlbumInfo> cachedAlbums))
+		if (!_artistAlbumsAscendingCache.TryGetValue(artistId, out var cachedAlbums))
 		{
 			cachedAlbums = await LoadArtistAlbumsAscendingListAsync(artistId);
 			_artistAlbumsAscendingCache[artistId] = cachedAlbums;
@@ -20231,8 +22379,9 @@ UrlResolved:
 				catch (Exception ex)
 				{
 					Exception ex2 = ex;
-					Debug.WriteLine($"[Cloud] 加载云盘失败: {ex2}");
-					MessageBox.Show("加载云盘失败: " + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+					Exception ex3 = ex2;
+					Debug.WriteLine($"[Cloud] 加载云盘失败: {ex3}");
+					MessageBox.Show("加载云盘失败: " + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 					UpdateStatusBar("加载云盘失败");
 				}
 				finally
@@ -20245,9 +22394,9 @@ UrlResolved:
 
 	private string BuildCloudStatusText(int currentCount)
 	{
-		string text = FormatSize(_cloudUsedSize);
-		string text2 = ((_cloudMaxSize > 0) ? FormatSize(_cloudMaxSize) : "未知");
-		return $"云盘 - 第 {_cloudPage} 页，本页 {currentCount} 首 / 总 {_cloudTotalCount} 首，已用 {text} / {text2}";
+		string value = FormatSize(_cloudUsedSize);
+		string value2 = ((_cloudMaxSize > 0) ? FormatSize(_cloudMaxSize) : "未知");
+		return $"云盘 - 第 {_cloudPage} 页，本页 {currentCount} 首 / 总 {_cloudTotalCount} 首，已用 {value} / {value2}";
 	}
 
 	private static string FormatSize(long bytes)
@@ -20281,7 +22430,7 @@ UrlResolved:
 			MessageBox.Show("请先登录后再上传云盘歌曲", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
 			return Task.CompletedTask;
 		}
-		string[] array = filePaths.Where((string path) => !string.IsNullOrWhiteSpace(path) && File.Exists(path)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+		string[] array = filePaths.Where((string path) => !string.IsNullOrWhiteSpace(path) && File.Exists(path)).Distinct<string>(StringComparer.OrdinalIgnoreCase).ToArray();
 		if (array.Length == 0)
 		{
 			MessageBox.Show("未找到可上传的音频文件", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
@@ -20328,7 +22477,8 @@ UrlResolved:
 			}
 			catch (Exception ex)
 			{
-				MessageBox.Show("删除云盘歌曲失败：" + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+				Exception ex2 = ex;
+				MessageBox.Show("删除云盘歌曲失败：" + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 				UpdateStatusBar("删除云盘歌曲失败");
 			}
 		}
@@ -20336,11 +22486,12 @@ UrlResolved:
 
 	private SongInfo? GetSelectedCloudSong()
 	{
-		if (resultListView.SelectedItems.Count == 0)
+		ListViewItem selectedListViewItemSafe = GetSelectedListViewItemSafe();
+		if (selectedListViewItemSafe == null)
 		{
 			return null;
 		}
-		return GetSongFromListViewItem(resultListView.SelectedItems[0]);
+		return GetSongFromListViewItem(selectedListViewItemSafe);
 	}
 
 	private SongInfo? GetSongFromListViewItem(ListViewItem? item)
@@ -20381,19 +22532,14 @@ UrlResolved:
 		{
 			return;
 		}
-		for (int i = 0; i < resultListView.Items.Count; i = checked(i + 1))
+		int num = _currentSongs.FindIndex((SongInfo s) => s != null && s.IsCloudSong && string.Equals(s.CloudSongId, text, StringComparison.Ordinal));
+		if (num >= 0 && num < resultListView.Items.Count)
 		{
-			if (resultListView.Items[i].Tag is int num && num >= 0 && num < _currentSongs.Count)
+			EnsureListSelectionWithoutFocus(num);
+			SongInfo songInfo = _currentSongs[num];
+			if (songInfo != null && !string.IsNullOrEmpty(songInfo.CloudSongId))
 			{
-				SongInfo songInfo = _currentSongs[num];
-				if (songInfo != null && songInfo.IsCloudSong && string.Equals(songInfo.CloudSongId, text, StringComparison.Ordinal))
-				{
-					resultListView.Items[i].Selected = true;
-					resultListView.FocusedItem = resultListView.Items[i];
-					resultListView.EnsureVisible(i);
-					_lastSelectedCloudSongId = songInfo.CloudSongId;
-					break;
-				}
+				_lastSelectedCloudSongId = songInfo.CloudSongId;
 			}
 		}
 		_pendingCloudFocusId = null;
@@ -20402,8 +22548,8 @@ UrlResolved:
 	private void RequestCloudRefresh(string? focusCloudSongId = null, bool preserveSelection = true)
 	{
 		SafeInvoke(Runner);
-		async void RefreshImpl()
-		{
+                async Task RefreshImpl()
+                {
 			try
 			{
 				if (!string.Equals(_currentViewSource, "user_cloud", StringComparison.OrdinalIgnoreCase))
@@ -20436,14 +22582,15 @@ UrlResolved:
 			catch (Exception ex)
 			{
 				Exception ex2 = ex;
-				Debug.WriteLine("[Cloud] 刷新云盘失败: " + ex2.Message);
+				Exception ex3 = ex2;
+				Debug.WriteLine("[Cloud] 刷新云盘失败: " + ex3.Message);
 			}
 		}
-		void Runner()
-		{
-			RefreshImpl();
-		}
-	}
+                void Runner()
+                {
+                        RefreshImpl().SafeFireAndForget("Cloud refresh");
+                }
+        }
 
 	private async void uploadToCloudMenuItem_Click(object sender, EventArgs e)
 	{
@@ -20564,19 +22711,16 @@ UrlResolved:
 		{
 			if (fileMenuItem != null && (_listenRecognitionMenuItem == null || !fileMenuItem.DropDownItems.Contains(_listenRecognitionMenuItem)))
 			{
-				_listenRecognitionMenuItem = new ToolStripMenuItem
-				{
-					Text = "听歌识曲(&L)",
-					Name = "listenRecognitionMenuItem",
-					AccessibleName = "听歌识曲",
-					AccessibleDescription = "录制环境音并识别当前播放的歌曲",
-					ShortcutKeys = (Keys.L | Keys.Control)
-				};
+                                _listenRecognitionMenuItem = new ToolStripMenuItem
+                                {
+                                        Text = "听歌识曲(&L)",
+                                        Name = "listenRecognitionMenuItem",
+                                        ShortcutKeys = (Keys.L | Keys.Control)
+                                };
 				_listenRecognitionMenuItem.Click += async delegate
 				{
 					await StartSongRecognitionAsync();
 				};
-				// 插入顺序：登录/用户信息 -> 当前播放 -> 听歌识曲
 				int num = fileMenuItem.DropDownItems.IndexOf(currentPlayingMenuItem);
 				if (num < 0)
 				{
@@ -20609,7 +22753,8 @@ UrlResolved:
 		catch (Exception ex)
 		{
 			Exception ex2 = ex;
-			MessageBox.Show(this, "枚举录音设备失败：" + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+			Exception ex3 = ex2;
+			MessageBox.Show(this, "枚举录音设备失败：" + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 			return;
 		}
 		if (devices == null || devices.Count == 0)
@@ -20636,9 +22781,10 @@ UrlResolved:
 		{
 			result = await _songRecognitionCoordinator.RecognizeAsync(selectedDevice, durationSeconds, cts.Token).ConfigureAwait(continueOnCapturedContext: true);
 		}
-		catch (NotSupportedException ex3)
+		catch (NotSupportedException ex4)
 		{
-			NotSupportedException nse = ex3;
+			NotSupportedException ex5 = ex4;
+			NotSupportedException nse = ex5;
 			MessageBox.Show(this, "指纹生成器尚未就绪：" + nse.Message + "\n请按设计文档接入 ncm-afp 库后重试。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
 			UpdateStatusBar("听歌识曲组件未就绪");
 			return;
@@ -20650,9 +22796,10 @@ UrlResolved:
 		}
 		catch (Exception ex)
 		{
-			Exception ex5 = ex;
-			Debug.WriteLine($"[Recognition] 识曲失败: {ex5}");
-			MessageBox.Show(this, "听歌识曲失败：" + ex5.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+			Exception ex7 = ex;
+			Exception ex8 = ex7;
+			Debug.WriteLine($"[Recognition] 识曲失败: {ex8}");
+			MessageBox.Show(this, "听歌识曲失败：" + ex8.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 			UpdateStatusBar("听歌识曲失败");
 			return;
 		}
@@ -20663,7 +22810,7 @@ UrlResolved:
 			return;
 		}
 		await ShowRecognitionResultsAsync(result).ConfigureAwait(continueOnCapturedContext: true);
-		if (!(_config?.RecognitionAutoCloseDialog ?? false) || _listenRecognitionMenuItem == null)
+		if ((_config?.RecognitionAutoCloseDialog ?? false) && _listenRecognitionMenuItem != null)
 		{
 		}
 	}
@@ -20700,51 +22847,53 @@ UrlResolved:
 		_maxPage = 1;
 		_hasNextSearchPage = false;
 		_isHomePage = false;
-		ViewLoadRequest request = new ViewLoadRequest(viewSource, "听歌识曲", isListeningView ? "正在更新听歌识曲结果..." : "正在载入听歌识曲结果...", cancelActiveNavigation: true, pendingFocusIndex: -1, suppressLoadingFocus: true);
-		if (!(await RunViewLoadAsync(request, (CancellationToken _) => Task.FromResult(mergedAggregate), "听歌识曲已取消").ConfigureAwait(continueOnCapturedContext: true)).IsCanceled)
+		ViewLoadRequest request = new ViewLoadRequest(viewSource, "听歌识曲", isListeningView ? "正在更新听歌识曲结果..." : "正在载入听歌识曲结果...", cancelActiveNavigation: true, -1);
+		if ((await RunViewLoadAsync(request, (CancellationToken _) => Task.FromResult(mergedAggregate), "听歌识曲已取消").ConfigureAwait(continueOnCapturedContext: true)).IsCanceled)
 		{
-			_currentSongs = mergedAggregate;
-			_currentPlaylist = null;
-			_currentMixedQueryKey = null;
-			await ExecuteOnUiThreadAsync(delegate
-			{
-				DisplaySongs(_currentSongs, showPagination: false, hasNextPage: false, 1, preserveSelection: false, viewSource, "听歌识曲");
-				string message = ((mergedAggregate.Count <= 0) ? "未能识别出歌曲" : (isListeningView ? $"识别到 {aggregateAdded} 首新歌曲，累计 {mergedAggregate.Count} 首" : $"识别到 {mergedAggregate.Count} 首歌曲"));
-				UpdateStatusBar(message);
-				AnnounceListViewHeaderIfNeeded("听歌识曲");
-				if (!IsListAutoFocusSuppressed && resultListView != null && resultListView.Items.Count > 0 && !resultListView.Focused && resultListView.CanFocus)
-				{
-					int idx = (resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : 0;
-					RestoreListViewFocus(Math.Max(0, Math.Min(idx, resultListView.Items.Count - 1)));
-				}
-			}).ConfigureAwait(continueOnCapturedContext: true);
+			return;
 		}
+		_currentSongs = mergedAggregate;
+		_currentPlaylist = null;
+		_currentMixedQueryKey = null;
+		await ExecuteOnUiThreadAsync(delegate
+		{
+			DisplaySongs(_currentSongs, showPagination: false, hasNextPage: false, 1, preserveSelection: false, viewSource, "听歌识曲");
+			string message = ((mergedAggregate.Count <= 0) ? "未能识别出歌曲" : (isListeningView ? $"识别到 {aggregateAdded} 首新歌曲，累计 {mergedAggregate.Count} 首" : $"识别到 {mergedAggregate.Count} 首歌曲"));
+			UpdateStatusBar(message);
+			AnnounceListViewHeaderIfNeeded("听歌识曲");
+			if (!IsListAutoFocusSuppressed && resultListView != null && resultListView.Items.Count > 0 && !resultListView.Focused && resultListView.CanFocus)
+			{
+				int val = ((resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : 0);
+				RestoreListViewFocus(Math.Max(0, Math.Min(val, checked(resultListView.Items.Count - 1))));
+			}
+		}).ConfigureAwait(continueOnCapturedContext: true);
 	}
 
 	private async Task LoadListenMatchAsync(string viewSource, bool skipSave = false)
 	{
 		string normalized = NormalizeListenMatchViewSource(viewSource);
-		ViewLoadRequest request = new ViewLoadRequest(normalized, "听歌识曲", "正在载入听歌识曲结果...", !skipSave, pendingFocusIndex: -1, suppressLoadingFocus: true);
-		List<SongInfo> songs = (_listenMatchCache.TryGetValue("listen-match", out var cached) ? CloneList(cached) : CloneList(_listenMatchAggregate));
-		ViewLoadResult<List<SongInfo>> loadResult = await RunViewLoadAsync(request, (CancellationToken _) => Task.FromResult(songs), "听歌识曲已取消").ConfigureAwait(continueOnCapturedContext: true);
-		if (!loadResult.IsCanceled)
+		ViewLoadRequest request = new ViewLoadRequest(normalized, "听歌识曲", "正在载入听歌识曲结果...", !skipSave, -1);
+		List<SongInfo> cached;
+		List<SongInfo> songs = (_listenMatchCache.TryGetValue("listen-match", out cached) ? CloneList(cached) : CloneList(_listenMatchAggregate));
+		if ((await RunViewLoadAsync(request, (CancellationToken _) => Task.FromResult(songs), "听歌识曲已取消").ConfigureAwait(continueOnCapturedContext: true)).IsCanceled)
 		{
-			_currentSongs = songs;
-			_currentPlaylist = null;
-			_currentMixedQueryKey = null;
-			await ExecuteOnUiThreadAsync(delegate
-			{
-				DisplaySongs(_currentSongs, showPagination: false, hasNextPage: false, 1, preserveSelection: false, viewSource, "听歌识曲");
-				string message = ((_currentSongs.Count <= 0) ? "未能识别出歌曲" : $"听歌识曲结果：{_currentSongs.Count} 首");
-				UpdateStatusBar(message);
-				AnnounceListViewHeaderIfNeeded("听歌识曲");
-				if (!IsListAutoFocusSuppressed && resultListView != null && resultListView.Items.Count > 0 && !resultListView.Focused && resultListView.CanFocus)
-				{
-					int idx = (resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : 0;
-					RestoreListViewFocus(Math.Max(0, Math.Min(idx, resultListView.Items.Count - 1)));
-				}
-			}).ConfigureAwait(continueOnCapturedContext: true);
+			return;
 		}
+		_currentSongs = songs;
+		_currentPlaylist = null;
+		_currentMixedQueryKey = null;
+		await ExecuteOnUiThreadAsync(delegate
+		{
+			DisplaySongs(_currentSongs, showPagination: false, hasNextPage: false, 1, preserveSelection: false, viewSource, "听歌识曲");
+			string message = ((_currentSongs.Count <= 0) ? "未能识别出歌曲" : $"听歌识曲结果：{_currentSongs.Count} 首");
+			UpdateStatusBar(message);
+			AnnounceListViewHeaderIfNeeded("听歌识曲");
+			if (!IsListAutoFocusSuppressed && resultListView != null && resultListView.Items.Count > 0 && !resultListView.Focused && resultListView.CanFocus)
+			{
+				int val = ((resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : 0);
+				RestoreListViewFocus(Math.Max(0, Math.Min(val, checked(resultListView.Items.Count - 1))));
+			}
+		}).ConfigureAwait(continueOnCapturedContext: true);
 	}
 
 	private static List<SongInfo> MergeRecognitionSongs(IEnumerable<SongInfo> newSongs, IEnumerable<SongInfo> existingSongs, out int addedCount)
@@ -20827,20 +22976,20 @@ UrlResolved:
 
 	private CancellationToken BeginNavigationOperation()
 	{
-		CancellationTokenSource navigationCts = new CancellationTokenSource();
-		CancellationTokenSource? old = Interlocked.Exchange(ref _navigationCts, navigationCts);
+		CancellationTokenSource cancellationTokenSource = new CancellationTokenSource();
+		CancellationTokenSource cancellationTokenSource2 = Interlocked.Exchange(ref _navigationCts, cancellationTokenSource);
 		try
 		{
-			old?.Cancel();
+			cancellationTokenSource2?.Cancel();
 		}
 		catch (ObjectDisposedException)
 		{
 		}
 		finally
 		{
-			old?.Dispose();
+			cancellationTokenSource2?.Dispose();
 		}
-		return navigationCts.Token;
+		return cancellationTokenSource.Token;
 	}
 
 	private void CancelViewContentOperation()
@@ -20918,11 +23067,21 @@ UrlResolved:
 	private void ShowLoadingPlaceholderCore(string? viewSource, string? accessibleName, string loadingText)
 	{
 		UpdateStatusBar(loadingText);
+		DisableVirtualSongList();
 		resultListView.BeginUpdate();
 		try
 		{
+			ResetListViewSelectionState();
 			resultListView.Items.Clear();
-			ListViewItem value = new ListViewItem(loadingText)
+			ListViewItem value = new ListViewItem(new string[6]
+			{
+				string.Empty,
+				loadingText,
+				string.Empty,
+				string.Empty,
+				string.Empty,
+				string.Empty
+			})
 			{
 				Tag = null
 			};
@@ -20930,11 +23089,9 @@ UrlResolved:
 		}
 		finally
 		{
-			resultListView.EndUpdate();
+			EndListViewUpdateAndRefreshAccessibility();
 		}
-		string accessibleName2 = (string.IsNullOrWhiteSpace(accessibleName) ? "列表" : accessibleName);
-		SetViewContext(viewSource, accessibleName2);
-		AnnounceListViewHeaderIfNeeded(accessibleName2);
+        ApplyListViewContext(viewSource, accessibleName, "列表", announceHeader: true);
 	}
 
 	private void ShowLoadingPlaceholder(string? viewSource, string? accessibleName, string loadingText)
@@ -20945,14 +23102,22 @@ UrlResolved:
 		});
 	}
 
-	private Task ShowLoadingStateAsync(ViewLoadRequest request)
-	{
-		return ExecuteOnUiThreadAsync(delegate
-		{
-			RequestListFocus(request.ViewSource, request.PendingFocusIndex);
-			ShowLoadingPlaceholderCore(request.ViewSource, request.AccessibleName, request.LoadingText);
-			if (!request.SuppressLoadingFocus && !IsListAutoFocusSuppressed && resultListView != null && resultListView.Items.Count != 0)
-			{
+        private Task ShowLoadingStateAsync(ViewLoadRequest request)
+        {
+                return ExecuteOnUiThreadAsync(delegate
+                {
+                        bool preserveExistingFocus = false;
+                        if (request.PendingFocusIndex == 0 && !string.IsNullOrWhiteSpace(request.ViewSource))
+                        {
+                                preserveExistingFocus = _pendingListFocusIndex >= 0 && !string.IsNullOrWhiteSpace(_pendingListFocusViewSource) && string.Equals(_pendingListFocusViewSource, request.ViewSource, StringComparison.OrdinalIgnoreCase);
+                        }
+                        if (!preserveExistingFocus)
+                        {
+                                RequestListFocus(request.ViewSource, request.PendingFocusIndex);
+                        }
+                        ShowLoadingPlaceholderCore(request.ViewSource, request.AccessibleName, request.LoadingText);
+                        if (!request.SuppressLoadingFocus && !IsListAutoFocusSuppressed && resultListView != null && resultListView.Items.Count != 0)
+                        {
 				int targetIndex = ((request.PendingFocusIndex >= 0) ? Math.Max(0, Math.Min(request.PendingFocusIndex, checked(resultListView.Items.Count - 1))) : 0);
 				EnsureListSelectionWithoutFocus(targetIndex);
 				if (resultListView.CanFocus)
@@ -20963,19 +23128,21 @@ UrlResolved:
 		});
 	}
 
-	private void RequestListFocus(string? viewSource, int pendingIndex)
-	{
-		if (string.IsNullOrWhiteSpace(viewSource) || pendingIndex < 0)
-		{
-			_pendingListFocusViewSource = null;
-			_pendingListFocusIndex = -1;
-		}
-		else
-		{
-			_pendingListFocusViewSource = viewSource;
-			_pendingListFocusIndex = pendingIndex;
-		}
-	}
+        private void RequestListFocus(string? viewSource, int pendingIndex, bool fromPlayback = false)
+        {
+                if (string.IsNullOrWhiteSpace(viewSource) || pendingIndex < 0)
+                {
+                        _pendingListFocusViewSource = null;
+                        _pendingListFocusIndex = -1;
+                        _pendingListFocusFromPlayback = false;
+                }
+                else
+                {
+                        _pendingListFocusViewSource = viewSource;
+                        _pendingListFocusIndex = pendingIndex;
+                        _pendingListFocusFromPlayback = fromPlayback;
+                }
+        }
 
 	private int ResolvePendingListFocusIndex(int fallbackIndex)
 	{
@@ -20983,24 +23150,34 @@ UrlResolved:
 		{
 			return fallbackIndex;
 		}
-		if (_pendingListFocusIndex >= 0 && !string.IsNullOrWhiteSpace(_pendingListFocusViewSource) && string.Equals(_pendingListFocusViewSource, _currentViewSource, StringComparison.OrdinalIgnoreCase))
-		{
-			int pendingListFocusIndex = _pendingListFocusIndex;
-			_pendingListFocusIndex = -1;
-			_pendingListFocusViewSource = null;
-			return pendingListFocusIndex;
-		}
-		return fallbackIndex;
-	}
+                if (_pendingListFocusIndex >= 0 && !string.IsNullOrWhiteSpace(_pendingListFocusViewSource) && string.Equals(_pendingListFocusViewSource, _currentViewSource, StringComparison.OrdinalIgnoreCase))
+                {
+                        int pendingListFocusIndex = _pendingListFocusIndex;
+                        bool pendingFromPlayback = _pendingListFocusFromPlayback;
+                        _pendingListFocusIndex = -1;
+                        _pendingListFocusViewSource = null;
+                        _pendingListFocusFromPlayback = false;
+                        if (pendingFromPlayback && !string.IsNullOrWhiteSpace(_pendingSongFocusId) && !string.IsNullOrWhiteSpace(_pendingSongFocusViewSource) && string.Equals(_pendingSongFocusViewSource, _currentViewSource, StringComparison.OrdinalIgnoreCase))
+                        {
+                                _pendingSongFocusId = null;
+                                _pendingSongFocusViewSource = null;
+                                _pendingSongFocusSatisfied = true;
+                                _pendingSongFocusSatisfiedViewSource = _currentViewSource;
+                        }
+                        return pendingListFocusIndex;
+                }
+                return fallbackIndex;
+        }
 
-	private void ResetPendingListFocusIfViewChanged(string? viewSource)
-	{
-		if (!string.IsNullOrWhiteSpace(viewSource) && !string.Equals(_pendingListFocusViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
-		{
-			_pendingListFocusIndex = -1;
-			_pendingListFocusViewSource = viewSource;
-		}
-	}
+        private void ResetPendingListFocusIfViewChanged(string? viewSource)
+        {
+                if (!string.IsNullOrWhiteSpace(viewSource) && !string.Equals(_pendingListFocusViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
+                {
+                        _pendingListFocusIndex = -1;
+                        _pendingListFocusViewSource = viewSource;
+                        _pendingListFocusFromPlayback = false;
+                }
+        }
 
 	private CancellationToken LinkCancellationTokens(CancellationToken viewToken, CancellationToken externalToken, out CancellationTokenSource? linkedCts)
 	{
@@ -21101,7 +23278,7 @@ UrlResolved:
 			return Task.CompletedTask;
 		}
 		TaskCompletionSource<object?> tcs = new TaskCompletionSource<object>(TaskCreationOptions.RunContinuationsAsynchronously);
-		BeginInvoke((Action)delegate
+		BeginInvoke(delegate
 		{
 			try
 			{
@@ -21162,6 +23339,7 @@ UrlResolved:
 		this.jumpToPositionMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.autoReadLyricsMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.hideSequenceMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+		this.hideControlBarMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.helpMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.checkUpdateMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.donateMenuItem = new System.Windows.Forms.ToolStripMenuItem();
@@ -21171,22 +23349,23 @@ UrlResolved:
 		this.searchTypeComboBox = new System.Windows.Forms.ComboBox();
 		this.searchTypeLabel = new System.Windows.Forms.Label();
 		this.searchButton = new System.Windows.Forms.Button();
-		this.searchTextBox = new System.Windows.Forms.TextBox();
+          this.searchTextBox = new SafeTextBox();
 		this.searchTextContextMenu = new System.Windows.Forms.ContextMenuStrip();
 		this.searchCopyMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.searchCutMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.searchPasteMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.searchHistorySeparator = new System.Windows.Forms.ToolStripSeparator();
 		this.searchClearHistoryMenuItem = new System.Windows.Forms.ToolStripMenuItem();
-		this.searchLabel = new System.Windows.Forms.Label();
-		this.resultListView = new System.Windows.Forms.ListView();
+                this.searchLabel = new System.Windows.Forms.Label();
+                this.resultListView = new YTPlayer.SafeListView();
+		this.columnHeader0 = new System.Windows.Forms.ColumnHeader();
 		this.columnHeader1 = new System.Windows.Forms.ColumnHeader();
 		this.columnHeader2 = new System.Windows.Forms.ColumnHeader();
 		this.columnHeader3 = new System.Windows.Forms.ColumnHeader();
 		this.columnHeader4 = new System.Windows.Forms.ColumnHeader();
 		this.columnHeader5 = new System.Windows.Forms.ColumnHeader();
-		this.controlPanel = new System.Windows.Forms.Panel();
-		this.lyricsLabel = new System.Windows.Forms.Label();
+                this.controlPanel = new YTPlayer.MainForm.AccessibleGroupPanel();
+                this.lyricsLabel = new System.Windows.Forms.Label();
 		this.songContextMenu = new System.Windows.Forms.ContextMenuStrip();
 		this.insertPlayMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.likeSongMenuItem = new System.Windows.Forms.ToolStripMenuItem();
@@ -21251,12 +23430,12 @@ UrlResolved:
 		this.trayMenuSeparator = new System.Windows.Forms.ToolStripSeparator();
 		this.trayExitMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.volumeLabel = new System.Windows.Forms.Label();
-		this.volumeTrackBar = new System.Windows.Forms.TrackBar();
+        this.volumeTrackBar = new System.Windows.Forms.TrackBar();
 		this.timeLabel = new System.Windows.Forms.Label();
-		this.progressTrackBar = new System.Windows.Forms.TrackBar();
+        this.progressTrackBar = new System.Windows.Forms.TrackBar();
 		this.playPauseButton = new System.Windows.Forms.Button();
 		this.currentSongLabel = new System.Windows.Forms.Label();
-		this.statusStrip1 = new System.Windows.Forms.StatusStrip();
+        this.statusStrip1 = new AccessibleStatusStrip();
 		this.toolStripStatusLabel1 = new System.Windows.Forms.ToolStripStatusLabel();
 		this.menuStrip1.SuspendLayout();
 		this.searchPanel.SuspendLayout();
@@ -21269,7 +23448,7 @@ UrlResolved:
 		this.trayContextMenu.SuspendLayout();
 		base.SuspendLayout();
 		this.menuStrip1.ImageScalingSize = new System.Drawing.Size(20, 20);
-		this.menuStrip1.Items.AddRange(new System.Windows.Forms.ToolStripItem[3] { this.fileMenuItem, this.playControlMenuItem, this.helpMenuItem });
+		this.menuStrip1.Items.AddRange(this.fileMenuItem, this.playControlMenuItem, this.helpMenuItem);
 		this.menuStrip1.Location = new System.Drawing.Point(0, 0);
 		this.menuStrip1.Name = "menuStrip1";
 		this.menuStrip1.Size = new System.Drawing.Size(1200, 28);
@@ -21281,25 +23460,15 @@ UrlResolved:
 		this.hideMenuItem.Text = "隐藏";
 		this.hideMenuItem.ShortcutKeyDisplayString = "Shift+Esc";
 		this.hideMenuItem.Click += new System.EventHandler(hideMenuItem_Click);
-		this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[11]
-		{
-			this.homeMenuItem, this.loginMenuItem, this.currentPlayingMenuItem, this.toolStripSeparatorDownload1, this.openDownloadDirMenuItem, this.changeDownloadDirMenuItem, this.downloadManagerMenuItem, this.refreshMenuItem, this.toolStripSeparatorDownload2, this.hideMenuItem,
-			this.exitMenuItem
-		});
+		this.fileMenuItem.DropDownItems.AddRange(this.homeMenuItem, this.loginMenuItem, this.currentPlayingMenuItem, this.toolStripSeparatorDownload1, this.openDownloadDirMenuItem, this.changeDownloadDirMenuItem, this.downloadManagerMenuItem, this.refreshMenuItem, this.toolStripSeparatorDownload2, this.hideMenuItem, this.exitMenuItem);
 		this.fileMenuItem.Name = "fileMenuItem";
 		this.fileMenuItem.Size = new System.Drawing.Size(98, 24);
 		this.fileMenuItem.Text = "文件/操作(&F)";
-		this.fileMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[11]
-		{
-			this.homeMenuItem, this.loginMenuItem, this.currentPlayingMenuItem, this.toolStripSeparatorDownload1, this.openDownloadDirMenuItem, this.changeDownloadDirMenuItem, this.downloadManagerMenuItem, this.refreshMenuItem, this.toolStripSeparatorDownload2, this.hideMenuItem,
-			this.exitMenuItem
-		});
+		this.fileMenuItem.DropDownItems.AddRange(this.homeMenuItem, this.loginMenuItem, this.currentPlayingMenuItem, this.toolStripSeparatorDownload1, this.openDownloadDirMenuItem, this.changeDownloadDirMenuItem, this.downloadManagerMenuItem, this.refreshMenuItem, this.toolStripSeparatorDownload2, this.hideMenuItem, this.exitMenuItem);
 		this.homeMenuItem.Name = "homeMenuItem";
 		this.homeMenuItem.Size = new System.Drawing.Size(178, 26);
 		this.homeMenuItem.Text = "主页(&H)";
 		this.homeMenuItem.Click += new System.EventHandler(homeMenuItem_Click);
-		this.homeMenuItem.AccessibleName = "主页";
-		this.homeMenuItem.AccessibleDescription = "返回主页，显示推荐歌单、用户歌单和排行榜";
 		this.loginMenuItem.Name = "loginMenuItem";
 		this.loginMenuItem.Size = new System.Drawing.Size(178, 26);
 		this.loginMenuItem.Text = "登录";
@@ -21331,7 +23500,7 @@ UrlResolved:
 		this.exitMenuItem.Size = new System.Drawing.Size(178, 26);
 		this.exitMenuItem.Text = "退出";
 		this.exitMenuItem.Click += new System.EventHandler(exitMenuItem_Click);
-		this.playControlMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[10] { this.playPauseMenuItem, this.toolStripSeparator1, this.playbackMenuItem, this.qualityMenuItem, this.outputDeviceMenuItem, this.prevMenuItem, this.nextMenuItem, this.jumpToPositionMenuItem, this.autoReadLyricsMenuItem, this.hideSequenceMenuItem });
+		this.playControlMenuItem.DropDownItems.AddRange(this.playPauseMenuItem, this.toolStripSeparator1, this.playbackMenuItem, this.qualityMenuItem, this.outputDeviceMenuItem, this.prevMenuItem, this.nextMenuItem, this.jumpToPositionMenuItem, this.autoReadLyricsMenuItem, this.hideSequenceMenuItem, this.hideControlBarMenuItem);
 		this.playControlMenuItem.Name = "playControlMenuItem";
 		this.playControlMenuItem.Size = new System.Drawing.Size(98, 24);
 		this.playControlMenuItem.Text = "播放/控制(&M)";
@@ -21341,7 +23510,7 @@ UrlResolved:
 		this.playPauseMenuItem.Click += new System.EventHandler(playPauseMenuItem_Click);
 		this.toolStripSeparator1.Name = "toolStripSeparator1";
 		this.toolStripSeparator1.Size = new System.Drawing.Size(177, 6);
-		this.playbackMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[4] { this.sequentialMenuItem, this.loopMenuItem, this.loopOneMenuItem, this.randomMenuItem });
+		this.playbackMenuItem.DropDownItems.AddRange(this.sequentialMenuItem, this.loopMenuItem, this.loopOneMenuItem, this.randomMenuItem);
 		this.playbackMenuItem.Name = "playbackMenuItem";
 		this.playbackMenuItem.Size = new System.Drawing.Size(180, 26);
 		this.playbackMenuItem.Text = "播放次序";
@@ -21365,7 +23534,7 @@ UrlResolved:
 		this.randomMenuItem.Size = new System.Drawing.Size(152, 26);
 		this.randomMenuItem.Text = "随机播放";
 		this.randomMenuItem.Click += new System.EventHandler(randomMenuItem_Click);
-		this.qualityMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[7] { this.standardQualityMenuItem, this.highQualityMenuItem, this.losslessQualityMenuItem, this.hiresQualityMenuItem, this.surroundHDQualityMenuItem, this.dolbyQualityMenuItem, this.masterQualityMenuItem });
+		this.qualityMenuItem.DropDownItems.AddRange(this.standardQualityMenuItem, this.highQualityMenuItem, this.losslessQualityMenuItem, this.hiresQualityMenuItem, this.surroundHDQualityMenuItem, this.dolbyQualityMenuItem, this.masterQualityMenuItem);
 		this.qualityMenuItem.Name = "qualityMenuItem";
 		this.qualityMenuItem.Size = new System.Drawing.Size(180, 26);
 		this.qualityMenuItem.Text = "音质";
@@ -21374,33 +23543,40 @@ UrlResolved:
 		this.outputDeviceMenuItem.Text = "输出设备...\tF9";
 		this.outputDeviceMenuItem.Click += new System.EventHandler(outputDeviceMenuItem_Click);
 		this.standardQualityMenuItem.Name = "standardQualityMenuItem";
-		this.standardQualityMenuItem.Size = new System.Drawing.Size(180, 26);
-		this.standardQualityMenuItem.Text = "标准音质";
-		this.standardQualityMenuItem.Click += new System.EventHandler(qualityMenuItem_Click);
-		this.highQualityMenuItem.Name = "highQualityMenuItem";
-		this.highQualityMenuItem.Size = new System.Drawing.Size(180, 26);
-		this.highQualityMenuItem.Text = "极高音质";
-		this.highQualityMenuItem.Click += new System.EventHandler(qualityMenuItem_Click);
-		this.losslessQualityMenuItem.Name = "losslessQualityMenuItem";
-		this.losslessQualityMenuItem.Size = new System.Drawing.Size(180, 26);
-		this.losslessQualityMenuItem.Text = "无损音质";
-		this.losslessQualityMenuItem.Click += new System.EventHandler(qualityMenuItem_Click);
-		this.hiresQualityMenuItem.Name = "hiresQualityMenuItem";
-		this.hiresQualityMenuItem.Size = new System.Drawing.Size(180, 26);
-		this.hiresQualityMenuItem.Text = "Hi-Res音质";
-		this.hiresQualityMenuItem.Click += new System.EventHandler(qualityMenuItem_Click);
-		this.surroundHDQualityMenuItem.Name = "surroundHDQualityMenuItem";
-		this.surroundHDQualityMenuItem.Size = new System.Drawing.Size(180, 26);
-		this.surroundHDQualityMenuItem.Text = "高清环绕声";
-		this.surroundHDQualityMenuItem.Click += new System.EventHandler(qualityMenuItem_Click);
-		this.dolbyQualityMenuItem.Name = "dolbyQualityMenuItem";
-		this.dolbyQualityMenuItem.Size = new System.Drawing.Size(180, 26);
-		this.dolbyQualityMenuItem.Text = "沉浸环绕声";
-		this.dolbyQualityMenuItem.Click += new System.EventHandler(qualityMenuItem_Click);
-		this.masterQualityMenuItem.Name = "masterQualityMenuItem";
-		this.masterQualityMenuItem.Size = new System.Drawing.Size(180, 26);
-		this.masterQualityMenuItem.Text = "超清母带";
-		this.masterQualityMenuItem.Click += new System.EventHandler(qualityMenuItem_Click);
+          this.standardQualityMenuItem.Size = new System.Drawing.Size(180, 26);
+          this.standardQualityMenuItem.Text = "标准音质";
+          this.standardQualityMenuItem.CheckOnClick = true;
+          this.standardQualityMenuItem.Click += new System.EventHandler(qualityMenuItem_Click);
+          this.highQualityMenuItem.Name = "highQualityMenuItem";
+          this.highQualityMenuItem.Size = new System.Drawing.Size(180, 26);
+          this.highQualityMenuItem.Text = "极高音质";
+          this.highQualityMenuItem.CheckOnClick = true;
+          this.highQualityMenuItem.Click += new System.EventHandler(qualityMenuItem_Click);
+          this.losslessQualityMenuItem.Name = "losslessQualityMenuItem";
+          this.losslessQualityMenuItem.Size = new System.Drawing.Size(180, 26);
+          this.losslessQualityMenuItem.Text = "无损音质";
+          this.losslessQualityMenuItem.CheckOnClick = true;
+          this.losslessQualityMenuItem.Click += new System.EventHandler(qualityMenuItem_Click);
+          this.hiresQualityMenuItem.Name = "hiresQualityMenuItem";
+          this.hiresQualityMenuItem.Size = new System.Drawing.Size(180, 26);
+          this.hiresQualityMenuItem.Text = "Hi-Res音质";
+          this.hiresQualityMenuItem.CheckOnClick = true;
+          this.hiresQualityMenuItem.Click += new System.EventHandler(qualityMenuItem_Click);
+          this.surroundHDQualityMenuItem.Name = "surroundHDQualityMenuItem";
+          this.surroundHDQualityMenuItem.Size = new System.Drawing.Size(180, 26);
+          this.surroundHDQualityMenuItem.Text = "高清环绕声";
+          this.surroundHDQualityMenuItem.CheckOnClick = true;
+          this.surroundHDQualityMenuItem.Click += new System.EventHandler(qualityMenuItem_Click);
+          this.dolbyQualityMenuItem.Name = "dolbyQualityMenuItem";
+          this.dolbyQualityMenuItem.Size = new System.Drawing.Size(180, 26);
+          this.dolbyQualityMenuItem.Text = "沉浸环绕声";
+          this.dolbyQualityMenuItem.CheckOnClick = true;
+          this.dolbyQualityMenuItem.Click += new System.EventHandler(qualityMenuItem_Click);
+          this.masterQualityMenuItem.Name = "masterQualityMenuItem";
+          this.masterQualityMenuItem.Size = new System.Drawing.Size(180, 26);
+          this.masterQualityMenuItem.Text = "超清母带";
+          this.masterQualityMenuItem.CheckOnClick = true;
+          this.masterQualityMenuItem.Click += new System.EventHandler(qualityMenuItem_Click);
 		this.prevMenuItem.Name = "prevMenuItem";
 		this.prevMenuItem.ShortcutKeys = System.Windows.Forms.Keys.F3;
 		this.prevMenuItem.Size = new System.Drawing.Size(180, 26);
@@ -21418,15 +23594,23 @@ UrlResolved:
 		this.jumpToPositionMenuItem.Click += new System.EventHandler(jumpToPositionMenuItem_Click);
 		this.autoReadLyricsMenuItem.Name = "autoReadLyricsMenuItem";
 		this.autoReadLyricsMenuItem.ShortcutKeys = System.Windows.Forms.Keys.F11;
-		this.autoReadLyricsMenuItem.Size = new System.Drawing.Size(180, 26);
-		this.autoReadLyricsMenuItem.Text = "打开歌词朗读\tF11";
-		this.autoReadLyricsMenuItem.Click += new System.EventHandler(autoReadLyricsMenuItem_Click);
-		this.hideSequenceMenuItem.Name = "hideSequenceMenuItem";
-		this.hideSequenceMenuItem.ShortcutKeys = System.Windows.Forms.Keys.F8;
-		this.hideSequenceMenuItem.Size = new System.Drawing.Size(180, 26);
-		this.hideSequenceMenuItem.Text = "隐藏序号\tF8";
-		this.hideSequenceMenuItem.Click += new System.EventHandler(hideSequenceMenuItem_Click);
-		this.helpMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[4] { this.checkUpdateMenuItem, this.donateMenuItem, this.shortcutsMenuItem, this.aboutMenuItem });
+          this.autoReadLyricsMenuItem.Size = new System.Drawing.Size(180, 26);
+          this.autoReadLyricsMenuItem.Text = "打开歌词朗读\tF11";
+          this.autoReadLyricsMenuItem.CheckOnClick = true;
+          this.autoReadLyricsMenuItem.Click += new System.EventHandler(autoReadLyricsMenuItem_Click);
+          this.hideSequenceMenuItem.Name = "hideSequenceMenuItem";
+          this.hideSequenceMenuItem.ShortcutKeys = System.Windows.Forms.Keys.F8;
+          this.hideSequenceMenuItem.Size = new System.Drawing.Size(180, 26);
+          this.hideSequenceMenuItem.Text = "隐藏序号\tF8";
+          this.hideSequenceMenuItem.CheckOnClick = true;
+          this.hideSequenceMenuItem.Click += new System.EventHandler(hideSequenceMenuItem_Click);
+          this.hideControlBarMenuItem.Name = "hideControlBarMenuItem";
+          this.hideControlBarMenuItem.ShortcutKeys = System.Windows.Forms.Keys.F7;
+          this.hideControlBarMenuItem.Size = new System.Drawing.Size(180, 26);
+          this.hideControlBarMenuItem.Text = "隐藏控制栏\tF7";
+          this.hideControlBarMenuItem.CheckOnClick = true;
+          this.hideControlBarMenuItem.Click += new System.EventHandler(hideControlBarMenuItem_Click);
+		this.helpMenuItem.DropDownItems.AddRange(this.checkUpdateMenuItem, this.donateMenuItem, this.shortcutsMenuItem, this.aboutMenuItem);
 		this.helpMenuItem.Name = "helpMenuItem";
 		this.helpMenuItem.Size = new System.Drawing.Size(73, 24);
 		this.helpMenuItem.Text = "帮助(&H)";
@@ -21456,23 +23640,16 @@ UrlResolved:
 		this.searchPanel.Name = "searchPanel";
 		this.searchPanel.Padding = new System.Windows.Forms.Padding(10);
 		this.searchPanel.Size = new System.Drawing.Size(1200, 72);
-		this.searchPanel.TabIndex = 0;
-		this.searchTypeComboBox.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDown;
+        this.searchPanel.TabIndex = 0;
+          this.searchTypeComboBox.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
 		this.searchTypeComboBox.Font = new System.Drawing.Font("Microsoft YaHei UI", 10f);
 		this.searchTypeComboBox.FormattingEnabled = true;
-		this.searchTypeComboBox.Items.AddRange(new object[5] { "歌曲", "歌单", "专辑", "歌手", "播客" });
+        this.searchTypeComboBox.Items.AddRange("歌曲", "歌单", "专辑", "歌手", "播客");
 		this.searchTypeComboBox.Location = new System.Drawing.Point(620, 40);
 		this.searchTypeComboBox.Name = "searchTypeComboBox";
 		this.searchTypeComboBox.Size = new System.Drawing.Size(240, 31);
 		this.searchTypeComboBox.TabIndex = 2;
-		this.searchTypeComboBox.AccessibleName = "类型";
-		this.searchTypeComboBox.AccessibleDescription = "选择要搜索的内容类型";
-		this.searchTypeComboBox.AccessibleRole = System.Windows.Forms.AccessibleRole.ComboBox;
-		this.searchTypeComboBox.KeyDown += new System.Windows.Forms.KeyEventHandler(searchTypeComboBox_KeyDown);
-		this.searchTypeComboBox.SelectedIndexChanged += new System.EventHandler(searchTypeComboBox_SelectedIndexChanged);
-		this.searchTypeComboBox.DropDownClosed += new System.EventHandler(searchTypeComboBox_DropDownClosed);
-		this.searchTypeComboBox.Enter += new System.EventHandler(searchTypeComboBox_Enter);
-		this.searchTypeComboBox.KeyPress += new System.Windows.Forms.KeyPressEventHandler(searchTypeComboBox_KeyPress);
+          this.searchTypeComboBox.SelectedIndexChanged += new System.EventHandler(searchTypeComboBox_SelectedIndexChanged);
 		this.searchTypeLabel.AutoSize = true;
 		this.searchTypeLabel.Location = new System.Drawing.Point(620, 18);
 		this.searchTypeLabel.Name = "searchTypeLabel";
@@ -21486,86 +23663,95 @@ UrlResolved:
 		this.searchButton.TabIndex = 3;
 		this.searchButton.Text = "搜索";
 		this.searchButton.UseVisualStyleBackColor = true;
-		this.searchButton.AccessibleName = "搜索";
-		this.searchButton.Click += new System.EventHandler(searchButton_Click);
+                this.searchButton.Click += new System.EventHandler(searchButton_Click);
 		this.searchTextContextMenu.ImageScalingSize = new System.Drawing.Size(20, 20);
-		this.searchTextContextMenu.Items.AddRange(new System.Windows.Forms.ToolStripItem[5] { this.searchCopyMenuItem, this.searchCutMenuItem, this.searchPasteMenuItem, this.searchHistorySeparator, this.searchClearHistoryMenuItem });
+		this.searchTextContextMenu.Items.AddRange(this.searchCopyMenuItem, this.searchCutMenuItem, this.searchPasteMenuItem, this.searchHistorySeparator, this.searchClearHistoryMenuItem);
 		this.searchTextContextMenu.Name = "searchTextContextMenu";
 		this.searchTextContextMenu.Size = new System.Drawing.Size(169, 114);
-		this.searchTextContextMenu.Opening += new System.ComponentModel.CancelEventHandler(this.searchTextContextMenu_Opening);
+		this.searchTextContextMenu.Opening += new System.ComponentModel.CancelEventHandler(searchTextContextMenu_Opening);
 		this.searchCopyMenuItem.Name = "searchCopyMenuItem";
 		this.searchCopyMenuItem.Size = new System.Drawing.Size(168, 24);
 		this.searchCopyMenuItem.Text = "复制";
-		this.searchCopyMenuItem.Click += new System.EventHandler(this.searchCopyMenuItem_Click);
+		this.searchCopyMenuItem.Click += new System.EventHandler(searchCopyMenuItem_Click);
 		this.searchCutMenuItem.Name = "searchCutMenuItem";
 		this.searchCutMenuItem.Size = new System.Drawing.Size(168, 24);
 		this.searchCutMenuItem.Text = "剪切";
-		this.searchCutMenuItem.Click += new System.EventHandler(this.searchCutMenuItem_Click);
+		this.searchCutMenuItem.Click += new System.EventHandler(searchCutMenuItem_Click);
 		this.searchPasteMenuItem.Name = "searchPasteMenuItem";
 		this.searchPasteMenuItem.Size = new System.Drawing.Size(168, 24);
 		this.searchPasteMenuItem.Text = "粘贴";
-		this.searchPasteMenuItem.Click += new System.EventHandler(this.searchPasteMenuItem_Click);
+		this.searchPasteMenuItem.Click += new System.EventHandler(searchPasteMenuItem_Click);
 		this.searchHistorySeparator.Name = "searchHistorySeparator";
 		this.searchHistorySeparator.Size = new System.Drawing.Size(165, 6);
 		this.searchClearHistoryMenuItem.Name = "searchClearHistoryMenuItem";
 		this.searchClearHistoryMenuItem.Size = new System.Drawing.Size(168, 24);
 		this.searchClearHistoryMenuItem.Text = "清空历史";
-		this.searchClearHistoryMenuItem.Click += new System.EventHandler(this.searchClearHistoryMenuItem_Click);
+		this.searchClearHistoryMenuItem.Click += new System.EventHandler(searchClearHistoryMenuItem_Click);
 		this.searchTextBox.Font = new System.Drawing.Font("Microsoft YaHei UI", 12f);
 		this.searchTextBox.Location = new System.Drawing.Point(130, 15);
-		this.searchTextBox.Name = "searchTextBox";
-		this.searchTextBox.Size = new System.Drawing.Size(470, 33);
-		this.searchTextBox.TabIndex = 1;
-		this.searchTextBox.AccessibleName = "搜索关键词";
-		this.searchTextBox.AccessibleDescription = "输入要搜索的歌曲、歌单、专辑名称或链接，多个链接用分号分隔";
-		this.searchTextBox.ContextMenuStrip = this.searchTextContextMenu;
+          this.searchTextBox.Name = "searchTextBox";
+          this.searchTextBox.Size = new System.Drawing.Size(470, 33);
+          this.searchTextBox.TabIndex = 1;
+          this.searchTextBox.ContextMenuStrip = this.searchTextContextMenu;
 		this.searchTextBox.TextChanged += new System.EventHandler(searchTextBox_TextChanged);
 		this.searchTextBox.KeyDown += new System.Windows.Forms.KeyEventHandler(searchTextBox_KeyDown);
 		this.searchLabel.AutoSize = true;
 		this.searchLabel.Font = new System.Drawing.Font("Microsoft YaHei UI", 12f);
 		this.searchLabel.Location = new System.Drawing.Point(13, 18);
-		this.searchLabel.Name = "searchLabel";
-		this.searchLabel.Size = new System.Drawing.Size(111, 27);
-		this.searchLabel.TabIndex = 0;
-		this.searchLabel.Text = "搜索关键词:";
-		this.resultListView.Columns.AddRange(new System.Windows.Forms.ColumnHeader[5] { this.columnHeader1, this.columnHeader2, this.columnHeader3, this.columnHeader4, this.columnHeader5 });
+                this.searchLabel.Name = "searchLabel";
+                this.searchLabel.Size = new System.Drawing.Size(111, 27);
+                this.searchLabel.TabIndex = 0;
+                this.searchLabel.Text = "搜索关键词:";
+                this.resultListView.Columns.AddRange(this.columnHeader0, this.columnHeader1, this.columnHeader2, this.columnHeader3, this.columnHeader4, this.columnHeader5);
 		this.resultListView.Dock = System.Windows.Forms.DockStyle.Fill;
 		this.resultListView.FullRowSelect = true;
 		this.resultListView.GridLines = true;
 		this.resultListView.HideSelection = false;
 		this.resultListView.Location = new System.Drawing.Point(0, 100);
-		this.resultListView.MultiSelect = false;
-		this.resultListView.Name = "resultListView";
-		this.resultListView.Size = new System.Drawing.Size(1200, 408);
-		this.resultListView.TabIndex = 1;
-		this.resultListView.UseCompatibleStateImageBehavior = false;
-		this.resultListView.View = System.Windows.Forms.View.Details;
-		this.resultListView.AccessibleName = "正在加载";
+        this.resultListView.MultiSelect = false;
+        this.resultListView.Name = "resultListView";
+        this.resultListView.Size = new System.Drawing.Size(1200, 408);
+        this.resultListView.TabIndex = 1;
+        this.resultListView.UseCompatibleStateImageBehavior = false;
+        this.resultListView.View = System.Windows.Forms.View.Details;
 		this.resultListView.ContextMenuStrip = this.songContextMenu;
 		this.resultListView.ItemActivate += new System.EventHandler(resultListView_ItemActivate);
+		this.resultListView.Enter += new System.EventHandler(resultListView_Enter);
+		this.resultListView.GotFocus += new System.EventHandler(resultListView_GotFocus);
+		this.resultListView.MouseUp += new System.Windows.Forms.MouseEventHandler(resultListView_MouseUp);
+		this.resultListView.KeyDown += new System.Windows.Forms.KeyEventHandler(resultListView_KeyDown);
+		this.resultListView.HandleCreated += new System.EventHandler(resultListView_HandleCreated);
+		this.resultListView.CacheVirtualItems += new System.Windows.Forms.CacheVirtualItemsEventHandler(resultListView_CacheVirtualItems);
+		this.resultListView.RetrieveVirtualItem += new System.Windows.Forms.RetrieveVirtualItemEventHandler(resultListView_RetrieveVirtualItem);
+		this.resultListView.VirtualItemsSelectionRangeChanged += new System.Windows.Forms.ListViewVirtualItemsSelectionRangeChangedEventHandler(resultListView_VirtualItemsSelectionRangeChanged);
 		this.resultListView.SelectedIndexChanged += new System.EventHandler(resultListView_SelectedIndexChanged);
-            this.columnHeader1.Text = string.Empty;
-            this.columnHeader1.Width = 50;
-            this.columnHeader2.Text = string.Empty;
-            this.columnHeader2.Width = 350;
-            this.columnHeader3.Text = string.Empty;
-            this.columnHeader3.Width = 200;
-            this.columnHeader4.Text = string.Empty;
-            this.columnHeader4.Width = 250;
-            this.columnHeader5.Text = string.Empty;
-            this.columnHeader5.Width = 150;
-		this.controlPanel.Controls.Add(this.lyricsLabel);
-		this.controlPanel.Controls.Add(this.volumeLabel);
-		this.controlPanel.Controls.Add(this.volumeTrackBar);
-		this.controlPanel.Controls.Add(this.timeLabel);
-		this.controlPanel.Controls.Add(this.progressTrackBar);
-		this.controlPanel.Controls.Add(this.playPauseButton);
-		this.controlPanel.Controls.Add(this.currentSongLabel);
+		this.columnHeader0.Text = string.Empty;
+		this.columnHeader0.Width = 0;
+		this.columnHeader1.Text = string.Empty;
+		this.columnHeader1.Width = 50;
+		this.columnHeader2.Text = string.Empty;
+		this.columnHeader2.Width = 350;
+		this.columnHeader3.Text = string.Empty;
+		this.columnHeader3.Width = 200;
+		this.columnHeader4.Text = string.Empty;
+		this.columnHeader4.Width = 250;
+		this.columnHeader5.Text = string.Empty;
+		this.columnHeader5.Width = 150;
+                this.controlPanel.Controls.Add(this.lyricsLabel);
+                this.controlPanel.Controls.Add(this.volumeLabel);
+                this.controlPanel.Controls.Add(this.volumeTrackBar);
+                this.controlPanel.Controls.Add(this.timeLabel);
+                this.controlPanel.Controls.Add(this.progressTrackBar);
+                this.controlPanel.Controls.Add(this.playPauseButton);
+                this.controlPanel.Controls.Add(this.currentSongLabel);
 		this.controlPanel.Dock = System.Windows.Forms.DockStyle.Bottom;
 		this.controlPanel.Location = new System.Drawing.Point(0, 500);
 		this.controlPanel.Name = "controlPanel";
 		this.controlPanel.Size = new System.Drawing.Size(1200, 150);
-		this.controlPanel.TabIndex = 3;
+                this.controlPanel.TabIndex = 3;
+		this.controlPanel.TabStop = false;
+		this.controlPanel.Text = string.Empty;
+		this.controlPanel.AccessibleRole = System.Windows.Forms.AccessibleRole.Grouping;
 		this.lyricsLabel.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
 		this.lyricsLabel.BackColor = System.Drawing.Color.FromArgb(245, 245, 245);
 		this.lyricsLabel.Font = new System.Drawing.Font("Microsoft YaHei UI", 11f, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, 0);
@@ -21574,50 +23760,48 @@ UrlResolved:
 		this.lyricsLabel.Name = "lyricsLabel";
 		this.lyricsLabel.Padding = new System.Windows.Forms.Padding(10, 8, 10, 8);
 		this.lyricsLabel.Size = new System.Drawing.Size(1176, 50);
-		this.lyricsLabel.TabIndex = 7;
-		this.lyricsLabel.Text = "暂无歌词";
+                this.lyricsLabel.TabIndex = 7;
+                this.lyricsLabel.Text = "暂无歌词";
 		this.lyricsLabel.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
-		this.lyricsLabel.AccessibleName = "歌词显示";
 		this.lyricsLabel.AccessibleRole = System.Windows.Forms.AccessibleRole.Text;
 		this.volumeLabel.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
 		this.volumeLabel.Location = new System.Drawing.Point(1130, 70);
 		this.volumeLabel.Name = "volumeLabel";
 		this.volumeLabel.Size = new System.Drawing.Size(58, 23);
-		this.volumeLabel.TabIndex = 6;
-		this.volumeLabel.Text = "100%";
-		this.volumeLabel.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
-		this.volumeTrackBar.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
-		this.volumeTrackBar.Location = new System.Drawing.Point(1000, 60);
-		this.volumeTrackBar.Maximum = 100;
-		this.volumeTrackBar.Name = "volumeTrackBar";
-		this.volumeTrackBar.Size = new System.Drawing.Size(124, 56);
-		this.volumeTrackBar.TabIndex = 4;
-		this.volumeTrackBar.TickFrequency = 10;
-		this.volumeTrackBar.Value = 100;
-		this.volumeTrackBar.AccessibleName = "音量";
-		this.volumeTrackBar.KeyDown += new System.Windows.Forms.KeyEventHandler(volumeTrackBar_KeyDown);
-		this.volumeTrackBar.Scroll += new System.EventHandler(volumeTrackBar_Scroll);
-		this.timeLabel.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
-		this.timeLabel.Location = new System.Drawing.Point(1050, 30);
-		this.timeLabel.Name = "timeLabel";
-		this.timeLabel.Size = new System.Drawing.Size(138, 23);
-		this.timeLabel.TabIndex = 5;
-		this.timeLabel.Text = "00:00 / 00:00";
-		this.timeLabel.TextAlign = System.Drawing.ContentAlignment.MiddleRight;
-		this.progressTrackBar.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
-		this.progressTrackBar.Location = new System.Drawing.Point(120, 30);
-		this.progressTrackBar.Maximum = 1000;
-		this.progressTrackBar.Name = "progressTrackBar";
-		this.progressTrackBar.Size = new System.Drawing.Size(924, 56);
-		this.progressTrackBar.TabIndex = 3;
-		this.progressTrackBar.TickFrequency = 50;
-		this.progressTrackBar.LargeChange = 10;
-		this.progressTrackBar.SmallChange = 1;
-		this.progressTrackBar.AccessibleName = "00:00 / 00:00";
-		this.progressTrackBar.Scroll += new System.EventHandler(progressTrackBar_Scroll);
-		this.progressTrackBar.KeyDown += new System.Windows.Forms.KeyEventHandler(progressTrackBar_KeyDown);
-		this.progressTrackBar.MouseDown += new System.Windows.Forms.MouseEventHandler(progressTrackBar_MouseDown);
-		this.progressTrackBar.MouseUp += new System.Windows.Forms.MouseEventHandler(progressTrackBar_MouseUp);
+                this.volumeLabel.TabIndex = 6;
+                this.volumeLabel.Text = "100%";
+                this.volumeLabel.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
+                this.volumeTrackBar.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
+                this.volumeTrackBar.Location = new System.Drawing.Point(1000, 60);
+                this.volumeTrackBar.Maximum = 100;
+                this.volumeTrackBar.Name = "volumeTrackBar";
+        this.volumeTrackBar.Size = new System.Drawing.Size(124, 56);
+        this.volumeTrackBar.TabIndex = 4;
+        this.volumeTrackBar.TickFrequency = 10;
+        this.volumeTrackBar.Value = 100;
+        this.volumeTrackBar.AccessibleName = "音量";
+        this.volumeTrackBar.KeyDown += new System.Windows.Forms.KeyEventHandler(volumeTrackBar_KeyDown);
+        this.volumeTrackBar.Scroll += new System.EventHandler(volumeTrackBar_Scroll);
+                this.timeLabel.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
+                this.timeLabel.Location = new System.Drawing.Point(1050, 30);
+                this.timeLabel.Name = "timeLabel";
+                this.timeLabel.Size = new System.Drawing.Size(138, 23);
+                this.timeLabel.TabIndex = 5;
+                this.timeLabel.Text = "00:00 / 00:00";
+                this.timeLabel.TextAlign = System.Drawing.ContentAlignment.MiddleRight;
+                this.progressTrackBar.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
+                this.progressTrackBar.Location = new System.Drawing.Point(120, 30);
+                this.progressTrackBar.Maximum = 1000;
+                this.progressTrackBar.Name = "progressTrackBar";
+                this.progressTrackBar.Size = new System.Drawing.Size(924, 56);
+        this.progressTrackBar.TabIndex = 3;
+        this.progressTrackBar.TickFrequency = 50;
+        this.progressTrackBar.LargeChange = 10;
+        this.progressTrackBar.SmallChange = 1;
+        this.progressTrackBar.Scroll += new System.EventHandler(progressTrackBar_Scroll);
+        this.progressTrackBar.KeyDown += new System.Windows.Forms.KeyEventHandler(progressTrackBar_KeyDown);
+        this.progressTrackBar.MouseDown += new System.Windows.Forms.MouseEventHandler(progressTrackBar_MouseDown);
+        this.progressTrackBar.MouseUp += new System.Windows.Forms.MouseEventHandler(progressTrackBar_MouseUp);
 		this.playPauseButton.Font = new System.Drawing.Font("Microsoft YaHei UI", 10f, System.Drawing.FontStyle.Bold);
 		this.playPauseButton.Location = new System.Drawing.Point(12, 30);
 		this.playPauseButton.Name = "playPauseButton";
@@ -21625,7 +23809,7 @@ UrlResolved:
 		this.playPauseButton.TabIndex = 1;
 		this.playPauseButton.Text = "播放";
 		this.playPauseButton.UseVisualStyleBackColor = true;
-		this.playPauseButton.Click += new System.EventHandler(playPauseButton_Click);
+          this.playPauseButton.Click += new System.EventHandler(playPauseButton_Click);
 		this.currentSongLabel.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
 		this.currentSongLabel.Font = new System.Drawing.Font("Microsoft YaHei UI", 11f, System.Drawing.FontStyle.Bold);
 		this.currentSongLabel.Location = new System.Drawing.Point(12, 5);
@@ -21634,25 +23818,22 @@ UrlResolved:
 		this.currentSongLabel.TabIndex = 0;
 		this.currentSongLabel.Text = "未播放";
 		this.currentSongLabel.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
-		this.statusStrip1.ImageScalingSize = new System.Drawing.Size(20, 20);
-		this.statusStrip1.Items.AddRange(new System.Windows.Forms.ToolStripItem[1] { this.toolStripStatusLabel1 });
-		this.statusStrip1.Location = new System.Drawing.Point(0, 650);
-		this.statusStrip1.Name = "statusStrip1";
-		this.statusStrip1.Size = new System.Drawing.Size(1200, 26);
-		this.statusStrip1.TabIndex = 4;
+        this.statusStrip1.ImageScalingSize = new System.Drawing.Size(20, 20);
+        this.statusStrip1.AccessibleRole = System.Windows.Forms.AccessibleRole.StatusBar;
+        this.statusStrip1.AccessibleName = "状态栏";
+        this.statusStrip1.Items.AddRange(this.toolStripStatusLabel1);
+        this.statusStrip1.Location = new System.Drawing.Point(0, 650);
+        this.statusStrip1.Name = "statusStrip1";
+        this.statusStrip1.Size = new System.Drawing.Size(1200, 26);
+        this.statusStrip1.TabIndex = 5;
 		this.statusStrip1.Text = "statusStrip1";
-		this.toolStripStatusLabel1.Name = "toolStripStatusLabel1";
-		this.toolStripStatusLabel1.Size = new System.Drawing.Size(39, 20);
-		this.toolStripStatusLabel1.Text = "就绪";
+        this.toolStripStatusLabel1.Name = "toolStripStatusLabel1";
+        this.toolStripStatusLabel1.Size = new System.Drawing.Size(39, 20);
+        this.toolStripStatusLabel1.Text = "就绪";
+        this.toolStripStatusLabel1.AccessibleRole = System.Windows.Forms.AccessibleRole.StaticText;
+        this.toolStripStatusLabel1.AccessibleName = "就绪";
 		this.songContextMenu.ImageScalingSize = new System.Drawing.Size(20, 20);
-		this.songContextMenu.Items.AddRange(new System.Windows.Forms.ToolStripItem[45]
-		{
-			this.viewSourceMenuItem, this.insertPlayMenuItem, this.likeSongMenuItem, this.unlikeSongMenuItem, this.addToPlaylistMenuItem, this.removeFromPlaylistMenuItem, this.cloudMenuSeparator, this.uploadToCloudMenuItem, this.deleteFromCloudMenuItem, this.toolStripSeparatorCollection, this.subscribePlaylistMenuItem,
-			this.unsubscribePlaylistMenuItem, this.deletePlaylistMenuItem, this.createPlaylistMenuItem, this.subscribeAlbumMenuItem, this.unsubscribeAlbumMenuItem, this.subscribePodcastMenuItem, this.unsubscribePodcastMenuItem, this.toolStripSeparatorView, this.viewSongArtistMenuItem, this.viewSongAlbumMenuItem,
-			this.viewPodcastMenuItem, this.shareSongMenuItem, this.sharePlaylistMenuItem, this.shareAlbumMenuItem, this.sharePodcastMenuItem, this.sharePodcastEpisodeMenuItem, this.artistSongsSortMenuItem, this.artistAlbumsSortMenuItem, this.podcastSortMenuItem, this.commentMenuSeparator,
-			this.commentMenuItem, this.toolStripSeparatorArtist, this.shareArtistMenuItem, this.subscribeArtistMenuItem, this.unsubscribeArtistMenuItem, this.toolStripSeparatorDownload3, this.downloadSongMenuItem, this.downloadLyricsMenuItem, this.downloadPlaylistMenuItem, this.downloadAlbumMenuItem,
-			this.downloadPodcastMenuItem, this.batchDownloadMenuItem, this.downloadCategoryMenuItem, this.batchDownloadPlaylistsMenuItem
-		});
+		this.songContextMenu.Items.AddRange(this.viewSourceMenuItem, this.insertPlayMenuItem, this.likeSongMenuItem, this.unlikeSongMenuItem, this.addToPlaylistMenuItem, this.removeFromPlaylistMenuItem, this.cloudMenuSeparator, this.uploadToCloudMenuItem, this.deleteFromCloudMenuItem, this.toolStripSeparatorCollection, this.subscribePlaylistMenuItem, this.unsubscribePlaylistMenuItem, this.deletePlaylistMenuItem, this.createPlaylistMenuItem, this.subscribeAlbumMenuItem, this.unsubscribeAlbumMenuItem, this.subscribePodcastMenuItem, this.unsubscribePodcastMenuItem, this.toolStripSeparatorView, this.viewSongArtistMenuItem, this.viewSongAlbumMenuItem, this.viewPodcastMenuItem, this.shareSongMenuItem, this.sharePlaylistMenuItem, this.shareAlbumMenuItem, this.sharePodcastMenuItem, this.sharePodcastEpisodeMenuItem, this.artistSongsSortMenuItem, this.artistAlbumsSortMenuItem, this.podcastSortMenuItem, this.commentMenuSeparator, this.commentMenuItem, this.toolStripSeparatorArtist, this.shareArtistMenuItem, this.subscribeArtistMenuItem, this.unsubscribeArtistMenuItem, this.toolStripSeparatorDownload3, this.downloadSongMenuItem, this.downloadLyricsMenuItem, this.downloadPlaylistMenuItem, this.downloadAlbumMenuItem, this.downloadPodcastMenuItem, this.batchDownloadMenuItem, this.downloadCategoryMenuItem, this.batchDownloadPlaylistsMenuItem);
 		this.songContextMenu.Name = "songContextMenu";
 		this.songContextMenu.Size = new System.Drawing.Size(211, 320);
 		this.songContextMenu.Opening += new System.ComponentModel.CancelEventHandler(songContextMenu_Opening);
@@ -21752,7 +23933,7 @@ UrlResolved:
 		this.toolStripSeparatorArtist.Name = "toolStripSeparatorArtist";
 		this.toolStripSeparatorArtist.Size = new System.Drawing.Size(207, 6);
 		this.toolStripSeparatorArtist.Visible = false;
-		this.shareSongMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[2] { this.shareSongWebMenuItem, this.shareSongDirectMenuItem });
+		this.shareSongMenuItem.DropDownItems.AddRange(this.shareSongWebMenuItem, this.shareSongDirectMenuItem);
 		this.shareSongMenuItem.Name = "shareSongMenuItem";
 		this.shareSongMenuItem.Size = new System.Drawing.Size(210, 24);
 		this.shareSongMenuItem.Text = "分享歌曲(&H)";
@@ -21780,7 +23961,7 @@ UrlResolved:
 		this.sharePodcastMenuItem.Text = "分享播客(&P)";
 		this.sharePodcastMenuItem.Visible = false;
 		this.sharePodcastMenuItem.Click += new System.EventHandler(sharePodcastMenuItem_Click);
-		this.sharePodcastEpisodeMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[2] { this.sharePodcastEpisodeWebMenuItem, this.sharePodcastEpisodeDirectMenuItem });
+		this.sharePodcastEpisodeMenuItem.DropDownItems.AddRange(this.sharePodcastEpisodeWebMenuItem, this.sharePodcastEpisodeDirectMenuItem);
 		this.sharePodcastEpisodeMenuItem.Name = "sharePodcastEpisodeMenuItem";
 		this.sharePodcastEpisodeMenuItem.Size = new System.Drawing.Size(210, 24);
 		this.sharePodcastEpisodeMenuItem.Text = "分享节目(&E)";
@@ -21793,7 +23974,7 @@ UrlResolved:
 		this.sharePodcastEpisodeDirectMenuItem.Size = new System.Drawing.Size(210, 26);
 		this.sharePodcastEpisodeDirectMenuItem.Text = "分享直链(&L)";
 		this.sharePodcastEpisodeDirectMenuItem.Click += new System.EventHandler(sharePodcastEpisodeDirectMenuItem_Click);
-		this.artistSongsSortMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[2] { this.artistSongsSortHotMenuItem, this.artistSongsSortTimeMenuItem });
+		this.artistSongsSortMenuItem.DropDownItems.AddRange(this.artistSongsSortHotMenuItem, this.artistSongsSortTimeMenuItem);
 		this.artistSongsSortMenuItem.Name = "artistSongsSortMenuItem";
 		this.artistSongsSortMenuItem.Size = new System.Drawing.Size(210, 24);
 		this.artistSongsSortMenuItem.Text = "单曲排序(&S)";
@@ -21808,7 +23989,7 @@ UrlResolved:
 		this.artistSongsSortTimeMenuItem.Text = "按发布时间排序(&T)";
 		this.artistSongsSortTimeMenuItem.CheckOnClick = true;
 		this.artistSongsSortTimeMenuItem.Click += new System.EventHandler(artistSongsSortTimeMenuItem_Click);
-		this.artistAlbumsSortMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[2] { this.artistAlbumsSortLatestMenuItem, this.artistAlbumsSortOldestMenuItem });
+		this.artistAlbumsSortMenuItem.DropDownItems.AddRange(this.artistAlbumsSortLatestMenuItem, this.artistAlbumsSortOldestMenuItem);
 		this.artistAlbumsSortMenuItem.Name = "artistAlbumsSortMenuItem";
 		this.artistAlbumsSortMenuItem.Size = new System.Drawing.Size(210, 24);
 		this.artistAlbumsSortMenuItem.Text = "专辑排序(&B)";
@@ -21823,7 +24004,7 @@ UrlResolved:
 		this.artistAlbumsSortOldestMenuItem.Text = "按最早发布排序(&O)";
 		this.artistAlbumsSortOldestMenuItem.CheckOnClick = true;
 		this.artistAlbumsSortOldestMenuItem.Click += new System.EventHandler(artistAlbumsSortOldestMenuItem_Click);
-		this.podcastSortMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[2] { this.podcastSortLatestMenuItem, this.podcastSortSerialMenuItem });
+		this.podcastSortMenuItem.DropDownItems.AddRange(this.podcastSortLatestMenuItem, this.podcastSortSerialMenuItem);
 		this.podcastSortMenuItem.Name = "podcastSortMenuItem";
 		this.podcastSortMenuItem.Size = new System.Drawing.Size(210, 24);
 		this.podcastSortMenuItem.Text = "排序(&T)";
@@ -21896,7 +24077,7 @@ UrlResolved:
 		this.batchDownloadPlaylistsMenuItem.Text = "批量下载(&B)...";
 		this.batchDownloadPlaylistsMenuItem.Click += new System.EventHandler(BatchDownloadPlaylistsOrAlbums_Click);
 		this.trayContextMenu.ImageScalingSize = new System.Drawing.Size(20, 20);
-		this.trayContextMenu.Items.AddRange(new System.Windows.Forms.ToolStripItem[6] { this.trayShowMenuItem, this.trayPlayPauseMenuItem, this.trayPrevMenuItem, this.trayNextMenuItem, this.trayMenuSeparator, this.trayExitMenuItem });
+		this.trayContextMenu.Items.AddRange(this.trayShowMenuItem, this.trayPlayPauseMenuItem, this.trayPrevMenuItem, this.trayNextMenuItem, this.trayMenuSeparator, this.trayExitMenuItem);
 		this.trayContextMenu.Name = "trayContextMenu";
 		this.trayContextMenu.Size = new System.Drawing.Size(161, 136);
 		this.trayShowMenuItem.Name = "trayShowMenuItem";
@@ -21924,7 +24105,7 @@ UrlResolved:
 		base.AutoScaleDimensions = new System.Drawing.SizeF(120f, 120f);
 		base.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Dpi;
 		base.ClientSize = new System.Drawing.Size(1200, 676);
-		base.Controls.Add(this.resultListView);
+        base.Controls.Add(this.resultListView);
 		base.Controls.Add(this.searchPanel);
 		base.Controls.Add(this.controlPanel);
 		base.Controls.Add(this.statusStrip1);
@@ -21990,18 +24171,19 @@ UrlResolved:
 			}
 			return menuContextSnapshot;
 		}
-		if (resultListView.SelectedItems.Count == 0)
+		ListViewItem selectedListViewItemSafe = GetSelectedListViewItemSafe();
+		if (selectedListViewItemSafe == null)
 		{
 			menuContextSnapshot.IsValid = false;
 			return menuContextSnapshot;
 		}
-		ListViewItem listViewItem = (menuContextSnapshot.SelectedListItem = resultListView.SelectedItems[0]);
-		if (menuContextSnapshot.IsPodcastEpisodeView && listViewItem.Tag is int num && num < 0)
+		menuContextSnapshot.SelectedListItem = selectedListViewItemSafe;
+		if (menuContextSnapshot.IsPodcastEpisodeView && selectedListViewItemSafe.Tag is int num && num < 0)
 		{
 			menuContextSnapshot.IsValid = false;
 			return menuContextSnapshot;
 		}
-		object tag = listViewItem.Tag;
+		object tag = selectedListViewItemSafe.Tag;
 		object obj = tag;
 		if (!(obj is PlaylistInfo playlist))
 		{
@@ -22411,11 +24593,10 @@ UrlResolved:
 			unlikeSongMenuItem.Tag = (flag ? songInfo : null);
 			addToPlaylistMenuItem.Visible = flag;
 			addToPlaylistMenuItem.Tag = (flag ? songInfo : null);
-			string playlistIdFromView = snapshot.ViewSource.StartsWith("playlist:", StringComparison.OrdinalIgnoreCase) ? snapshot.ViewSource.Substring("playlist:".Length) : null;
-			bool isPlaylistContext = snapshot.ViewSource.StartsWith("playlist:", StringComparison.OrdinalIgnoreCase) || (_currentPlaylist != null && !string.IsNullOrWhiteSpace(_currentPlaylist.Id));
-			bool isUserOwnedPlaylist = _currentPlaylistOwnedByUser || IsCurrentPlaylistOwnedByUser(playlistIdFromView) || (snapshot.Playlist != null && IsPlaylistCreatedByCurrentUser(snapshot.Playlist));
-
-			bool flag4 = isPlaylistContext && isUserOwnedPlaylist;
+			string playlistId = (snapshot.ViewSource.StartsWith("playlist:", StringComparison.OrdinalIgnoreCase) ? snapshot.ViewSource.Substring("playlist:".Length) : null);
+			bool flag4 = snapshot.ViewSource.StartsWith("playlist:", StringComparison.OrdinalIgnoreCase) || (_currentPlaylist != null && !string.IsNullOrWhiteSpace(_currentPlaylist.Id));
+			bool flag5 = _currentPlaylistOwnedByUser || IsCurrentPlaylistOwnedByUser(playlistId) || (snapshot.Playlist != null && IsPlaylistCreatedByCurrentUser(snapshot.Playlist));
+			bool flag6 = flag4 && flag5;
 			if (snapshot.IsCurrentPlayback)
 			{
 				removeFromPlaylistMenuItem.Visible = false;
@@ -22425,7 +24606,7 @@ UrlResolved:
 			else
 			{
 				removeFromPlaylistMenuItem.Text = "从歌单中移除(&R)";
-				removeFromPlaylistMenuItem.Visible = flag && flag4;
+				removeFromPlaylistMenuItem.Visible = flag && flag6;
 				removeFromPlaylistMenuItem.Tag = (removeFromPlaylistMenuItem.Visible ? songInfo : null);
 			}
 		}
@@ -22441,29 +24622,29 @@ UrlResolved:
 			addToPlaylistMenuItem.Tag = null;
 			removeFromPlaylistMenuItem.Tag = null;
 		}
-		bool flag5 = isCloudView && songInfo != null && songInfo.IsCloudSong;
-		downloadSongMenuItem.Visible = !flag5;
+		bool flag7 = isCloudView && songInfo != null && songInfo.IsCloudSong;
+		downloadSongMenuItem.Visible = !flag7;
 		downloadSongMenuItem.Tag = songInfo;
 		downloadSongMenuItem.Text = (isPodcastEpisodeContext ? "下载声音(&D)" : "下载歌曲(&D)");
-		bool flag6 = !flag5 && !isPodcastEpisodeContext;
-		downloadLyricsMenuItem.Visible = flag6;
-		downloadLyricsMenuItem.Tag = (flag6 ? songInfo : null);
-		batchDownloadMenuItem.Visible = !flag5 && !snapshot.IsCurrentPlayback;
-		bool flag7 = songInfo != null && (!songInfo.IsCloudSong || !string.IsNullOrWhiteSpace(songInfo?.Artist));
-		bool flag8 = songInfo != null && (!songInfo.IsCloudSong || !string.IsNullOrWhiteSpace(songInfo?.Album));
-		bool flag9 = songInfo != null && flag;
+		bool flag8 = !flag7 && !isPodcastEpisodeContext;
+		downloadLyricsMenuItem.Visible = flag8;
+		downloadLyricsMenuItem.Tag = (flag8 ? songInfo : null);
+		batchDownloadMenuItem.Visible = !flag7 && !snapshot.IsCurrentPlayback;
+		bool flag9 = songInfo != null && (!songInfo.IsCloudSong || !string.IsNullOrWhiteSpace(songInfo?.Artist));
+		bool flag10 = songInfo != null && (!songInfo.IsCloudSong || !string.IsNullOrWhiteSpace(songInfo?.Album));
+		bool flag11 = songInfo != null && flag;
 		if (isPodcastEpisodeContext)
 		{
-			flag7 = false;
-			flag8 = false;
 			flag9 = false;
+			flag10 = false;
+			flag11 = false;
 		}
-		viewSongArtistMenuItem.Visible = flag7;
-		viewSongArtistMenuItem.Tag = (flag7 ? songInfo : null);
-		viewSongAlbumMenuItem.Visible = flag8;
-		viewSongAlbumMenuItem.Tag = (flag8 ? songInfo : null);
-		shareSongMenuItem.Visible = flag9;
-		if (flag9)
+		viewSongArtistMenuItem.Visible = flag9;
+		viewSongArtistMenuItem.Tag = (flag9 ? songInfo : null);
+		viewSongAlbumMenuItem.Visible = flag10;
+		viewSongAlbumMenuItem.Tag = (flag10 ? songInfo : null);
+		shareSongMenuItem.Visible = flag11;
+		if (flag11)
 		{
 			shareSongMenuItem.Tag = songInfo;
 			shareSongWebMenuItem.Tag = songInfo;
@@ -22487,17 +24668,17 @@ UrlResolved:
 		{
 			ConfigurePodcastEpisodeShareMenu(null);
 		}
-		bool flag10 = false;
+		bool flag12 = false;
 		if (viewPodcastMenuItem != null)
 		{
-			bool flag11 = contextPodcastForEpisode != null && contextPodcastForEpisode.Id > 0;
-			viewPodcastMenuItem.Visible = flag11;
-			viewPodcastMenuItem.Tag = (flag11 ? contextPodcastForEpisode : null);
-			flag10 = flag11;
+			bool flag13 = contextPodcastForEpisode != null && contextPodcastForEpisode.Id > 0;
+			viewPodcastMenuItem.Visible = flag13;
+			viewPodcastMenuItem.Tag = (flag13 ? contextPodcastForEpisode : null);
+			flag12 = flag13;
 		}
 		bool visible = sharePodcastMenuItem.Visible;
 		bool visible2 = sharePodcastEpisodeMenuItem.Visible;
-		showViewSection = showViewSection || flag7 || flag8 || flag9 || flag10 || visible || visible2;
+		showViewSection = showViewSection || flag9 || flag10 || flag11 || flag12 || visible || visible2;
 	}
 
 	private async Task<T> FetchWithRetryUntilCancel<T>(Func<CancellationToken, Task<T>> operation, string operationName, CancellationToken cancellationToken, Action<int, Exception>? onRetry = null, int? maxAttempts = null, Action<int>? onRecovery = null, Action<int, Exception>? onGiveUp = null)
@@ -22556,86 +24737,23 @@ UrlResolved:
 					onGiveUp?.Invoke(attempt, ex2);
 					throw;
 				}
+			}
 		}
 	}
-}
 
-private static bool IsNonRecoverableFetchError(Exception ex)
-{
-	if (ex is UnauthorizedAccessException)
+	private static bool IsNonRecoverableFetchError(Exception ex)
 	{
-		return true;
+		if (ex is UnauthorizedAccessException)
+		{
+			return true;
+		}
+		string text = ex.Message ?? string.Empty;
+		if (text.IndexOf("不存在", StringComparison.OrdinalIgnoreCase) >= 0 || text.IndexOf("下架", StringComparison.OrdinalIgnoreCase) >= 0 || text.IndexOf("被移除", StringComparison.OrdinalIgnoreCase) >= 0 || text.IndexOf("版权", StringComparison.OrdinalIgnoreCase) >= 0)
+		{
+			return true;
+		}
+		return false;
 	}
-	string text = ex.Message ?? string.Empty;
-	if (text.IndexOf("不存在", StringComparison.OrdinalIgnoreCase) >= 0 || text.IndexOf("下架", StringComparison.OrdinalIgnoreCase) >= 0 || text.IndexOf("被移除", StringComparison.OrdinalIgnoreCase) >= 0 || text.IndexOf("版权", StringComparison.OrdinalIgnoreCase) >= 0)
-	{
-		return true;
-	}
-	return false;
-}
-
-internal sealed class NavigationHistoryItem
-{
-	public string ViewSource { get; set; } = string.Empty;
-
-	public string ViewName { get; set; } = string.Empty;
-
-	public int SelectedIndex { get; set; }
-
-	public int SelectedDataIndex { get; set; }
-
-	public string PageType { get; set; } = string.Empty;
-
-	public string CategoryId { get; set; } = string.Empty;
-
-	public string PlaylistId { get; set; } = string.Empty;
-
-	public string AlbumId { get; set; } = string.Empty;
-
-	public string SearchType { get; set; } = string.Empty;
-
-	public string SearchKeyword { get; set; } = string.Empty;
-
-	public int CurrentPage { get; set; }
-
-	public long ArtistId { get; set; }
-
-	public string ArtistName { get; set; } = string.Empty;
-
-	public int ArtistOffset { get; set; }
-
-	public string ArtistOrder { get; set; } = string.Empty;
-
-	public string ArtistAlbumSort { get; set; } = string.Empty;
-
-	public int ArtistType { get; set; }
-
-	public int ArtistArea { get; set; }
-
-	public long PodcastRadioId { get; set; }
-
-	public int PodcastOffset { get; set; }
-
-	public bool PodcastAscending { get; set; }
-
-	public string PodcastRadioName { get; set; } = string.Empty;
-
-	public string MixedQueryKey { get; set; } = string.Empty;
-
-	public string SongId { get; set; } = string.Empty;
-}
-
-internal enum ArtistSongSortOption
-{
-	Hot,
-	Time
-}
-
-internal enum ArtistAlbumSortOption
-{
-	Latest,
-	Oldest
-}
-
 }
 }
+

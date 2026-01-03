@@ -28,32 +28,12 @@ namespace YTPlayer.Core
         {
             try
             {
-                string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-                if (!string.IsNullOrEmpty(baseDir))
-                {
-                    return Path.GetFullPath(baseDir);
-                }
+                return PathHelper.ApplicationRootDirectory;
             }
             catch
             {
-                // 忽略 BaseDirectory 获取失败，回退到程序集路径
+                return Directory.GetCurrentDirectory();
             }
-
-            try
-            {
-                string exePath = System.Reflection.Assembly.GetExecutingAssembly().Location;
-                string exeDir = Path.GetDirectoryName(exePath);
-                if (!string.IsNullOrEmpty(exeDir))
-                {
-                    return Path.GetFullPath(exeDir);
-                }
-            }
-            catch
-            {
-                // 忽略获取失败，回退到当前工作目录
-            }
-
-            return Directory.GetCurrentDirectory();
         }
 
         /// <summary>
@@ -338,6 +318,7 @@ namespace YTPlayer.Core
                 FollowCursor = true,
                 SeekMinIntervalMs = 30,
                 SequenceNumberHidden = false,
+                ControlBarHidden = false,
 
                 // 其他设置
                 LastPlayingSongId = string.Empty,
@@ -346,6 +327,7 @@ namespace YTPlayer.Core
                 LastPlayingDuration = 0,
                 LastPlayingQueue = new List<string>(),
                 LastPlayingQueueIndex = -1,
+                LastPlayingSourceIndex = -1,
                 LyricsFontSize = 12
             };
         }
@@ -475,9 +457,12 @@ namespace YTPlayer.Core
             else
             {
                 var trimmed = config.RecognitionApiBaseUrl.Trim();
-                bool isValid = Uri.TryCreate(trimmed, UriKind.Absolute, out var parsed) &&
+                Uri? parsed;
+                bool isValid = Uri.TryCreate(trimmed, UriKind.Absolute, out parsed) &&
+                               parsed != null &&
                                (parsed.Scheme == Uri.UriSchemeHttp || parsed.Scheme == Uri.UriSchemeHttps);
-                bool isLoopback = isValid && (parsed.IsLoopback || parsed.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase));
+                bool isLoopback = isValid && parsed != null &&
+                                  (parsed.IsLoopback || parsed.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase));
 
                 if (!isValid || isLoopback)
                 {
@@ -534,6 +519,13 @@ namespace YTPlayer.Core
             if (config.LastPlayingQueueIndex < -1)
             {
                 config.LastPlayingQueueIndex = -1;
+                changed = true;
+            }
+
+
+            if (config.LastPlayingSourceIndex < -1)
+            {
+                config.LastPlayingSourceIndex = -1;
                 changed = true;
             }
 

@@ -30,6 +30,11 @@ bld/
 [Oo]bj/
 [Ll]og/
 [Ll]ogs/
+node_modules/
+package.json
+package-lock.json
+npm_package.json
+UpdatorBackend/cache/
 
 # Visual Studio cache/options
 .vs/

@@ -38,9 +38,7 @@ namespace YTPlayer.Forms
                 Location = new Point(15, 15),
                 Size = new Size(390, 100),
                 Text = description,
-                TabStop = true,
-                AccessibleName = "购买说明",
-                AccessibleDescription = description
+                TabStop = true
             };
 
             _openButton = new Button
@@ -75,7 +73,10 @@ namespace YTPlayer.Forms
                     ActiveControl = _messageLabel;
                     _messageLabel.Focus();
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"[PurchaseLinkDialog] Focus failed: {ex.Message}");
+                }
             };
         }
 

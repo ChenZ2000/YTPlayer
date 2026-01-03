@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <RootNamespace>YTPlayer.Launcher</RootNamespace>
+    <AssemblyName>YTPlayer</AssemblyName>
+    <Nullable>enable</Nullable>
+    <LangVersion>9.0</LangVersion>
+    <PlatformTarget>x64</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Deterministic>true</Deterministic>
+    <VersionFile>..\version.txt</VersionFile>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <EnableDefaultEmbeddedResourceItems>false</EnableDefaultEmbeddedResourceItems>
+    <EnableDefaultNoneItems>false</EnableDefaultNoneItems>
+  </PropertyGroup>
+
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <OutputPath>..\bin\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+  </PropertyGroup>
+
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|x64' ">   
+    <OutputPath>..\bin\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+  </PropertyGroup>
+
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <OutputPath>..\bin\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <Optimize>true</Optimize>
+    <DebugType>pdbonly</DebugType>
+  </PropertyGroup>
+
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|x64' ">  
+    <OutputPath>..\bin\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <Optimize>true</Optimize>
+    <DebugType>pdbonly</DebugType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="Properties\VersionInfo.g.cs" />
+  </ItemGroup>
+
+  <ItemGroup />
+
+  <Target Name="GenerateVersionInfo" Inputs="$(VersionFile)" Outputs="Properties\VersionInfo.g.cs" BeforeTargets="BeforeCompile">
+    <Error Condition="!Exists('$(VersionFile)')" Text="缺少版本号文件 $(VersionFile)。" />
+    <ReadLinesFromFile File="$(VersionFile)">
+      <Output TaskParameter="Lines" ItemName="VersionFileContent" />
+    </ReadLinesFromFile>
+    <PropertyGroup>
+      <VersionRaw>@(VersionFileContent)</VersionRaw>
+      <VersionNumber>$([System.String]::Copy('$(VersionRaw)').Trim())</VersionNumber>
+    </PropertyGroup>
+    <Error Condition="'$(VersionNumber)' == ''" Text="version.txt 不能为空或仅包含空白字符。" />
+    <PropertyGroup>
+      <VersionSegmentCount>$([System.String]::Copy('$(VersionNumber)').Split('.').Length)</VersionSegmentCount>
+      <AssemblyVersionText Condition="'$(VersionSegmentCount)' == '3'">$(VersionNumber).0</AssemblyVersionText>
+      <AssemblyVersionText Condition="'$(VersionSegmentCount)' == '4'">$(VersionNumber)</AssemblyVersionText>
+      <AssemblyVersionText Condition="'$(AssemblyVersionText)' == ''">$(VersionNumber).0</AssemblyVersionText>
+    </PropertyGroup>
+    <ItemGroup>
+      <VersionInfoLines Include="Line1">
+        <Text>// &lt;auto-generated&gt; This file is generated from version.txt. Do not edit manually.</Text>
+      </VersionInfoLines>
+      <VersionInfoLines Include="Line2">
+        <Text>namespace YTPlayer</Text>
+      </VersionInfoLines>
+      <VersionInfoLines Include="Line3">
+        <Text>{</Text>
+      </VersionInfoLines>
+      <VersionInfoLines Include="Line4">
+        <Text>    internal static class VersionInfo</Text>
+      </VersionInfoLines>
+      <VersionInfoLines Include="Line5">
+        <Text>    {</Text>
+      </VersionInfoLines>
+      <VersionInfoLines Include="Line6">
+        <Text>        public const string Version = "$(VersionNumber)";</Text>
+      </VersionInfoLines>
+      <VersionInfoLines Include="Line7">
+        <Text>        public const string AssemblyVersion = "$(AssemblyVersionText)";</Text>
+      </VersionInfoLines>
+      <VersionInfoLines Include="Line8">
+        <Text>    }</Text>
+      </VersionInfoLines>
+      <VersionInfoLines Include="Line9">
+        <Text>}</Text>
+      </VersionInfoLines>
+    </ItemGroup>
+    <WriteLinesToFile File="Properties\VersionInfo.g.cs" Lines="@(VersionInfoLines->'%(Text)')" Overwrite="true" Encoding="UTF-8" />
+  </Target>
+</Project>

@@ -1,65 +1,61 @@
 <?xml version="1.0" encoding="utf-8"?>
-<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
-    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
-    <ProjectGuid>{5B4E8843-B54F-49F5-8B0D-F1BC572C6E62}</ProjectGuid>
     <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
     <RootNamespace>YTPlayer.Updater</RootNamespace>
     <AssemblyName>YTPlayer.Updater</AssemblyName>
-    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
-    <FileAlignment>512</FileAlignment>
-    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
-    <Deterministic>true</Deterministic>
-    <LangVersion>9.0</LangVersion>
     <Nullable>enable</Nullable>
+    <LangVersion>9.0</LangVersion>
+    <PlatformTarget>x64</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Deterministic>true</Deterministic>
+    <VersionFile>..\version.txt</VersionFile>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <EnableDefaultEmbeddedResourceItems>false</EnableDefaultEmbeddedResourceItems>
+    <EnableDefaultNoneItems>false</EnableDefaultNoneItems>
   </PropertyGroup>
+
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
-    <PlatformTarget>x64</PlatformTarget>
     <OutputPath>bin\Debug\</OutputPath>
     <DefineConstants>DEBUG;TRACE</DefineConstants>
     <DebugSymbols>true</DebugSymbols>
     <DebugType>full</DebugType>
     <Optimize>false</Optimize>
   </PropertyGroup>
+
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|x64' ">
-    <PlatformTarget>x64</PlatformTarget>
     <OutputPath>bin\Debug\</OutputPath>
     <DefineConstants>DEBUG;TRACE</DefineConstants>
     <DebugSymbols>true</DebugSymbols>
     <DebugType>full</DebugType>
     <Optimize>false</Optimize>
   </PropertyGroup>
+
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
-    <PlatformTarget>x64</PlatformTarget>
     <OutputPath>bin\Release\</OutputPath>
     <DefineConstants>TRACE</DefineConstants>
     <Optimize>true</Optimize>
     <DebugType>pdbonly</DebugType>
   </PropertyGroup>
+
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|x64' ">
-    <PlatformTarget>x64</PlatformTarget>
     <OutputPath>bin\Release\</OutputPath>
     <DefineConstants>TRACE</DefineConstants>
     <Optimize>true</Optimize>
     <DebugType>pdbonly</DebugType>
   </PropertyGroup>
+
   <ItemGroup>
-    <Reference Include="System" />
-    <Reference Include="System.Core" />
-    <Reference Include="System.Data" />
-    <Reference Include="System.Drawing" />
-    <Reference Include="System.IO.Compression" />
-    <Reference Include="System.IO.Compression.FileSystem" />
     <Reference Include="System.Net.Http" />
-    <Reference Include="System.Windows.Forms" />
-    <Reference Include="System.Xml" />
-    <Reference Include="Newtonsoft.Json">
-      <HintPath>..\packages\Newtonsoft.Json.13.0.3\lib\net45\Newtonsoft.Json.dll</HintPath>
-      <Private>True</Private>
-    </Reference>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
   </ItemGroup>
+
   <ItemGroup>
     <Compile Include="Program.cs" />
     <Compile Include="UpdaterForm.cs">
@@ -70,6 +66,7 @@
     </Compile>
     <Compile Include="UpdaterOptions.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="Properties\VersionInfo.g.cs" />
     <Compile Include="..\Core\Update\UpdateConstants.cs">
       <Link>Core\Update\UpdateConstants.cs</Link>
     </Compile>
@@ -80,14 +77,62 @@
       <Link>Core\Update\UpdateServiceClient.cs</Link>
     </Compile>
   </ItemGroup>
+
   <ItemGroup>
     <EmbeddedResource Include="UpdaterForm.resx">
       <DependentUpon>UpdaterForm.cs</DependentUpon>
     </EmbeddedResource>
   </ItemGroup>
+
   <ItemGroup>
     <None Include="App.config" />
-    <None Include="packages.config" />
   </ItemGroup>
-  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+
+  <Target Name="GenerateVersionInfo" Inputs="$(VersionFile)" Outputs="Properties\VersionInfo.g.cs" BeforeTargets="BeforeCompile">
+    <Error Condition="!Exists('$(VersionFile)')" Text="缺少版本号文件 $(VersionFile)。" />
+    <ReadLinesFromFile File="$(VersionFile)">
+      <Output TaskParameter="Lines" ItemName="VersionFileContent" />
+    </ReadLinesFromFile>
+    <PropertyGroup>
+      <VersionRaw>@(VersionFileContent)</VersionRaw>
+      <VersionNumber>$([System.String]::Copy('$(VersionRaw)').Trim())</VersionNumber>
+    </PropertyGroup>
+    <Error Condition="'$(VersionNumber)' == ''" Text="version.txt 不能为空或仅包含空白字符。" />
+    <PropertyGroup>
+      <VersionSegmentCount>$([System.String]::Copy('$(VersionNumber)').Split('.').Length)</VersionSegmentCount>
+      <AssemblyVersionText Condition="'$(VersionSegmentCount)' == '3'">$(VersionNumber).0</AssemblyVersionText>
+      <AssemblyVersionText Condition="'$(VersionSegmentCount)' == '4'">$(VersionNumber)</AssemblyVersionText>
+      <AssemblyVersionText Condition="'$(AssemblyVersionText)' == ''">$(VersionNumber).0</AssemblyVersionText>
+    </PropertyGroup>
+    <ItemGroup>
+      <VersionInfoLines Include="Line1">
+        <Text>// &lt;auto-generated&gt; This file is generated from version.txt. Do not edit manually.</Text>
+      </VersionInfoLines>
+      <VersionInfoLines Include="Line2">
+        <Text>namespace YTPlayer</Text>
+      </VersionInfoLines>
+      <VersionInfoLines Include="Line3">
+        <Text>{</Text>
+      </VersionInfoLines>
+      <VersionInfoLines Include="Line4">
+        <Text>    internal static class VersionInfo</Text>
+      </VersionInfoLines>
+      <VersionInfoLines Include="Line5">
+        <Text>    {</Text>
+      </VersionInfoLines>
+      <VersionInfoLines Include="Line6">
+        <Text>        public const string Version = "$(VersionNumber)";</Text>
+      </VersionInfoLines>
+      <VersionInfoLines Include="Line7">
+        <Text>        public const string AssemblyVersion = "$(AssemblyVersionText)";</Text>
+      </VersionInfoLines>
+      <VersionInfoLines Include="Line8">
+        <Text>    }</Text>
+      </VersionInfoLines>
+      <VersionInfoLines Include="Line9">
+        <Text>}</Text>
+      </VersionInfoLines>
+    </ItemGroup>
+    <WriteLinesToFile File="Properties\VersionInfo.g.cs" Lines="@(VersionInfoLines->'%(Text)')" Overwrite="true" Encoding="UTF-8" />
+  </Target>
 </Project>

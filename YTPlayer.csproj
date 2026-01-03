@@ -1,22 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
-<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003" ToolsVersion="15.0">
-  <Import Project="packages\Microsoft.Web.WebView2.1.0.2420.47\build\Microsoft.Web.WebView2.props" Condition="Exists('packages\Microsoft.Web.WebView2.1.0.2420.47\build\Microsoft.Web.WebView2.props')" />
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
-    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
-    <ProjectGuid>{B1234567-C890-1234-5678-901234567890}</ProjectGuid>
     <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
     <RootNamespace>YTPlayer</RootNamespace>
-    <AssemblyName>YTPlayer</AssemblyName>
-    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
-    <FileAlignment>512</FileAlignment>
-    <LangVersion>9.0</LangVersion>
-    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <AssemblyName>YTPlayer.App</AssemblyName>
     <Nullable>enable</Nullable>
-    <VersionFile>version.txt</VersionFile>
+    <LangVersion>9.0</LangVersion>
+    <PlatformTarget>x64</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <ImplicitUsings>disable</ImplicitUsings>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <SupportedOSPlatformVersion>7.0</SupportedOSPlatformVersion>
+    <VersionFile>version.txt</VersionFile>
     <NoWarn>MSB3277</NoWarn>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <EnableDefaultEmbeddedResourceItems>false</EnableDefaultEmbeddedResourceItems>
+    <EnableDefaultNoneItems>false</EnableDefaultNoneItems>
   </PropertyGroup>
+
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <DebugSymbols>true</DebugSymbols>
     <DebugType>full</DebugType>
@@ -25,15 +31,17 @@
     <DefineConstants>DEBUG;TRACE</DefineConstants>
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>
-    <PlatformTarget>x64</PlatformTarget>
-    <Prefer32Bit>false</Prefer32Bit>
-    <!-- ✅ 增强调试配置 -->
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <CheckForOverflowUnderflow>true</CheckForOverflowUnderflow>
     <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
     <FileAlignment>4096</FileAlignment>
+    <StartAction>Program</StartAction>
+    <StartProgram>dotnet</StartProgram>
+    <StartArguments>exec --runtimeconfig "$(TargetDir)libs\YTPlayer.App.runtimeconfig.json" --depsfile "$(TargetDir)libs\YTPlayer.App.deps.json" "$(TargetDir)libs\YTPlayer.App.dll"</StartArguments>
+    <StartWorkingDirectory>$(TargetDir)</StartWorkingDirectory>
   </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|x64' ">
+
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|x64' ">   
     <DebugSymbols>true</DebugSymbols>
     <DebugType>full</DebugType>
     <Optimize>false</Optimize>
@@ -41,13 +49,16 @@
     <DefineConstants>DEBUG;TRACE</DefineConstants>
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>
-    <PlatformTarget>x64</PlatformTarget>
-    <Prefer32Bit>false</Prefer32Bit>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <CheckForOverflowUnderflow>true</CheckForOverflowUnderflow>
     <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
     <FileAlignment>4096</FileAlignment>
+    <StartAction>Program</StartAction>
+    <StartProgram>dotnet</StartProgram>
+    <StartArguments>exec --runtimeconfig "$(TargetDir)libs\YTPlayer.App.runtimeconfig.json" --depsfile "$(TargetDir)libs\YTPlayer.App.deps.json" "$(TargetDir)libs\YTPlayer.App.dll"</StartArguments>
+    <StartWorkingDirectory>$(TargetDir)</StartWorkingDirectory>
   </PropertyGroup>
+
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
     <DebugType>pdbonly</DebugType>
     <Optimize>true</Optimize>
@@ -55,9 +66,8 @@
     <DefineConstants>TRACE</DefineConstants>
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>
-    <PlatformTarget>x64</PlatformTarget>
-    <Prefer32Bit>false</Prefer32Bit>
   </PropertyGroup>
+
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|x64' ">
     <DebugType>pdbonly</DebugType>
     <Optimize>true</Optimize>
@@ -65,90 +75,46 @@
     <DefineConstants>TRACE</DefineConstants>
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>
-    <PlatformTarget>x64</PlatformTarget>
-    <Prefer32Bit>false</Prefer32Bit>
   </PropertyGroup>
+
   <ItemGroup>
-    <Reference Include="Accessibility" />
-    <Reference Include="Microsoft.Activities.Build" />
-    <Reference Include="Microsoft.Build" />
-    <Reference Include="Microsoft.Build.Conversion.v4.0" />
-    <Reference Include="Microsoft.Build.Engine" />
-    <Reference Include="Microsoft.VisualBasic" />
-    <Reference Include="System" />
-    <Reference Include="System.Core" />
-    <Reference Include="System.IO.Log" />
-    <Reference Include="System.Numerics" />
-    <Reference Include="System.Web" />
-    <Reference Include="System.Data" />
-    <Reference Include="System.Drawing" />
-    <Reference Include="System.Net.Http" />
-    <Reference Include="System.Windows.Forms" />
-    <Reference Include="System.Xml" />
-    <Reference Include="Microsoft.CSharp" />
-    <Reference Include="System.IO.Compression" />
-    <Reference Include="System.IO.Compression.FileSystem" />
-    <Reference Include="Newtonsoft.Json">
-      <HintPath>packages\Newtonsoft.Json.13.0.3\lib\net45\Newtonsoft.Json.dll</HintPath>
-      <Private>True</Private>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <PackageReference Include="QRCoder" Version="1.4.3" />
+    <PackageReference Include="taglib-sharp-netstandard2.0" Version="2.1.0" />
+    <PackageReference Include="BrotliSharpLib" Version="0.3.3" />
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.6.2" />
+    <PackageReference Include="Microsoft.ClearScript.Core" Version="7.5.0" />
+    <PackageReference Include="Microsoft.ClearScript.V8" Version="7.5.0" />
+    <PackageReference Include="Microsoft.ClearScript.V8.Native.win-x64" Version="7.5.0" />
+    <PackageReference Include="Microsoft.ClearScript.V8.ICUData" Version="7.5.0" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2420.47" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="UIAutomationProvider">
+      <HintPath>$(ProgramFiles)\dotnet\packs\Microsoft.WindowsDesktop.App.Ref\10.0.1\ref\net10.0\UIAutomationProvider.dll</HintPath>
+      <Private>false</Private>
     </Reference>
-    <Reference Include="QRCoder, Version=1.4.3.0, Culture=neutral, processorArchitecture=MSIL">
-      <HintPath>packages\QRCoder.1.4.3\lib\net40\QRCoder.dll</HintPath>
-      <Private>True</Private>
-    </Reference>
-    <Reference Include="taglib-sharp, Version=2.1.0.0, Culture=neutral, processorArchitecture=MSIL">
-      <HintPath>packages\taglib-sharp-netstandard2.0.2.1.0\lib\netstandard2.0\taglib-sharp.dll</HintPath>
-      <Private>True</Private>
-    </Reference>
-    <Reference Include="BrotliSharpLib, Version=0.3.2.0, Culture=neutral, processorArchitecture=MSIL">
-      <HintPath>packages\BrotliSharpLib.0.3.3\lib\net45\BrotliSharpLib.dll</HintPath>
-      <Private>True</Private>
-    </Reference>
-    <Reference Include="System.Runtime.CompilerServices.Unsafe, Version=4.0.4.1, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a, processorArchitecture=MSIL">
-      <HintPath>packages\System.Runtime.CompilerServices.Unsafe.4.5.3\lib\net461\System.Runtime.CompilerServices.Unsafe.dll</HintPath>
-      <Private>True</Private>
-    </Reference>
-    <Reference Include="ClearScript.Core">
-      <HintPath>packages\Microsoft.ClearScript.Core.7.5.0\lib\net462\ClearScript.Core.dll</HintPath>
-      <Private>True</Private>
-    </Reference>
-    <Reference Include="ClearScript.V8">
-      <HintPath>packages\Microsoft.ClearScript.V8.7.5.0\lib\net462\ClearScript.V8.dll</HintPath>
-      <Private>True</Private>
-    </Reference>
-    <Reference Include="ClearScript.V8.ICUData">
-      <HintPath>packages\Microsoft.ClearScript.V8.ICUData.7.5.0\lib\netstandard1.0\ClearScript.V8.ICUData.dll</HintPath>
-      <Private>True</Private>
-    </Reference>
-    <Reference Include="System.Threading.Tasks.Extensions">
-      <HintPath>packages\System.Threading.Tasks.Extensions.4.6.3\lib\net461\System.Threading.Tasks.Extensions.dll</HintPath>
-      <Private>True</Private>
-    </Reference>
-    <Reference Include="Microsoft.Bcl.AsyncInterfaces">
-      <HintPath>packages\Microsoft.Bcl.AsyncInterfaces.10.0.0\lib\net462\Microsoft.Bcl.AsyncInterfaces.dll</HintPath>
-      <Private>True</Private>
-    </Reference>
-    <Reference Include="System.Memory">
-      <HintPath>packages\System.Memory.4.6.3\lib\net461\System.Memory.dll</HintPath>
-      <Private>True</Private>
-    </Reference>
-    <Reference Include="System.Numerics.Vectors">
-      <HintPath>packages\System.Numerics.Vectors.4.6.1\lib\net46\System.Numerics.Vectors.dll</HintPath>
-      <Private>True</Private>
-    </Reference>
-    <Reference Include="Microsoft.Web.WebView2.Core, Version=1.0.2420.47, Culture=neutral, PublicKeyToken=2a8ab48044d2601e, processorArchitecture=MSIL">
-      <HintPath>packages\Microsoft.Web.WebView2.1.0.2420.47\lib\net45\Microsoft.Web.WebView2.Core.dll</HintPath>
-      <Private>True</Private>
-    </Reference>
-    <Reference Include="Microsoft.Web.WebView2.WinForms, Version=1.0.2420.47, Culture=neutral, PublicKeyToken=2a8ab48044d2601e, processorArchitecture=MSIL">
-      <HintPath>packages\Microsoft.Web.WebView2.1.0.2420.47\lib\net45\Microsoft.Web.WebView2.WinForms.dll</HintPath>
-      <Private>True</Private>
+    <Reference Include="UIAutomationTypes">
+      <HintPath>$(ProgramFiles)\dotnet\packs\Microsoft.WindowsDesktop.App.Ref\10.0.1\ref\net10.0\UIAutomationTypes.dll</HintPath>
+      <Private>false</Private>
     </Reference>
   </ItemGroup>
+
+
   <ItemGroup>
-    <Compile Include="Program.cs" />
+    <Compile Include="Program.cs">
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Include="MainForm.cs">
       <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="MainForm.Accessibility.cs" />
+    <Compile Include="Forms\AccessibleTrackBar.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="Forms\SafeListView.cs">
+      <SubType>Component</SubType>
     </Compile>
     <Compile Include="Core\Unblock\UnblockService.cs" />
     <Compile Include="Forms\ArtistDetailDialog.cs">
@@ -184,6 +150,7 @@
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Properties\VersionInfo.g.cs" />
     <Compile Include="Core\NeteaseApiClient.cs" />
+    <Compile Include="Core\NeteaseApiClient.AuthCookies.cs" />
     <Compile Include="Core\BassAudioEngine.cs" />
     <Compile Include="Core\SeekManager.cs" />
     <Compile Include="Core\ConfigManager.cs" />
@@ -222,6 +189,7 @@
     <Compile Include="Core\Recognition\AudioFingerprintGenerator.cs" />
     <Compile Include="Core\Recognition\SongRecognitionCoordinator.cs" />
     <Compile Include="Core\Streaming\HttpRangeHelper.cs" />
+    <Compile Include="Core\Streaming\StreamSizeEstimator.cs" />
     <Compile Include="Core\Streaming\ChunkData.cs" />
     <Compile Include="Core\Streaming\OptimizedHttpClientFactory.cs" />
     <Compile Include="Utils\HttpHeaderExtensions.cs" />
@@ -235,7 +203,10 @@
     <Compile Include="Utils\EncryptionHelper.cs" />
     <Compile Include="Utils\DebugLogger.cs" />
     <Compile Include="Utils\PerformanceMonitor.cs" />
+    <Compile Include="Utils\SafeTextBox.cs" />
+    <Compile Include="Utils\TaskExtensions.cs" />
     <Compile Include="Utils\TtsHelper.cs" />
+    <Compile Include="Utils\AccessibilityPropertyService.cs" />
     <Compile Include="Utils\ArtistMetadataHelper.cs" />
     <Compile Include="Utils\DocumentationLoader.cs" />
     <Compile Include="Utils\PathHelper.cs" />
@@ -266,6 +237,7 @@
     <Compile Include="Models\SearchResult.cs" />
     <Compile Include="Models\UserAccountInfo.cs" />
     <Compile Include="Models\Auth\QrLoginModels.cs" />
+    <Compile Include="Models\Auth\CountryCodeInfo.cs" />
     <Compile Include="Models\Download\DownloadTask.cs" />
     <Compile Include="Models\Download\DownloadStatus.cs" />
     <Compile Include="Models\Download\DownloadBatch.cs" />
@@ -302,6 +274,7 @@
     <Compile Include="Forms\CommentsDialog.cs">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="Forms\CommentTreeView.cs" />
     <Compile Include="Forms\Download\DownloadManagerForm.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -321,36 +294,24 @@
       <DependentUpon>DownloadConflictDialog.cs</DependentUpon>
     </Compile>
   </ItemGroup>
+
   <ItemGroup>
-    <ProjectReference Include="Updater\YTPlayer.Updater.csproj">
-      <Project>{5B4E8843-B54F-49F5-8B0D-F1BC572C6E62}</Project>
-      <Name>YTPlayer.Updater</Name>
-      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
-    </ProjectReference>
     <ProjectReference Include="ThirdParty\UnblockNCM.Core\UnblockNCM.Core.csproj">
-      <Project>{6D1BA998-96AC-4797-86A9-96520A87CD56}</Project>
       <Name>UnblockNCM.Core</Name>
     </ProjectReference>
   </ItemGroup>
+
   <ItemGroup>
     <Content Include="libs\**\*.*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <TargetPath>libs\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
     </Content>
-    <Content Include="packages\Microsoft.ClearScript.V8.Native.win-x64.7.5.0\runtimes\win-x64\native\ClearScriptV8.win-x64.dll">
-      <Link>libs\ClearScriptV8.win-x64.dll</Link>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <TargetPath>libs\ClearScriptV8.win-x64.dll</TargetPath>
-    </Content>
-    <Content Include="packages\Microsoft.Web.WebView2.1.0.2420.47\runtimes\win-x64\native\WebView2Loader.dll">
-      <Link>libs\WebView2Loader.dll</Link>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <TargetPath>libs\WebView2Loader.dll</TargetPath>
-    </Content>
     <Content Include="WeChatQRCode.jpg">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>libs\assets\WeChatQRCode.jpg</TargetPath>
     </Content>
   </ItemGroup>
+
   <ItemGroup>
     <EmbeddedResource Include="MainForm.resx">
       <DependentUpon>MainForm.cs</DependentUpon>
@@ -370,26 +331,13 @@
     <EmbeddedResource Include="ThirdParty\afp\afp.js" />
     <EmbeddedResource Include="ThirdParty\afp\afp.wasm.js" />
   </ItemGroup>
+
   <ItemGroup>
-    <None Include="packages.config" />
     <None Include="App.config" />
     <None Include="version.txt" />
+    <!-- Launcher exe is built by Launcher project into bin output. -->
   </ItemGroup>
-  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
-  <Target Name="EnsureNuGetPackageBuildImports" BeforeTargets="PrepareForBuild">
-    <PropertyGroup>
-      <ErrorText>此项目引用的 NuGet 包缺失或未还原。请运行 `nuget restore`：{0}</ErrorText>
-    </PropertyGroup>
-    <Error Condition="!Exists('packages\Microsoft.Web.WebView2.1.0.2420.47\build\Microsoft.Web.WebView2.targets')" Text="$([System.String]::Format('$(ErrorText)', 'packages\Microsoft.Web.WebView2.1.0.2420.47\build\Microsoft.Web.WebView2.targets'))" />
-  </Target>
-  <Import Project="packages\Microsoft.Web.WebView2.1.0.2420.47\build\Microsoft.Web.WebView2.targets" Condition="Exists('packages\Microsoft.Web.WebView2.1.0.2420.47\build\Microsoft.Web.WebView2.targets')" />
-  <Target Name="RelocateManagedDependencies" AfterTargets="CopyFilesToOutputDirectory">
-    <MakeDir Directories="$(OutDir)libs" />
-    <ItemGroup>
-      <ManagedDeps Include="$(OutDir)*.*" Exclude="$(OutDir)$(AssemblyName).exe;$(OutDir)$(AssemblyName).exe.config;$(OutDir)$(AssemblyName).dll;$(OutDir)YTPlayer.Updater.exe;$(OutDir)YTPlayer.Updater.exe.config;$(OutDir)account.json;$(OutDir)config.json;$(OutDir)WeChatQRCode.jpg;$(OutDir)libs\**\*.*;$(OutDir)app.publish\**\*.*;$(OutDir)*.manifest" />
-    </ItemGroup>
-    <Move SourceFiles="@(ManagedDeps)" DestinationFolder="$(OutDir)libs" Condition="'@(ManagedDeps)' != ''" />
-  </Target>
+
   <Target Name="GenerateVersionInfo" Inputs="$(VersionFile)" Outputs="Properties\VersionInfo.g.cs" BeforeTargets="BeforeCompile">
     <Error Condition="!Exists('$(VersionFile)')" Text="缺少版本号文件 $(VersionFile)。" />
     <ReadLinesFromFile File="$(VersionFile)">
@@ -437,6 +385,26 @@
     </ItemGroup>
     <WriteLinesToFile File="Properties\VersionInfo.g.cs" Lines="@(VersionInfoLines->'%(Text)')" Overwrite="true" Encoding="UTF-8" />
   </Target>
+
+  <Target Name="RelocateManagedDependencies" AfterTargets="CopyFilesToOutputDirectory">
+    <MakeDir Directories="$(OutDir)libs" />
+    <ItemGroup>
+      <ManagedDeps Include="$(OutDir)*.*"
+                   Exclude="$(OutDir)YTPlayer.exe;
+                            $(OutDir)YTPlayer.Updater.exe;
+                            $(OutDir)account.json;
+                            $(OutDir)config.json;
+                            $(OutDir)Logs\**\*.*;
+                            $(OutDir)Downloads\**\*.*;
+                            $(OutDir)libs\**\*.*;
+                            $(OutDir)runtimes\**\*.*;
+                            $(OutDir)app.publish\**\*.*;
+                            $(OutDir)*.manifest" />
+    </ItemGroup>
+    <Copy SourceFiles="@(ManagedDeps)" DestinationFolder="$(OutDir)libs" SkipUnchangedFiles="true" Condition="'@(ManagedDeps)' != ''" />
+    <Delete Files="@(ManagedDeps)" Condition="'@(ManagedDeps)' != ''" />
+  </Target>
+
   <Target Name="CopyUpdaterBinary" AfterTargets="Build">
     <PropertyGroup>
       <UpdaterOutputDir Condition="'$(SolutionDir)' != ''">$(SolutionDir)Updater\bin\$(Configuration)\</UpdaterOutputDir>
@@ -444,8 +412,46 @@
     </PropertyGroup>
     <ItemGroup Condition="Exists('$(UpdaterOutputDir)YTPlayer.Updater.exe')">
       <UpdaterOutputFiles Include="$(UpdaterOutputDir)YTPlayer.Updater.exe" />
+      <UpdaterOutputFiles Include="$(UpdaterOutputDir)YTPlayer.Updater.dll" Condition="Exists('$(UpdaterOutputDir)YTPlayer.Updater.dll')" />
+      <UpdaterOutputFiles Include="$(UpdaterOutputDir)YTPlayer.Updater.runtimeconfig.json" Condition="Exists('$(UpdaterOutputDir)YTPlayer.Updater.runtimeconfig.json')" />
+      <UpdaterOutputFiles Include="$(UpdaterOutputDir)YTPlayer.Updater.deps.json" Condition="Exists('$(UpdaterOutputDir)YTPlayer.Updater.deps.json')" />
       <UpdaterOutputFiles Include="$(UpdaterOutputDir)YTPlayer.Updater.exe.config" Condition="Exists('$(UpdaterOutputDir)YTPlayer.Updater.exe.config')" />
     </ItemGroup>
     <Copy SourceFiles="@(UpdaterOutputFiles)" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" Condition="'@(UpdaterOutputFiles)' != ''" />
   </Target>
+
+  <Target Name="CopyUpdaterSupportFiles" AfterTargets="CopyUpdaterBinary">
+    <PropertyGroup>
+      <UpdaterOutputDir Condition="'$(SolutionDir)' != ''">$(SolutionDir)Updater\bin\$(Configuration)\</UpdaterOutputDir>
+      <UpdaterOutputDir Condition="'$(SolutionDir)' == ''">$(MSBuildProjectDirectory)\Updater\bin\$(Configuration)\</UpdaterOutputDir>
+    </PropertyGroup>
+    <ItemGroup>
+      <UpdaterSupportFiles Include="$(UpdaterOutputDir)Newtonsoft.Json.dll"
+                            Condition="Exists('$(UpdaterOutputDir)Newtonsoft.Json.dll')" />
+      <UpdaterSupportFiles Include="$(UpdaterOutputDir)Newtonsoft.Json.xml"
+                            Condition="Exists('$(UpdaterOutputDir)Newtonsoft.Json.xml')" />
+    </ItemGroup>
+    <MakeDir Directories="$(OutDir)libs\updater" />
+    <Copy SourceFiles="@(UpdaterSupportFiles)"
+          DestinationFolder="$(OutDir)libs\updater"
+          SkipUnchangedFiles="true"
+          Condition="'@(UpdaterSupportFiles)' != ''" />
+  </Target>
+
+  <Target Name="RelocateUpdaterDependencies" AfterTargets="CopyUpdaterBinary">
+    <MakeDir Directories="$(OutDir)libs" />
+    <ItemGroup>
+      <UpdaterDeps Include="$(OutDir)YTPlayer.Updater.dll"
+                   Condition="Exists('$(OutDir)YTPlayer.Updater.dll')" />
+      <UpdaterDeps Include="$(OutDir)YTPlayer.Updater.runtimeconfig.json"
+                   Condition="Exists('$(OutDir)YTPlayer.Updater.runtimeconfig.json')" />
+      <UpdaterDeps Include="$(OutDir)YTPlayer.Updater.deps.json"
+                   Condition="Exists('$(OutDir)YTPlayer.Updater.deps.json')" />
+      <UpdaterDeps Include="$(OutDir)YTPlayer.Updater.exe.config"
+                   Condition="Exists('$(OutDir)YTPlayer.Updater.exe.config')" />
+    </ItemGroup>
+    <Copy SourceFiles="@(UpdaterDeps)" DestinationFolder="$(OutDir)libs" SkipUnchangedFiles="true" Condition="'@(UpdaterDeps)' != ''" />
+    <Delete Files="@(UpdaterDeps)" Condition="'@(UpdaterDeps)' != ''" />
+  </Target>
+
 </Project>

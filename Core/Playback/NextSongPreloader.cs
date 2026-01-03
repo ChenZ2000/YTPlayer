@@ -143,11 +143,25 @@ namespace YTPlayer.Core.Playback
                     urlResult.TryGetValue(song.Id, out var songUrl) &&
                     !string.IsNullOrEmpty(songUrl?.Url))
                 {
+                    long resolvedSize = songUrl.Size;
+                    if (resolvedSize <= 0)
+                    {
+                        var (_, contentLength) = await HttpRangeHelper.CheckRangeSupportAsync(songUrl.Url, _httpClient, cancellationToken, song.CustomHeaders).ConfigureAwait(false);
+                        if (contentLength > 0)
+                        {
+                            resolvedSize = contentLength;
+                        }
+                    }
+                    if (resolvedSize <= 0)
+                    {
+                        resolvedSize = StreamSizeEstimator.EstimateSizeFromBitrate(songUrl.Br, song.Duration);
+                    }
+
                     // 歌曲可用
                     song.IsAvailable = true;
                     song.Url = songUrl.Url;
                     song.Level = songUrl.Level;
-                    song.Size = songUrl.Size;
+                    song.Size = resolvedSize;
                     System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] ✓ 歌曲可用: {song.Name}");
                     return true;
                 }
@@ -270,15 +284,30 @@ namespace YTPlayer.Core.Playback
                         }
 
                         // ⭐⭐ 将获取的URL缓存到多音质字典中（包含试听信息）
+                        long resolvedSize = songUrl.Size;
+                        if (resolvedSize <= 0)
+                        {
+                            var (_, contentLength) = await HttpRangeHelper.CheckRangeSupportAsync(songUrl.Url, _httpClient, cancellationToken, nextSong.CustomHeaders).ConfigureAwait(false);
+                            if (contentLength > 0)
+                            {
+                                resolvedSize = contentLength;
+                            }
+                        }
+                        if (resolvedSize <= 0)
+                        {
+                            resolvedSize = StreamSizeEstimator.EstimateSizeFromBitrate(songUrl.Br, nextSong.Duration);
+                        }
+
                         string actualLevel = songUrl.Level?.ToLower() ?? qualityLevel;
-                        nextSong.SetQualityUrl(actualLevel, songUrl.Url, songUrl.Size, true, isTrial, trialStart, trialEnd);
-                        System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] ✓ 已缓存音质URL: {nextSong.Name}, 音质: {actualLevel}, 大小: {songUrl.Size}, 试听: {isTrial}");
+
+                        nextSong.SetQualityUrl(actualLevel, songUrl.Url, resolvedSize, true, isTrial, trialStart, trialEnd);
+                        System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] ✓ 已缓存音质URL: {nextSong.Name}, 音质: {actualLevel}, 大小: {resolvedSize}, 试听: {isTrial}");
 
                         // ✅ 成功获取 URL，标记为可用并更新当前字段
                         nextSong.IsAvailable = true;
                         nextSong.Url = songUrl.Url;
                         nextSong.Level = songUrl.Level;
-                        nextSong.Size = songUrl.Size;
+                        nextSong.Size = resolvedSize;
                         nextSong.IsTrial = isTrial;
                         nextSong.TrialStart = trialStart;
                         nextSong.TrialEnd = trialEnd;

@@ -519,7 +519,7 @@ namespace YTPlayer.Forms
             }
         }
 
-        private void ArtistDetailDialog_KeyDown(object sender, KeyEventArgs e)
+        private void ArtistDetailDialog_KeyDown(object? sender, KeyEventArgs e)
         {
             if (e.KeyCode == Keys.Escape)
             {

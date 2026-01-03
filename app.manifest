@@ -25,15 +25,6 @@
       <supportedOS Id="{35138b9a-5d96-4fbd-8e2d-a2440225f93a}" />
     </application>
   </compatibility>
-  <application xmlns="urn:schemas-microsoft-com:asm.v3">
-    <windowsSettings>
-      <!-- 禁用桌面 DPI 虚拟化，使用每显示器 DPI 感知 -->
-      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
-      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
-      <!-- 宣告支持高分屏，不需要自动缩放 -->
-      <gdiScaling xmlns="http://schemas.microsoft.com/SMI/2017/WindowsSettings">true</gdiScaling>
-    </windowsSettings>
-  </application>
   <!-- 关闭文件虚拟化，避免被当作旧程序 -->
   <asmv3:application xmlns:asmv3="urn:schemas-microsoft-com:asm.v3">
     <asmv3:windowsSettings xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">

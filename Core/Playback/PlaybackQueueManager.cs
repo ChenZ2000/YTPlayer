@@ -731,6 +731,44 @@ namespace YTPlayer.Core.Playback
             }
         }
 
+        public bool TryUpdateSongDetail(SongInfo updated)
+        {
+            if (updated == null || string.IsNullOrWhiteSpace(updated.Id))
+            {
+                return false;
+            }
+            bool changed = false;
+            lock (_syncRoot)
+            {
+                changed |= ReplaceSongIfMatch(_queue, updated);
+                changed |= ReplaceSongIfMatch(_injectionChain, updated);
+                if (_pendingInjection?.Song != null && _pendingInjection.Song.Id == updated.Id)
+                {
+                    _pendingInjection = new PendingInjectionInfo(updated, _pendingInjection.Source);
+                    changed = true;
+                }
+            }
+            return changed;
+        }
+
+        private static bool ReplaceSongIfMatch(List<SongInfo> list, SongInfo updated)
+        {
+            if (list == null || list.Count == 0)
+            {
+                return false;
+            }
+            bool changed = false;
+            for (int i = 0; i < list.Count; i++)
+            {
+                if (list[i]?.Id == updated.Id)
+                {
+                    list[i] = updated;
+                    changed = true;
+                }
+            }
+            return changed;
+        }
+
         public SongInfo PendingInjection
         {
             get

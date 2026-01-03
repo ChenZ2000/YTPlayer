@@ -14,7 +14,7 @@ namespace YTPlayer.Forms
 
         public DonateDialog()
         {
-            _qrCodePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "WeChatQRCode.jpg");
+            _qrCodePath = Utils.PathHelper.ResolveFromLibsOrRoot(Path.Combine("assets", "WeChatQRCode.jpg"));
             _qrPictureBox = new PictureBox();
             _subtitleLabel = new Label();
 

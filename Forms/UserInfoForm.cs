@@ -50,7 +50,7 @@ namespace YTPlayer.Forms
             }
         }
 
-        private async void UserInfoForm_Load(object sender, EventArgs e)
+        private async void UserInfoForm_Load(object? sender, EventArgs e)
         {
             await LoadUserInfoAsync();
         }

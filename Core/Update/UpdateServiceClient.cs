@@ -5,6 +5,7 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Security.Authentication;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -18,24 +19,27 @@ namespace YTPlayer.Update
         private readonly HttpClient _httpClient;
         private readonly string _endpoint;
 
-        static UpdateServiceClient()
-        {
-            ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
-        }
-
         public UpdateServiceClient(string endpoint, string productName, string productVersion)
         {
             _endpoint = string.IsNullOrWhiteSpace(endpoint) ? UpdateConstants.DefaultEndpoint : endpoint;
 
             var handler = new HttpClientHandler
             {
-                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+                MaxConnectionsPerServer = 100,
+                SslProtocols =
+#if NET48
+                    SslProtocols.Tls12
+#else
+                    SslProtocols.Tls12 | SslProtocols.Tls13
+#endif
             };
 
             _httpClient = new HttpClient(handler, disposeHandler: true)
             {
                 Timeout = Timeout.InfiniteTimeSpan
             };
+            _httpClient.DefaultRequestHeaders.ExpectContinue = false;
 
             _httpClient.DefaultRequestHeaders.UserAgent.Clear();
             string name = string.IsNullOrWhiteSpace(productName) ? "YTPlayer" : productName;
@@ -159,7 +163,7 @@ namespace YTPlayer.Update
                     continue;
                 }
 
-                string raw = values.FirstOrDefault();
+                string? raw = values.FirstOrDefault();
                 if (string.IsNullOrWhiteSpace(raw))
                 {
                     continue;

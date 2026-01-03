@@ -690,7 +690,7 @@ namespace YTPlayer.Core.Download
             // 给予短暂时间让任务响应取消（避免长时间阻塞）
             if (activeCancellations.Count > 0)
             {
-                System.Threading.Thread.Sleep(500); // 500ms 应该足够任务响应取消
+                Task.Delay(500).GetAwaiter().GetResult(); // 500ms 应该足够任务响应取消
             }
 
             _schedulerCts?.Dispose();
@@ -890,10 +890,29 @@ namespace YTPlayer.Core.Download
                 ? new Dictionary<string, string>(result.Headers, StringComparer.OrdinalIgnoreCase)
                 : null;
 
+            string level = StreamSizeEstimator.NormalizeQualityLevel(MapQualityLevel(task.Quality));
+
+            int durationSeconds = StreamSizeEstimator.NormalizeDurationSeconds(task.Song.Duration);
+            if (result.DurationMs.HasValue && result.DurationMs.Value > 0)
+            {
+                int resultSeconds = StreamSizeEstimator.NormalizeDurationSeconds((int)Math.Round(result.DurationMs.Value / 1000d));
+                if (resultSeconds > 0 && (durationSeconds <= 0 || Math.Abs(resultSeconds - durationSeconds) > 1))
+                {
+                    task.Song.Duration = resultSeconds;
+                    durationSeconds = resultSeconds;
+                }
+            }
+
             long size = result.Size > 0 ? result.Size : task.Song.Size;
             if (size <= 0)
             {
-                var (_, contentLength) = await HttpRangeHelper.CheckRangeSupportAsync(result.Url, null, cancellationToken, headers).ConfigureAwait(false);
+                using var sizeCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                sizeCts.CancelAfter(TimeSpan.FromSeconds(12));
+                long contentLength = await HttpRangeHelper.TryGetContentLengthAsync(
+                    result.Url,
+                    headers,
+                    sizeCts.Token,
+                    TimeSpan.FromSeconds(8)).ConfigureAwait(false);
                 if (contentLength > 0)
                 {
                     size = contentLength;
@@ -901,9 +920,17 @@ namespace YTPlayer.Core.Download
             }
             if (size <= 0)
             {
+                int bitrate = result.BitRate ?? 0;
+                if (bitrate <= 0)
+                {
+                    bitrate = StreamSizeEstimator.GetApproxBitrateForLevel(level);
+                }
+                size = StreamSizeEstimator.EstimateSizeFromBitrate(bitrate, durationSeconds);
+            }
+            if (size <= 0)
+            {
                 size = task.Song.Size > 0 ? task.Song.Size : 16 * 1024 * 1024;
             }
-            string level = MapQualityLevel(task.Quality);
 
             task.Song.IsAvailable = true;
             task.Song.IsTrial = false;

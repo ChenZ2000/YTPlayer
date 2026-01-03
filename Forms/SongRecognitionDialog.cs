@@ -51,15 +51,10 @@ namespace YTPlayer.Forms
 
             _deviceComboBox = new ComboBox
             {
-                DropDownStyle = ComboBoxStyle.DropDown,
+                DropDownStyle = ComboBoxStyle.DropDownList,
                 IntegralHeight = false,
                 Location = new Point(15, 45),
-                Size = new Size(420, 28),
-                AccessibleName = "聆听设备",
-                AccessibleDescription = "选择用于听歌识曲的录音或环回设备",
-                AccessibleRole = AccessibleRole.ComboBox,
-                AutoCompleteMode = AutoCompleteMode.SuggestAppend,
-                AutoCompleteSource = AutoCompleteSource.ListItems
+                Size = new Size(420, 28)
             };
 
             _deviceComboBox.KeyDown += DeviceComboBoxOnKeyDown;

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Windows.Forms;
+using System.ComponentModel;
 using YTPlayer.Update;
 
 namespace YTPlayer.Forms
@@ -26,6 +27,8 @@ namespace YTPlayer.Forms
             resultTextBox.SelectionLength = 0;
         }
 
+        [Browsable(false)]
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
         public Func<UpdatePlan, bool>? UpdateLauncher { get; set; }
 
         private string BuildSummaryText()

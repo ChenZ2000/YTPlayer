@@ -271,8 +271,12 @@ namespace YTPlayer.Core
                 return AudioDeviceSwitchResult.Failure("请选择有效的输出设备");
             }
 
-            await _playSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+            if (!await TryEnterPlaySemaphoreAsync(cancellationToken).ConfigureAwait(false))
+            {
+                return AudioDeviceSwitchResult.Failure("音频引擎已释放");
+            }
 
+            bool lockTaken = true;
             try
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -324,7 +328,17 @@ namespace YTPlayer.Core
             }
             finally
             {
-                _playSemaphore.Release();
+                if (lockTaken)
+                {
+                    try
+                    {
+                        _playSemaphore.Release();
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        // 已释放时忽略
+                    }
+                }
             }
         }
 
@@ -338,8 +352,12 @@ namespace YTPlayer.Core
 
             preloadedData ??= ConsumeGaplessPreload(song.Id);
 
-            await _playSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+            if (!await TryEnterPlaySemaphoreAsync(cancellationToken).ConfigureAwait(false))
+            {
+                return false;
+            }
 
+            bool lockTaken = true;
             try
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -588,20 +606,17 @@ namespace YTPlayer.Core
             }
             finally
             {
-                _playSemaphore.Release();
-            }
-        }
-
-        public bool Play(SongInfo song)
-        {
-            try
-            {
-                return Task.Run(() => PlayAsync(song, CancellationToken.None)).Result;
-            }
-            catch (AggregateException ex)
-            {
-                OnPlaybackError($"播放异常: {ex.InnerException?.Message ?? ex.Message}");
-                return false;
+                if (lockTaken)
+                {
+                    try
+                    {
+                        _playSemaphore.Release();
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        // 已释放时忽略
+                    }
+                }
             }
         }
 
@@ -767,7 +782,7 @@ namespace YTPlayer.Core
                         $"[BassAudioEngine] 🎯 已通知调度器优先下载目标位置: {seconds:F1}s");
 
                     // 短按场景：优先调度目标块本身
-                    await _currentCacheManager.EnsurePositionAsync(targetBytes, cancellationToken).ConfigureAwait(false);
+                    await _currentCacheManager.EnsurePositionAsync(targetBytes, cancellationToken, allowRangeRescue: true).ConfigureAwait(false);
 
                     // 然后等待数据就绪
                     bool dataReady = await _currentCacheManager.WaitForPositionReadyAsync(
@@ -787,7 +802,7 @@ namespace YTPlayer.Core
                         $"[BassAudioEngine] ✓ Seek 数据就绪: {seconds:F1}s");
 
                     // 主动预取目标后的少量块，避免短距跳转后立即卡顿
-                    _ = _currentCacheManager.PrefetchAroundAsync(targetBytes, aheadChunks: 2, cancellationToken);
+                    _ = _currentCacheManager.PrefetchAroundAsync(targetBytes, aheadChunks: 2, cancellationToken, allowRangeRescue: true);
                 }
                 catch (OperationCanceledException)
                 {
@@ -844,7 +859,7 @@ namespace YTPlayer.Core
 
         public void SetVolume(float volume)
         {
-            _volume = Math.Max(0f, Math.Min(volume, 1f)); // .NET Framework 4.8 不支持 Math.Clamp
+            _volume = Math.Max(0f, Math.Min(volume, 1f)); // 为保持兼容，避免依赖 Math.Clamp
             ApplyVolume();
         }
 
@@ -944,6 +959,24 @@ namespace YTPlayer.Core
             Debug.WriteLine("═══════════════════════════════════════════════════════");
         }
 
+        private async Task<bool> TryEnterPlaySemaphoreAsync(CancellationToken cancellationToken)
+        {
+            if (_disposed)
+            {
+                return false;
+            }
+
+            try
+            {
+                await _playSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+                return true;
+            }
+            catch (ObjectDisposedException)
+            {
+                return false;
+            }
+        }
+
         private void LoadBassFlacPlugin()
         {
             try
@@ -951,7 +984,7 @@ namespace YTPlayer.Core
                 // 优先从 libs 目录加载（新的依赖布局），找不到时回退到根目录
                 string searchRoot = Directory.Exists(PathHelper.LibsDirectory)
                     ? PathHelper.LibsDirectory
-                    : PathHelper.BaseDirectory;
+                    : PathHelper.ApplicationRootDirectory;
                 string bassflacPath = PathHelper.ResolveFromLibsOrBase("bassflac.dll");
                 Debug.WriteLine($"[BassAudioEngine]   查找路径: {bassflacPath}");
                 Debug.WriteLine($"[BassAudioEngine]   搜索根目录: {searchRoot}");

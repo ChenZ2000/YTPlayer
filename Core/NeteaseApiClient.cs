@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -31,7 +32,7 @@ namespace YTPlayer.Core
     /// <summary>
     /// 网易云音乐API客户端
     /// </summary>
-    public class NeteaseApiClient : IDisposable
+    public partial class NeteaseApiClient : IDisposable
     {
         #region 常量定义
 
@@ -87,6 +88,11 @@ namespace YTPlayer.Core
         private readonly string? _desktopUserAgent;
         private readonly object _throttleLock = new object();
         private readonly Dictionary<string, DateTime> _lastActionTimestamps = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, CommentCursorCache> _commentCursorCaches =
+            new ConcurrentDictionary<string, CommentCursorCache>(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, SemaphoreSlim> _commentCursorLocks =
+            new ConcurrentDictionary<string, SemaphoreSlim>(StringComparer.OrdinalIgnoreCase);
+        private static readonly TimeSpan CommentCursorCacheTtl = TimeSpan.FromMinutes(5);
 
         private static readonly (uint Start, uint End)[] ChineseIpRanges = new (uint, uint)[]
         {
@@ -203,29 +209,38 @@ namespace YTPlayer.Core
             {
                 CookieContainer = _cookieContainer,
                 UseCookies = true,
-                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+                MaxConnectionsPerServer = 100
             };
 
             _httpClient = new HttpClient(handler)
             {
                 Timeout = TimeSpan.FromSeconds(15)  // 优化：降低超时时间，配合音质fallback机制加快加载
             };
+            _httpClient.DefaultRequestHeaders.ExpectContinue = false;
 
-            _simplifiedClient = new HttpClient
+            var simplifiedHandler = new HttpClientHandler
+            {
+                MaxConnectionsPerServer = 100
+            };
+            _simplifiedClient = new HttpClient(simplifiedHandler)
             {
                 Timeout = TimeSpan.FromSeconds(8)   // 优化：降低公共API超时时间
             };
+            _simplifiedClient.DefaultRequestHeaders.ExpectContinue = false;
 
             // EAPI专用客户端：不使用CookieContainer，避免Cookie冲突
             var eapiHandler = new HttpClientHandler
             {
-                UseCookies = false  // 关键：不自动处理Cookie
+                UseCookies = false,  // 关键：不自动处理Cookie
+                MaxConnectionsPerServer = 100
                 // EAPI 返回的是 AES 密文，不能启用自动解压缩，否则密文会被破坏
             };
             _eapiClient = new HttpClient(eapiHandler)
             {
                 Timeout = TimeSpan.FromSeconds(15)
             };
+            _eapiClient.DefaultRequestHeaders.ExpectContinue = false;
 
             // iOS登录专用客户端：模拟参考项目 netease-music-simple-player (UseCookies=false)
             // 关键修复：避免 HttpClientHandler 自动注入 _cookieContainer 中的访客Cookie
@@ -233,12 +248,14 @@ namespace YTPlayer.Core
             var iOSLoginHandler = new HttpClientHandler
             {
                 UseCookies = false,  // ⭐ 核心：禁用自动Cookie管理，完全手动控制Cookie
-                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+                MaxConnectionsPerServer = 100
             };
             _iOSLoginClient = new HttpClient(iOSLoginHandler)
             {
                 Timeout = TimeSpan.FromSeconds(15)
             };
+            _iOSLoginClient.DefaultRequestHeaders.ExpectContinue = false;
 
             _uploadHttpClient = OptimizedHttpClientFactory.CreateForPreCache(TimeSpan.FromMinutes(30));
 
@@ -601,139 +618,6 @@ namespace YTPlayer.Core
         /// <summary>
         /// 获取当前 Cookie 列表（用于配置持久化）。
         /// </summary>
-        public List<CookieItem> GetAllCookies()
-        {
-            var result = new List<CookieItem>();
-
-            try
-            {
-                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                var uris = new[]
-                {
-                    MUSIC_URI,
-                    INTERFACE_URI,
-                    EAPI_URI  // ⭐ 添加 interface3 域名支持
-                };
-
-                foreach (var uri in uris)
-                {
-                    CookieCollection collection = null;
-                    try
-                    {
-                        collection = _cookieContainer.GetCookies(uri);
-                    }
-                    catch { }
-
-                    if (collection == null || collection.Count == 0)
-                        continue;
-
-                    foreach (Cookie cookie in collection)
-                    {
-                        string key = $"{cookie.Name}|{cookie.Domain}|{cookie.Path}";
-                        if (seen.Add(key))
-                        {
-                            result.Add(new CookieItem
-                            {
-                                Name = cookie.Name,
-                                Value = cookie.Value,
-                                Domain = cookie.Domain,
-                                Path = cookie.Path
-                            });
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[COOKIE] 获取Cookie列表失败: {ex.Message}");
-            }
-
-            return result;
-        }
-
-        /// <summary>
-        /// 获取当前登录状态的快照副本，供上层安全读取。
-        /// </summary>
-        public AccountState GetAccountStateSnapshot()
-        {
-            if (_authContext == null)
-            {
-                return new AccountState { IsLoggedIn = false };
-            }
-
-            try
-            {
-                var state = _authContext.CurrentAccountState;
-                return CloneAccountState(state);
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[Auth] 获取登录状态快照失败: {ex.Message}");
-                return new AccountState { IsLoggedIn = false };
-            }
-        }
-
-        private static AccountState CloneAccountState(AccountState source)
-        {
-            if (source == null)
-            {
-                return new AccountState { IsLoggedIn = false };
-            }
-
-            var clone = new AccountState
-            {
-                IsLoggedIn = source.IsLoggedIn,
-                Cookie = source.Cookie,
-                MusicU = source.MusicU,
-                CsrfToken = source.CsrfToken,
-                UserId = source.UserId,
-                Nickname = source.Nickname,
-                AvatarUrl = source.AvatarUrl,
-                VipType = source.VipType,
-                LastUpdated = source.LastUpdated,
-                DeviceId = source.DeviceId,
-                NmtId = source.NmtId,
-                NtesNuid = source.NtesNuid,
-                WnmCid = source.WnmCid,
-                AntiCheatToken = source.AntiCheatToken,
-                AntiCheatTokenExpiresAt = source.AntiCheatTokenExpiresAt
-            };
-
-            clone.Cookies = CloneCookieItems(source.Cookies);
-            return clone;
-        }
-
-        private static List<CookieItem> CloneCookieItems(IEnumerable<CookieItem> items)
-        {
-            var clone = new List<CookieItem>();
-            if (items == null)
-            {
-                return clone;
-            }
-
-            foreach (var item in items)
-            {
-                if (item == null)
-                {
-                    continue;
-                }
-
-                clone.Add(new CookieItem
-                {
-                    Name = item.Name,
-                    Value = item.Value,
-                    Domain = item.Domain,
-                    Path = item.Path
-                });
-            }
-
-            return clone;
-        }
-
-        /// <summary>
-        /// 应用配置中保存的 Cookie 列表。
-        /// </summary>
-        /// <param name="cookies">Cookie 集合</param>
         public void ApplyCookies(IEnumerable<CookieItem> cookies)
         {
             if (cookies == null)
@@ -1224,6 +1108,88 @@ namespace YTPlayer.Core
             return responseText;
         }
 
+        private static string AppendQueryParameter(string url, string key, string value)
+        {
+            if (string.IsNullOrEmpty(url) || string.IsNullOrEmpty(key))
+            {
+                return url ?? string.Empty;
+            }
+
+            string separator;
+            if (!url.Contains("?"))
+            {
+                separator = "?";
+            }
+            else if (url.EndsWith("?") || url.EndsWith("&"))
+            {
+                separator = string.Empty;
+            }
+            else
+            {
+                separator = "&";
+            }
+
+            string encodedValue = Uri.EscapeDataString(value ?? string.Empty);
+            return $"{url}{separator}{key}={encodedValue}";
+        }
+
+        private static string? TryWriteDebugFile(string prefix, string extension, string content)
+        {
+            try
+            {
+                string safeExtension = string.IsNullOrWhiteSpace(extension) ? "log" : extension.TrimStart('.');
+                string fileName = $"{prefix}_{DateTime.Now:yyyyMMdd_HHmmss_fff}_{Guid.NewGuid():N}.{safeExtension}";
+                string path = Path.Combine(Path.GetTempPath(), fileName);
+                File.WriteAllText(path, content);
+                return path;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private async Task<T> HandleWeApiInvalidResponseAsync<T>(
+            string message,
+            string url,
+            HttpStatusCode statusCode,
+            string? debugFile,
+            string path,
+            object payload,
+            int retryCount,
+            bool skipErrorHandling,
+            CancellationToken cancellationToken,
+            string baseUrl,
+            bool autoConvertApiSegment)
+        {
+            if (retryCount < MAX_RETRY_COUNT)
+            {
+                int delayMs = GetRandomRetryDelay();
+                await Task.Delay(delayMs, cancellationToken).ConfigureAwait(false);
+                return await PostWeApiAsync<T>(
+                    path,
+                    payload,
+                    retryCount + 1,
+                    skipErrorHandling,
+                    cancellationToken,
+                    baseUrl,
+                    autoConvertApiSegment).ConfigureAwait(false);
+            }
+
+            if (typeof(T) == typeof(JObject))
+            {
+                var error = new JObject
+                {
+                    ["code"] = -1,
+                    ["message"] = message,
+                    ["status"] = (int)statusCode
+                };
+                return (T)(object)error;
+            }
+
+            throw new ApiResponseCorruptedException(statusCode, url, message, debugFile);
+        }
+
         #endregion
 
         #region 加密请求方法
@@ -1316,14 +1282,12 @@ namespace YTPlayer.Core
                 // 添加csrf_token查询参数（如果有的话）
                 if (!string.IsNullOrEmpty(_csrfToken))
                 {
-                    string sep = url.Contains("?") ? "&" : "?";
-                    url = $"{url}{sep}csrf_token={_csrfToken}";
+                    url = AppendQueryParameter(url, "csrf_token", _csrfToken);
                 }
 
                 // 添加时间戳参数，避免缓存
-                string sep2 = url.Contains("?") ? "&" : "?";
                 long timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                url = $"{url}{sep2}t={timestamp}";
+                url = AppendQueryParameter(url, "t", timestamp.ToString(CultureInfo.InvariantCulture));
 
                 // ⭐ 调试：输出Cookie信息
                 var cookies = _cookieContainer.GetCookies(baseUri);
@@ -1363,21 +1327,46 @@ namespace YTPlayer.Core
                         System.Diagnostics.Debug.WriteLine("[DEBUG WEAPI] Response Preview: <empty>");
                     }
 
-                    if (!responseText.TrimStart().StartsWith("{") && !responseText.TrimStart().StartsWith("["))
+                    string trimmedResponse = responseText?.TrimStart() ?? string.Empty;
+                    if (string.IsNullOrWhiteSpace(trimmedResponse) ||
+                        (!trimmedResponse.StartsWith("{") && !trimmedResponse.StartsWith("[")))
                     {
                         string? debugFile = null;
-                        try
+                        if (!string.IsNullOrWhiteSpace(responseText))
                         {
-                            debugFile = System.IO.Path.Combine(
-                                System.IO.Path.GetTempPath(),
-                                $"netease_debug_response_{DateTime.Now:yyyyMMdd_HHmmss}.html"
-                            );
-                            System.IO.File.WriteAllText(debugFile, $"URL: {url}\n\nStatus: {response.StatusCode}\n\n{responseText}");
-                            System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] !!!响应不是JSON!!! 已保存到: {debugFile}");
+                            try
+                            {
+                                debugFile = TryWriteDebugFile(
+                                    "netease_debug_response",
+                                    "html",
+                                    $"URL: {url}\n\nStatus: {response.StatusCode}\n\n{responseText}"
+                                );
+                                if (!string.IsNullOrEmpty(debugFile))
+                                {
+                                    System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] !!!响应不是JSON!!! 已保存到: {debugFile}");
+                                }
+                            }
+                            catch
+                            {
+                            }
                         }
-                        catch { }
 
-                        throw new ApiResponseCorruptedException(response.StatusCode, url, $"服务器返回非JSON响应（状态码: {response.StatusCode}），可能是网络问题或API限流", debugFile);
+                        string errorMessage = string.IsNullOrWhiteSpace(responseText)
+                            ? $"服务器返回空响应（状态码: {response.StatusCode}），可能是网络问题或API限流"
+                            : $"服务器返回非JSON响应（状态码: {response.StatusCode}），可能是网络问题或API限流";
+
+                        return await HandleWeApiInvalidResponseAsync<T>(
+                            errorMessage,
+                            url,
+                            response.StatusCode,
+                            debugFile,
+                            path,
+                            payload,
+                            retryCount,
+                            skipErrorHandling,
+                            cancellationToken,
+                            baseUrl,
+                            autoConvertApiSegment).ConfigureAwait(false);
                     }
 
                     JObject json;
@@ -1390,21 +1379,34 @@ namespace YTPlayer.Core
                     {
                         System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] JSON解析失败: {ex.Message}");
                         System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] 响应原文: {responseText}");
-
+                    
                         string? debugFile = null;
                         try
                         {
-                            debugFile = System.IO.Path.Combine(
-                                System.IO.Path.GetTempPath(),
-                                $"netease_json_error_{DateTime.Now:yyyyMMdd_HHmmss}.txt"
-                            );
-                            System.IO.File.WriteAllText(debugFile, $"URL: {url}\n\nError: {ex.Message}\n\nResponse:\n{responseText}");
-                            System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] 错误响应已保存到: {debugFile}");
+                            debugFile = TryWriteDebugFile("netease_json_error", "txt", $"URL: {url}\n\nError: {ex.Message}\n\nResponse:\n{responseText}");
+                            if (!string.IsNullOrEmpty(debugFile))
+                            {
+                                System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] 错误响应已保存到: {debugFile}");
+                            }
                         }
-                        catch { }
-
-                        throw new ApiResponseCorruptedException(response.StatusCode, url, $"JSON解析失败: {ex.Message}，响应内容可能已损坏", debugFile, ex);
+                        catch
+                        {
+                        }
+                    
+                        return await HandleWeApiInvalidResponseAsync<T>(
+                            $"JSON解析失败: {ex.Message}，响应内容可能已损坏",
+                            url,
+                            response.StatusCode,
+                            debugFile,
+                            path,
+                            payload,
+                            retryCount,
+                            skipErrorHandling,
+                            cancellationToken,
+                            baseUrl,
+                            autoConvertApiSegment).ConfigureAwait(false);
                     }
+
 
                     int code = json["code"]?.Value<int>() ?? -1;
                     string message = json["message"]?.Value<string>() ?? json["msg"]?.Value<string>() ?? "Unknown error";
@@ -1498,13 +1500,11 @@ namespace YTPlayer.Core
                     string url = $"{OFFICIAL_API_BASE}/weapi{path}";
                     if (!string.IsNullOrEmpty(_csrfToken))
                     {
-                        string sep = url.Contains("?") ? "&" : "?";
-                        url = $"{url}{sep}csrf_token={_csrfToken}";
+                        url = AppendQueryParameter(url, "csrf_token", _csrfToken);
                     }
                     // 添加时间戳
-                    string sep2 = url.Contains("?") ? "&" : "?";
                     long timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                    url = $"{url}{sep2}t={timestamp}";
+                    url = AppendQueryParameter(url, "t", timestamp.ToString(CultureInfo.InvariantCulture));
 
                     // WEAPI 加密
                     string jsonPayload = JsonConvert.SerializeObject(payloadDict, Formatting.None);
@@ -1683,13 +1683,11 @@ namespace YTPlayer.Core
                     string url = $"{OFFICIAL_API_BASE}/weapi{path}";
                     if (!string.IsNullOrEmpty(_csrfToken))
                     {
-                        string sep = url.Contains("?") ? "&" : "?";
-                        url = $"{url}{sep}csrf_token={_csrfToken}";
+                        url = AppendQueryParameter(url, "csrf_token", _csrfToken);
                     }
                     // 添加时间戳
-                    string sep2 = url.Contains("?") ? "&" : "?";
                     long timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                    url = $"{url}{sep2}t={timestamp}";
+                    url = AppendQueryParameter(url, "t", timestamp.ToString(CultureInfo.InvariantCulture));
 
                     // WEAPI 加密
                     string jsonPayload = JsonConvert.SerializeObject(payloadDict, Formatting.None);
@@ -1852,7 +1850,10 @@ namespace YTPlayer.Core
                             string asciiPreview = Encoding.ASCII.GetString(preview).Replace("\r", "\\r").Replace("\n", "\\n").Replace("\0", "\\0");
                             System.Diagnostics.Debug.WriteLine($"[DEBUG EAPI] 响应前{preview.Length}字节 (ASCII): {asciiPreview}");
                         }
-                        catch { }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[DEBUG EAPI] ASCII preview failed: {ex.Message}");
+                        }
                     }
 
                     // 记录响应头中的编码信息
@@ -2263,8 +2264,7 @@ namespace YTPlayer.Core
                 }
             }
 
-            // Brotli 解压在 .NET Framework 4.8 中需要额外依赖，运行时不一定提供。
-            // 为避免缺少类型导致编译失败，这里通过反射探测并在可用时才启用。
+            // Brotli 解压依赖外部库，保持可选启用策略以避免运行时缺失导致失败。
             if (!decompressed && !LooksLikePlainJson(working))
             {
                 try
@@ -3442,6 +3442,144 @@ namespace YTPlayer.Core
         }
 
         /// <summary>
+        /// 获取国家地区编码列表（用于手机号登录）
+        /// </summary>
+        public async Task<List<CountryCodeInfo>> GetCountryCodeListAsync()
+        {
+            var payload = new Dictionary<string, object>();
+
+            JObject result = await PostEApiAsync<JObject>(
+                "/api/lbs/countries/v1",
+                payload,
+                useIosHeaders: true,
+                skipErrorHandling: true).ConfigureAwait(false);
+
+            int code = result["code"]?.Value<int>() ?? -1;
+            if (code != 200 && result["data"] == null)
+            {
+                string message = result["message"]?.Value<string>() ?? result["msg"]?.Value<string>() ?? "未知错误";
+                throw new Exception($"获取国家地区列表失败: {message} (code={code})");
+            }
+
+            JToken? dataToken = result["data"] ?? result["result"];
+            JToken? listToken = null;
+
+            if (dataToken is JArray arrayData)
+            {
+                listToken = arrayData;
+            }
+            else if (dataToken is JObject dataObj)
+            {
+                listToken = FindArrayToken(dataObj, "list", "countryList", "countries", "data", "items");
+            }
+
+            if (listToken == null && result is JObject rootObj)
+            {
+                listToken = FindArrayToken(rootObj, "list", "countryList", "countries", "data", "items");
+            }
+
+            if (listToken is not JArray listArray)
+            {
+                return new List<CountryCodeInfo>();
+            }
+
+            var map = new Dictionary<string, CountryCodeInfo>(StringComparer.OrdinalIgnoreCase);
+            foreach (var item in listArray)
+            {
+                if (item == null)
+                {
+                    continue;
+                }
+
+                string codeText = GetStringValue(item, "code", "countrycode", "countryCode", "id");
+                if (string.IsNullOrWhiteSpace(codeText))
+                {
+                    continue;
+                }
+
+                codeText = codeText.Trim().TrimStart('+');
+
+                string zhName = GetLocalizedName(item, "zh", "cn", "name", "country", "label", "zhName");
+                string enName = GetLocalizedName(item, "en", "enName", "englishName", "enUS", "enGB");
+
+                if (!map.TryGetValue(codeText, out var info))
+                {
+                    info = new CountryCodeInfo
+                    {
+                        Code = codeText,
+                        Name = zhName,
+                        EnglishName = enName
+                    };
+                    map[codeText] = info;
+                }
+                else
+                {
+                    if (string.IsNullOrWhiteSpace(info.Name) && !string.IsNullOrWhiteSpace(zhName))
+                    {
+                        info.Name = zhName;
+                    }
+                    if (string.IsNullOrWhiteSpace(info.EnglishName) && !string.IsNullOrWhiteSpace(enName))
+                    {
+                        info.EnglishName = enName;
+                    }
+                }
+            }
+
+            return map.Values.ToList();
+
+            static JArray? FindArrayToken(JObject obj, params string[] keys)
+            {
+                foreach (var key in keys)
+                {
+                    if (obj.TryGetValue(key, out var token) && token is JArray arr)
+                    {
+                        return arr;
+                    }
+                }
+                return null;
+            }
+
+            static string GetStringValue(JToken token, params string[] keys)
+            {
+                if (token is JObject obj)
+                {
+                    foreach (var key in keys)
+                    {
+                        if (obj.TryGetValue(key, out var value) && value != null)
+                        {
+                            string text = value.ToString().Trim();
+                            if (!string.IsNullOrWhiteSpace(text))
+                            {
+                                return text;
+                            }
+                        }
+                    }
+                }
+                return string.Empty;
+            }
+
+            static string GetLocalizedName(JToken token, params string[] keys)
+            {
+                if (token is JObject obj)
+                {
+                    var locales = obj["locale"] ?? obj["locales"] ?? obj["names"];
+                    if (locales != null)
+                    {
+                        string name = GetStringValue(locales, keys);
+                        if (!string.IsNullOrWhiteSpace(name))
+                        {
+                            return name;
+                        }
+                    }
+
+                    return GetStringValue(obj, keys);
+                }
+
+                return string.Empty;
+            }
+        }
+
+        /// <summary>
         /// 完成登录后的初始化工作
         /// ⭐⭐⭐ 在登录成功后调用，确保Cookie完全同步并进行会话预热
         /// </summary>
@@ -3497,7 +3635,10 @@ namespace YTPlayer.Core
                     };
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[GetUserInfo] Failed: {ex.Message}");
+            }
 
             return null;
         }
@@ -5229,7 +5370,10 @@ namespace YTPlayer.Core
                     var result = await GetSimplifiedApiAsync<JObject>("/playlist/detail", parameters);
                     return ParsePlaylistDetail(result["playlist"] as JObject);
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[PlaylistDetail] Simplified API failed: {ex.Message}");
+                }
             }
 
             // 使用加密API
@@ -5343,7 +5487,7 @@ namespace YTPlayer.Core
         /// 批量获取歌曲详情（参考 Python 版本 _fetch_songs_by_ids，11967-11977行）
         /// 添加延迟避免触发风控限流，减小批次大小提高成功率
         /// </summary>
-        private async Task<List<SongInfo>> GetSongsByIdsAsync(List<string> ids, CancellationToken cancellationToken = default)
+        public async Task<List<SongInfo>> GetSongsByIdsAsync(List<string> ids, CancellationToken cancellationToken = default)
         {
             var allSongs = new List<SongInfo>();
             // 减小批次大小到200，降低触发风控概率
@@ -6236,14 +6380,16 @@ namespace YTPlayer.Core
                 // ⭐ 修复：添加更详细的错误检查
                 if (response == null)
                 {
-                    throw new Exception("获取用户信息失败: 响应为空");
+                    System.Diagnostics.Debug.WriteLine("[GetUserAccountAsync] 获取用户信息失败: 响应为空");
+                    return new UserAccountInfo();
                 }
 
                 int code = response["code"]?.Value<int>() ?? -1;
                 if (code != 200)
                 {
                     string message = response["message"]?.Value<string>() ?? "未知错误";
-                    throw new Exception($"获取用户信息失败: code={code}, message={message}");
+                    System.Diagnostics.Debug.WriteLine($"[GetUserAccountAsync] 获取用户信息失败: code={code}, message={message}");
+                    return new UserAccountInfo();
                 }
 
                 // 调试：输出完整的响应数据
@@ -6256,7 +6402,8 @@ namespace YTPlayer.Core
                 // ⭐ 修复：添加 null 检查并抛出异常
                 if (profile == null)
                 {
-                    throw new Exception("获取用户信息失败: profile 字段为空");
+                    System.Diagnostics.Debug.WriteLine("[GetUserAccountAsync] 获取用户信息失败: profile 字段为空");
+                    return new UserAccountInfo();
                 }
 
             // 从 account 字段获取 VIP 信息
@@ -6452,13 +6599,14 @@ namespace YTPlayer.Core
             }
             catch (Exception ex)
             {
-                // ⭐ 修复：记录完整错误信息并重新抛出异常
+                // ⭐ 修复：记录完整错误信息并返回空对象，避免界面异常
                 System.Diagnostics.Debug.WriteLine($"[GetUserAccountAsync] 失败: {ex.Message}");
                 System.Diagnostics.Debug.WriteLine($"[GetUserAccountAsync] 异常类型: {ex.GetType().Name}");
                 System.Diagnostics.Debug.WriteLine($"[GetUserAccountAsync] 堆栈跟踪: {ex.StackTrace}");
-                throw; // 重新抛出异常，让调用者处理
+                return new UserAccountInfo();
             }
         }
+
 
         /// <summary>
         /// 获取每日推荐歌单
@@ -8608,6 +8756,12 @@ namespace YTPlayer.Core
         #endregion
 
         #region 评论相关
+        private sealed class CommentCursorCache
+        {
+            public Dictionary<int, string> CursorByPage { get; } = new Dictionary<int, string>();
+            public DateTime LastAccessUtc { get; set; } = DateTime.UtcNow;
+        }
+
 
         /// <summary>
         /// 获取评论
@@ -8649,7 +8803,16 @@ namespace YTPlayer.Core
                 throw new InvalidOperationException($"评论接口请求失败: code={code}, message={message}");
             }
 
-            return ParseComments(response);
+            var parsed = ParseComments(response, sortType);
+            if (parsed.PageNumber <= 0)
+            {
+                parsed.PageNumber = pageNo;
+            }
+            if (parsed.PageSize <= 0 || parsed.PageSize != pageSize)
+            {
+                parsed.PageSize = pageSize;
+            }
+            return parsed;
         }
 
         /// <summary>
@@ -8689,6 +8852,243 @@ namespace YTPlayer.Core
                 autoConvertApiSegment: true);
 
             return ParseCommentFloor(response, parentCommentId);
+        }
+
+        public async Task<CommentResult> GetCommentsPageAsync(string resourceId, CommentType type = CommentType.Song,
+            int pageNo = 1, int pageSize = 20, CommentSortType sortType = CommentSortType.Hot,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(resourceId))
+            {
+                throw new ArgumentException("resourceId cannot be null or empty", nameof(resourceId));
+            }
+
+            resourceId = resourceId.Trim();
+            if (pageNo <= 0) pageNo = 1;
+            if (pageSize <= 0) pageSize = 20;
+
+            if (sortType != CommentSortType.Time)
+            {
+                return await GetCommentsAsync(resourceId, type, pageNo, pageSize, sortType, null, cancellationToken).ConfigureAwait(false);
+            }
+
+            string threadId = BuildCommentThreadId(type, resourceId);
+            int sortCode = MapCommentSortType(sortType);
+            string cacheKey = BuildCommentCursorCacheKey(threadId, sortCode, pageSize);
+            return await GetCommentsPageWithCursorCacheAsync(resourceId, type, pageNo, pageSize, sortType, cacheKey, cancellationToken).ConfigureAwait(false);
+        }
+
+        public async Task<CommentFloorResult> GetCommentFloorPageAsync(string resourceId, string parentCommentId,
+            CommentType type = CommentType.Song, int pageNo = 1, int pageSize = 20,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(resourceId))
+            {
+                throw new ArgumentException("resourceId cannot be null or empty", nameof(resourceId));
+            }
+
+            if (string.IsNullOrWhiteSpace(parentCommentId))
+            {
+                throw new ArgumentException("parentCommentId cannot be null or empty", nameof(parentCommentId));
+            }
+
+            resourceId = resourceId.Trim();
+            parentCommentId = parentCommentId.Trim();
+            if (pageNo <= 0) pageNo = 1;
+            if (pageSize <= 0) pageSize = 20;
+
+            string threadId = BuildCommentThreadId(type, resourceId);
+            string cacheKey = BuildCommentFloorCursorCacheKey(threadId, parentCommentId, pageSize);
+            return await GetCommentFloorPageWithCursorCacheAsync(resourceId, parentCommentId, type, pageNo, pageSize, cacheKey, cancellationToken).ConfigureAwait(false);
+        }
+
+        private async Task<CommentResult> GetCommentsPageWithCursorCacheAsync(string resourceId, CommentType type, int pageNo, int pageSize,
+            CommentSortType sortType, string cacheKey, CancellationToken cancellationToken)
+        {
+            int safePageNo = Math.Max(1, pageNo);
+            int safePageSize = Math.Max(1, pageSize);
+
+            TrimCommentCursorCaches();
+
+            var gate = _commentCursorLocks.GetOrAdd(cacheKey, _ => new SemaphoreSlim(1, 1));
+            await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var cache = _commentCursorCaches.GetOrAdd(cacheKey, _ => new CommentCursorCache());
+                cache.LastAccessUtc = DateTime.UtcNow;
+                if (cache.CursorByPage.Count == 0)
+                {
+                    cache.CursorByPage[1] = "0";
+                }
+
+                if (cache.CursorByPage.TryGetValue(safePageNo, out string? cachedCursor))
+                {
+                    var result = await GetCommentsAsync(resourceId, type, safePageNo, safePageSize, sortType, cachedCursor, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (!string.IsNullOrWhiteSpace(result.Cursor))
+                    {
+                        cache.CursorByPage[safePageNo + 1] = result.Cursor;
+                    }
+                    return result;
+                }
+
+                int nearestPage = cache.CursorByPage.Keys.Where(key => key <= safePageNo).DefaultIfEmpty(1).Max();
+                string cursor = cache.CursorByPage.TryGetValue(nearestPage, out var nearestCursor)
+                    ? nearestCursor
+                    : "0";
+
+                CommentResult? lastResult = null;
+                for (int page = nearestPage; page <= safePageNo; page++)
+                {
+                    var result = await GetCommentsAsync(resourceId, type, page, safePageSize, sortType, cursor, cancellationToken)
+                        .ConfigureAwait(false);
+                    lastResult = result;
+
+                    string? nextCursor = result.Cursor;
+                    if (!string.IsNullOrWhiteSpace(nextCursor))
+                    {
+                        cache.CursorByPage[page + 1] = nextCursor;
+                    }
+
+                    if (page == safePageNo)
+                    {
+                        return result;
+                    }
+
+                    if (string.IsNullOrWhiteSpace(nextCursor) || !result.HasMore)
+                    {
+                        break;
+                    }
+
+                    cursor = nextCursor;
+                }
+
+                return new CommentResult
+                {
+                    PageNumber = safePageNo,
+                    PageSize = safePageSize,
+                    SortType = sortType,
+                    TotalCount = lastResult?.TotalCount ?? 0,
+                    HasMore = false
+                };
+            }
+            finally
+            {
+                gate.Release();
+            }
+        }
+
+        private async Task<CommentFloorResult> GetCommentFloorPageWithCursorCacheAsync(string resourceId, string parentCommentId, CommentType type,
+            int pageNo, int pageSize, string cacheKey, CancellationToken cancellationToken)
+        {
+            int safePageNo = Math.Max(1, pageNo);
+            int safePageSize = Math.Max(1, pageSize);
+
+            TrimCommentCursorCaches();
+
+            var gate = _commentCursorLocks.GetOrAdd(cacheKey, _ => new SemaphoreSlim(1, 1));
+            await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var cache = _commentCursorCaches.GetOrAdd(cacheKey, _ => new CommentCursorCache());
+                cache.LastAccessUtc = DateTime.UtcNow;
+                if (cache.CursorByPage.Count == 0)
+                {
+                    cache.CursorByPage[1] = "-1";
+                }
+
+                if (cache.CursorByPage.TryGetValue(safePageNo, out string? cachedCursor))
+                {
+                    long cursorValue = ParseFloorCursor(cachedCursor);
+                    var result = await GetCommentFloorAsync(resourceId, parentCommentId, type, cursorValue, safePageSize, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (result.NextTime.HasValue)
+                    {
+                        cache.CursorByPage[safePageNo + 1] = result.NextTime.Value.ToString(CultureInfo.InvariantCulture);
+                    }
+                    return result;
+                }
+
+                int nearestPage = cache.CursorByPage.Keys.Where(key => key <= safePageNo).DefaultIfEmpty(1).Max();
+                string cursorText = cache.CursorByPage.TryGetValue(nearestPage, out var nearestCursor)
+                    ? nearestCursor
+                    : "-1";
+                long cursor = ParseFloorCursor(cursorText);
+
+                CommentFloorResult? lastResult = null;
+                for (int page = nearestPage; page <= safePageNo; page++)
+                {
+                    var result = await GetCommentFloorAsync(resourceId, parentCommentId, type, cursor, safePageSize, cancellationToken)
+                        .ConfigureAwait(false);
+                    lastResult = result;
+
+                    if (result.NextTime.HasValue)
+                    {
+                        cache.CursorByPage[page + 1] = result.NextTime.Value.ToString(CultureInfo.InvariantCulture);
+                    }
+
+                    if (page == safePageNo)
+                    {
+                        return result;
+                    }
+
+                    if (!result.HasMore || !result.NextTime.HasValue)
+                    {
+                        break;
+                    }
+
+                    cursor = result.NextTime.Value;
+                }
+
+                return new CommentFloorResult
+                {
+                    ParentCommentId = parentCommentId,
+                    TotalCount = lastResult?.TotalCount ?? 0,
+                    HasMore = false
+                };
+            }
+            finally
+            {
+                gate.Release();
+            }
+        }
+
+        private static long ParseFloorCursor(string? cursorText)
+        {
+            if (string.IsNullOrWhiteSpace(cursorText))
+            {
+                return -1;
+            }
+
+            if (long.TryParse(cursorText, NumberStyles.Integer, CultureInfo.InvariantCulture, out long parsed))
+            {
+                return parsed;
+            }
+
+            return -1;
+        }
+
+        private static string BuildCommentCursorCacheKey(string threadId, int sortCode, int pageSize)
+        {
+            return $"comment_new:{threadId}:{sortCode}:{pageSize}";
+        }
+
+        private static string BuildCommentFloorCursorCacheKey(string threadId, string parentCommentId, int pageSize)
+        {
+            return $"comment_floor:{threadId}:{parentCommentId}:{pageSize}";
+        }
+
+        private void TrimCommentCursorCaches()
+        {
+            var cutoff = DateTime.UtcNow - CommentCursorCacheTtl;
+            foreach (var entry in _commentCursorCaches)
+            {
+                if (entry.Value.LastAccessUtc < cutoff)
+                {
+                    _commentCursorCaches.TryRemove(entry.Key, out _);
+                    _commentCursorLocks.TryRemove(entry.Key, out _);
+                }
+            }
         }
 
         /// <summary>
@@ -9605,7 +10005,10 @@ namespace YTPlayer.Core
 
                     result.Add(albumInfo);
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[AlbumParse] Failed to parse album entry: {ex.Message}");
+                }
             }
 
             return result;
@@ -9841,7 +10244,7 @@ namespace YTPlayer.Core
         /// <summary>
         /// 解析评论
         /// </summary>
-        private CommentResult ParseComments(JObject commentData)
+        private CommentResult ParseComments(JObject commentData, CommentSortType? preferredSortType)
         {
             var result = new CommentResult();
 
@@ -9861,26 +10264,110 @@ namespace YTPlayer.Core
             result.PageSize = data["pageSize"]?.Value<int>() ?? result.PageSize;
             result.Cursor = ExtractCursorValue(data["cursor"]) ?? result.Cursor;
 
-            int sortValue = data["sortType"]?.Value<int?>() ?? (int)result.SortType;
-            result.SortType = Enum.IsDefined(typeof(CommentSortType), sortValue)
-                ? (CommentSortType)sortValue
-                : result.SortType;
-
-            var comments = data["comments"] as JArray;
-            if (comments != null)
+            int apiSortType = data["sortType"]?.Value<int?>() ?? 0;
+            if (apiSortType == 0 && preferredSortType.HasValue)
             {
-                foreach (var comment in comments)
+                apiSortType = MapCommentSortType(preferredSortType.Value);
+            }
+
+            result.SortType = apiSortType switch
+            {
+                2 => CommentSortType.Hot,
+                3 => CommentSortType.Time,
+                _ => preferredSortType ?? result.SortType
+            };
+
+            var commentIdSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            List<CommentInfo> ParseComments(JArray? items)
+            {
+                var parsedList = new List<CommentInfo>();
+                if (items == null)
                 {
-                    if (comment is JObject commentObject)
+                    return parsedList;
+                }
+
+                foreach (var comment in items)
+                {
+                    if (comment is not JObject commentObject)
                     {
-                        var parsed = ParseCommentToken(commentObject);
-                        if (parsed != null)
-                        {
-                            result.Comments.Add(parsed);
-                        }
+                        continue;
+                    }
+
+                    var parsed = ParseCommentToken(commentObject);
+                    if (parsed == null || string.IsNullOrWhiteSpace(parsed.CommentId))
+                    {
+                        continue;
+                    }
+
+                    if (commentIdSet.Add(parsed.CommentId))
+                    {
+                        parsedList.Add(parsed);
                     }
                 }
+
+                return parsedList;
             }
+
+            var topList = ParseComments(data["topComments"] as JArray);
+            var hotList = ParseComments(data["hotComments"] as JArray);
+            var normalList = ParseComments(data["comments"] as JArray);
+
+            if (apiSortType == 2)
+            {
+                hotList.Sort((left, right) =>
+                {
+                    int likedCompare = right.LikedCount.CompareTo(left.LikedCount);
+                    if (likedCompare != 0)
+                    {
+                        return likedCompare;
+                    }
+
+                    int timeCompare = right.TimeMilliseconds.CompareTo(left.TimeMilliseconds);
+                    if (timeCompare != 0)
+                    {
+                        return timeCompare;
+                    }
+
+                    return string.CompareOrdinal(left.CommentId, right.CommentId);
+                });
+
+                normalList.Sort((left, right) =>
+                {
+                    int likedCompare = right.LikedCount.CompareTo(left.LikedCount);
+                    if (likedCompare != 0)
+                    {
+                        return likedCompare;
+                    }
+
+                    int timeCompare = right.TimeMilliseconds.CompareTo(left.TimeMilliseconds);
+                    if (timeCompare != 0)
+                    {
+                        return timeCompare;
+                    }
+
+                    return string.CompareOrdinal(left.CommentId, right.CommentId);
+                });
+            }
+            else if (apiSortType == 3)
+            {
+                normalList.Sort((left, right) =>
+                {
+                    int timeCompare = right.TimeMilliseconds.CompareTo(left.TimeMilliseconds);
+                    if (timeCompare != 0)
+                    {
+                        return timeCompare;
+                    }
+
+                    return string.CompareOrdinal(left.CommentId, right.CommentId);
+                });
+            }
+
+            result.Comments.AddRange(topList);
+            if (apiSortType == 2)
+            {
+                result.Comments.AddRange(hotList);
+            }
+            result.Comments.AddRange(normalList);
 
             return result;
         }
@@ -10155,7 +10642,7 @@ namespace YTPlayer.Core
                     Content = commentObject["content"]?.Value<string>() ?? string.Empty,
                     LikedCount = commentObject["likedCount"]?.Value<int>() ?? 0,
                     Liked = commentObject["liked"]?.Value<bool>() ?? false,
-                    IpLocation = commentObject["ipLocation"]?["location"]?.Value<string>() ?? string.Empty,
+                    IpLocation = ExtractIpLocation(commentObject["ipLocation"]),
                     ParentCommentId = NormalizeParentCommentId(commentObject["parentCommentId"], parentCommentId)
                 };
 
@@ -10169,8 +10656,17 @@ namespace YTPlayer.Core
                 var beReplied = commentObject["beReplied"] as JArray;
                 if (beReplied != null && beReplied.Count > 0)
                 {
-                    commentInfo.BeRepliedId = ConvertToStringId(beReplied[0]?["beRepliedCommentId"]);
-                    commentInfo.BeRepliedUserName = beReplied[0]?["user"]?["nickname"]?.Value<string>();
+                    var firstReply = beReplied[0];
+                    if (firstReply is JObject replyObject)
+                    {
+                        commentInfo.BeRepliedId = ConvertToStringId(replyObject["beRepliedCommentId"]);
+                        var replyUser = replyObject["user"] as JObject;
+                        commentInfo.BeRepliedUserName = replyUser?["nickname"]?.Value<string>();
+                    }
+                    else
+                    {
+                        commentInfo.BeRepliedId = ConvertToStringId(firstReply);
+                    }
                 }
 
                 int replyCount = commentObject["replyCount"]?.Value<int>() ?? 0;
@@ -10207,6 +10703,24 @@ namespace YTPlayer.Core
                 System.Diagnostics.Debug.WriteLine($"[API] 解析评论失败: {ex.Message}");
                 return null;
             }
+        }
+
+        private static string ExtractIpLocation(JToken? token)
+        {
+            if (token == null)
+            {
+                return string.Empty;
+            }
+
+            if (token.Type == JTokenType.Object)
+            {
+                return token["location"]?.Value<string>()
+                    ?? token["text"]?.Value<string>()
+                    ?? token["value"]?.Value<string>()
+                    ?? string.Empty;
+            }
+
+            return token.Value<string>() ?? string.Empty;
         }
 
         private static string? NormalizeParentCommentId(JToken? token, string? fallback)

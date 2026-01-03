@@ -6,7 +6,7 @@ namespace YTPlayer.Core.Streaming
 {
     /// <summary>
     /// 优化的HttpClient工厂 - 阶段2：TCP参数调优
-    /// 针对高码率音频流式播放优化网络参数（.NET Framework 4.8版本）
+    /// 针对高码率音频流式播放优化网络参数（.NET 10 版本）
     /// </summary>
     public static class OptimizedHttpClientFactory
     {
@@ -15,7 +15,7 @@ namespace YTPlayer.Core.Streaming
         /// </summary>
         public static HttpClient CreateForMainPlayback(TimeSpan? timeout = null)
         {
-            // .NET Framework 4.8 使用 HttpClientHandler
+            // .NET 10 使用 HttpClientHandler（SocketsHttpHandler 作为底层实现）
             var handler = new HttpClientHandler
             {
                 // ⭐ TCP连接池优化
@@ -29,13 +29,11 @@ namespace YTPlayer.Core.Streaming
                 MaxAutomaticRedirections = 10
             };
 
-            // ⭐ .NET Framework 4.8: 通过 ServicePointManager 全局优化TCP参数
-            ConfigureTcpSettings();
-
             var client = new HttpClient(handler)
             {
                 Timeout = timeout ?? TimeSpan.FromMinutes(10)
             };
+            client.DefaultRequestHeaders.ExpectContinue = false;
 
             // ⭐ 设置User-Agent避免被限速
             client.DefaultRequestHeaders.UserAgent.ParseAdd("NeteaseMusic-Player/1.0");
@@ -58,12 +56,11 @@ namespace YTPlayer.Core.Streaming
                 MaxAutomaticRedirections = 10
             };
 
-            ConfigureTcpSettings();
-
             var client = new HttpClient(handler)
             {
                 Timeout = timeout ?? TimeSpan.FromMinutes(5)
             };
+            client.DefaultRequestHeaders.ExpectContinue = false;
 
             client.DefaultRequestHeaders.UserAgent.ParseAdd("NeteaseMusic-PreCache/1.0");
             client.DefaultRequestHeaders.Connection.Add("keep-alive");
@@ -84,12 +81,11 @@ namespace YTPlayer.Core.Streaming
                 AllowAutoRedirect = true
             };
 
-            ConfigureTcpSettings();
-
             var client = new HttpClient(handler)
             {
                 Timeout = timeout ?? TimeSpan.FromMinutes(5)
             };
+            client.DefaultRequestHeaders.ExpectContinue = false;
 
             client.DefaultRequestHeaders.UserAgent.ParseAdd("NeteaseMusic-Seek/1.0");
             client.DefaultRequestHeaders.Connection.Add("keep-alive");
@@ -135,23 +131,7 @@ namespace YTPlayer.Core.Streaming
             });
         }
 
-        /// <summary>
-        /// 配置全局TCP设置（.NET Framework 4.8）
-        /// </summary>
-        private static void ConfigureTcpSettings()
-        {
-            // ⭐ 这些设置对所有HttpClient生效
-            // 最大并发连接数（已在Program.cs中设置为100）
-            // ServicePointManager.DefaultConnectionLimit = 100;
-
-            // ⭐ 禁用Expect100Continue，减少延迟
-            ServicePointManager.Expect100Continue = false;
-
-            // ⭐ 禁用Nagle算法，减少小包延迟
-            ServicePointManager.UseNagleAlgorithm = false;
-
-            // ⭐ 启用TCP Fast Open（Windows 10+ 自动支持）
-            // .NET Framework 4.8无法直接设置，依赖系统配置
-        }
+        // 注意：TCP 参数由 HttpClientHandler/SocketsHttpHandler 控制，
+        // 已在构造函数中设置 MaxConnectionsPerServer 与 ExpectContinue。
     }
 }

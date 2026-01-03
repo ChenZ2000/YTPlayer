@@ -127,7 +127,13 @@ if ($exitCode -eq 0) {
     Write-Host "输出文件:" -ForegroundColor Yellow
     if (Test-Path "bin\Debug\YTPlayer.exe") {
         $fileInfo = Get-Item "bin\Debug\YTPlayer.exe"
-        Write-Host "  ✓ bin\Debug\YTPlayer.exe" -ForegroundColor Green
+        Write-Host "  ✓ bin\Debug\YTPlayer.exe (启动器)" -ForegroundColor Green
+        Write-Host "    大小: $([math]::Round($fileInfo.Length / 1KB, 1)) KB" -ForegroundColor Gray
+        Write-Host "    修改时间: $($fileInfo.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Gray
+    }
+    if (Test-Path "bin\Debug\YTPlayer.Updater.exe") {
+        $fileInfo = Get-Item "bin\Debug\YTPlayer.Updater.exe"
+        Write-Host "  ✓ bin\Debug\YTPlayer.Updater.exe" -ForegroundColor Green
         Write-Host "    大小: $([math]::Round($fileInfo.Length / 1KB, 1)) KB" -ForegroundColor Gray
         Write-Host "    修改时间: $($fileInfo.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Gray
     }

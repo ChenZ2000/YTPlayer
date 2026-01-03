@@ -34,11 +34,18 @@ namespace YTPlayer.Core.Playback
         /// </summary>
         public async Task<CommandResult> EnqueueCommandAsync(PlaybackCommand command)
         {
-            if (_disposed) throw new ObjectDisposedException(nameof(PlaybackCommandQueue));
+            if (_disposed)
+            {
+                return CommandResult.Cancelled;
+            }
 
             // 等待获取执行权（串行执行）
-            await _executionSemaphore.WaitAsync(command.CancellationToken).ConfigureAwait(false);
+            if (!await TryEnterExecutionSemaphoreAsync(command.CancellationToken).ConfigureAwait(false))
+            {
+                return CommandResult.Cancelled;
+            }
 
+            bool lockTaken = true;
             try
             {
                 // 取消当前命令
@@ -73,7 +80,17 @@ namespace YTPlayer.Core.Playback
             }
             finally
             {
-                _executionSemaphore.Release();
+                if (lockTaken)
+                {
+                    try
+                    {
+                        _executionSemaphore.Release();
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        // 已释放时忽略
+                    }
+                }
             }
         }
 
@@ -170,6 +187,24 @@ namespace YTPlayer.Core.Playback
             _currentCts?.Dispose();
             _executionSemaphore?.Dispose();
             _disposed = true;
+        }
+
+        private async Task<bool> TryEnterExecutionSemaphoreAsync(CancellationToken cancellationToken)
+        {
+            if (_disposed)
+            {
+                return false;
+            }
+
+            try
+            {
+                await _executionSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+                return true;
+            }
+            catch (ObjectDisposedException)
+            {
+                return false;
+            }
         }
     }
 

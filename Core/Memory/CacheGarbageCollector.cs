@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using YTPlayer.Core.Data;
+using YTPlayer.Utils;
 
 namespace YTPlayer.Core.Memory
 {
@@ -282,10 +283,10 @@ namespace YTPlayer.Core.Memory
         /// </summary>
         public void ForceCollect()
         {
-            Utils.DebugLogger.Log(Utils.LogLevel.Info, "CacheGarbageCollector",
+            Utils.DebugLogger.Log(Utils.LogLevel.Info, "CacheGarbageCollector", 
                 "Force collect triggered");
 
-            CollectGarbageAsync().Wait();
+            CollectGarbageAsync().SafeFireAndForget("CacheGarbageCollector force collect");
         }
     }
 }

@@ -29,7 +29,6 @@ namespace UnblockNCM.Core.Tests
             var http = new HttpHelper();
             var cache = new CacheStorage();
             var find = new FindService(http, cache, false, opt.NoCache);
-            var yt = Environment.GetEnvironmentVariable("YTDLP_BIN") ?? System.IO.Path.Combine(AppContext.BaseDirectory, "yt-dlp.exe");
 
             var providers = new Dictionary<string, IProvider>(StringComparer.OrdinalIgnoreCase)
             {

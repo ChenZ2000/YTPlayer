@@ -132,19 +132,5 @@ namespace YTPlayer.Core.Lyrics
             }
         }
 
-        /// <summary>
-        /// 同步加载歌词（用于向后兼容，不推荐使用）
-        /// </summary>
-        public LyricsData? LoadLyrics(string songId)
-        {
-            try
-            {
-                return LoadLyricsAsync(songId).ConfigureAwait(false).GetAwaiter().GetResult();
-            }
-            catch
-            {
-                return null;
-            }
-        }
     }
 }

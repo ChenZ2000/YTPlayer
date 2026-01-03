@@ -24,7 +24,6 @@ namespace UnblockNCM.Core.Services
         private readonly UnblockOptions _options;
         private readonly string _scope = "provider/match";
         private readonly int _providerTimeoutMs;
-        private readonly string _defaultYtDlp;
         private static readonly HttpClient ValidateHttp = new HttpClient(new HttpClientHandler
         {
             AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
@@ -37,7 +36,6 @@ namespace UnblockNCM.Core.Services
             _find = find;
             _options = options;
             _providerTimeoutMs = int.TryParse(Environment.GetEnvironmentVariable("PROVIDER_TIMEOUT_MS"), out var ms) ? ms : 8000;
-            _defaultYtDlp = System.IO.Path.Combine(AppContext.BaseDirectory, "yt-dlp.exe");
         }
 
         private IEnumerable<string> BuildCandidate()

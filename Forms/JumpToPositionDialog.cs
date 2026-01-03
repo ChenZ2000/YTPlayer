@@ -131,7 +131,7 @@ namespace YTPlayer.Forms
             txtPosition.Focus();
         }
 
-        private void txtPosition_KeyPress(object sender, KeyPressEventArgs e)
+        private void txtPosition_KeyPress(object? sender, KeyPressEventArgs e)
         {
             // 按回车键直接跳转
             if (e.KeyChar == (char)Keys.Return)
@@ -141,7 +141,7 @@ namespace YTPlayer.Forms
             }
         }
 
-        private void btnJump_Click(object sender, EventArgs e)
+        private void btnJump_Click(object? sender, EventArgs e)
         {
             string input = txtPosition.Text.Trim();
 

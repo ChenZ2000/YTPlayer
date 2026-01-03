@@ -105,6 +105,11 @@ namespace YTPlayer.Models
         public int LastPlayingQueueIndex { get; set; } = -1;
 
         /// <summary>
+        /// 上次播放歌曲在来源列表中的索引（基于 LastPlayingSource）
+        /// </summary>
+        public int LastPlayingSourceIndex { get; set; } = -1;
+
+        /// <summary>
         /// 听歌识曲默认输入设备 ID（Default / Loopback / 设备标识）。
         /// </summary>
         public string RecognitionInputDeviceId { get; set; } = AudioInputDeviceInfo.WindowsDefaultId;
@@ -133,6 +138,11 @@ namespace YTPlayer.Models
         /// 是否隐藏列表序号（默认显示）
         /// </summary>
         public bool SequenceNumberHidden { get; set; } = false;
+
+        /// <summary>
+        /// 是否隐藏控制栏（默认显示）
+        /// </summary>
+        public bool ControlBarHidden { get; set; } = false;
 
         /// <summary>
         /// 是否启用播放数据上报，保持“最近播放/听歌排行”与官方账号同步
