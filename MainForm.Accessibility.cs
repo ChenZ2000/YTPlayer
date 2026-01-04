@@ -379,21 +379,27 @@ namespace YTPlayer
                         return;
                 }
                 string text = message?.Trim() ?? string.Empty;
-                if (string.IsNullOrWhiteSpace(text))
-                {
-                        return;
-                }
                 try
                 {
                         statusStrip1.AccessibleRole = AccessibleRole.StatusBar;
-                        statusStrip1.AccessibleName = text;
-                        statusStrip1.AccessibleDescription = text;
-                        statusStrip1.Text = text;
-                        if (statusStrip1.Items.Count > 0 && statusStrip1.Items[0] is ToolStripStatusLabel toolStripStatusLabel)
+                        statusStrip1.AccessibleName = string.Empty;
+                        statusStrip1.AccessibleDescription = string.Empty;
+                        statusStrip1.Text = string.Empty;
+                        if (toolStripStatusLabel1 != null)
                         {
-                                toolStripStatusLabel.AccessibleRole = AccessibleRole.StaticText;
-                                toolStripStatusLabel.AccessibleName = text;
-                                toolStripStatusLabel.AccessibleDescription = text;
+                                toolStripStatusLabel1.AccessibleRole = AccessibleRole.StaticText;
+                                if (!string.IsNullOrWhiteSpace(text))
+                                {
+                                        string spokenText = $"{text}，状态栏";
+                                        toolStripStatusLabel1.Text = text;
+                                        toolStripStatusLabel1.AccessibleName = spokenText;
+                                        toolStripStatusLabel1.AccessibleDescription = spokenText;
+                                }
+                                else
+                                {
+                                        toolStripStatusLabel1.AccessibleName = "状态栏";
+                                        toolStripStatusLabel1.AccessibleDescription = "状态栏";
+                                }
                         }
                 }
                 catch

@@ -237,7 +237,6 @@
     <Compile Include="Models\SearchResult.cs" />
     <Compile Include="Models\UserAccountInfo.cs" />
     <Compile Include="Models\Auth\QrLoginModels.cs" />
-    <Compile Include="Models\Auth\CountryCodeInfo.cs" />
     <Compile Include="Models\Download\DownloadTask.cs" />
     <Compile Include="Models\Download\DownloadStatus.cs" />
     <Compile Include="Models\Download\DownloadBatch.cs" />

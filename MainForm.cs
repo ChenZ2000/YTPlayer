@@ -370,48 +370,6 @@ public partial class MainForm : Form
                 }
         }
 
-        private sealed class AccessibleStatusStrip : StatusStrip
-        {
-                protected override AccessibleObject CreateAccessibilityInstance()
-                {
-                        return new AccessibleStatusStripAccessibleObject(this);
-                }
-
-                private sealed class AccessibleStatusStripAccessibleObject : ToolStrip.ToolStripAccessibleObject
-                {
-                        private readonly AccessibleStatusStrip _owner;
-
-                        public AccessibleStatusStripAccessibleObject(AccessibleStatusStrip owner)
-                                : base(owner)
-                        {
-                                _owner = owner;
-                        }
-
-                        public override AccessibleRole Role => AccessibleRole.StatusBar;
-
-                        public override string Name
-                        {
-                                get
-                                {
-                                        return _owner.AccessibleName ?? _owner.Text ?? string.Empty;
-                                }
-                                set
-                                {
-                                        base.Name = value;
-                                }
-                        }
-
-                        public override string Description
-                        {
-                                get
-                                {
-                                        return _owner.AccessibleDescription ?? string.Empty;
-                                }
-                        }
-
-                }
-        }
-
         private sealed class MainFormAccessibleObject : Control.ControlAccessibleObject
         {
                 private readonly MainForm _owner;
@@ -440,291 +398,6 @@ public partial class MainForm : Form
                                 }
                                 return base.Bounds;
                         }
-                }
-        }
-
-        private sealed class StatusBarProxy : Control
-        {
-                private string _statusText = string.Empty;
-
-                public StatusBarProxy()
-                {
-                        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, value: true);
-                        TabStop = false;
-                        AccessibleRole = AccessibleRole.StatusBar;
-                }
-
-                public void UpdateStatusText(string text)
-                {
-                        _statusText = text?.Trim() ?? string.Empty;
-                        AccessibleName = _statusText;
-                        AccessibleDescription = _statusText;
-                        Text = _statusText;
-                }
-
-                protected override AccessibleObject CreateAccessibilityInstance()
-                {
-                        return new StatusBarProxyAccessibleObject(this);
-                }
-
-                protected override void OnPaint(PaintEventArgs e)
-                {
-                        Color color = ((base.Parent != null) ? base.Parent.BackColor : BackColor);
-                        e.Graphics.Clear(color);
-                }
-
-                private sealed class StatusBarProxyAccessibleObject : Control.ControlAccessibleObject
-                {
-                        private readonly StatusBarProxy _owner;
-                        private readonly StatusBarPaneAccessibleObject _pane;
-
-                        public StatusBarProxyAccessibleObject(StatusBarProxy owner)
-                                : base(owner)
-                        {
-                                _owner = owner;
-                                _pane = new StatusBarPaneAccessibleObject(owner);
-                        }
-
-                        public override AccessibleRole Role => AccessibleRole.StatusBar;
-
-                        public override string Name => _owner._statusText ?? string.Empty;
-
-                        public override int GetChildCount()
-                        {
-                                return 1;
-                        }
-
-                        public override AccessibleObject GetChild(int index)
-                        {
-                                return (index == 0) ? _pane : null;
-                        }
-
-                        public override Rectangle Bounds
-                        {
-                                get
-                                {
-                                        return _owner.RectangleToScreen(_owner.ClientRectangle);
-                                }
-                        }
-
-
-                        private sealed class StatusBarPaneAccessibleObject : AccessibleObject
-                        {
-                                private readonly StatusBarProxy _owner;
-
-                                public StatusBarPaneAccessibleObject(StatusBarProxy owner)
-                                {
-                                        _owner = owner;
-                                }
-
-                                public override AccessibleRole Role => AccessibleRole.StaticText;
-
-                                public override string Name => _owner._statusText ?? string.Empty;
-
-                                public override Rectangle Bounds
-                                {
-                                        get
-                                        {
-                                                return _owner.RectangleToScreen(_owner.ClientRectangle);
-                                        }
-                                }
-
-                        }
-                }
-        }
-
-        private sealed class NativeStatusBarWindow
-        {
-                private const int WM_USER = 1024;
-                private const int SB_SETTEXT = WM_USER + 1;
-                private const int SB_SETMINHEIGHT = WM_USER + 8;
-                private const int SB_SIMPLE = WM_USER + 9;
-                private const int WS_CHILD = 0x40000000;
-                private const int WS_VISIBLE = 0x10000000;
-                private const uint SWP_NOACTIVATE = 0x0010;
-                private static readonly nint HWND_TOP = new nint(0);
-                private static readonly nint HWND_BOTTOM = new nint(1);
-                private const int ICC_BAR_CLASSES = 0x00000004;
-                private static bool _commonControlsInitialized;
-                private nint _handle = nint.Zero;
-                private string _pendingText = string.Empty;
-                private Rectangle _bounds = Rectangle.Empty;
-
-                [StructLayout(LayoutKind.Sequential)]
-                private struct INITCOMMONCONTROLSEX
-                {
-                        public int dwSize;
-                        public int dwICC;
-                }
-
-                [DllImport("comctl32.dll", SetLastError = true)]
-                private static extern bool InitCommonControlsEx(ref INITCOMMONCONTROLSEX init);
-
-                [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-                private static extern nint CreateWindowEx(int exStyle, string className, string windowName, int style, int x, int y, int width, int height, nint parentHandle, nint menuHandle, nint instanceHandle, nint param);
-
-                [DllImport("user32.dll", SetLastError = true)]
-                private static extern bool DestroyWindow(nint hWnd);
-
-                [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-                private static extern nint GetModuleHandle(string lpModuleName);
-
-                [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-                private static extern nint SendMessage(nint hWnd, int msg, nint wParam, string lParam);
-
-                [DllImport("user32.dll")]
-                private static extern nint SendMessage(nint hWnd, int msg, nint wParam, nint lParam);
-
-                [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-                private static extern int GetClassName(nint hWnd, StringBuilder lpClassName, int nMaxCount);
-
-                [DllImport("user32.dll", SetLastError = true)]
-                private static extern bool SetWindowPos(nint hWnd, nint hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
-
-                public nint Handle => _handle;
-
-                public bool IsCreated => _handle != nint.Zero;
-
-                public Rectangle Bounds => _bounds;
-
-                public void EnsureCreated(nint parentHandle)
-                {
-                        if (IsCreated)
-                        {
-                                return;
-                        }
-                        EnsureCommonControls();
-                        nint instanceHandle = GetModuleHandle(null);
-                        _handle = CreateWindowEx(0, "msctls_statusbar32", string.Empty, WS_CHILD | WS_VISIBLE,
-                                _bounds.X, _bounds.Y, _bounds.Width, _bounds.Height, parentHandle, nint.Zero, instanceHandle, nint.Zero);
-                        if (_handle == nint.Zero)
-                        {
-                                int error = Marshal.GetLastWin32Error();
-                                DebugLogger.Log(DebugLogger.LogLevel.Error, "A11yStatusBar",
-                                        $"NativeStatusBarWindow CreateWindowEx failed (error={error}).");
-                                return;
-                        }
-                        ApplyMinHeight(_bounds.Height);
-                        EnsureSimpleMode();
-                        ApplyPendingText();
-                        SetWindowPos(_handle, HWND_TOP, _bounds.X, _bounds.Y, _bounds.Width, _bounds.Height, SWP_NOACTIVATE);
-                        LogHandleCreated();
-                }
-
-                public void Destroy()
-                {
-                        if (!IsCreated)
-                        {
-                                return;
-                        }
-                        if (DestroyWindow(_handle))
-                        {
-                                DebugLogger.Log(DebugLogger.LogLevel.Info, "A11yStatusBar",
-                                        "NativeStatusBarWindow handle destroyed.");
-                        }
-                        _handle = nint.Zero;
-                }
-
-                public void UpdateBounds(Rectangle bounds)
-                {
-                        _bounds = bounds;
-                        if (!IsCreated)
-                        {
-                                return;
-                        }
-                        ApplyMinHeight(bounds.Height);
-                        SetWindowPos(_handle, HWND_BOTTOM, bounds.X, bounds.Y, bounds.Width, bounds.Height, SWP_NOACTIVATE);
-                }
-
-                public void UpdateStatusText(string text)
-                {
-                        _pendingText = text ?? string.Empty;
-                        if (!IsCreated)
-                        {
-                                DebugLogger.Log(DebugLogger.LogLevel.Info, "A11yStatusBar",
-                                        "NativeStatusBarWindow UpdateStatusText cached (handle not created yet).");
-                                return;
-                        }
-                        EnsureSimpleMode();
-                        SendMessage(_handle, SB_SETTEXT, nint.Zero, _pendingText);
-                }
-
-                private static void EnsureCommonControls()
-                {
-                        if (_commonControlsInitialized)
-                        {
-                                return;
-                        }
-                        INITCOMMONCONTROLSEX init = new INITCOMMONCONTROLSEX
-                        {
-                                dwSize = Marshal.SizeOf<INITCOMMONCONTROLSEX>(),
-                                dwICC = ICC_BAR_CLASSES
-                        };
-                        _commonControlsInitialized = InitCommonControlsEx(ref init);
-                        if (!_commonControlsInitialized)
-                        {
-                                int error = Marshal.GetLastWin32Error();
-                                DebugLogger.Log(DebugLogger.LogLevel.Warning, "A11yStatusBar",
-                                        $"InitCommonControlsEx failed (error={error}).");
-                        }
-                }
-
-                private void EnsureSimpleMode()
-                {
-                        if (!IsCreated)
-                        {
-                                return;
-                        }
-                        SendMessage(_handle, SB_SIMPLE, new nint(1), nint.Zero);
-                }
-
-                private void ApplyMinHeight(int height)
-                {
-                        if (!IsCreated)
-                        {
-                                return;
-                        }
-                        int target = Math.Max(1, height);
-                        SendMessage(_handle, SB_SETMINHEIGHT, new nint(target), nint.Zero);
-                }
-
-                private void ApplyPendingText()
-                {
-                        if (!IsCreated)
-                        {
-                                return;
-                        }
-                        EnsureSimpleMode();
-                        SendMessage(_handle, SB_SETTEXT, nint.Zero, _pendingText);
-                }
-
-                private void LogHandleCreated()
-                {
-                        try
-                        {
-                                string className = ResolveClassName();
-                                DebugLogger.Log(DebugLogger.LogLevel.Info, "A11yStatusBar",
-                                        $"NativeStatusBarWindow handle created. Handle=0x{_handle.ToInt64():X}, Class={className}, Bounds={_bounds}");
-                        }
-                        catch (Exception ex)
-                        {
-                                DebugLogger.LogException("A11yStatusBar", ex, "NativeStatusBarWindow LogHandleCreated failed");
-                        }
-                }
-
-                private string ResolveClassName()
-                {
-                        if (!IsCreated)
-                        {
-                                return string.Empty;
-                        }
-                        StringBuilder sb = new StringBuilder(256);
-                        int length = GetClassName(_handle, sb, sb.Capacity);
-                        if (length <= 0)
-                        {
-                                return string.Empty;
-                        }
-                        return sb.ToString(0, length);
                 }
         }
 
@@ -1514,15 +1187,9 @@ public partial class MainForm : Form
 
 	private Button playPauseButton;
 
-	private Label currentSongLabel;
+        private Label currentSongLabel;
 
-private AccessibleStatusStrip statusStrip1;
-private StatusBarProxy _statusBarProxy;
-private NativeStatusBarWindow _nativeStatusBar;
-private string _lastStatusBarDebugText = string.Empty;
-private Rectangle _lastStatusBarProxyBounds = Rectangle.Empty;
-private Rectangle _lastNativeStatusBarBounds = Rectangle.Empty;
-private bool _nativeStatusBarCreateDeferredLogged;
+        private StatusStrip statusStrip1;
 
 	private ToolStripStatusLabel toolStripStatusLabel1;
 
@@ -1940,7 +1607,6 @@ private bool _nativeStatusBarCreateDeferredLogged;
         {
                 InitializeComponent();
                 InitializeAccessibilityAnnouncementLabel();
-                InitializeStatusBarProxy();
                 UpdateStatusStripAccessibility(toolStripStatusLabel1?.Text);
                 UpdateWindowTitle(null);
                 if (songContextMenu != null)
@@ -1960,36 +1626,14 @@ private bool _nativeStatusBarCreateDeferredLogged;
 		_contextMenuHost = new ContextMenuHost();
 		trayContextMenu.Opening += TrayContextMenu_Opening;
 		trayContextMenu.Opened += TrayContextMenu_Opened;
-		trayContextMenu.Closed += TrayContextMenu_Closed;
+                trayContextMenu.Closed += TrayContextMenu_Closed;
                 SyncPlayPauseButtonText();
-                base.SizeChanged += MainForm_SizeChanged;
                 base.Load += MainForm_Load;
         }
 
         protected override AccessibleObject CreateAccessibilityInstance()
         {
                 return new MainFormAccessibleObject(this);
-        }
-
-        protected override void OnHandleCreated(EventArgs e)
-        {
-                base.OnHandleCreated(e);
-                _nativeStatusBarCreateDeferredLogged = false;
-                TryCreateNativeStatusBarWindow("OnHandleCreated");
-        }
-
-        protected override void OnHandleDestroyed(EventArgs e)
-        {
-                _nativeStatusBar?.Destroy();
-                base.OnHandleDestroyed(e);
-        }
-
-        protected override void OnShown(EventArgs e)
-        {
-                base.OnShown(e);
-                TryCreateNativeStatusBarWindow("OnShown");
-                SyncStatusBarProxyBounds();
-                LogStatusBarSnapshot("OnShown");
         }
 
         private async void MainForm_Load(object sender, EventArgs e)
@@ -12048,230 +11692,15 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
                 if (message != null)
                 {
                         if (statusStrip1.InvokeRequired)
-			{
-				statusStrip1.Invoke(new Action<string>(UpdateStatusBar), message);
-			}
-                        else if (statusStrip1.Items.Count > 0)
                         {
-                                ((ToolStripStatusLabel)statusStrip1.Items[0]).Text = message;
+                                statusStrip1.Invoke(new Action<string>(UpdateStatusBar), message);
+                        }
+                        else if (toolStripStatusLabel1 != null)
+                        {
+                                toolStripStatusLabel1.Text = message;
                                 UpdateStatusStripAccessibility(message);
-                                UpdateStatusBarProxyText(message);
                         }
                 }
-        }
-
-        private void UpdateStatusBarProxyText(string message)
-        {
-                string text = message ?? string.Empty;
-                if (!string.Equals(_lastStatusBarDebugText, text, StringComparison.Ordinal))
-                {
-                        _lastStatusBarDebugText = text;
-                        DebugLogger.Log(DebugLogger.LogLevel.Info, "A11yStatusBar",
-                                $"Status text updated: '{text}'");
-                }
-                if (_statusBarProxy != null)
-                {
-                        _statusBarProxy.UpdateStatusText(text);
-                }
-                if (_nativeStatusBar != null)
-                {
-                        TryCreateNativeStatusBarWindow("UpdateStatusBarProxyText");
-                        _nativeStatusBar.UpdateStatusText(text);
-                }
-        }
-
-        private void InitializeStatusBarProxy()
-        {
-                if (_statusBarProxy != null || statusStrip1 == null)
-                {
-                        if (statusStrip1 == null)
-                        {
-                                DebugLogger.Log(DebugLogger.LogLevel.Warning, "A11yStatusBar",
-                                        "InitializeStatusBarProxy skipped: statusStrip1 is null.");
-                        }
-                        return;
-                }
-                DebugLogger.Log(DebugLogger.LogLevel.Info, "A11yStatusBar",
-                        $"InitializeStatusBarProxy: statusStrip Visible={statusStrip1.Visible}, Bounds={statusStrip1.Bounds}");
-                try
-                {
-                        DebugLogger.Log(DebugLogger.LogLevel.Info, "A11yStatusBar",
-                                $"StatusStrip A11y: Role={statusStrip1.AccessibleRole}, Name='{statusStrip1.AccessibleName}', Desc='{statusStrip1.AccessibleDescription}', Text='{statusStrip1.Text}'");
-                }
-                catch (Exception ex)
-                {
-                        DebugLogger.LogException("A11yStatusBar", ex, "读取 StatusStrip 可访问性信息失败");
-                }
-                _statusBarProxy = new StatusBarProxy
-                {
-                        Name = "statusBarProxy",
-                        Visible = true
-                };
-                base.Controls.Add(_statusBarProxy);
-                _statusBarProxy.BringToFront();
-                if (_nativeStatusBar == null)
-                {
-                        _nativeStatusBar = new NativeStatusBarWindow();
-                }
-                TryCreateNativeStatusBarWindow("InitializeStatusBarProxy");
-                SyncStatusBarProxyBounds();
-                _statusBarProxy.UpdateStatusText(toolStripStatusLabel1?.Text ?? string.Empty);
-                _nativeStatusBar?.UpdateStatusText(toolStripStatusLabel1?.Text ?? string.Empty);
-                DebugLogger.Log(DebugLogger.LogLevel.Info, "A11yStatusBar",
-                        $"StatusBarProxy created: Handle={_statusBarProxy.Handle}, Bounds={_statusBarProxy.Bounds}");
-                if (_nativeStatusBar != null)
-                {
-                        DebugLogger.Log(DebugLogger.LogLevel.Info, "A11yStatusBar",
-                                $"NativeStatusBarWindow state: Handle=0x{_nativeStatusBar.Handle.ToInt64():X}, Bounds={_nativeStatusBar.Bounds}, Created={_nativeStatusBar.IsCreated}");
-                }
-                statusStrip1.SizeChanged += StatusStrip1_BoundsChanged;
-                statusStrip1.LocationChanged += StatusStrip1_BoundsChanged;
-        }
-
-        private void TryCreateNativeStatusBarWindow(string stage)
-        {
-                if (_nativeStatusBar == null)
-                {
-                        return;
-                }
-                if (!IsHandleCreated)
-                {
-                        if (!_nativeStatusBarCreateDeferredLogged)
-                        {
-                                _nativeStatusBarCreateDeferredLogged = true;
-                                DebugLogger.Log(DebugLogger.LogLevel.Info, "A11yStatusBar",
-                                        $"NativeStatusBarWindow create deferred ({stage}): form handle not created yet.");
-                        }
-                        return;
-                }
-                if (!Visible)
-                {
-                        if (!_nativeStatusBarCreateDeferredLogged)
-                        {
-                                _nativeStatusBarCreateDeferredLogged = true;
-                                DebugLogger.Log(DebugLogger.LogLevel.Info, "A11yStatusBar",
-                                        $"NativeStatusBarWindow create deferred ({stage}): form not visible yet.");
-                        }
-                        return;
-                }
-                if (!_nativeStatusBar.IsCreated)
-                {
-                        if (_nativeStatusBar.Bounds.IsEmpty)
-                        {
-                                Rectangle pendingBounds = CalculateNativeStatusBarBounds();
-                                _nativeStatusBar.UpdateBounds(pendingBounds);
-                        }
-                        _nativeStatusBar.EnsureCreated(Handle);
-                        DebugLogger.Log(DebugLogger.LogLevel.Info, "A11yStatusBar",
-                                $"NativeStatusBarWindow created ({stage}): Handle=0x{_nativeStatusBar.Handle.ToInt64():X}, Bounds={_nativeStatusBar.Bounds}");
-                }
-        }
-
-        private void LogStatusBarSnapshot(string stage)
-        {
-                try
-                {
-                        string statusStripInfo = (statusStrip1 == null)
-                                ? "null"
-                                : $"Visible={statusStrip1.Visible}, Bounds={statusStrip1.Bounds}";
-                        string proxyInfo = (_statusBarProxy == null)
-                                ? "null"
-                                : $"Visible={_statusBarProxy.Visible}, Bounds={_statusBarProxy.Bounds}";
-                        string nativeInfo = (_nativeStatusBar == null)
-                                ? "null"
-                                : $"Created={_nativeStatusBar.IsCreated}, Bounds={_nativeStatusBar.Bounds}";
-                        string accBoundsInfo = "n/a";
-                        string clientBoundsInfo = "n/a";
-                        try
-                        {
-                                accBoundsInfo = AccessibilityObject?.Bounds.ToString() ?? "null";
-                        }
-                        catch
-                        {
-                                accBoundsInfo = "error";
-                        }
-                        try
-                        {
-                                clientBoundsInfo = RectangleToScreen(ClientRectangle).ToString();
-                        }
-                        catch
-                        {
-                                clientBoundsInfo = "error";
-                        }
-                        DebugLogger.Log(DebugLogger.LogLevel.Info, "A11yStatusBar",
-                                $"Status bar snapshot ({stage}): statusStrip={statusStripInfo}, proxy={proxyInfo}, native={nativeInfo}, accBounds={accBoundsInfo}, clientBounds={clientBoundsInfo}");
-                }
-                catch (Exception ex)
-                {
-                        DebugLogger.LogException("A11yStatusBar", ex, "Status bar snapshot failed");
-                }
-        }
-
-        private void StatusStrip1_BoundsChanged(object sender, EventArgs e)
-        {
-                SyncStatusBarProxyBounds();
-        }
-
-        private void MainForm_SizeChanged(object sender, EventArgs e)
-        {
-                SyncStatusBarProxyBounds();
-        }
-
-        private void SyncStatusBarProxyBounds()
-        {
-                int proxyHeight = 2;
-                int width = ClientSize.Width;
-                int x = 0;
-                int y = Math.Max(0, ClientSize.Height - proxyHeight);
-                if (statusStrip1 != null && statusStrip1.Visible)
-                {
-                        width = statusStrip1.Width;
-                        x = statusStrip1.Left;
-                        y = Math.Max(0, statusStrip1.Bottom - proxyHeight);
-                }
-                if (_statusBarProxy != null)
-                {
-                        _statusBarProxy.SetBounds(x, y, width, proxyHeight);
-                        _statusBarProxy.BringToFront();
-                        if (_lastStatusBarProxyBounds != _statusBarProxy.Bounds)
-                        {
-                                _lastStatusBarProxyBounds = _statusBarProxy.Bounds;
-                                DebugLogger.Log(DebugLogger.LogLevel.Info, "A11yStatusBar",
-                                        $"StatusBarProxy bounds updated: {_statusBarProxy.Bounds}");
-                        }
-                }
-                if (_nativeStatusBar != null)
-                {
-                        Rectangle nativeBounds = CalculateNativeStatusBarBounds();
-                        TryCreateNativeStatusBarWindow("SyncStatusBarProxyBounds");
-                        _nativeStatusBar.UpdateBounds(nativeBounds);
-                        if (_lastNativeStatusBarBounds != nativeBounds)
-                        {
-                                _lastNativeStatusBarBounds = nativeBounds;
-                                DebugLogger.Log(DebugLogger.LogLevel.Info, "A11yStatusBar",
-                                        $"NativeStatusBarWindow bounds updated: {nativeBounds}");
-                        }
-                }
-        }
-
-        private Rectangle CalculateNativeStatusBarBounds()
-        {
-                int width = ClientSize.Width;
-                int x = 0;
-                int nativeHeight = statusStrip1?.Height ?? 0;
-                if (nativeHeight <= 0)
-                {
-                        nativeHeight = 1;
-                }
-                if (statusStrip1 != null && statusStrip1.Visible)
-                {
-                        width = statusStrip1.Width;
-                        x = statusStrip1.Left;
-                }
-                int nativeY = Math.Max(0, (statusStrip1 != null && statusStrip1.Visible)
-                        ? statusStrip1.Top
-                        : (ClientSize.Height - nativeHeight));
-                return new Rectangle(x, nativeY, width, nativeHeight);
         }
 
         private void AnnounceStatusBarMessage(string? message)
@@ -12337,10 +11766,10 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 					playPauseButton.Text = "加载中...";
 					playPauseButton.Enabled = false;
 				}
-				if (statusStrip1 != null && statusStrip1.Items.Count > 0 && statusStrip1.Items[0] is ToolStripStatusLabel toolStripStatusLabel)
-				{
-					_statusTextBeforeLoading = toolStripStatusLabel.Text;
-				}
+                                if (toolStripStatusLabel1 != null)
+                                {
+                                        _statusTextBeforeLoading = toolStripStatusLabel1.Text;
+                                }
 			}
 			if (!string.IsNullOrEmpty(statusMessage))
 			{
@@ -17622,7 +17051,6 @@ private static void SetMenuItemCheckedState(ToolStripMenuItem? menuItem, bool is
                 _autoUpdateCheckCts = null;
                 CancelPendingLyricSpeech();
                 base.OnFormClosing(e);
-                _nativeStatusBar?.Destroy();
                 CompleteActivePlaybackSession(PlaybackEndReason.Stopped);
 		try
 		{
@@ -23435,7 +22863,7 @@ private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlay
         this.progressTrackBar = new System.Windows.Forms.TrackBar();
 		this.playPauseButton = new System.Windows.Forms.Button();
 		this.currentSongLabel = new System.Windows.Forms.Label();
-        this.statusStrip1 = new AccessibleStatusStrip();
+        this.statusStrip1 = new System.Windows.Forms.StatusStrip();
 		this.toolStripStatusLabel1 = new System.Windows.Forms.ToolStripStatusLabel();
 		this.menuStrip1.SuspendLayout();
 		this.searchPanel.SuspendLayout();
@@ -23826,12 +23254,12 @@ private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlay
         this.statusStrip1.Name = "statusStrip1";
         this.statusStrip1.Size = new System.Drawing.Size(1200, 26);
         this.statusStrip1.TabIndex = 5;
-		this.statusStrip1.Text = "statusStrip1";
+        this.statusStrip1.Text = "";
         this.toolStripStatusLabel1.Name = "toolStripStatusLabel1";
         this.toolStripStatusLabel1.Size = new System.Drawing.Size(39, 20);
         this.toolStripStatusLabel1.Text = "就绪";
         this.toolStripStatusLabel1.AccessibleRole = System.Windows.Forms.AccessibleRole.StaticText;
-        this.toolStripStatusLabel1.AccessibleName = "就绪";
+        this.toolStripStatusLabel1.AccessibleName = "";
 		this.songContextMenu.ImageScalingSize = new System.Drawing.Size(20, 20);
 		this.songContextMenu.Items.AddRange(this.viewSourceMenuItem, this.insertPlayMenuItem, this.likeSongMenuItem, this.unlikeSongMenuItem, this.addToPlaylistMenuItem, this.removeFromPlaylistMenuItem, this.cloudMenuSeparator, this.uploadToCloudMenuItem, this.deleteFromCloudMenuItem, this.toolStripSeparatorCollection, this.subscribePlaylistMenuItem, this.unsubscribePlaylistMenuItem, this.deletePlaylistMenuItem, this.createPlaylistMenuItem, this.subscribeAlbumMenuItem, this.unsubscribeAlbumMenuItem, this.subscribePodcastMenuItem, this.unsubscribePodcastMenuItem, this.toolStripSeparatorView, this.viewSongArtistMenuItem, this.viewSongAlbumMenuItem, this.viewPodcastMenuItem, this.shareSongMenuItem, this.sharePlaylistMenuItem, this.shareAlbumMenuItem, this.sharePodcastMenuItem, this.sharePodcastEpisodeMenuItem, this.artistSongsSortMenuItem, this.artistAlbumsSortMenuItem, this.podcastSortMenuItem, this.commentMenuSeparator, this.commentMenuItem, this.toolStripSeparatorArtist, this.shareArtistMenuItem, this.subscribeArtistMenuItem, this.unsubscribeArtistMenuItem, this.toolStripSeparatorDownload3, this.downloadSongMenuItem, this.downloadLyricsMenuItem, this.downloadPlaylistMenuItem, this.downloadAlbumMenuItem, this.downloadPodcastMenuItem, this.batchDownloadMenuItem, this.downloadCategoryMenuItem, this.batchDownloadPlaylistsMenuItem);
 		this.songContextMenu.Name = "songContextMenu";
