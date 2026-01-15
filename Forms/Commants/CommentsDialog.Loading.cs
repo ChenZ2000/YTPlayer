@@ -15,72 +15,50 @@ namespace YTPlayer.Forms
                 return;
             }
 
-            bool suppressHeader = false;
-            bool suppressRole = false;
-            if (suppressTreeAccessibility && _commentTree.IsHandleCreated)
+            var anchors = restoreAnchors
+                ? CaptureAnchors()
+                : (selectedId: (string?)null, topId: (string?)null, hadFocus: false);
+            _loadVersion++;
+
+            _cts?.Cancel();
+            _cts?.Dispose();
+            _cts = new CancellationTokenSource();
+
+            ResetTreeState();
+            EnsureTopLoadingPlaceholder();
+            UpdateSortTypeFromUi();
+
+            await LoadTopPageWithFallbackAsync(anchors, restoreAnchors);
+            if (IsDisposed)
             {
-                _commentTree.SuppressAccessibleText(true, "refresh");
-                _commentTree.SuppressControlRole(true);
-                suppressHeader = true;
-                suppressRole = true;
+                return;
             }
 
-            try
+            RecalculateTopLevelSequences();
+            bool focusedPending = TryFocusPendingCommentAfterRefresh();
+            if (!focusedPending)
             {
-                var anchors = restoreAnchors
-                    ? CaptureAnchors()
-                    : (selectedId: (string?)null, topId: (string?)null, hadFocus: false);
-                _loadVersion++;
-
-                _cts?.Cancel();
-                _cts?.Dispose();
-                _cts = new CancellationTokenSource();
-
-                ResetTreeState();
-                EnsureTopLoadingPlaceholder();
-                UpdateSortTypeFromUi();
-                LogComments($"Refresh start sort={_sortType} target={_target.Type}:{_target.ResourceId}");
-
-                await LoadTopPageWithFallbackAsync(anchors, restoreAnchors);
-                if (IsDisposed)
-                {
-                    return;
-                }
-
-                RecalculateTopLevelSequences();
-                bool focusedPending = TryFocusPendingCommentAfterRefresh();
-                if (!focusedPending)
-                {
-                    focusedPending = TryFocusPendingTopAfterRefresh();
-                }
-
-                bool focusedFirst = false;
-                if (!focusedPending)
-                {
-                    bool ensureFocus = _commentTree.ContainsFocus || anchors.hadFocus || _isFirstLoad;
-                    focusedFirst = TryFocusFirstTopAfterRefresh(ensureFocus);
-                }
-
-                if (clearSelection && !focusedPending && !focusedFirst)
-                {
-                    ClearTreeSelectionAfterRefresh();
-                }
-
-                RemoveTopLoadingPlaceholder("refresh_done");
-                _commentTree.NotifyAccessibilityReorder("comments_sequence_sync");
-                _isFirstLoad = false;
+                focusedPending = TryFocusPendingTopAfterRefresh();
             }
-            finally
+
+            bool focusedFirst = false;
+            if (!focusedPending)
             {
-                if (suppressHeader)
-                {
-                    _commentTree.ScheduleRestoreAccessibleText("refresh");
-                }
-                if (suppressRole)
-                {
-                    _commentTree.ScheduleRestoreControlRole();
-                }
+                bool ensureFocus = _commentTree.ContainsFocus || anchors.hadFocus || _isFirstLoad;
+                focusedFirst = TryFocusFirstTopAfterRefresh(ensureFocus);
             }
+
+            if (clearSelection && !focusedPending && !focusedFirst)
+            {
+                ClearTreeSelectionAfterRefresh();
+            }
+
+            RemoveTopLoadingPlaceholder("refresh_done");
+            if (_commentTree.IsHandleCreated)
+            {
+                _commentTree.ResetAccessibilityChildCache("comments_sequence_sync");
+            }
+            _isFirstLoad = false;
         }
 
         private async Task LoadTopPageWithFallbackAsync((string? selectedId, string? topId, bool hadFocus) anchors, bool restoreAnchors)
@@ -111,7 +89,6 @@ namespace YTPlayer.Forms
                 string? topId = restoreAnchorsForAttempt ? anchors.topId : null;
                 bool hadFocus = restoreAnchorsForAttempt && anchors.hadFocus;
 
-                LogComments($"Refresh load attempt={i + 1} sort={sortType} restoreAnchors={restoreAnchorsForAttempt}");
                 await LoadTopPageAsync(1, _cts?.Token ?? CancellationToken.None, selectedId, topId, hadFocus, restoreAnchorsForAttempt);
 
                 if (HasRealTopNodes() || !_isFirstLoad)
@@ -121,7 +98,6 @@ namespace YTPlayer.Forms
 
                 if (i < order.Length - 1)
                 {
-                    LogComments("Refresh fallback: no comments, try next sort");
                     ResetTreeState();
                 }
             }
@@ -176,7 +152,6 @@ namespace YTPlayer.Forms
 
             try
             {
-                LogComments($"Load top page start page={pageNo} sort={_sortType}");
                 var result = await RetryAsync(
                     () => _apiClient.GetCommentsNewPageAsync(
                         _target.ResourceId,
@@ -194,11 +169,9 @@ namespace YTPlayer.Forms
 
                 if (result == null)
                 {
-                    LogComments($"Load top page null page={pageNo}");
                     return;
                 }
 
-                LogComments($"Load top page done page={pageNo} total={result.TotalCount} count={result.Comments.Count} hasMore={result.HasMore}");
                 ApplyTopLevelResult(result, pageNo, selectedAnchorId, topAnchorId, hadFocus, restoreAnchors);
                 MaybeLoadNextTopPage();
             }
@@ -215,7 +188,7 @@ namespace YTPlayer.Forms
             }
         }
 
-        private async Task LoadFloorPageAsync(string parentCommentId, int pageNo, bool forceReload = false)
+        private async Task LoadFloorPageAsync(string parentCommentId, int pageNo, bool forceReload = false, bool autoTriggered = false)
         {
             if (string.IsNullOrWhiteSpace(parentCommentId) || IsDisposed)
             {
@@ -243,7 +216,6 @@ namespace YTPlayer.Forms
 
             try
             {
-                LogComments($"Load floor page start parent={parentCommentId} page={pageNo}");
                 var result = await RetryAsync(
                     () => _apiClient.GetCommentFloorPageAsync(
                         _target.ResourceId,
@@ -261,20 +233,19 @@ namespace YTPlayer.Forms
                     {
                         _pendingFloorSelectionParentId = null;
                         _pendingFloorSelectionPage = 0;
-                        LogComments($"LoadFloor canceled clear pending parent={parentCommentId} page={pageNo}");
                     }
+                    ClearFloorAutoRetry(parentCommentId, pageNo);
                     return;
                 }
 
                 if (result == null)
                 {
-                    LogComments($"Load floor page null parent={parentCommentId} page={pageNo}");
-                    MarkLoadMoreFailed(parentCommentId, pageNo, "null_result");
+                    HandleFloorLoadFailure(parentCommentId, pageNo, "null_result", autoTriggered);
                     return;
                 }
 
-                LogComments($"Load floor page done parent={parentCommentId} page={pageNo} count={result.Comments.Count} hasMore={result.HasMore}");
                 ApplyFloorResult(result, pageNo);
+                ClearFloorAutoRetry(parentCommentId, pageNo);
                 if (pageNo == 1)
                 {
                     TryAutoExpandParent(parentCommentId);
@@ -286,7 +257,7 @@ namespace YTPlayer.Forms
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[Comments] 楼层评论加载失败: {ex.Message}");
-                MarkLoadMoreFailed(parentCommentId, pageNo, "exception");
+                HandleFloorLoadFailure(parentCommentId, pageNo, "exception", autoTriggered);
             }
             finally
             {
@@ -296,6 +267,153 @@ namespace YTPlayer.Forms
                     BeginInvoke(new Action(() => TryAutoLoadVisibleFloorMore("floor_loaded")));
                 }
             }
+        }
+
+        private static string BuildFloorRetryKey(string parentCommentId, int pageNo)
+        {
+            return $"{parentCommentId}:{pageNo}";
+        }
+
+        private void ClearFloorAutoRetry(string parentCommentId, int pageNo)
+        {
+            if (string.IsNullOrWhiteSpace(parentCommentId) || pageNo <= 0)
+            {
+                return;
+            }
+
+            _floorAutoRetryStates.Remove(BuildFloorRetryKey(parentCommentId, pageNo));
+        }
+
+        private void HandleFloorLoadFailure(string parentCommentId, int pageNo, string reason, bool autoTriggered)
+        {
+            if (autoTriggered && TryScheduleFloorAutoRetry(parentCommentId, pageNo))
+            {
+                return;
+            }
+
+            MarkLoadMoreFailed(parentCommentId, pageNo, reason);
+        }
+
+        private bool TryScheduleFloorAutoRetry(string parentCommentId, int pageNo)
+        {
+            if (IsDisposed || string.IsNullOrWhiteSpace(parentCommentId) || pageNo <= 0)
+            {
+                return false;
+            }
+
+            if (_floorPagesLoaded.TryGetValue(parentCommentId, out var pages) && pages.Contains(pageNo))
+            {
+                ClearFloorAutoRetry(parentCommentId, pageNo);
+                return false;
+            }
+
+            string key = BuildFloorRetryKey(parentCommentId, pageNo);
+            AutoRetryState state = _floorAutoRetryStates.TryGetValue(key, out var existing) ? existing : default;
+            if (state.Attempts >= FloorAutoRetryMaxAttempts)
+            {
+                _floorAutoRetryStates.Remove(key);
+                return false;
+            }
+
+            state.Attempts++;
+            _floorAutoRetryStates[key] = state;
+            int delay = GetFloorAutoRetryDelayMs(state.Attempts);
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(delay).ConfigureAwait(false);
+                if (IsDisposed || (_cts?.IsCancellationRequested ?? false))
+                {
+                    return;
+                }
+
+                BeginInvoke(new Action(() =>
+                {
+                    if (!IsFloorAutoRetryStillValid(parentCommentId, pageNo, key, state.Attempts))
+                    {
+                        return;
+                    }
+
+                    StartFloorAutoRetry(parentCommentId, pageNo);
+                }));
+            });
+
+            return true;
+        }
+
+        private bool IsFloorAutoRetryStillValid(string parentCommentId, int pageNo, string key, int attempt)
+        {
+            if (IsDisposed || string.IsNullOrWhiteSpace(parentCommentId) || pageNo <= 0)
+            {
+                return false;
+            }
+
+            if (!_floorAutoRetryStates.TryGetValue(key, out var state) || state.Attempts != attempt)
+            {
+                return false;
+            }
+
+            if (_loadingFloors.Contains(parentCommentId))
+            {
+                return false;
+            }
+
+            if (_floorPagesLoaded.TryGetValue(parentCommentId, out var pages) && pages.Contains(pageNo))
+            {
+                _floorAutoRetryStates.Remove(key);
+                return false;
+            }
+
+            return true;
+        }
+
+        private void StartFloorAutoRetry(string parentCommentId, int pageNo)
+        {
+            if (!_nodeById.TryGetValue(parentCommentId, out var parentNode))
+            {
+                ClearFloorAutoRetry(parentCommentId, pageNo);
+                return;
+            }
+
+            TreeNode? loadNode = null;
+            CommentNodeTag? loadTag = null;
+            var loadMoreNode = FindLoadMoreNode(parentNode);
+            if (loadMoreNode?.Tag is CommentNodeTag moreTag && moreTag.IsLoadMoreNode && moreTag.PageNumber == pageNo)
+            {
+                loadNode = loadMoreNode;
+                loadTag = moreTag;
+            }
+            else
+            {
+                var placeholders = GetPlaceholderNodes(parentNode, pageNo);
+                if (placeholders.Count > 0 && placeholders[0].Tag is CommentNodeTag placeholderTag)
+                {
+                    loadNode = placeholders[0];
+                    loadTag = placeholderTag;
+                }
+            }
+
+            if (loadNode == null || loadTag == null)
+            {
+                ClearFloorAutoRetry(parentCommentId, pageNo);
+                return;
+            }
+
+            loadTag.IsLoading = false;
+            loadTag.LoadFailed = false;
+            loadTag.AutoLoadTriggered = true;
+            loadNode.Tag = loadTag;
+
+            BeginLoadMoreNode(loadNode, loadTag, preferSelection: false, isAuto: true, reason: "auto_retry");
+        }
+
+        private static int GetFloorAutoRetryDelayMs(int attempt)
+        {
+            return attempt switch
+            {
+                1 => 400,
+                2 => 800,
+                _ => 1500
+            };
         }
 
         private void BeginLoadMoreNode(TreeNode node, CommentNodeTag tag, bool preferSelection, bool isAuto, string reason)
@@ -313,6 +431,11 @@ namespace YTPlayer.Forms
             if (isAuto && tag.LoadFailed)
             {
                 return;
+            }
+
+            if (!isAuto)
+            {
+                ClearFloorAutoRetry(tag.ParentCommentId, tag.PageNumber);
             }
 
             var parentNode = node.Parent;
@@ -371,15 +494,13 @@ namespace YTPlayer.Forms
                 }
             }
 
-            LogComments($"LoadMore start parent={tag.ParentCommentId} page={tag.PageNumber} auto={isAuto} reason={reason}");
-
             if (preferSelection)
             {
                 _pendingFloorSelectionParentId = tag.ParentCommentId;
                 _pendingFloorSelectionPage = tag.PageNumber;
             }
 
-            _ = LoadFloorPageAsync(tag.ParentCommentId, tag.PageNumber);
+            _ = LoadFloorPageAsync(tag.ParentCommentId, tag.PageNumber, autoTriggered: isAuto);
         }
 
         private bool TryAutoLoadVisibleFloorMore(string reason)
@@ -461,16 +582,6 @@ namespace YTPlayer.Forms
             if (lastTopNode.IsVisible)
             {
                 int nextPage = _nextTopPage;
-                string selected = DescribeNodeShort(_commentTree.SelectedNode);
-                string topNode = DescribeNodeShort(_commentTree.TopNode);
-                string last = DescribeNodeShort(lastTopNode);
-                LogComments($"Auto load next top page {nextPage} (last visible) selected={selected} topNode={topNode} lastTop={last}");
-                LogTopChildAnomalies("auto_load_next");
-                LogExpandedParentSummary("auto_load_next");
-                if (_commentTree.ContainsFocus)
-                {
-                    _commentTree.SuppressNavigationA11y("auto_load", 420);
-                }
                 _ = LoadTopPageAsync(nextPage, _cts?.Token ?? CancellationToken.None, restoreAnchors: false);
             }
         }
@@ -506,16 +617,6 @@ namespace YTPlayer.Forms
             var firstTopNode = _commentTree.Nodes[0];
             if (firstTopNode.IsVisible)
             {
-                string selected = DescribeNodeShort(_commentTree.SelectedNode);
-                string topNode = DescribeNodeShort(_commentTree.TopNode);
-                string first = DescribeNodeShort(firstTopNode);
-                LogComments($"Auto load prev top page {prevPage} (first visible) selected={selected} topNode={topNode} firstTop={first}");
-                LogTopChildAnomalies("auto_load_prev");
-                LogExpandedParentSummary("auto_load_prev");
-                if (_commentTree.ContainsFocus)
-                {
-                    _commentTree.SuppressNavigationA11y("auto_load", 420);
-                }
                 _ = LoadTopPageAsync(prevPage, _cts?.Token ?? CancellationToken.None, restoreAnchors: false);
             }
         }
@@ -555,12 +656,10 @@ namespace YTPlayer.Forms
             QueueAutoExpandParent(tag.CommentId);
             if (_loadingFloors.Contains(tag.CommentId))
             {
-                LogComments($"Expand parent={tag.CommentId} wait loading");
                 return;
             }
 
-            LogComments($"Expand parent={tag.CommentId} load floor page=1 (defer)");
-            await LoadFloorPageAsync(tag.CommentId, 1);
+            await LoadFloorPageAsync(tag.CommentId, 1, autoTriggered: false);
         }
 
         private bool TryLoadMoreFromSelectedNode()

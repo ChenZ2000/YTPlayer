@@ -191,6 +191,11 @@ namespace YTPlayer.Forms
                 return;
             }
 
+            if (!TryGetAccessibleChildId(node, out int childId))
+            {
+                return;
+            }
+
             var tag = node.Tag as CommentNodeTag;
             string id = tag?.CommentId ?? "null";
             string text = node.Text ?? string.Empty;
@@ -198,19 +203,12 @@ namespace YTPlayer.Forms
             {
                 text = text.Substring(0, 48);
             }
-            int accId = TryGetAccIdForNode(node);
-            int index = GetVisibleNodeIndex(node);
-            int childId = accId > 0 ? accId : index + 1;
-            if (childId <= 0)
-            {
-                long handleValue = node.Handle.ToInt64();
-                LogTree($"AccessibilityNameChange skip id={id} level={node.Level} handle=0x{handleValue:X} accId={accId} index={index}");
-                return;
-            }
 
             long handleValueForLog = node.Handle.ToInt64();
             if (LogAccIdMapping)
             {
+                int accId = TryGetAccIdForNode(node);
+                int index = GetVisibleNodeIndex(node);
                 LogTree($"AccessibilityNameChange id={id} level={node.Level} index={index} accId={accId} handle=0x{handleValueForLog:X} childId={childId} text='{text}'");
             }
 
@@ -221,6 +219,91 @@ namespace YTPlayer.Forms
             catch
             {
             }
+        }
+
+        public void NotifyAccessibilitySelection(TreeNode node)
+        {
+            if (node == null || !IsHandleCreated || node.Handle == IntPtr.Zero)
+            {
+                return;
+            }
+
+            if (!ContainsFocus || !ReferenceEquals(SelectedNode, node))
+            {
+                return;
+            }
+
+            if (!TryGetAccessibleChildId(node, out int childId))
+            {
+                return;
+            }
+
+            try
+            {
+                AccessibilityNotifyClients(AccessibleEvents.Selection, childId);
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                AccessibilityNotifyClients(AccessibleEvents.Focus, childId);
+            }
+            catch
+            {
+            }
+        }
+
+        public void NotifyAccessibilityStateChange(TreeNode node)
+        {
+            if (node == null || !IsHandleCreated || node.Handle == IntPtr.Zero)
+            {
+                return;
+            }
+
+            if (!ContainsFocus)
+            {
+                return;
+            }
+
+            if (!TryGetAccessibleChildId(node, out int childId))
+            {
+                return;
+            }
+
+            try
+            {
+                AccessibilityNotifyClients(AccessibleEvents.StateChange, childId);
+            }
+            catch
+            {
+            }
+        }
+
+        private bool TryGetAccessibleChildId(TreeNode node, out int childId)
+        {
+            childId = -1;
+            if (node == null || !IsHandleCreated || node.Handle == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            int accId = TryGetAccIdForNode(node);
+            if (accId > 0)
+            {
+                childId = accId;
+                return true;
+            }
+
+            int index = GetVisibleNodeIndex(node);
+            if (index >= 0)
+            {
+                childId = index + 1;
+                return true;
+            }
+
+            return false;
         }
 
         public void SuppressControlRole(bool suppress)
@@ -1042,44 +1125,7 @@ namespace YTPlayer.Forms
             {
                 return;
             }
-
-            if (!ContainsFocus)
-            {
-                LogTree($"AccessibilityRefresh skip (no focus) reason={reason}");
-                return;
-            }
-
-            bool suppressText = !_suppressAccessibleText;
-            bool suppressRole = !_suppressControlRole;
-            if (suppressText)
-            {
-                SuppressAccessibleText(true, "acc_refresh");
-            }
-            if (suppressRole)
-            {
-                SuppressControlRole(true);
-            }
-
-            try
-            {
-                AccessibilityNotifyClients(AccessibleEvents.Reorder, -1);
-                AccessibilityNotifyClients(AccessibleEvents.NameChange, -1);
-            }
-            catch
-            {
-            }
-            finally
-            {
-                if (suppressText)
-                {
-                    ScheduleRestoreAccessibleText("acc_refresh");
-                }
-                if (suppressRole)
-                {
-                    ScheduleRestoreControlRole();
-                }
-            }
-
+            ResetAccessibilityChildCache($"refresh_{reason}");
             LogTree($"AccessibilityRefresh reason={reason}");
         }
 

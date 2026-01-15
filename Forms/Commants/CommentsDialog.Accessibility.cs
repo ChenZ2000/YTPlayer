@@ -13,8 +13,11 @@ namespace YTPlayer.Forms
         private string _lastAnnouncementText = string.Empty;
         private DateTime _lastAnnouncementAt = DateTime.MinValue;
         private bool _suppressLevelAnnouncement;
+        private bool _treeIntroAnnounced;
         private Timer? _levelAnnouncementTimer;
         private int? _pendingLevelAnnouncement;
+        private int? _lastSelectedLevel;
+        private bool _levelAnnouncedBeforeSelect;
         private const int LevelAnnouncementDelayMs = 140;
 
         private void InitializeAccessibilityAnnouncements()
@@ -25,7 +28,6 @@ namespace YTPlayer.Forms
         private void AnnounceTreeLevelChange(int level)
         {
             string text = $"{level} 级";
-            LogComments($"AnnounceLevel level={level} focus={_commentTree.ContainsFocus}");
             RaiseAccessibilityAnnouncement(text,
                 AutomationNotificationProcessing.All,
                 notifyMsaa: false,
@@ -41,6 +43,36 @@ namespace YTPlayer.Forms
             }
 
             RaiseAccessibilityAnnouncement($"按{name}排序");
+        }
+
+        private void AnnounceTreeIntroIfNeeded()
+        {
+            if (_treeIntroAnnounced || IsDisposed)
+            {
+                return;
+            }
+
+            if (!_commentTree.ContainsFocus)
+            {
+                return;
+            }
+
+            var selected = _commentTree.SelectedNode;
+            if (selected != null)
+            {
+                var tag = selected.Tag as CommentNodeTag;
+                if (tag != null && tag.Comment != null && !tag.IsPlaceholder)
+                {
+                    return;
+                }
+            }
+
+            _treeIntroAnnounced = true;
+            RaiseAccessibilityAnnouncement(
+                "使用方向键浏览评论，右箭头展开楼层回复。",
+                AutomationNotificationProcessing.All,
+                notifyMsaa: false,
+                updateLabelText: false);
         }
 
         private static string GetSortDisplayName(CommentSortType sortType)
@@ -87,7 +119,6 @@ namespace YTPlayer.Forms
                 _accessibilityAnnouncementLabel.AccessibleName = trimmed;
                 _accessibilityAnnouncementLabel.AccessibleDescription = trimmed;
             }
-            LogComments($"AccAnnounce '{trimmed}' processing={processing} msaa={notifyMsaa} updateLabel={updateLabelText}");
             try
             {
                 _accessibilityAnnouncementLabel.AccessibilityObject.RaiseAutomationNotification(

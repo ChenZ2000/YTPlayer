@@ -365,7 +365,12 @@ namespace YTPlayer.Forms
 
             UpdateAllNodeTexts();
             RaiseAccessibilityAnnouncement(_hideSequenceNumbers ? "已隐藏序号" : "已显示序号");
-            _commentTree.NotifyAccessibilityReorder("comments_sequence_toggle");
+            _commentTree.ResetAccessibilityChildCache("comments_sequence_toggle");
+            var selected = _commentTree.SelectedNode;
+            if (selected != null)
+            {
+                _commentTree.NotifyAccessibilityItemNameChange(selected);
+            }
         }
 
         private string? ShowReplyDialog(string? userName)
@@ -541,7 +546,7 @@ namespace YTPlayer.Forms
             bool page1Loaded = _floorPagesLoaded.TryGetValue(parentCommentId, out var pageSet) && pageSet.Contains(1);
             if (!page1Loaded)
             {
-                await LoadFloorPageAsync(parentCommentId, 1, forceReload: true);
+                await LoadFloorPageAsync(parentCommentId, 1, forceReload: true, autoTriggered: false);
             }
             else
             {

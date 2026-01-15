@@ -4,7 +4,6 @@ using System.Linq;
 using System.Windows.Forms;
 using YTPlayer.Core;
 using YTPlayer.Models;
-using YTPlayer.Utils;
 
 namespace YTPlayer.Forms
 {
@@ -12,7 +11,6 @@ namespace YTPlayer.Forms
     {
         private void ResetTreeState()
         {
-            LogComments($"ResetTreeState start nodes={_commentTree.Nodes.Count} nodeById={_nodeById.Count} topPages={_topPagesLoaded.Count} floorParents={_floorPagesLoaded.Count} loadingTop={_loadingTopPages.Count} loadingFloors={_loadingFloors.Count} pendingFloorParents={_pendingFloorByParent.Count} hasMoreTop={_hasMoreTop} nextTopPage={_nextTopPage}");
             _isResettingTree = true;
             try
             {
@@ -25,6 +23,7 @@ namespace YTPlayer.Forms
                 _loadingTopPages.Clear();
                 _loadingFloors.Clear();
                 _pendingFloorByParent.Clear();
+                _floorAutoRetryStates.Clear();
                 _hasMoreTop = false;
                 _nextTopPage = 1;
                 _minTopPageLoaded = 1;
@@ -35,9 +34,10 @@ namespace YTPlayer.Forms
                 _pendingFocusCommentId = null;
                 _pendingFocusParentId = null;
                 _pendingFocusTopAfterRefresh = false;
+                _lastSelectedLevel = null;
+                _levelAnnouncedBeforeSelect = false;
                 _pendingAutoExpandParents.Clear();
                 _floorLoadMoreAtTop.Clear();
-                LogComments("ResetTreeState done");
             }
             finally
             {
@@ -52,9 +52,7 @@ namespace YTPlayer.Forms
                 return;
             }
 
-            bool hadSelection = _commentTree.SelectedNode != null;
             int nodeCount = _commentTree.Nodes.Count;
-            LogComments($"ClearSelectionAfterRefresh selected={hadSelection} nodes={nodeCount}");
 
             bool previousResetting = _isResettingTree;
             _isResettingTree = true;
@@ -80,11 +78,9 @@ namespace YTPlayer.Forms
         {
             if (_commentTree.Nodes.Count == 0)
             {
-                LogComments("ClearTreeNodes skip (empty)");
                 return;
             }
 
-            LogComments($"ClearTreeNodes start count={_commentTree.Nodes.Count}");
             _commentTree.BeginUpdate();
             try
             {
@@ -102,7 +98,6 @@ namespace YTPlayer.Forms
             finally
             {
                 _commentTree.EndUpdate();
-                LogComments("ClearTreeNodes done");
             }
         }
 
@@ -170,7 +165,6 @@ namespace YTPlayer.Forms
             string? selectedId = ResolveAnchorId(_commentTree.SelectedNode);
             string? topId = ResolveAnchorId(_commentTree.TopNode);
             bool hadFocus = _commentTree.Focused;
-            LogComments($"CaptureAnchors selectedId={selectedId ?? "null"} topId={topId ?? "null"} hadFocus={hadFocus}");
             return (selectedId, topId, hadFocus);
         }
 
@@ -218,15 +212,10 @@ namespace YTPlayer.Forms
 
         private void RestoreAnchors(string? selectedId, string? topId, bool hadFocus)
         {
-            LogComments($"RestoreAnchors start selectedId={selectedId ?? "null"} topId={topId ?? "null"} hadFocus={hadFocus}");
             if (topId != null && TryGetNodeByAnchor(topId, out var topNode))
             {
                 _commentTree.TopNode = topNode;
                 LogNodeSnapshot("RestoreTop", topNode);
-            }
-            else if (topId != null)
-            {
-                LogComments($"RestoreTop miss id={topId}");
             }
 
             if (selectedId != null && TryGetNodeByAnchor(selectedId, out var selectedNode))
@@ -240,14 +229,8 @@ namespace YTPlayer.Forms
                 if (hadFocus && !_commentTree.Focused)
                 {
                     _commentTree.Focus();
-                    LogComments("RestoreFocus tree focused");
                 }
             }
-            else if (selectedId != null)
-            {
-                LogComments($"RestoreSelect miss id={selectedId}");
-            }
-            LogComments("RestoreAnchors done");
         }
 
         private bool TryFocusPendingCommentAfterRefresh()
@@ -267,7 +250,6 @@ namespace YTPlayer.Forms
                 return false;
             }
 
-            LogComments($"PendingFocus refresh parent={parentId ?? "null"} id={commentId}");
             return TrySelectCommentNode(commentId, ensureFocus: true, "RefreshFocus", parentId);
         }
 
@@ -397,8 +379,6 @@ namespace YTPlayer.Forms
                         continue;
                     }
 
-                    LogComments($"TreeIntegrity {reason} parent={rootId} child={tag.CommentId} childParent={tag.ParentCommentId ?? "null"} childTop={tag.IsTopLevel} dupRoot={duplicateRoot}");
-
                     if (duplicateRoot)
                     {
                         RemoveNodeSafe(child);
@@ -479,137 +459,16 @@ namespace YTPlayer.Forms
                         continue;
                     }
 
-                    LogComments($"TopFloorCollision {reason} parent={rootTag.CommentId} child={tag.CommentId} childParent={tag.ParentCommentId ?? "null"}");
                     RemoveNodeSafe(child);
                     RemoveFloorParent(tag.CommentId ?? string.Empty);
                     removed++;
                 }
             }
 
-            if (removed > 0)
-            {
-                LogComments($"TopFloorCollision summary reason={reason} removed={removed}");
-            }
-
             return removed;
         }
 
-        private void LogTopChildAnomalies(string reason)
-        {
-            int hits = 0;
-            int roots = 0;
-            int totalChildren = 0;
-            int topKnownHits = 0;
-            int topTagHits = 0;
-            int mismatchHits = 0;
-            foreach (TreeNode root in _commentTree.Nodes)
-            {
-                var rootTag = root.Tag as CommentNodeTag;
-                if (rootTag == null || string.IsNullOrWhiteSpace(rootTag.CommentId))
-                {
-                    continue;
-                }
-
-                roots++;
-                string rootId = rootTag.CommentId;
-                foreach (TreeNode child in root.Nodes)
-                {
-                    var tag = child.Tag as CommentNodeTag;
-                    if (tag == null || string.IsNullOrWhiteSpace(tag.CommentId))
-                    {
-                        continue;
-                    }
-
-                    totalChildren++;
-                    bool topKnown = _topCommentIds.Contains(tag.CommentId);
-                    bool topTag = tag.IsTopLevel;
-                    bool parentMismatch = !string.IsNullOrWhiteSpace(tag.ParentCommentId)
-                        && !string.Equals(tag.ParentCommentId, rootId, StringComparison.OrdinalIgnoreCase);
-
-                    if (!topKnown && !topTag && !parentMismatch)
-                    {
-                        continue;
-                    }
-
-                    hits++;
-                    if (topKnown)
-                    {
-                        topKnownHits++;
-                    }
-                    if (topTag)
-                    {
-                        topTagHits++;
-                    }
-                    if (parentMismatch)
-                    {
-                        mismatchHits++;
-                    }
-                    LogComments($"TopChildDetect reason={reason} parent={rootId} child={tag.CommentId} childParent={tag.ParentCommentId ?? "null"} childTop={tag.IsTopLevel} topKnown={topKnown} mismatch={parentMismatch}");
-                }
-            }
-
-            LogComments($"TopChildDetect summary reason={reason} roots={roots} children={totalChildren} hits={hits} topKnown={topKnownHits} topTag={topTagHits} mismatch={mismatchHits}");
-        }
-
-        private void LogExpandedParentSummary(string reason)
-        {
-            int expanded = 0;
-            foreach (TreeNode root in _commentTree.Nodes)
-            {
-                if (!root.IsExpanded)
-                {
-                    continue;
-                }
-
-                var rootTag = root.Tag as CommentNodeTag;
-                if (rootTag == null || string.IsNullOrWhiteSpace(rootTag.CommentId))
-                {
-                    continue;
-                }
-
-                expanded++;
-                string rootId = rootTag.CommentId;
-                int childCount = root.Nodes.Count;
-                int topKnown = 0;
-                int topTag = 0;
-                int mismatch = 0;
-                string firstChild = "null";
-                string lastChild = "null";
-                if (childCount > 0)
-                {
-                    firstChild = DescribeNodeShort(root.Nodes[0]);
-                    lastChild = DescribeNodeShort(root.Nodes[childCount - 1]);
-                }
-
-                foreach (TreeNode child in root.Nodes)
-                {
-                    var tag = child.Tag as CommentNodeTag;
-                    if (tag == null || string.IsNullOrWhiteSpace(tag.CommentId))
-                    {
-                        continue;
-                    }
-
-                    if (_topCommentIds.Contains(tag.CommentId))
-                    {
-                        topKnown++;
-                    }
-                    if (tag.IsTopLevel)
-                    {
-                        topTag++;
-                    }
-                    if (!string.IsNullOrWhiteSpace(tag.ParentCommentId)
-                        && !string.Equals(tag.ParentCommentId, rootId, StringComparison.OrdinalIgnoreCase))
-                    {
-                        mismatch++;
-                    }
-                }
-
-                LogComments($"ExpandedParent reason={reason} parent={rootId} children={childCount} topKnown={topKnown} topTag={topTag} mismatch={mismatch} first={firstChild} last={lastChild}");
-            }
-
-            LogComments($"ExpandedParent summary reason={reason} expanded={expanded}");
-        }
-
+        
         
 
         private bool TrySelectCommentNode(string commentId, bool ensureFocus, string reason, string? parentId = null)
@@ -635,7 +494,6 @@ namespace YTPlayer.Forms
 
             if (!_nodeById.TryGetValue(key, out var node))
             {
-                LogComments($"SelectComment miss id={commentId} reason={reason}");
                 return false;
             }
 
@@ -662,17 +520,11 @@ namespace YTPlayer.Forms
                 return;
             }
 
-            var tag = node.Tag as CommentNodeTag;
-            string nodeId = tag?.CommentId ?? "null";
-            string prevParentId = (node.Parent?.Tag as CommentNodeTag)?.CommentId ?? "null";
-            bool wasRoot = node.Parent == null
-                && ReferenceEquals(node.TreeView, _commentTree)
-                && _commentTree.Nodes.Contains(node);
-            bool isTop = tag?.IsTopLevel ?? false;
-            bool knownTop = !string.IsNullOrWhiteSpace(nodeId) && _topCommentIds.Contains(nodeId);
-            LogComments($"AttachRoot reason={reason} node={nodeId} wasRoot={wasRoot} prevParent={prevParentId} topTag={isTop} topKnown={knownTop}");
             _commentTree.Nodes.Add(node);
-            _commentTree.ScheduleAccessibilityRefresh($"attach_root_{reason}");
+            if (_commentTree.IsHandleCreated)
+            {
+                _commentTree.ResetAccessibilityChildCache($"attach_root_{reason}");
+            }
         }
 
         private void AttachChildNode(TreeNode parentNode, TreeNode node, int index, string reason)
@@ -682,18 +534,6 @@ namespace YTPlayer.Forms
                 return;
             }
 
-            var parentTag = parentNode.Tag as CommentNodeTag;
-            string parentId = parentTag?.CommentId ?? "null";
-            var tag = node.Tag as CommentNodeTag;
-            string nodeId = tag?.CommentId ?? "null";
-            string prevParentId = (node.Parent?.Tag as CommentNodeTag)?.CommentId ?? "null";
-            bool wasRoot = node.Parent == null
-                && ReferenceEquals(node.TreeView, _commentTree)
-                && _commentTree.Nodes.Contains(node);
-            bool isTop = tag?.IsTopLevel ?? false;
-            bool knownTop = !string.IsNullOrWhiteSpace(nodeId) && _topCommentIds.Contains(nodeId);
-            LogComments($"AttachChild reason={reason} parent={parentId} index={index} node={nodeId} wasRoot={wasRoot} prevParent={prevParentId} topTag={isTop} topKnown={knownTop}");
-
             if (index < 0)
             {
                 parentNode.Nodes.Add(node);
@@ -702,7 +542,10 @@ namespace YTPlayer.Forms
             {
                 parentNode.Nodes.Insert(index, node);
             }
-            _commentTree.ScheduleAccessibilityRefresh($"attach_child_{reason}");
+            if (_commentTree.IsHandleCreated)
+            {
+                _commentTree.ResetAccessibilityChildCache($"attach_child_{reason}");
+            }
         }
 
         private void QueueAutoExpandParent(string parentId)
@@ -713,7 +556,6 @@ namespace YTPlayer.Forms
             }
 
             _pendingAutoExpandParents.Add(parentId);
-            LogComments($"AutoExpand pending parent={parentId}");
         }
 
         private void TryAutoExpandParent(string parentId)
@@ -730,20 +572,17 @@ namespace YTPlayer.Forms
 
             if (!_nodeById.TryGetValue(parentId, out var parentNode))
             {
-                LogComments($"AutoExpand missing parent={parentId}");
                 return;
             }
 
             if (!ReferenceEquals(_commentTree.SelectedNode, parentNode))
             {
-                LogComments($"AutoExpand skip (not selected) parent={parentId}");
                 return;
             }
 
             if (!parentNode.IsExpanded)
             {
                 parentNode.Expand();
-                LogComments($"AutoExpand apply parent={parentId}");
             }
         }
 
@@ -839,19 +678,14 @@ namespace YTPlayer.Forms
 
                     if (_pendingFloorByParent.Count > 0)
                     {
-                        LogComments($"TopPage page={pageNo} pendingFloorParents={_pendingFloorByParent.Count}");
                     }
 
                     ApplyPendingFloorReplies();
-                    LogComments($"TopPage page={pageNo} topCount={topCount} floorCount={floorCount} rootNodes={_commentTree.Nodes.Count}");
                     PruneTopLevelCollisions(newTopIds, $"top_page_{pageNo}");
                     if (EnsureTreeIntegrity($"top_page_{pageNo}"))
                     {
-                        LogComments($"TreeIntegrity fixed after top page {pageNo}");
                     }
                     RecalculateTopLevelSequences();
-                    LogTopChildAnomalies($"top_page_{pageNo}");
-                    LogExpandedParentSummary($"top_page_{pageNo}");
                 }
                 finally
                 {
@@ -864,7 +698,6 @@ namespace YTPlayer.Forms
                     {
                         RestoreAnchors(anchors.selectedId, anchors.topId, anchors.hadFocus);
                     }
-                    _commentTree.NotifyAccessibilityReorder("comments_patch");
                 }
 
                 int maxBeforeUpdate = _maxTopPageLoaded;
@@ -913,7 +746,6 @@ namespace YTPlayer.Forms
             var parentTag = parentNode.Tag as CommentNodeTag;
             if (parentTag?.CommentId == null || !string.Equals(parentTag.CommentId, result.ParentCommentId, StringComparison.OrdinalIgnoreCase))
             {
-                LogComments($"ApplyFloorResult parent mismatch expected={result.ParentCommentId} actual={(parentTag?.CommentId ?? "null")}");
                 return;
             }
 
@@ -925,15 +757,6 @@ namespace YTPlayer.Forms
                 && _pendingFloorSelectionPage == pageNo;
             bool preferFocusComment = !string.IsNullOrWhiteSpace(_pendingFocusCommentId)
                 && string.Equals(_pendingFocusParentId, result.ParentCommentId, StringComparison.OrdinalIgnoreCase);
-            bool suppressTreeHeader = false;
-            bool suppressTreeRole = false;
-            if ((preferNewSelection || preferFocusComment) && _commentTree.ContainsFocus)
-            {
-                suppressTreeHeader = true;
-                _commentTree.SuppressAccessibleText(true, "floor_load_more");
-                suppressTreeRole = true;
-                _commentTree.SuppressControlRole(true);
-            }
             TreeNode? firstNewNode = null;
             HashSet<string>? existingIds = null;
             if (preferNewSelection)
@@ -958,7 +781,6 @@ namespace YTPlayer.Forms
             try
             {
                 var replies = DeduplicateComments(result.Comments);
-                LogComments($"ApplyFloorResult parent={result.ParentCommentId} page={pageNo} replies={replies.Count}");
                 TreeNode? lastInsertedNode = null;
                 IEnumerable<CommentInfo> replySource = replies;
                 if (loadMoreAtTop)
@@ -981,14 +803,12 @@ namespace YTPlayer.Forms
 
                     if (_topCommentIds.Contains(reply.CommentId))
                     {
-                        LogComments($"FloorSkipTopKnown parent={result.ParentCommentId} reply={reply.CommentId}");
                         continue;
                     }
 
                     if (!string.IsNullOrWhiteSpace(reply.ParentCommentId)
                         && !string.Equals(reply.ParentCommentId, result.ParentCommentId, StringComparison.OrdinalIgnoreCase))
                     {
-                        LogComments($"FloorReplyParentMismatch parent={result.ParentCommentId} reply={reply.CommentId} actualParent={reply.ParentCommentId}");
                         continue;
                     }
 
@@ -1001,12 +821,10 @@ namespace YTPlayer.Forms
                         && topCandidate.Tag is CommentNodeTag topTag
                         && topTag.IsTopLevel)
                     {
-                        LogComments($"FloorSkipTopCollision parent={result.ParentCommentId} reply={reply.CommentId} topSeq={topTag.SequenceNumber}");
                         continue;
                     }
                     if (IsTopLevelCommentId(reply.CommentId))
                     {
-                        LogComments($"FloorSkipTopRoot parent={result.ParentCommentId} reply={reply.CommentId}");
                         continue;
                     }
 
@@ -1088,6 +906,8 @@ namespace YTPlayer.Forms
                     }
                 }
 
+                int expectedTotal = parentTag.Comment?.ReplyCount ?? 0;
+                int actualCount = CountFloorReplies(parentNode);
                 bool hasMore = result.HasMore;
                 int nextPage = pageNo + 1;
                 if (loadMoreAtTop)
@@ -1095,6 +915,21 @@ namespace YTPlayer.Forms
                     int prevPage = GetPrevFloorPageNumber(result.ParentCommentId, pageNo);
                     hasMore = prevPage >= 1;
                     nextPage = prevPage;
+                    if (nextPage <= 0)
+                    {
+                        _floorLoadMoreAtTop.Remove(result.ParentCommentId);
+                        loadMoreAtTop = false;
+                        nextPage = pageNo + 1;
+                    }
+                }
+
+                if (!hasMore && expectedTotal > 0 && actualCount < expectedTotal)
+                {
+                    hasMore = true;
+                    if (nextPage <= 0)
+                    {
+                        nextPage = pageNo + 1;
+                    }
                 }
 
                 EnsureLoadMoreNode(parentNode, result.ParentCommentId, hasMore, nextPage, loadMoreAtTop);
@@ -1103,11 +938,8 @@ namespace YTPlayer.Forms
                 RecalculateFloorSequences(parentNode);
                 if (EnsureTreeIntegrity($"floor_{result.ParentCommentId}_{pageNo}"))
                 {
-                    LogComments($"TreeIntegrity fixed after floor {result.ParentCommentId} page {pageNo}");
                     RecalculateTopLevelSequences();
                 }
-                LogTopChildAnomalies($"floor_{result.ParentCommentId}_{pageNo}");
-                LogExpandedParentSummary($"floor_{result.ParentCommentId}_{pageNo}");
             }
             finally
             {
@@ -1170,22 +1002,13 @@ namespace YTPlayer.Forms
                     }
                     else
                     {
-                        LogComments($"SkipRestoreAnchors parent={result.ParentCommentId} selectionInParent={selectionInParent} versionMatch={interactionVersion == _treeInteractionVersion}");
                     }
 
                     bool selectedIsPlaceholder = _commentTree.SelectedNode?.Tag is CommentNodeTag selectedTag && selectedTag.IsPlaceholder;
                     if (!selectedIsPlaceholder && allowRestore)
                     {
-                        _commentTree.NotifyAccessibilityReorder("comments_patch");
+                        _commentTree.ResetAccessibilityChildCache("comments_patch");
                     }
-                }
-                if (suppressTreeHeader)
-                {
-                    _commentTree.ScheduleRestoreAccessibleText("floor_load_more");
-                }
-                if (suppressTreeRole)
-                {
-                    _commentTree.ScheduleRestoreControlRole();
                 }
                 _suppressLevelAnnouncement = suppressAnnouncement;
             }
@@ -1236,13 +1059,11 @@ namespace YTPlayer.Forms
             {
                 node.Remove();
                 AttachRootNode(node, "upsert_top_add");
-                LogComments($"UpsertTop add root id={comment.CommentId}");
             }
             else if (node.Parent != null)
             {
                 node.Remove();
                 AttachRootNode(node, "upsert_top_move");
-                LogComments($"UpsertTop move to root id={comment.CommentId}");
             }
 
             return node;
@@ -1254,7 +1075,6 @@ namespace YTPlayer.Forms
             if (!string.IsNullOrWhiteSpace(reply.ParentCommentId)
                 && !string.Equals(reply.ParentCommentId, parentId, StringComparison.OrdinalIgnoreCase))
             {
-                LogComments($"UpsertFloor parent mismatch expected={parentId} actual={reply.ParentCommentId} reply={reply.CommentId}");
                 reply.ParentCommentId = parentId;
             }
             else if (string.IsNullOrWhiteSpace(reply.ParentCommentId))
@@ -1268,7 +1088,6 @@ namespace YTPlayer.Forms
                 && ReferenceEquals(node.TreeView, _commentTree)
                 && _commentTree.Nodes.Contains(node))
             {
-                LogComments($"UpsertFloor root collision parent={parentId} reply={reply.CommentId} key={floorKey}");
                 var replacement = new TreeNode();
                 if (!string.IsNullOrWhiteSpace(floorKey))
                 {
@@ -1299,8 +1118,6 @@ namespace YTPlayer.Forms
                 }
 
                 AttachChildNode(parentNode, node, insertIndex, "upsert_floor");
-                string logParentId = (parentNode.Tag as CommentNodeTag)?.CommentId ?? "null";
-                LogComments($"UpsertFloor parent={logParentId} reply={reply.CommentId} index={insertIndex}");
             }
 
             return node;
@@ -1327,7 +1144,6 @@ namespace YTPlayer.Forms
 
                 if (_topCommentIds.Contains(reply.CommentId))
                 {
-                    LogComments($"InitialReplySkipTop parent={comment.CommentId} reply={reply.CommentId}");
                     continue;
                 }
 
@@ -1350,7 +1166,6 @@ namespace YTPlayer.Forms
 
             bool hasMore = comment.ReplyCount > comment.Replies.Count;
             EnsureLoadMoreNode(parentNode, comment.CommentId, hasMore, 2, placeAtTop: false);
-            LogComments($"InitialReplies parent={comment.CommentId} count={comment.Replies.Count} replyCount={comment.ReplyCount} hasMore={hasMore}");
         }
 
         private void EnsureExpandableNode(TreeNode parentNode, CommentInfo comment)
@@ -1540,7 +1355,10 @@ namespace YTPlayer.Forms
             };
 
             _commentTree.Nodes.Add(node);
-            _commentTree.ScheduleAccessibilityRefresh("top_placeholder_add");
+            if (_commentTree.IsHandleCreated)
+            {
+                _commentTree.ResetAccessibilityChildCache("top_placeholder_add");
+            }
         }
 
         private void RemoveTopLoadingPlaceholder(string reason)
@@ -1565,7 +1383,10 @@ namespace YTPlayer.Forms
 
             if (removed)
             {
-                _commentTree.ScheduleAccessibilityRefresh($"top_placeholder_remove_{reason}");
+                if (_commentTree.IsHandleCreated)
+                {
+                    _commentTree.ResetAccessibilityChildCache($"top_placeholder_remove_{reason}");
+                }
             }
         }
 
@@ -1715,7 +1536,6 @@ namespace YTPlayer.Forms
         {
             if (string.IsNullOrWhiteSpace(parentId))
             {
-                LogComments($"FloorKey missing parent id={commentId}");
             }
 
             string key = BuildFloorKey(parentId, commentId);
@@ -1728,7 +1548,6 @@ namespace YTPlayer.Forms
                 if (existingTag != null && existingTag.IsTopLevel || isRootNode)
                 {
                     string topId = existingTag?.CommentId ?? "null";
-                    LogComments($"FloorKey collision key={key} id={commentId} parent={parentId} topId={topId} root={isRootNode}");
                     var replacement = new TreeNode();
                     _nodeById[key] = replacement;
                     return replacement;
@@ -1760,21 +1579,15 @@ namespace YTPlayer.Forms
         private void RecalculateTopLevelSequences()
         {
             int sequenceNumber = 0;
-            int rootCount = _commentTree.Nodes.Count;
-            int skipped = 0;
-            int nonTopRoot = 0;
-            int previewCount = 0;
             foreach (TreeNode node in _commentTree.Nodes)
             {
                 var tag = node.Tag as CommentNodeTag;
                 if (tag?.Comment == null || tag.IsPlaceholder || tag.IsLoadMoreNode)
                 {
-                    skipped++;
                     continue;
                 }
                 if (!tag.IsTopLevel)
                 {
-                    nonTopRoot++;
                     continue;
                 }
 
@@ -1786,85 +1599,57 @@ namespace YTPlayer.Forms
                 ApplyNodeText(node, text, "RecalcTop");
 
                 RecalculateFloorSequences(node);
-
-                if (previewCount < 5)
-                {
-                    previewCount++;
-                    string preview = node.Text ?? string.Empty;
-                    if (preview.Length > 32)
-                    {
-                        preview = preview.Substring(0, 32);
-                    }
-                    LogComments($"TopPreview seq={sequenceNumber} id={tag.CommentId} text='{preview}'");
-                }
             }
-
-            LogComments($"RecalcTopLevel root={rootCount} top={sequenceNumber} skipped={skipped} nonTopRoot={nonTopRoot}");
         }
 
         private void RecalculateFloorSequences(TreeNode parentNode)
         {
-                int sequenceNumber = 0;
-                foreach (TreeNode node in parentNode.Nodes)
+            int sequenceNumber = 0;
+            foreach (TreeNode node in parentNode.Nodes)
+            {
+                var tag = node.Tag as CommentNodeTag;
+                if (tag == null || tag.IsLoadMoreNode)
                 {
-                    var tag = node.Tag as CommentNodeTag;
-                    if (tag == null || tag.IsLoadMoreNode)
-                    {
-                        continue;
-                    }
+                    continue;
+                }
 
-                    if (tag.IsVirtualFloor)
-                    {
-                        int fixedNumber = tag.FixedSequenceNumber > 0 ? tag.FixedSequenceNumber : tag.SequenceNumber;
-                        tag.SequenceNumber = fixedNumber;
-                        tag.IsTopLevel = false;
-                        node.Tag = tag;
+                if (tag.IsVirtualFloor)
+                {
+                    int fixedNumber = tag.FixedSequenceNumber > 0 ? tag.FixedSequenceNumber : tag.SequenceNumber;
+                    tag.SequenceNumber = fixedNumber;
+                    tag.IsTopLevel = false;
+                    node.Tag = tag;
                     if (tag.Comment != null)
                     {
                         string virtualText = BuildNodeText(tag.Comment, fixedNumber, isTopLevel: false);
                         ApplyNodeText(node, virtualText, "RecalcFloorVirtual");
                     }
-                        if (fixedNumber > sequenceNumber)
-                        {
-                            sequenceNumber = fixedNumber;
-                        }
-                        continue;
-                    }
-
-                    sequenceNumber++;
-                    tag.SequenceNumber = sequenceNumber;
-                    tag.IsTopLevel = false;
-                    node.Tag = tag;
-                    if (tag.IsPlaceholder)
+                    if (fixedNumber > sequenceNumber)
                     {
+                        sequenceNumber = fixedNumber;
+                    }
+                    continue;
+                }
+
+                sequenceNumber++;
+                tag.SequenceNumber = sequenceNumber;
+                tag.IsTopLevel = false;
+                node.Tag = tag;
+                if (tag.IsPlaceholder)
+                {
                     string placeholderText = BuildPlaceholderText(tag, sequenceNumber);
                     ApplyNodeText(node, placeholderText, "RecalcFloorPlaceholder");
                     continue;
                 }
 
-                    if (tag.Comment == null)
-                    {
-                        continue;
-                    }
+                if (tag.Comment == null)
+                {
+                    continue;
+                }
 
                 string text = BuildNodeText(tag.Comment, sequenceNumber, isTopLevel: false);
                 ApplyNodeText(node, text, "RecalcFloor");
             }
-
-            var parentTag = parentNode.Tag as CommentNodeTag;
-            LogComments($"RecalcFloor parent={parentTag?.CommentId ?? "null"} count={sequenceNumber} children={parentNode.Nodes.Count}");
-        }
-
-        private void LogNodeTextChange(string reason, TreeNode node, string newText)
-        {
-            var tag = node.Tag as CommentNodeTag;
-            string id = tag?.CommentId ?? "null";
-            string parentId = (node.Parent?.Tag as CommentNodeTag)?.CommentId ?? "null";
-            bool isTop = tag?.IsTopLevel ?? false;
-            int seq = tag?.SequenceNumber ?? 0;
-            string oldText = node.Text ?? string.Empty;
-            string handle = node.Handle == IntPtr.Zero ? "0" : $"0x{node.Handle.ToInt64():X}";
-            LogComments($"NodeTextChange reason={reason} id={id} parent={parentId} handle={handle} top={isTop} seq={seq} old='{PreviewText(oldText)}' new='{PreviewText(newText)}'");
         }
 
         private void ApplyNodeText(TreeNode node, string text, string reason)
@@ -1879,91 +1664,8 @@ namespace YTPlayer.Forms
                 return;
             }
 
-            LogNodeTextChange(reason, node, text);
             node.Text = text;
             _commentTree.NotifyAccessibilityItemNameChange(node);
-        }
-
-        private void TrySetTreeNodeAccessibleName(TreeNode node, string text, string reason)
-        {
-            if (node == null || _commentTree == null || string.IsNullOrWhiteSpace(text))
-            {
-                return;
-            }
-
-            if (!_commentTree.IsHandleCreated || node.Handle == IntPtr.Zero)
-            {
-                return;
-            }
-
-            try
-            {
-                AccessibilityPropertyService.TrySetTreeItemName(_commentTree.Handle, node.Handle, text);
-                var tag = node.Tag as CommentNodeTag;
-                string id = tag?.CommentId ?? "null";
-                string preview = PreviewText(text);
-                long handleValue = node.Handle.ToInt64();
-                LogComments($"AccPropSet reason={reason} id={id} level={node.Level} handle=0x{handleValue:X} text='{preview}'");
-            }
-            catch
-            {
-            }
-        }
-
-        private void LogNodeTextMismatchIfAny(TreeNode node, string reason)
-        {
-            if (node == null)
-            {
-                return;
-            }
-
-            var tag = node.Tag as CommentNodeTag;
-            if (tag == null)
-            {
-                return;
-            }
-
-            string? expected = null;
-            if (tag.IsLoadMoreNode)
-            {
-                expected = GetLoadMoreText(tag);
-            }
-            else if (tag.IsPlaceholder)
-            {
-                int seq = tag.SequenceNumber > 0 ? tag.SequenceNumber : 0;
-                expected = BuildPlaceholderText(tag, seq);
-            }
-            else if (tag.Comment != null)
-            {
-                int seq = tag.SequenceNumber > 0 ? tag.SequenceNumber : 0;
-                expected = BuildNodeText(tag.Comment, seq, tag.IsTopLevel);
-            }
-
-            if (expected == null)
-            {
-                return;
-            }
-
-            string actual = node.Text ?? string.Empty;
-            if (actual == expected)
-            {
-                return;
-            }
-
-            string id = tag.CommentId ?? "null";
-            string parentId = tag.ParentCommentId ?? "null";
-            LogComments($"NodeTextMismatch reason={reason} id={id} parent={parentId} level={node.Level} top={tag.IsTopLevel} seq={tag.SequenceNumber} actual='{PreviewText(actual)}' expected='{PreviewText(expected)}'");
-        }
-
-        private static string PreviewText(string text)
-        {
-            if (string.IsNullOrEmpty(text))
-            {
-                return string.Empty;
-            }
-
-            text = text.Replace("\r", " ").Replace("\n", " ");
-            return text.Length > 60 ? text.Substring(0, 60) : text;
         }
 
         private void UpdateCommentNode(TreeNode node, CommentInfo comment, bool isTopLevel, int sequenceNumber)
@@ -2052,7 +1754,6 @@ namespace YTPlayer.Forms
                 else
                 {
                     LogNodeSnapshot("RemoveSelectCurrent", node);
-                    LogComments("RemoveSelectFallback none");
                 }
             }
             else if (_isResettingTree && ReferenceEquals(_commentTree.SelectedNode, node))
@@ -2065,7 +1766,10 @@ namespace YTPlayer.Forms
 
             LogNodeSnapshot("RemoveNode", node);
             node.Remove();
-            _commentTree.ScheduleAccessibilityRefresh("remove_node");
+            if (_commentTree.IsHandleCreated)
+            {
+                _commentTree.ResetAccessibilityChildCache("remove_node");
+            }
         }
 
         private void RemoveNodeMapping(CommentNodeTag? tag)
@@ -2168,7 +1872,6 @@ namespace YTPlayer.Forms
             {
                 if (!_nodeById.TryGetValue(pair.Key, out var parentNode))
                 {
-                    LogComments($"PendingFloor no parent id={pair.Key} count={pair.Value.Count}");
                     continue;
                 }
 
@@ -2212,7 +1915,6 @@ namespace YTPlayer.Forms
 
                 if (_topCommentIds.Contains(reply.CommentId))
                 {
-                    LogComments($"PendingFloorSkipTop parent={parentId} reply={reply.CommentId}");
                     continue;
                 }
 
@@ -2230,7 +1932,6 @@ namespace YTPlayer.Forms
             bool loadMoreAtTop = IsFloorLoadMoreAtTop(parentId);
             EnsureLoadMoreNode(parentNode, parentId, hasMore, nextPage, loadMoreAtTop);
             RecalculateFloorSequences(parentNode);
-            LogComments($"ApplyPendingFloor parent={parentId} replies={replies.Count} expected={expectedCount} actual={actualCount} hasMore={hasMore}");
         }
 
         private int CountFloorReplies(TreeNode parentNode)

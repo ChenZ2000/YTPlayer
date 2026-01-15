@@ -45,9 +45,11 @@ namespace YTPlayer.Forms
         private readonly HashSet<int> _loadingTopPages = new();
         private readonly HashSet<string> _loadingFloors = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, List<CommentInfo>> _pendingFloorByParent = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, AutoRetryState> _floorAutoRetryStates = new(StringComparer.OrdinalIgnoreCase);
 
         private const int TopPageSize = 100;
         private const int FloorPageSize = 20;
+        private const int FloorAutoRetryMaxAttempts = 3;
         private bool _hasMoreTop;
         private int _nextTopPage = 1;
 
@@ -56,6 +58,11 @@ namespace YTPlayer.Forms
             None,
             Up,
             Down
+        }
+
+        private struct AutoRetryState
+        {
+            public int Attempts;
         }
 
         private void InitializeState()
@@ -79,7 +86,6 @@ namespace YTPlayer.Forms
             }
 
             _lastTreeNavDirection = direction;
-            LogComments($"TreeNav direction={direction} reason={reason}");
         }
 
         [Conditional("DEBUG")]
@@ -99,17 +105,5 @@ namespace YTPlayer.Forms
             LogComments($"{prefix} level={node.Level} id={id} parent={parentId} handle={handle} {flags} textLen={(node.Text?.Length ?? 0)}");
         }
 
-        private string DescribeNodeShort(TreeNode? node)
-        {
-            if (node == null)
-            {
-                return "null";
-            }
-
-            var tag = node.Tag as CommentNodeTag;
-            string id = tag?.CommentId ?? "null";
-            string parentId = tag?.ParentCommentId ?? "null";
-            return $"level={node.Level} id={id} parent={parentId}";
-        }
     }
 }

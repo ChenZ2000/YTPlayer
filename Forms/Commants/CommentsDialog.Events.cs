@@ -1,5 +1,4 @@
 using System;
-using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace YTPlayer.Forms
@@ -32,23 +31,20 @@ namespace YTPlayer.Forms
             _commentTree.Enter += (_, _) =>
             {
                 _commentTree.SuppressControlRole(false);
-                LogComments($"Tree Enter focus={_commentTree.ContainsFocus}");
                 ApplyPendingSortRefreshOnTreeFocus();
+                AnnounceTreeIntroIfNeeded();
             };
             _commentTree.GotFocus += (_, _) =>
             {
                 _commentTree.SuppressControlRole(false);
-                LogComments($"Tree GotFocus focus={_commentTree.ContainsFocus}");
                 ApplyPendingSortRefreshOnTreeFocus();
+                AnnounceTreeIntroIfNeeded();
             };
             _commentTree.Leave += (_, _) =>
             {
                 _commentTree.SuppressControlRole(false);
-                LogComments("Tree Leave");
                 CancelLevelAnnouncement();
             };
-            _commentTree.HandleCreated += (_, _) => LogComments("Tree HandleCreated");
-            _commentTree.HandleDestroyed += (_, _) => LogComments("Tree HandleDestroyed");
 
             BuildTreeContextMenu();
         }
@@ -63,21 +59,22 @@ namespace YTPlayer.Forms
 
             if (_isResettingTree)
             {
-                LogComments("BeforeSelect suppressed (resetting)");
                 return;
             }
 
             int? previousLevel = _commentTree.SelectedNode?.Level;
-            string preview = BuildNodePreview(node, 28);
-            LogComments($"BeforeSelect level={node.Level} prevLevel={(previousLevel.HasValue ? previousLevel.Value.ToString() : "null")} focus={_commentTree.ContainsFocus} text='{preview}'");
 
+            _levelAnnouncedBeforeSelect = false;
             if (_suppressLevelAnnouncement || !_commentTree.ContainsFocus)
             {
                 return;
             }
-            if (previousLevel.HasValue && previousLevel.Value != node.Level)
+            int? stablePreviousLevel = _lastSelectedLevel ?? previousLevel;
+            if (stablePreviousLevel.HasValue && stablePreviousLevel.Value != node.Level)
             {
-                ScheduleLevelAnnouncement(node.Level);
+                CancelLevelAnnouncement();
+                AnnounceTreeLevelChange(node.Level);
+                _levelAnnouncedBeforeSelect = true;
             }
         }
 
@@ -129,17 +126,12 @@ namespace YTPlayer.Forms
 
         private void OnSortChanged(object? sender, EventArgs e)
         {
-            var active = ActiveControl;
-            string activeName = active?.Name ?? active?.GetType().Name ?? "null";
-            LogComments($"SortChanged active={activeName} treeFocused={_commentTree.Focused} treeContainsFocus={_commentTree.ContainsFocus}");
             if (!_sortComboBox.Focused && !_sortComboBox.DroppedDown)
             {
-                LogComments("SortChanged ignored (not focused)");
                 return;
             }
 
             _pendingSortRefresh = true;
-            LogComments($"SortChanged pending index={_sortComboBox.SelectedIndex}");
         }
 
         private async void OnSortComboLeave(object? sender, EventArgs e)
@@ -152,13 +144,11 @@ namespace YTPlayer.Forms
             _pendingSortRefresh = false;
             if (_commentTree.ContainsFocus)
             {
-                LogComments("SortLeave apply pending (tree focused)");
                 await RefreshCommentsAsync(restoreAnchors: false, clearSelection: true);
             }
             else
             {
                 _pendingSortRefreshOnTreeFocus = true;
-                LogComments("SortLeave pending until tree focus");
             }
         }
 
@@ -170,7 +160,6 @@ namespace YTPlayer.Forms
             }
 
             _pendingSortRefreshOnTreeFocus = false;
-            LogComments("SortPending apply on tree focus");
             await RefreshCommentsAsync(restoreAnchors: false, clearSelection: true);
         }
 
@@ -218,28 +207,14 @@ namespace YTPlayer.Forms
                 case Keys.Up:
                 case Keys.PageUp:
                 case Keys.Home:
-                    _commentTree.SuppressNavigationA11y("tree_nav", 260);
                     SetTreeNavDirection(TreeNavDirection.Up, $"KeyDown:{e.KeyCode}");
                     _treeInteractionVersion++;
                     break;
                 case Keys.Down:
                 case Keys.PageDown:
                 case Keys.End:
-                    int navDelay = e.KeyCode == Keys.End || e.KeyCode == Keys.PageDown ? 360 : 260;
-                    _commentTree.SuppressNavigationA11y("tree_nav", navDelay);
                     SetTreeNavDirection(TreeNavDirection.Down, $"KeyDown:{e.KeyCode}");
                     _treeInteractionVersion++;
-                    if (e.KeyCode == Keys.End || e.KeyCode == Keys.PageDown)
-                    {
-                        string selected = DescribeNodeShort(_commentTree.SelectedNode);
-                        string topNode = DescribeNodeShort(_commentTree.TopNode);
-                        string lastTop = _commentTree.Nodes.Count > 0
-                            ? DescribeNodeShort(_commentTree.Nodes[_commentTree.Nodes.Count - 1])
-                            : "null";
-                        LogComments($"KeyDownScroll key={e.KeyCode} selected={selected} topNode={topNode} lastTop={lastTop} roots={_commentTree.Nodes.Count}");
-                        LogTopChildAnomalies($"keydown_{e.KeyCode}");
-                        LogExpandedParentSummary($"keydown_{e.KeyCode}");
-                    }
                     break;
             }
 
@@ -270,12 +245,10 @@ namespace YTPlayer.Forms
         {
             if (e.Delta > 0)
             {
-                _commentTree.SuppressNavigationA11y("tree_nav", 260);
                 SetTreeNavDirection(TreeNavDirection.Up, "MouseWheel");
             }
             else if (e.Delta < 0)
             {
-                _commentTree.SuppressNavigationA11y("tree_nav", 260);
                 SetTreeNavDirection(TreeNavDirection.Down, "MouseWheel");
             }
             _treeInteractionVersion++;
@@ -298,77 +271,53 @@ namespace YTPlayer.Forms
         {
             if (_isResettingTree)
             {
-                LogComments("AfterSelect suppressed (resetting)");
                 return;
             }
 
+            int? previousLevel = _lastSelectedLevel;
+            int? currentLevel = e.Node?.Level;
+            _lastSelectedLevel = currentLevel;
+            if (!_levelAnnouncedBeforeSelect
+                && currentLevel.HasValue
+                && previousLevel.HasValue
+                && previousLevel.Value != currentLevel.Value
+                && _commentTree.ContainsFocus)
+            {
+                ScheduleLevelAnnouncement(currentLevel.Value);
+            }
+            _levelAnnouncedBeforeSelect = false;
+
             if (e.Node != null)
             {
-                LogNodeTextMismatchIfAny(e.Node, "AfterSelect");
+                _commentTree.NotifyAccessibilitySelection(e.Node);
             }
 
-            if (_commentTree.ContainsFocus
-                && (e.Action == TreeViewAction.ByKeyboard || e.Action == TreeViewAction.Unknown))
-            {
-                _commentTree.SuppressNavigationA11y("after_select", 240);
-            }
-
-            string preview = e.Node?.Text ?? string.Empty;
-            if (preview.Length > 32)
-            {
-                preview = preview.Substring(0, 32);
-            }
-            LogNodeSnapshot("Select", e.Node);
-            if (!string.IsNullOrWhiteSpace(preview))
-            {
-                LogComments($"SelectText '{preview}'");
-            }
-            LogComments($"AfterSelect focus={_commentTree.ContainsFocus}");
             MaybeLoadPrevTopPage();
-            _commentTree.ScheduleRestoreControlRole();
             MaybeLoadNextTopPage();
             TryAutoLoadVisibleFloorMore("after_select");
-            LogTopChildAnomalies("after_select");
-            LogExpandedParentSummary("after_select");
         }
 
         private void OnCommentTreeAfterExpand(object? sender, TreeViewEventArgs e)
         {
             LogNodeSnapshot("AfterExpand", e.Node);
-            LogComments($"AfterExpand focus={_commentTree.ContainsFocus}");
-            _commentTree.NotifyAccessibilityReorder("after_expand");
+            if (e.Node != null)
+            {
+                _commentTree.NotifyAccessibilityStateChange(e.Node);
+            }
             MaybeLoadPrevTopPage();
             MaybeLoadNextTopPage();
             TryAutoLoadVisibleFloorMore("after_expand");
-            LogTopChildAnomalies("after_expand");
-            LogExpandedParentSummary("after_expand");
         }
 
         private void OnCommentTreeAfterCollapse(object? sender, TreeViewEventArgs e)
         {
             LogNodeSnapshot("AfterCollapse", e.Node);
-            LogComments($"AfterCollapse focus={_commentTree.ContainsFocus}");
-            _commentTree.NotifyAccessibilityReorder("after_collapse");
+            if (e.Node != null)
+            {
+                _commentTree.NotifyAccessibilityStateChange(e.Node);
+            }
             TryAutoLoadVisibleFloorMore("after_collapse");
-            LogTopChildAnomalies("after_collapse");
-            LogExpandedParentSummary("after_collapse");
         }
-
-        private static string BuildNodePreview(TreeNode? node, int maxLength)
-        {
-            if (node == null || string.IsNullOrEmpty(node.Text))
-            {
-                return string.Empty;
-            }
-
-            if (node.Text.Length <= maxLength)
-            {
-                return node.Text;
-            }
-
-            return node.Text.Substring(0, maxLength);
-        }
-
 
         private void UpdateContextMenuState()
         {

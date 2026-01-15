@@ -88,7 +88,7 @@ namespace YTPlayer.Forms
                     ShowRootLines = true,
                     AccessibleRole = AccessibleRole.Outline,
                     AccessibleName = "评论",
-                    AccessibleDescription = "使用方向键浏览评论，右箭头展开楼层回复。",
+                    AccessibleDescription = "评论列表",
                     TabIndex = 0
                 };
                 _ = _commentTree.AccessibilityObject;
@@ -191,7 +191,6 @@ namespace YTPlayer.Forms
                 AppContext.SetSwitch("Switch.System.Windows.Forms.UseLegacyAccessibilityFeatures", enableLegacy);
                 AppContext.SetSwitch("Switch.System.Windows.Forms.UseLegacyAccessibilityFeatures.2", enableLegacy);
                 AppContext.SetSwitch("Switch.System.Windows.Forms.UseLegacyAccessibilityFeatures.3", enableLegacy);
-                _owner.LogComments($"AccSwitch override legacy={enableLegacy} prev={_prev1},{_prev2},{_prev3}");
             }
 
             public void Dispose()
@@ -199,7 +198,6 @@ namespace YTPlayer.Forms
                 AppContext.SetSwitch("Switch.System.Windows.Forms.UseLegacyAccessibilityFeatures", _prev1);
                 AppContext.SetSwitch("Switch.System.Windows.Forms.UseLegacyAccessibilityFeatures.2", _prev2);
                 AppContext.SetSwitch("Switch.System.Windows.Forms.UseLegacyAccessibilityFeatures.3", _prev3);
-                _owner.LogComments($"AccSwitch restore legacy={_prev1},{_prev2},{_prev3}");
             }
         }
     }
