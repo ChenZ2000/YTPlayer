@@ -963,11 +963,26 @@ namespace YTPlayer.Core.Download
                 }
 
                 // 调用 NeteaseApiClient 获取歌曲 URL
-                var urlDict = await _apiClient.GetSongUrlAsync(
-                    new[] { task.Song.Id },
-                    ConvertToApiQuality(task.Quality),
-                    skipAvailabilityCheck: false,
-                    cancellationToken: CancellationToken.None).ConfigureAwait(false);
+                Dictionary<string, SongUrlInfo>? urlDict;
+                try
+                {
+                    urlDict = await _apiClient.GetSongUrlAsync(
+                        new[] { task.Song.Id },
+                        ConvertToApiQuality(task.Quality),
+                        skipAvailabilityCheck: false,
+                        cancellationToken: CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (global::YTPlayer.Core.SongResourceNotFoundException ex)
+                {
+                    if (await TryApplyUnblockAsync(task, CancellationToken.None).ConfigureAwait(false))
+                    {
+                        return true;
+                    }
+
+                    task.ErrorMessage = $"获取下载链接失败: {ex.Message}";
+                    DebugLogger.LogException("DownloadManager", ex, $"获取下载 URL 失败: {task.Song.Name}");
+                    return false;
+                }
 
                 if (urlDict == null || !urlDict.ContainsKey(task.Song.Id))
                 {

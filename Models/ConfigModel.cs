@@ -125,6 +125,11 @@ namespace YTPlayer.Models
         public string RecognitionApiBaseUrl { get; set; } = string.Empty;
 
         /// <summary>
+        /// 评论 API 基础地址（/comment/new 等，留空则使用内置默认）。
+        /// </summary>
+        public string CommentApiBaseUrl { get; set; } = string.Empty;
+
+        /// <summary>
         /// 歌词字体大小
         /// </summary>
         public int LyricsFontSize { get; set; } = 12;
@@ -138,6 +143,11 @@ namespace YTPlayer.Models
         /// 是否隐藏列表序号（默认显示）
         /// </summary>
         public bool SequenceNumberHidden { get; set; } = false;
+
+        /// <summary>
+        /// 是否隐藏评论序号（默认显示）
+        /// </summary>
+        public bool CommentSequenceNumberHidden { get; set; } = false;
 
         /// <summary>
         /// 是否隐藏控制栏（默认显示）

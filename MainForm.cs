@@ -2421,6 +2421,8 @@ public partial class MainForm : Form
 			UpdateLoginMenuItemText();
 			InvalidateLibraryCaches();
 		}
+
+		RefreshQualityMenuAvailability();
 	}
 
 	private void SaveConfig(bool refreshCookieFromClient = true)
@@ -3163,16 +3165,18 @@ private void ActivateMixedSearchTypeOption()
 		{
 			UpdateStatusBar("正在搜索: " + keyword + "...");
 			_isHomePage = false;
-			if (isMultiUrlSearch && multiMatches != null)
-			{
-				await HandleMultipleNeteaseUrlSearchAsync(multiMatches, searchToken).ConfigureAwait(continueOnCapturedContext: true);
-				_lastKeyword = keyword;
-			}
-			else if (singleUrlSearch && parsedUrl != null)
-			{
-				await HandleNeteaseUrlSearchAsync(parsedUrl, searchToken).ConfigureAwait(continueOnCapturedContext: true);
-				_lastKeyword = keyword;
-			}
+                if (isMultiUrlSearch && multiMatches != null)
+                {
+                    await HandleMultipleNeteaseUrlSearchAsync(multiMatches, searchToken).ConfigureAwait(continueOnCapturedContext: true);
+                    await EnsureListFocusedAfterUrlParseAsync().ConfigureAwait(continueOnCapturedContext: true);
+                    _lastKeyword = keyword;
+                }
+                else if (singleUrlSearch && parsedUrl != null)
+                {
+                    await HandleNeteaseUrlSearchAsync(parsedUrl, searchToken).ConfigureAwait(continueOnCapturedContext: true);
+                    await EnsureListFocusedAfterUrlParseAsync().ConfigureAwait(continueOnCapturedContext: true);
+                    _lastKeyword = keyword;
+                }
 			else
 			{
 				await ExecuteSearchAsync(keyword, searchType, 1, !shouldSaveNavigation, showEmptyPrompt: true, searchToken).ConfigureAwait(continueOnCapturedContext: true);
@@ -12834,6 +12838,57 @@ private void searchTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
 			masterQualityMenuItem.Enabled = false;
 			Debug.WriteLine($"[QualityMenu] 普通用户 (VipType={num}) - 标准/极高/无损可用");
 		}
+		EnsureDefaultQualityAvailability();
+	}
+
+	private void EnsureDefaultQualityAvailability()
+	{
+		EnsureConfigInitialized();
+		string currentQuality = _config.DefaultQuality;
+		if (string.IsNullOrWhiteSpace(currentQuality))
+		{
+			currentQuality = string.Empty;
+		}
+
+		bool currentEnabled = IsQualityMenuItemEnabled(currentQuality);
+		if (!currentEnabled)
+		{
+			string fallback = GetHighestAvailableQualityName();
+			if (!string.Equals(currentQuality, fallback, StringComparison.Ordinal))
+			{
+				_config.DefaultQuality = fallback;
+				SaveConfig(refreshCookieFromClient: false);
+				Debug.WriteLine($"[QualityMenu] 当前音质不可用，已降级为: {fallback}");
+			}
+		}
+
+		UpdateQualityMenuCheck();
+	}
+
+	private bool IsQualityMenuItemEnabled(string qualityName)
+	{
+		return qualityName switch
+		{
+			"标准音质" => standardQualityMenuItem.Enabled,
+			"极高音质" => highQualityMenuItem.Enabled,
+			"无损音质" => losslessQualityMenuItem.Enabled,
+			"Hi-Res音质" => hiresQualityMenuItem.Enabled,
+			"高清环绕声" => surroundHDQualityMenuItem.Enabled,
+			"沉浸环绕声" => dolbyQualityMenuItem.Enabled,
+			"超清母带" => masterQualityMenuItem.Enabled,
+			_ => false
+		};
+	}
+
+	private string GetHighestAvailableQualityName()
+	{
+		if (masterQualityMenuItem.Enabled) return masterQualityMenuItem.Text;
+		if (dolbyQualityMenuItem.Enabled) return dolbyQualityMenuItem.Text;
+		if (surroundHDQualityMenuItem.Enabled) return surroundHDQualityMenuItem.Text;
+		if (hiresQualityMenuItem.Enabled) return hiresQualityMenuItem.Text;
+		if (losslessQualityMenuItem.Enabled) return losslessQualityMenuItem.Text;
+		if (highQualityMenuItem.Enabled) return highQualityMenuItem.Text;
+		return standardQualityMenuItem.Text;
 	}
 
 	private void qualityMenuItem_Click(object sender, EventArgs e)

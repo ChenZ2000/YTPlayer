@@ -92,11 +92,11 @@
 
   <ItemGroup>
     <Reference Include="UIAutomationProvider">
-      <HintPath>$(ProgramFiles)\dotnet\packs\Microsoft.WindowsDesktop.App.Ref\10.0.1\ref\net10.0\UIAutomationProvider.dll</HintPath>
+      <HintPath>$(ProgramFiles)\dotnet\packs\Microsoft.WindowsDesktop.App.Ref\10.0.2\ref\net10.0\UIAutomationProvider.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="UIAutomationTypes">
-      <HintPath>$(ProgramFiles)\dotnet\packs\Microsoft.WindowsDesktop.App.Ref\10.0.1\ref\net10.0\UIAutomationTypes.dll</HintPath>
+      <HintPath>$(ProgramFiles)\dotnet\packs\Microsoft.WindowsDesktop.App.Ref\10.0.2\ref\net10.0\UIAutomationTypes.dll</HintPath>
       <Private>false</Private>
     </Reference>
   </ItemGroup>
@@ -270,10 +270,18 @@
     <Compile Include="Forms\JumpToPositionDialog.cs">
       <SubType>Form</SubType>
     </Compile>
-    <Compile Include="Forms\CommentsDialog.cs">
+    <Compile Include="Forms\Commants\CommentsDialog.cs">
       <SubType>Form</SubType>
     </Compile>
-    <Compile Include="Forms\CommentTreeView.cs" />
+    <Compile Include="Forms\Commants\CommentsDialog.Actions.cs" />
+    <Compile Include="Forms\Commants\CommentsDialog.Accessibility.cs" />
+    <Compile Include="Forms\Commants\CommentsDialog.Events.cs" />
+    <Compile Include="Forms\Commants\CommentsDialog.Loading.cs" />
+    <Compile Include="Forms\Commants\CommentsDialog.State.cs" />
+    <Compile Include="Forms\Commants\CommentsDialog.Tree.cs" />
+    <Compile Include="Forms\Commants\CommentTreeView.cs" />
+    <Compile Include="Forms\Commants\CommentNodeTag.cs" />
+    <Compile Include="Forms\Commants\CommentReplyTarget.cs" />
     <Compile Include="Forms\Download\DownloadManagerForm.cs">
       <SubType>Form</SubType>
     </Compile>

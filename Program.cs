@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Drawing;
@@ -152,18 +153,47 @@ namespace YTPlayer
             try
             {
                 string libsPath = PathHelper.LibsDirectory;
-                if (!Directory.Exists(libsPath))
+                string? runtimeNativePath = GetRuntimeNativePath();
+                bool hasLibs = Directory.Exists(libsPath);
+                bool hasRuntimeNative = !string.IsNullOrWhiteSpace(runtimeNativePath) &&
+                                        Directory.Exists(runtimeNativePath);
+                if (!hasLibs && !hasRuntimeNative)
                 {
                     return;
                 }
 
-                SetDllDirectory(libsPath);
+                if (hasLibs)
+                {
+                    SetDllDirectory(libsPath);
+                }
+                else if (hasRuntimeNative)
+                {
+                    SetDllDirectory(runtimeNativePath!);
+                }
 
                 string currentPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
-                if (!currentPath.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries)
-                        .Any(p => string.Equals(p, libsPath, StringComparison.OrdinalIgnoreCase)))
+                var pathEntries = currentPath.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries)
+                    .ToList();
+                var pathSet = new HashSet<string>(pathEntries, StringComparer.OrdinalIgnoreCase);
+                bool pathChanged = false;
+                if (hasLibs && pathSet.Add(libsPath))
                 {
-                    Environment.SetEnvironmentVariable("PATH", libsPath + ";" + currentPath);
+                    pathEntries.Insert(0, libsPath);
+                    pathChanged = true;
+                }
+                if (hasRuntimeNative && runtimeNativePath != null && pathSet.Add(runtimeNativePath))
+                {
+                    pathEntries.Insert(0, runtimeNativePath);
+                    pathChanged = true;
+                }
+                if (pathChanged)
+                {
+                    Environment.SetEnvironmentVariable("PATH", string.Join(";", pathEntries));
+                }
+
+                if (!hasLibs)
+                {
+                    return;
                 }
 
                 Assembly? ResolveFromLibs(AssemblyName name)
@@ -203,6 +233,25 @@ namespace YTPlayer
             {
                 DebugLogger.LogException("Program", ex, "配置依赖目录失败（非致命）");
             }
+        }
+
+        private static string? GetRuntimeNativePath()
+        {
+            string? rid = RuntimeInformation.ProcessArchitecture switch
+            {
+                Architecture.X64 => "win-x64",
+                Architecture.X86 => "win-x86",
+                Architecture.Arm64 => "win-arm64",
+                Architecture.Arm => "win-arm",
+                _ => null
+            };
+
+            if (string.IsNullOrWhiteSpace(rid))
+            {
+                return null;
+            }
+
+            return Path.Combine(PathHelper.RuntimesDirectory, rid, "native");
         }
 
         [DllImport("kernel32", SetLastError = true)]

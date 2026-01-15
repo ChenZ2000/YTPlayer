@@ -224,6 +224,7 @@ namespace YTPlayer.Core.Recognition
         private readonly ConcurrentDictionary<int, CancellationTokenSource> _timers = new();
         private int _nextId;
         private readonly object _engineLock = new();
+        private bool _disposed;
 
         public JsTimerHost(V8ScriptEngine engine)
         {
@@ -235,6 +236,10 @@ namespace YTPlayer.Core.Recognition
         public void SetTimeout(int id, int milliseconds, object callback)
         {
             if (callback is not ScriptObject scriptCallback)
+            {
+                return;
+            }
+            if (_disposed)
             {
                 return;
             }
@@ -251,39 +256,90 @@ namespace YTPlayer.Core.Recognition
                 try
                 {
                     await Task.Delay(Math.Max(0, milliseconds), cts.Token).ConfigureAwait(false);
-                    if (cts.IsCancellationRequested) return;
+                    if (cts.IsCancellationRequested || _disposed) return;
                     lock (_engineLock)
                     {
-                        scriptCallback.Invoke(false);
+                        if (!_disposed)
+                        {
+                            scriptCallback.Invoke(false);
+                        }
                     }
                 }
                 catch (OperationCanceledException)
                 {
                     // ignore
                 }
+                catch (ObjectDisposedException)
+                {
+                    // ignore disposed timer token
+                }
                 finally
                 {
                     _timers.TryRemove(id, out _);
-                    cts.Dispose();
+                    try
+                    {
+                        cts.Dispose();
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        // ignore
+                    }
                 }
             });
         }
 
         public void ClearTimeout(int id)
         {
+            if (_disposed)
+            {
+                return;
+            }
             if (_timers.TryRemove(id, out var cts))
             {
-                cts.Cancel();
-                cts.Dispose();
+                try
+                {
+                    cts.Cancel();
+                }
+                catch (ObjectDisposedException)
+                {
+                    // ignore
+                }
+                try
+                {
+                    cts.Dispose();
+                }
+                catch (ObjectDisposedException)
+                {
+                    // ignore
+                }
             }
         }
 
         public void Dispose()
         {
+            if (_disposed)
+            {
+                return;
+            }
+            _disposed = true;
             foreach (var kv in _timers)
             {
-                kv.Value.Cancel();
-                kv.Value.Dispose();
+                try
+                {
+                    kv.Value.Cancel();
+                }
+                catch (ObjectDisposedException)
+                {
+                    // ignore
+                }
+                try
+                {
+                    kv.Value.Dispose();
+                }
+                catch (ObjectDisposedException)
+                {
+                    // ignore
+                }
             }
             _timers.Clear();
         }

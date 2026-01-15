@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Linq;
 using System.IO;
 using System.Threading;
@@ -73,7 +74,7 @@ namespace YTPlayer.Forms
             this.MaximizeBox = false;
             this.MinimizeBox = false;
             this.StartPosition = FormStartPosition.CenterParent;
-            this.Size = new Size(500, 600);
+            this.Size = new Size(1100, 720);
             this.KeyPreview = true;
 
             // 默认显示二维码登录标签页
@@ -83,10 +84,21 @@ namespace YTPlayer.Forms
             this.Load += LoginForm_Load;
             this.FormClosing += LoginForm_FormClosing;
             loginTabControl.SelectedIndexChanged += LoginTabControl_SelectedIndexChanged;
+            this.SizeChanged += (_, _) =>
+            {
+                UpdateQrLayout();
+                UpdateWebLayout();
+            };
+
+            UpdateQrLayout();
+            UpdateWebLayout();
         }
 
         private void LoginForm_Load(object? sender, EventArgs e)
         {
+            UpdateQrLayout();
+            UpdateWebLayout();
+
             // 如果默认显示二维码标签页，则加载二维码
             if (loginTabControl.SelectedIndex == 0)
             {
@@ -128,6 +140,7 @@ namespace YTPlayer.Forms
             // 切换到二维码登录
             if (loginTabControl.SelectedTab == qrTabPage)
             {
+                UpdateQrLayout();
                 LoadQrCodeAsync().SafeFireAndForget("Login QR load");
             }
             else
@@ -138,6 +151,7 @@ namespace YTPlayer.Forms
                 // 打开网页登录时启动 WebView
                 if (loginTabControl.SelectedTab == webTabPage)
                 {
+                    UpdateWebLayout();
                     _ = InitializeWebLoginAsync();
                 }
             }
@@ -174,14 +188,9 @@ namespace YTPlayer.Forms
                 string qrUrl = _qrSession.Url ?? throw new InvalidOperationException("QR session URL is missing.");
                 string qrKey = _qrSession.Key ?? throw new InvalidOperationException("QR session key is missing.");
 
-                // 生成二维码图片
-                using (QRCodeGenerator qrGenerator = new QRCodeGenerator())
-                using (QRCodeData qrCodeData = qrGenerator.CreateQrCode(qrUrl, QRCodeGenerator.ECCLevel.Q))
-                using (QRCode qrCode = new QRCode(qrCodeData))
-                {
-                    Bitmap qrImage = qrCode.GetGraphic(10);
-                    qrPictureBox.Image = qrImage;
-                }
+                // 生成二维码图片（像素级渲染，避免缩放插值导致扫码失败）
+                Bitmap qrImage = CreateQrBitmap(qrUrl, qrPictureBox.Width, qrPictureBox.Height);
+                SetQrImage(qrImage);
 
                 qrStatusLabel.Text = "请使用网易云音乐APP扫码登录";
                 qrStatusLabel.ForeColor = Color.Blue;
@@ -409,6 +418,111 @@ namespace YTPlayer.Forms
                     refreshQrButton.Enabled = true;
                 }
             }
+        }
+
+        private static Bitmap CreateQrBitmap(string qrUrl, int targetWidth, int targetHeight)
+        {
+            int targetSize = Math.Max(1, Math.Min(targetWidth, targetHeight));
+            if (targetSize <= 1)
+            {
+                targetSize = 300;
+            }
+
+            using (var qrGenerator = new QRCodeGenerator())
+            using (var qrCodeData = qrGenerator.CreateQrCode(qrUrl, QRCodeGenerator.ECCLevel.Q))
+            using (var qrCode = new QRCode(qrCodeData))
+            {
+                int moduleCount = qrCodeData.ModuleMatrix?.Count ?? 0;
+                if (moduleCount <= 0)
+                {
+                    moduleCount = 1;
+                }
+
+                int pixelsPerModule = Math.Max(1, targetSize / moduleCount);
+                using (var raw = qrCode.GetGraphic(pixelsPerModule))
+                {
+                    if (raw.Width == targetSize && raw.Height == targetSize)
+                    {
+                        return (Bitmap)raw.Clone();
+                    }
+
+                    var canvas = new Bitmap(targetSize, targetSize);
+                    using (var g = Graphics.FromImage(canvas))
+                    {
+                        g.Clear(Color.White);
+                        g.InterpolationMode = InterpolationMode.NearestNeighbor;
+                        g.PixelOffsetMode = PixelOffsetMode.Half;
+                        g.SmoothingMode = SmoothingMode.None;
+                        int offsetX = (targetSize - raw.Width) / 2;
+                        int offsetY = (targetSize - raw.Height) / 2;
+                        g.DrawImage(raw, new Rectangle(offsetX, offsetY, raw.Width, raw.Height));
+                    }
+                    return canvas;
+                }
+            }
+        }
+
+        private void SetQrImage(Bitmap qrImage)
+        {
+            var old = qrPictureBox.Image;
+            qrPictureBox.Image = null;
+            if (old != null)
+            {
+                old.Dispose();
+            }
+
+            qrPictureBox.SizeMode = PictureBoxSizeMode.CenterImage;
+            qrPictureBox.Image = qrImage;
+        }
+
+        private void UpdateQrLayout()
+        {
+            if (qrTabPage == null || qrPictureBox == null || qrStatusLabel == null || refreshQrButton == null)
+            {
+                return;
+            }
+
+            int pageWidth = Math.Max(1, qrTabPage.ClientSize.Width);
+            int pageHeight = Math.Max(1, qrTabPage.ClientSize.Height);
+
+            int topPadding = 30;
+            int sidePadding = 40;
+            int bottomArea = 120; // 状态标签 + 按钮
+
+            int availableWidth = Math.Max(200, pageWidth - sidePadding * 2);
+            int availableHeight = Math.Max(200, pageHeight - topPadding - bottomArea);
+            int size = Math.Max(320, Math.Min(availableWidth, availableHeight));
+
+            qrPictureBox.Size = new Size(size, size);
+            qrPictureBox.Location = new Point((pageWidth - size) / 2, topPadding);
+
+            int labelY = qrPictureBox.Bottom + 24;
+            qrStatusLabel.Location = new Point(20, labelY);
+            qrStatusLabel.Size = new Size(Math.Max(100, pageWidth - 40), 30);
+
+            int buttonY = labelY + 44;
+            int buttonWidth = Math.Max(180, Math.Min(260, pageWidth / 4));
+            refreshQrButton.Size = new Size(buttonWidth, 44);
+            refreshQrButton.Location = new Point((pageWidth - buttonWidth) / 2, buttonY);
+        }
+
+        private void UpdateWebLayout()
+        {
+            if (webTopPanel == null || webReloadButton == null || webStatusLabel == null)
+            {
+                return;
+            }
+
+            webReloadButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            webStatusLabel.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+
+            int panelWidth = Math.Max(1, webTopPanel.ClientSize.Width);
+            int rightPadding = 16;
+            int leftPadding = 12;
+
+            webReloadButton.Location = new Point(panelWidth - webReloadButton.Width - rightPadding, webReloadButton.Location.Y);
+            webStatusLabel.Location = new Point(leftPadding, webStatusLabel.Location.Y);
+            webStatusLabel.Size = new Size(Math.Max(100, panelWidth - webReloadButton.Width - leftPadding - rightPadding - 12), webStatusLabel.Height);
         }
 
         private string BuildQrFailureMessage(QrLoginPollResult result)

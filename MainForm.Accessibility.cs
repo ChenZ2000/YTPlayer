@@ -194,14 +194,31 @@ namespace YTPlayer
                 }
         }
 
-	private void FocusListAfterEnrich(int pendingFocusIndex)
-	{
-		if ((!_pendingSongFocusSatisfied || string.IsNullOrWhiteSpace(_pendingSongFocusSatisfiedViewSource) || !string.Equals(_pendingSongFocusSatisfiedViewSource, _currentViewSource, StringComparison.OrdinalIgnoreCase)) && !IsListAutoFocusSuppressed && resultListView.Items.Count != 0)
-		{
-			int targetIndex = ((pendingFocusIndex >= 0) ? pendingFocusIndex : ((resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : 0));
-			RestoreListViewFocus(targetIndex);
-		}
-	}
+        private void FocusListAfterEnrich(int pendingFocusIndex)
+        {
+            if ((!_pendingSongFocusSatisfied || string.IsNullOrWhiteSpace(_pendingSongFocusSatisfiedViewSource) || !string.Equals(_pendingSongFocusSatisfiedViewSource, _currentViewSource, StringComparison.OrdinalIgnoreCase)) && !IsListAutoFocusSuppressed && resultListView.Items.Count != 0)
+            {
+                int targetIndex = ((pendingFocusIndex >= 0) ? pendingFocusIndex : ((resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : 0));
+                RestoreListViewFocus(targetIndex);
+            }
+        }
+
+        private Task EnsureListFocusedAfterUrlParseAsync(int fallbackIndex = 0)
+        {
+            return ExecuteOnUiThreadAsync(delegate
+            {
+                if (IsListAutoFocusSuppressed || resultListView == null || resultListView.Items.Count == 0)
+                {
+                    return;
+                }
+
+                int targetIndex = (resultListView.SelectedIndices.Count > 0)
+                    ? resultListView.SelectedIndices[0]
+                    : fallbackIndex;
+                targetIndex = Math.Max(0, Math.Min(targetIndex, resultListView.Items.Count - 1));
+                RestoreListViewFocus(targetIndex);
+            });
+        }
 
 	private bool IsNvdaRunningCached()
 	{

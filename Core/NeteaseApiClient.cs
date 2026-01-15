@@ -1160,7 +1160,8 @@ namespace YTPlayer.Core
             bool skipErrorHandling,
             CancellationToken cancellationToken,
             string baseUrl,
-            bool autoConvertApiSegment)
+            bool autoConvertApiSegment,
+            string? userAgentOverride)
         {
             if (retryCount < MAX_RETRY_COUNT)
             {
@@ -1173,7 +1174,8 @@ namespace YTPlayer.Core
                     skipErrorHandling,
                     cancellationToken,
                     baseUrl,
-                    autoConvertApiSegment).ConfigureAwait(false);
+                    autoConvertApiSegment,
+                    userAgentOverride).ConfigureAwait(false);
             }
 
             if (typeof(T) == typeof(JObject))
@@ -1204,7 +1206,8 @@ namespace YTPlayer.Core
             bool skipErrorHandling = false,
             CancellationToken cancellationToken = default,
             string baseUrl = OFFICIAL_API_BASE,
-            bool autoConvertApiSegment = false)
+            bool autoConvertApiSegment = false,
+            string? userAgentOverride = null)
         {
             try
             {
@@ -1308,6 +1311,11 @@ namespace YTPlayer.Core
                 {
                     requestMessage.Content = content;
                     ApplyFingerprintHeaders(requestMessage);
+                    if (!string.IsNullOrWhiteSpace(userAgentOverride))
+                    {
+                        requestMessage.Headers.Remove("User-Agent");
+                        requestMessage.Headers.TryAddWithoutValidation("User-Agent", userAgentOverride);
+                    }
 
                     var response = await _httpClient.SendAsync(requestMessage, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
 
@@ -1366,7 +1374,8 @@ namespace YTPlayer.Core
                             skipErrorHandling,
                             cancellationToken,
                             baseUrl,
-                            autoConvertApiSegment).ConfigureAwait(false);
+                            autoConvertApiSegment,
+                            userAgentOverride).ConfigureAwait(false);
                     }
 
                     JObject json;
@@ -1404,7 +1413,8 @@ namespace YTPlayer.Core
                             skipErrorHandling,
                             cancellationToken,
                             baseUrl,
-                            autoConvertApiSegment).ConfigureAwait(false);
+                            autoConvertApiSegment,
+                            userAgentOverride).ConfigureAwait(false);
                     }
 
 
@@ -1420,7 +1430,7 @@ namespace YTPlayer.Core
                             if (refreshed)
                             {
                                 System.Diagnostics.Debug.WriteLine("[WEAPI] 检测到 301，已自动刷新登录，重试当前请求。");
-                                return await PostWeApiAsync<T>(path, payload, retryCount + 1, skipErrorHandling, cancellationToken, baseUrl, autoConvertApiSegment).ConfigureAwait(false);
+                                return await PostWeApiAsync<T>(path, payload, retryCount + 1, skipErrorHandling, cancellationToken, baseUrl, autoConvertApiSegment, userAgentOverride).ConfigureAwait(false);
                             }
                         }
 
@@ -1442,7 +1452,7 @@ namespace YTPlayer.Core
                 {
                     int delayMs = GetRandomRetryDelay();
                     await Task.Delay(delayMs, cancellationToken).ConfigureAwait(false);
-                    return await PostWeApiAsync<T>(path, payload, retryCount + 1, skipErrorHandling, cancellationToken, baseUrl, autoConvertApiSegment).ConfigureAwait(false);
+                    return await PostWeApiAsync<T>(path, payload, retryCount + 1, skipErrorHandling, cancellationToken, baseUrl, autoConvertApiSegment, userAgentOverride).ConfigureAwait(false);
                 }
 
                 throw;
@@ -1535,7 +1545,7 @@ namespace YTPlayer.Core
                             request.Headers.TryAddWithoutValidation("X-antiCheatToken", antiCheatToken);
                         }
 
-                        // 注入大陆IP指纹，降低 -462 风控概率
+                        // 默认不注入随机IP，避免登录记录出现异常地区
                         ApplyFingerprintHeaders(request);
 
                         // ??? 双模式Cookie策略（与1.7.3保持一致）
@@ -1778,7 +1788,7 @@ namespace YTPlayer.Core
         /// <summary>
         /// EAPI POST 请求
         /// </summary>
-        public async Task<T> PostEApiAsync<T>(string path, object payload, bool useIosHeaders = true, int retryCount = 0, bool skipErrorHandling = false)
+        public async Task<T> PostEApiAsync<T>(string path, object payload, bool useIosHeaders = true, int retryCount = 0, bool skipErrorHandling = false, bool injectRealIpHeaders = false)
         {
             try
             {
@@ -1815,7 +1825,7 @@ namespace YTPlayer.Core
                 using (var request = new HttpRequestMessage(HttpMethod.Post, url))
                 {
                     request.Content = content;
-                    ApplyFingerprintHeaders(request);
+                    ApplyFingerprintHeaders(request, injectRealIpHeaders);
 
                     System.Diagnostics.Debug.WriteLine($"[DEBUG EAPI] Cookie Length: {(string.IsNullOrEmpty(cookieHeader) ? 0 : cookieHeader.Length)}");
                     if (requestHeaders.TryGetValue("User-Agent", out var resolvedUa))
@@ -2396,7 +2406,7 @@ namespace YTPlayer.Core
                 payload["header"] = header;
             }
 
-            return await PostEApiAsync<JObject>(path, payload, useIosHeaders: true, skipErrorHandling: true).ConfigureAwait(false);
+            return await PostEApiAsync<JObject>(path, payload, useIosHeaders: true, skipErrorHandling: true, injectRealIpHeaders: true).ConfigureAwait(false);
         }
 
         private IDictionary<string, object> EnsureEapiHeader(Dictionary<string, object> payloadDict)
@@ -2765,20 +2775,23 @@ namespace YTPlayer.Core
             return candidate;
         }
 
-        private void ApplyFingerprintHeaders(HttpRequestMessage request)
+        private void ApplyFingerprintHeaders(HttpRequestMessage request, bool injectRealIpHeaders = false)
         {
             if (request == null)
             {
                 return;
             }
 
-            string ip = GenerateRandomChineseIp();
-            if (!string.IsNullOrEmpty(ip))
+            if (injectRealIpHeaders)
             {
-                request.Headers.Remove("X-Real-IP");
-                request.Headers.Remove("X-Forwarded-For");
-                request.Headers.TryAddWithoutValidation("X-Real-IP", ip);
-                request.Headers.TryAddWithoutValidation("X-Forwarded-For", ip);
+                string ip = GenerateRandomChineseIp();
+                if (!string.IsNullOrEmpty(ip))
+                {
+                    request.Headers.Remove("X-Real-IP");
+                    request.Headers.Remove("X-Forwarded-For");
+                    request.Headers.TryAddWithoutValidation("X-Real-IP", ip);
+                    request.Headers.TryAddWithoutValidation("X-Forwarded-For", ip);
+                }
             }
 
             if (!request.Headers.Contains("Accept-Encoding"))
@@ -2974,8 +2987,7 @@ namespace YTPlayer.Core
         {
             var payload = new Dictionary<string, object>
             {
-                { "type", 1 },
-                { "noWarning", true }
+                { "type", 3 }
             };
 
             var antiCheatToken = _authContext?.GetActiveAntiCheatToken();
@@ -2984,7 +2996,7 @@ namespace YTPlayer.Core
                 payload["antiCheatToken"] = antiCheatToken;
             }
 
-            System.Diagnostics.Debug.WriteLine("[QR LOGIN] 请求新的二维码登录会话 (type=1)");
+            System.Diagnostics.Debug.WriteLine("[QR LOGIN] 请求新的二维码登录会话 (type=3)");
             // ⭐ 核心修复：使用标准 _httpClient，自动发送CookieContainer中的所有Cookie
             var result = await PostWeApiWithoutCookiesAsync<JObject>("/login/qrcode/unikey", payload);
 
@@ -3004,13 +3016,85 @@ namespace YTPlayer.Core
             var session = new QrLoginSession
             {
                 Key = unikey,
-                Url = $"https://music.163.com/login?codekey={unikey}",
+                Url = BuildQrLoginUrl(unikey),
                 CreatedAt = DateTimeOffset.UtcNow,
                 ExpireInSeconds = result["endTime"]?.Value<int?>()
             };
 
             System.Diagnostics.Debug.WriteLine($"[QR LOGIN] 二维码会话创建成功, key={session.Key}");
             return session;
+        }
+
+        private string BuildQrLoginUrl(string unikey)
+        {
+            string url = $"https://music.163.com/login?codekey={unikey}";
+            string chainId = BuildQrChainId();
+            if (!string.IsNullOrWhiteSpace(chainId))
+            {
+                url = $"{url}&chainId={Uri.EscapeDataString(chainId)}";
+            }
+            return url;
+        }
+
+        private string BuildQrChainId()
+        {
+            const string version = "v1";
+            string deviceId = GetCookieValue("sDeviceId")
+                ?? _authContext?.CurrentAccountState?.SDeviceId
+                ?? _authContext?.CurrentAccountState?.DeviceId
+                ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(deviceId))
+            {
+                deviceId = $"unknown-{GetRandomChainSuffix()}";
+            }
+
+            const string platform = "web";
+            const string action = "login";
+            long timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            return $"{version}_{deviceId}_{platform}_{action}_{timestamp}";
+        }
+
+        private int GetRandomChainSuffix()
+        {
+            lock (_random)
+            {
+                return _random.Next(1, 1_000_000);
+            }
+        }
+
+        private string? GetCookieValue(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                return null;
+            }
+
+            try
+            {
+                var cookies = _cookieContainer.GetCookies(MUSIC_URI);
+                if (cookies == null || cookies.Count == 0)
+                {
+                    return null;
+                }
+
+                foreach (Cookie cookie in cookies)
+                {
+                    if (cookie == null)
+                    {
+                        continue;
+                    }
+
+                    if (string.Equals(cookie.Name, name, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return cookie.Value;
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            return null;
         }
 
         /// <summary>
@@ -3043,7 +3127,7 @@ namespace YTPlayer.Core
             var payload = new Dictionary<string, object>
             {
                 { "key", key },
-                { "type", 1 }
+                { "type", 3 }
             };
 
             var antiCheatToken = _authContext?.GetActiveAntiCheatToken();
@@ -3052,7 +3136,7 @@ namespace YTPlayer.Core
                 payload["antiCheatToken"] = antiCheatToken;
             }
 
-            System.Diagnostics.Debug.WriteLine($"[QR LOGIN] 轮询二维码状态 (WEAPI type=1), key={key}");
+            System.Diagnostics.Debug.WriteLine($"[QR LOGIN] 轮询二维码状态 (WEAPI type=3), key={key}");
 
             JObject result;
             try
@@ -8624,6 +8708,33 @@ namespace YTPlayer.Core
             public DateTime LastAccessUtc { get; set; } = DateTime.UtcNow;
         }
 
+        private string ResolveCommentApiBaseUrl()
+        {
+            string? configured = _config?.CommentApiBaseUrl;
+            if (!string.IsNullOrWhiteSpace(configured))
+            {
+                return configured.Trim().TrimEnd('/');
+            }
+
+            return SIMPLIFIED_API_BASE;
+        }
+
+        private async Task<JObject> GetCommentNewApiAsync(Dictionary<string, string> parameters, CancellationToken cancellationToken)
+        {
+            string baseUrl = ResolveCommentApiBaseUrl();
+            string url = $"{baseUrl}/comment/new";
+            foreach (var kv in parameters)
+            {
+                url = AppendQueryParameter(url, kv.Key, kv.Value ?? string.Empty);
+            }
+
+            var response = await _simplifiedClient.GetAsync(url, cancellationToken).ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+
+            string responseText = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+            return JObject.Parse(responseText);
+        }
+
 
         /// <summary>
         /// 获取评论
@@ -8652,7 +8763,7 @@ namespace YTPlayer.Core
                 { "pageSize", pageSize },
                 { "cursor", resolvedCursor },
                 { "sortType", sortCode },
-                { "showInner", true }
+                { "showInner", false }
             };
 
             var response = await PostEApiAsync<JObject>("/api/v2/resource/comments", payload, useIosHeaders: false);
@@ -8674,6 +8785,100 @@ namespace YTPlayer.Core
             {
                 parsed.PageSize = pageSize;
             }
+            return parsed;
+        }
+
+        private static string? ResolveTimeCursorFromComments(CommentResult result)
+        {
+            if (result == null)
+            {
+                return null;
+            }
+
+            if (!string.IsNullOrWhiteSpace(result.Cursor))
+            {
+                return result.Cursor;
+            }
+
+            if (result.Comments != null && result.Comments.Count > 0)
+            {
+                var last = result.Comments[result.Comments.Count - 1];
+                if (last != null && last.TimeMilliseconds > 0)
+                {
+                    return last.TimeMilliseconds.ToString(CultureInfo.InvariantCulture);
+                }
+            }
+
+            return null;
+        }
+
+        private async Task<CommentResult> GetCommentsNewAsync(
+            string resourceId,
+            CommentType type,
+            int pageNo,
+            int pageSize,
+            CommentSortType sortType,
+            string? cursor,
+            CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrWhiteSpace(resourceId))
+            {
+                throw new ArgumentException("resourceId cannot be null or empty", nameof(resourceId));
+            }
+
+            resourceId = resourceId.Trim();
+            if (pageNo <= 0) pageNo = 1;
+            if (pageSize <= 0) pageSize = 20;
+
+            int sortCode = MapCommentSortType(sortType);
+            var parameters = new Dictionary<string, string>
+            {
+                ["type"] = ((int)type).ToString(CultureInfo.InvariantCulture),
+                ["id"] = resourceId,
+                ["pageNo"] = pageNo.ToString(CultureInfo.InvariantCulture),
+                ["pageSize"] = pageSize.ToString(CultureInfo.InvariantCulture),
+                ["sortType"] = sortCode.ToString(CultureInfo.InvariantCulture)
+            };
+
+            if (sortType == CommentSortType.Time && pageNo > 1 && !string.IsNullOrWhiteSpace(cursor))
+            {
+                parameters["cursor"] = cursor!;
+            }
+
+            JObject response;
+            try
+            {
+                response = await GetCommentNewApiAsync(parameters, cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                return await GetCommentsAsync(resourceId, type, pageNo, pageSize, sortType, cursor, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            int code = response["code"]?.Value<int>() ?? -1;
+            if (code != 200)
+            {
+                string? message = response["message"]?.Value<string>()
+                    ?? response["msg"]?.Value<string>()
+                    ?? "未知错误";
+                throw new InvalidOperationException($"评论接口请求失败: code={code}, message={message}");
+            }
+
+            var parsed = ParseComments(response, sortType);
+            if (parsed.PageNumber <= 0)
+            {
+                parsed.PageNumber = pageNo;
+            }
+            if (parsed.PageSize <= 0 || parsed.PageSize != pageSize)
+            {
+                parsed.PageSize = pageSize;
+            }
+
+            if (sortType == CommentSortType.Time && string.IsNullOrWhiteSpace(parsed.Cursor))
+            {
+                parsed.Cursor = ResolveTimeCursorFromComments(parsed);
+            }
+
             return parsed;
         }
 
@@ -8737,7 +8942,33 @@ namespace YTPlayer.Core
             string threadId = BuildCommentThreadId(type, resourceId);
             int sortCode = MapCommentSortType(sortType);
             string cacheKey = BuildCommentCursorCacheKey(threadId, sortCode, pageSize);
-            return await GetCommentsPageWithCursorCacheAsync(resourceId, type, pageNo, pageSize, sortType, cacheKey, cancellationToken).ConfigureAwait(false);
+            return await GetCommentsPageWithCursorCacheAsync(resourceId, type, pageNo, pageSize, sortType, cacheKey, cancellationToken).ConfigureAwait(false);  
+        }
+
+        public async Task<CommentResult> GetCommentsNewPageAsync(string resourceId, CommentType type = CommentType.Song,
+            int pageNo = 1, int pageSize = 20, CommentSortType sortType = CommentSortType.Recommend,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(resourceId))
+            {
+                throw new ArgumentException("resourceId cannot be null or empty", nameof(resourceId));
+            }
+
+            resourceId = resourceId.Trim();
+            if (pageNo <= 0) pageNo = 1;
+            if (pageSize <= 0) pageSize = 20;
+
+            if (sortType != CommentSortType.Time)
+            {
+                return await GetCommentsNewAsync(resourceId, type, pageNo, pageSize, sortType, null, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            string threadId = BuildCommentThreadId(type, resourceId);
+            int sortCode = MapCommentSortType(sortType);
+            string cacheKey = BuildCommentCursorCacheKey($"{threadId}:new", sortCode, pageSize);
+            return await GetCommentsNewPageWithCursorCacheAsync(resourceId, type, pageNo, pageSize, sortType, cacheKey, cancellationToken)
+                .ConfigureAwait(false);
         }
 
         public async Task<CommentFloorResult> GetCommentFloorPageAsync(string resourceId, string parentCommentId,
@@ -8818,6 +9049,83 @@ namespace YTPlayer.Core
                     }
 
                     if (string.IsNullOrWhiteSpace(nextCursor) || !result.HasMore)
+                    {
+                        break;
+                    }
+
+                    cursor = nextCursor;
+                }
+
+                return new CommentResult
+                {
+                    PageNumber = safePageNo,
+                    PageSize = safePageSize,
+                    SortType = sortType,
+                    TotalCount = lastResult?.TotalCount ?? 0,
+                    HasMore = false
+                };
+            }
+            finally
+            {
+                gate.Release();
+            }
+        }
+
+        private async Task<CommentResult> GetCommentsNewPageWithCursorCacheAsync(string resourceId, CommentType type, int pageNo, int pageSize,
+            CommentSortType sortType, string cacheKey, CancellationToken cancellationToken)
+        {
+            int safePageNo = Math.Max(1, pageNo);
+            int safePageSize = Math.Max(1, pageSize);
+
+            TrimCommentCursorCaches();
+
+            var gate = _commentCursorLocks.GetOrAdd(cacheKey, _ => new SemaphoreSlim(1, 1));
+            await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var cache = _commentCursorCaches.GetOrAdd(cacheKey, _ => new CommentCursorCache());
+                cache.LastAccessUtc = DateTime.UtcNow;
+                if (cache.CursorByPage.Count == 0)
+                {
+                    cache.CursorByPage[1] = "0";
+                }
+
+                if (cache.CursorByPage.TryGetValue(safePageNo, out string? cachedCursor))
+                {
+                    var result = await GetCommentsNewAsync(resourceId, type, safePageNo, safePageSize, sortType, cachedCursor, cancellationToken)
+                        .ConfigureAwait(false);
+                    string? nextCursor = ResolveTimeCursorFromComments(result);
+                    if (!string.IsNullOrWhiteSpace(nextCursor))
+                    {
+                        cache.CursorByPage[safePageNo + 1] = nextCursor;
+                    }
+                    return result;
+                }
+
+                int nearestPage = cache.CursorByPage.Keys.Where(key => key <= safePageNo).DefaultIfEmpty(1).Max();
+                string cursor = cache.CursorByPage.TryGetValue(nearestPage, out var nearestCursor)
+                    ? nearestCursor
+                    : "0";
+
+                CommentResult? lastResult = null;
+                for (int page = nearestPage; page <= safePageNo; page++)
+                {
+                    var result = await GetCommentsNewAsync(resourceId, type, page, safePageSize, sortType, cursor, cancellationToken)
+                        .ConfigureAwait(false);
+                    lastResult = result;
+
+                    string? nextCursor = ResolveTimeCursorFromComments(result);
+                    if (!string.IsNullOrWhiteSpace(nextCursor))
+                    {
+                        cache.CursorByPage[page + 1] = nextCursor;
+                    }
+
+                    if (page == safePageNo)
+                    {
+                        return result;
+                    }
+
+                    if (!result.HasMore || string.IsNullOrWhiteSpace(nextCursor))
                     {
                         break;
                     }
@@ -8965,10 +9273,10 @@ namespace YTPlayer.Core
         /// <summary>
         /// 回复评论
         /// </summary>
-        public Task<CommentMutationResult> ReplyCommentAsync(string resourceId, string parentCommentId, string content,
+        public Task<CommentMutationResult> ReplyCommentAsync(string resourceId, string commentId, string content,
             CommentType type = CommentType.Song, CancellationToken cancellationToken = default)
         {
-            return ExecuteCommentMutationAsync(CommentMutationAction.Reply, type, resourceId, content, parentCommentId, cancellationToken);
+            return ExecuteCommentMutationAsync(CommentMutationAction.Reply, type, resourceId, content, commentId, cancellationToken);
         }
 
         /// <summary>
@@ -8980,6 +9288,40 @@ namespace YTPlayer.Core
             return ExecuteCommentMutationAsync(CommentMutationAction.Delete, type, resourceId, null, commentId, cancellationToken);
         }
 
+        private void PrepareCommentRequestFingerprint()
+        {
+            try
+            {
+                ApplyBaseCookies(includeAnonymousToken: string.IsNullOrEmpty(_musicU));
+
+                var fingerprint = _authContext?.GetFingerprintSnapshot() ?? new FingerprintSnapshot();
+                string ntesNuid = fingerprint.NtesNuid;
+                if (string.IsNullOrWhiteSpace(ntesNuid))
+                {
+                    ntesNuid = EncryptionHelper.GenerateRandomHex(32);
+                }
+
+                string nmtId = EncryptionHelper.GenerateRandomHex(32);
+                string ntesNnid = $"{ntesNuid},{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
+
+                UpsertCookie("__remember_me", "true");
+                UpsertCookie("NMTID", nmtId);
+                UpsertCookie("_ntes_nuid", ntesNuid);
+                UpsertCookie("_ntes_nnid", ntesNnid);
+                UpsertCookie("WEVNSM", "1.0.0");
+                UpsertCookie("ntes_kaola_ad", "1");
+
+                if (!string.IsNullOrEmpty(fingerprint.WnmCid))
+                {
+                    UpsertCookie("WNMCID", fingerprint.WnmCid);
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[Comments] 准备评论指纹失败: {ex.Message}");
+            }
+        }
+
         private async Task<CommentMutationResult> ExecuteCommentMutationAsync(
             CommentMutationAction action,
             CommentType type,
@@ -8988,6 +9330,8 @@ namespace YTPlayer.Core
             string? commentId,
             CancellationToken cancellationToken)
         {
+            PrepareCommentRequestFingerprint();
+
             if (string.IsNullOrWhiteSpace(resourceId))
             {
                 throw new ArgumentException("resourceId cannot be null or empty", nameof(resourceId));
@@ -8996,9 +9340,7 @@ namespace YTPlayer.Core
             resourceId = resourceId.Trim();
             var payload = new Dictionary<string, object>
             {
-                { "threadId", BuildCommentThreadId(type, resourceId) },
-                { "id", resourceId },
-                { "type", (int)type }
+                { "threadId", BuildCommentThreadId(type, resourceId) }
             };
 
             switch (action)
@@ -9053,19 +9395,100 @@ namespace YTPlayer.Core
 
             try
             {
-                var response = await PostWeApiAsync<JObject>(
-                    $"/resource/comments/{actionPath}",
-                    payload,
-                    cancellationToken: cancellationToken);
+                const int maxAttempts = 3;
+                int attempt = 0;
+                JObject? response = null;
+                int code = -1;
 
-                int code = response["code"]?.Value<int>() ?? -1;
+                while (attempt < maxAttempts)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    attempt++;
+
+                    try
+                    {
+                        response = await PostWeApiAsync<JObject>(
+                            $"/resource/comments/{actionPath}",
+                            payload,
+                            skipErrorHandling: true,
+                            cancellationToken: cancellationToken,
+                            userAgentOverride: AuthConstants.WeapiUserAgent);
+                    }
+                    catch (Exception) when (attempt < maxAttempts)
+                    {
+                        int delayMs = GetRandomRetryDelay();
+                        await Task.Delay(delayMs, cancellationToken).ConfigureAwait(false);
+                        continue;
+                    }
+                    catch (Exception ex)
+                    {
+                        return new CommentMutationResult
+                        {
+                            Success = false,
+                            Code = -1,
+                            Message = ex.Message,
+                            CommentId = commentId
+                        };
+                    }
+
+                    code = response?["code"]?.Value<int>() ?? -1;
+                    if (code == 301 && attempt < maxAttempts)
+                    {
+                        bool refreshed = await TryAutoRefreshLoginAsync().ConfigureAwait(false);
+                        if (refreshed)
+                        {
+                            int delayMs = GetRandomRetryDelay();
+                            await Task.Delay(delayMs, cancellationToken).ConfigureAwait(false);
+                            continue;
+                        }
+                    }
+
+                    if ((code == 429 || code == 500 || code == 502 || code == 503 || code == 504) && attempt < maxAttempts)
+                    {
+                        int delayMs = GetRandomRetryDelay();
+                        await Task.Delay(delayMs, cancellationToken).ConfigureAwait(false);
+                        continue;
+                    }
+
+                    break;
+                }
+
+                if (response == null)
+                {
+                    return new CommentMutationResult
+                    {
+                        Success = false,
+                        Code = -1,
+                        Message = "未获取到评论接口响应",
+                        CommentId = commentId
+                    };
+                }
+
                 string? message = response["message"]?.Value<string>() ?? response["msg"]?.Value<string>();
+                string? riskTitle = null;
+                string? riskSubtitle = null;
+                string? riskUrl = null;
+                var dialog = response["data"]?["dialog"] as JObject;
+                if (dialog != null)
+                {
+                    riskTitle = dialog["title"]?.Value<string>();
+                    riskSubtitle = dialog["subtitle"]?.Value<string>();
+                    riskUrl = dialog["buttonUrl"]?.Value<string>();
+                    if (string.IsNullOrWhiteSpace(message))
+                    {
+                        message = riskSubtitle ?? riskTitle;
+                    }
+                }
 
                 var result = new CommentMutationResult
                 {
                     Success = code == 200,
+                    Code = code,
                     Message = message,
-                    CommentId = commentId
+                    CommentId = commentId,
+                    RiskTitle = riskTitle,
+                    RiskSubtitle = riskSubtitle,
+                    RiskUrl = riskUrl
                 };
 
                 if (result.Success && action != CommentMutationAction.Delete)
@@ -9115,9 +9538,10 @@ namespace YTPlayer.Core
         {
             return sortType switch
             {
+                CommentSortType.Recommend => 1,
                 CommentSortType.Hot => 2,
                 CommentSortType.Time => 3,
-                _ => 99
+                _ => 1
             };
         }
 
@@ -10134,6 +10558,7 @@ namespace YTPlayer.Core
 
             result.SortType = apiSortType switch
             {
+                1 => CommentSortType.Recommend,
                 2 => CommentSortType.Hot,
                 3 => CommentSortType.Time,
                 _ => preferredSortType ?? result.SortType
@@ -10795,6 +11220,8 @@ namespace YTPlayer.Core
     /// </summary>
     public enum CommentSortType
     {
+        /// <summary>推荐</summary>
+        Recommend = 0,
         /// <summary>热度</summary>
         Hot = 1,
         /// <summary>时间</summary>
@@ -10927,9 +11354,13 @@ namespace YTPlayer.Core
     public class CommentMutationResult
     {
         public bool Success { get; set; }
+        public int Code { get; set; }
         public string? Message { get; set; }
         public string? CommentId { get; set; }
         public CommentInfo? Comment { get; set; }
+        public string? RiskTitle { get; set; }
+        public string? RiskSubtitle { get; set; }
+        public string? RiskUrl { get; set; }
     }
 
     #endregion

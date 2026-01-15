@@ -318,6 +318,7 @@ namespace YTPlayer.Core
                 FollowCursor = true,
                 SeekMinIntervalMs = 30,
                 SequenceNumberHidden = false,
+                CommentSequenceNumberHidden = false,
                 ControlBarHidden = false,
 
                 // 其他设置

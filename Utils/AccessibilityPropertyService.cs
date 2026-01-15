@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.InteropServices;
+using System.Windows.Forms;
 using Accessibility;
 
 namespace YTPlayer.Utils
@@ -40,6 +41,76 @@ namespace YTPlayer.Utils
                 {
                     service.SetHwndProp(ref handle, ObjIdClient, childId, RolePropertyId, role.Value);
                 }
+            }
+            catch (COMException)
+            {
+                _serviceFailed = true;
+            }
+            catch (Exception)
+            {
+            }
+        }
+
+        public static void TrySetTreeItemName(IntPtr hwnd, IntPtr itemHandle, string name)
+        {
+            TrySetTreeItemProperties(hwnd, itemHandle, name, role: null);
+        }
+
+        public static void TrySetTreeItemProperties(IntPtr hwnd, IntPtr itemHandle, string name, int? role)
+        {
+            if (hwnd == IntPtr.Zero || itemHandle == IntPtr.Zero || string.IsNullOrWhiteSpace(name))
+            {
+                return;
+            }
+
+            IAccPropServices? service = GetService();
+            if (service == null)
+            {
+                return;
+            }
+
+            try
+            {
+                _RemotableHandle handle = CreateHandle(hwnd);
+                long rawHandle = itemHandle.ToInt64();
+                if (rawHandle == 0)
+                {
+                    return;
+                }
+
+                uint childId = unchecked((uint)rawHandle);
+                service.SetHwndPropStr(ref handle, ObjIdClient, childId, NamePropertyId, name);
+                if (role.HasValue)
+                {
+                    service.SetHwndProp(ref handle, ObjIdClient, childId, RolePropertyId, role.Value);
+                }
+            }
+            catch (COMException)
+            {
+                _serviceFailed = true;
+            }
+            catch (Exception)
+            {
+            }
+        }
+
+        public static void TrySetControlRole(IntPtr hwnd, AccessibleRole role)
+        {
+            if (hwnd == IntPtr.Zero)
+            {
+                return;
+            }
+
+            IAccPropServices? service = GetService();
+            if (service == null)
+            {
+                return;
+            }
+
+            try
+            {
+                _RemotableHandle handle = CreateHandle(hwnd);
+                service.SetHwndProp(ref handle, ObjIdClient, 0, RolePropertyId, (int)role);
             }
             catch (COMException)
             {
