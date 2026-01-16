@@ -86,11 +86,13 @@ namespace YTPlayer.Forms
                     ShowLines = true,
                     ShowPlusMinus = true,
                     ShowRootLines = true,
+                    DrawMode = TreeViewDrawMode.Normal,
                     AccessibleRole = AccessibleRole.Outline,
                     AccessibleName = "评论",
                     AccessibleDescription = "评论列表",
                     TabIndex = 0
                 };
+                _commentTree.DisplayTextResolver = GetNodeDisplayText;
                 _ = _commentTree.AccessibilityObject;
             }
 

@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Text;
 using Accessibility;
 using System.Windows.Automation.Provider;
 using System.Windows.Forms;
@@ -34,6 +36,8 @@ namespace YTPlayer.Forms
         private const int UIA_PFIA_DEFAULT = 0x0;
         private static readonly bool LogNativeItemRequests = false;
         private static readonly bool LogAccIdMapping = false;
+        private static readonly TimeSpan AccNameLogThrottle = TimeSpan.FromMilliseconds(500);
+        private static DateTime _lastAccNameLogAt = DateTime.MinValue;
         private const int ControlRoleRestoreDelayMs = 80;
         private const int AccessibleTextRestoreDelayMs = 120;
         private const int AccessibilityRefreshDelayMs = 60;
@@ -109,6 +113,82 @@ namespace YTPlayer.Forms
                 _accessibilityRefreshTimer.Stop();
                 FlushAccessibilityRefresh();
             };
+        }
+
+        [Browsable(false)]
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+        public Func<TreeNode, string?>? DisplayTextResolver { get; set; }
+
+        protected override void OnDrawNode(DrawTreeNodeEventArgs e)
+        {
+            if (e.Node == null)
+            {
+                base.OnDrawNode(e);
+                return;
+            }
+
+            string text = GetResolvedNodeText(e.Node);
+            bool selected = (e.State & TreeNodeStates.Selected) != 0;
+            bool focused = (e.State & TreeNodeStates.Focused) != 0;
+            Color backColor = selected && ContainsFocus ? SystemColors.Highlight : BackColor;
+            Color foreColor = selected && ContainsFocus ? SystemColors.HighlightText : ForeColor;
+
+            using (var backBrush = new SolidBrush(backColor))
+            {
+                e.Graphics.FillRectangle(backBrush, e.Bounds);
+            }
+
+            var flags = TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix;
+            TextRenderer.DrawText(e.Graphics, text, Font, e.Bounds, foreColor, flags);
+
+            if (focused && ShowFocusCues)
+            {
+                ControlPaint.DrawFocusRectangle(e.Graphics, e.Bounds, foreColor, backColor);
+            }
+        }
+
+        internal string GetResolvedNodeText(TreeNode node)
+        {
+            if (node == null)
+            {
+                return string.Empty;
+            }
+
+            string? resolved = null;
+            try
+            {
+                resolved = DisplayTextResolver?.Invoke(node);
+            }
+            catch
+            {
+            }
+
+            return resolved ?? node.Text ?? string.Empty;
+        }
+
+        [Conditional("DEBUG")]
+        private void LogAccNameForLastVisible(string source, TreeNode node, string name)
+        {
+            if (node == null)
+            {
+                return;
+            }
+
+            if (node.NextVisibleNode != null)
+            {
+                return;
+            }
+
+            DateTime now = DateTime.UtcNow;
+            if (now - _lastAccNameLogAt < AccNameLogThrottle)
+            {
+                return;
+            }
+
+            _lastAccNameLogAt = now;
+            string rawText = node.Text ?? string.Empty;
+            string tagInfo = DescribeTreeNode(node);
+            LogTree($"AccNameLastVisible source={source} name='{TrimPreview(name ?? string.Empty, 60)}' nodeText='{TrimPreview(rawText, 60)}' node={tagInfo}");
         }
 
         public void SetNodeHasChildren(TreeNode node, bool hasChildren)
@@ -546,6 +626,15 @@ namespace YTPlayer.Forms
 
             base.WndProc(ref m);
 
+            if (m.Msg == TVM_GETITEMW)
+            {
+                TryOverrideNativeItemText(m.LParam, unicode: true);
+            }
+            else if (m.Msg == TVM_GETITEMA)
+            {
+                TryOverrideNativeItemText(m.LParam, unicode: false);
+            }
+
             if (LogNativeItemRequests && m.Msg == TVM_GETITEMW)
             {
                 LogGetItemResult(m.LParam, unicode: true);
@@ -666,6 +755,85 @@ namespace YTPlayer.Forms
             catch
             {
             }
+        }
+
+        private void TryOverrideNativeItemText(IntPtr lParam, bool unicode)
+        {
+            if (lParam == IntPtr.Zero || DisplayTextResolver == null)
+            {
+                return;
+            }
+
+            try
+            {
+                var item = Marshal.PtrToStructure<TVITEM>(lParam);
+                if ((item.mask & TVIF_TEXT) == 0 || item.pszText == IntPtr.Zero || item.cchTextMax <= 0)
+                {
+                    return;
+                }
+
+                TreeNode? node = null;
+                try
+                {
+                    node = TreeNode.FromHandle(this, item.hItem);
+                }
+                catch
+                {
+                }
+
+                if (node == null)
+                {
+                    return;
+                }
+
+                string resolved = GetResolvedNodeText(node);
+                if (string.IsNullOrEmpty(resolved))
+                {
+                    return;
+                }
+
+                WriteBuffer(item.pszText, item.cchTextMax, unicode, resolved);
+            }
+            catch
+            {
+            }
+        }
+
+        private static void WriteBuffer(IntPtr dest, int cchTextMax, bool unicode, string text)
+        {
+            if (dest == IntPtr.Zero || cchTextMax <= 0)
+            {
+                return;
+            }
+
+            int maxChars = Math.Max(0, cchTextMax - 1);
+            if (unicode)
+            {
+                string clipped = text.Length > maxChars ? text.Substring(0, maxChars) : text;
+                char[] buffer = new char[cchTextMax];
+                if (clipped.Length > 0)
+                {
+                    clipped.CopyTo(0, buffer, 0, clipped.Length);
+                }
+                buffer[Math.Min(clipped.Length, cchTextMax - 1)] = '\0';
+                Marshal.Copy(buffer, 0, dest, cchTextMax);
+                return;
+            }
+
+            Encoding encoding = Encoding.Default;
+            byte[] bytes = encoding.GetBytes(text);
+            if (bytes.Length > maxChars)
+            {
+                Array.Resize(ref bytes, maxChars);
+            }
+
+            byte[] raw = new byte[cchTextMax];
+            if (bytes.Length > 0)
+            {
+                Array.Copy(bytes, raw, bytes.Length);
+            }
+            raw[Math.Min(bytes.Length, cchTextMax - 1)] = 0;
+            Marshal.Copy(raw, 0, dest, cchTextMax);
         }
 
         private static string ReadBuffer(IntPtr ptr, int maxChars, bool unicode)
@@ -1290,7 +1458,7 @@ namespace YTPlayer.Forms
             }
         }
 
-        private int TryGetAccIdForNode(TreeNode node)
+        internal int TryGetAccIdForNode(TreeNode node)
         {
             if (!IsHandleCreated || node == null || node.Handle == IntPtr.Zero)
             {
@@ -1324,13 +1492,23 @@ namespace YTPlayer.Forms
 
             public override string? Name
             {
-                get => _node.Text ?? string.Empty;
+                get
+                {
+                    string name = _owner.GetResolvedNodeText(_node);
+                    _owner.LogAccNameForLastVisible("Name", _node, name);
+                    return name;
+                }
                 set { }
             }
 
             public override string? Value
             {
-                get => _node.Text ?? string.Empty;
+                get
+                {
+                    string value = _owner.GetResolvedNodeText(_node);
+                    _owner.LogAccNameForLastVisible("Value", _node, value);
+                    return value;
+                }
                 set { }
             }
 

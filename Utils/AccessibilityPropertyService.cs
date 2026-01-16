@@ -56,6 +56,11 @@ namespace YTPlayer.Utils
             TrySetTreeItemProperties(hwnd, itemHandle, name, role: null);
         }
 
+        public static void TrySetTreeItemNameByChildId(IntPtr hwnd, int childId, string name)
+        {
+            TrySetTreeItemPropertiesByChildId(hwnd, childId, name, role: null);
+        }
+
         public static void TrySetTreeItemProperties(IntPtr hwnd, IntPtr itemHandle, string name, int? role)
         {
             if (hwnd == IntPtr.Zero || itemHandle == IntPtr.Zero || string.IsNullOrWhiteSpace(name))
@@ -83,6 +88,38 @@ namespace YTPlayer.Utils
                 if (role.HasValue)
                 {
                     service.SetHwndProp(ref handle, ObjIdClient, childId, RolePropertyId, role.Value);
+                }
+            }
+            catch (COMException)
+            {
+                _serviceFailed = true;
+            }
+            catch (Exception)
+            {
+            }
+        }
+
+        public static void TrySetTreeItemPropertiesByChildId(IntPtr hwnd, int childId, string name, int? role)
+        {
+            if (hwnd == IntPtr.Zero || childId <= 0 || string.IsNullOrWhiteSpace(name))
+            {
+                return;
+            }
+
+            IAccPropServices? service = GetService();
+            if (service == null)
+            {
+                return;
+            }
+
+            try
+            {
+                _RemotableHandle handle = CreateHandle(hwnd);
+                uint accId = unchecked((uint)childId);
+                service.SetHwndPropStr(ref handle, ObjIdClient, accId, NamePropertyId, name);
+                if (role.HasValue)
+                {
+                    service.SetHwndProp(ref handle, ObjIdClient, accId, RolePropertyId, role.Value);
                 }
             }
             catch (COMException)

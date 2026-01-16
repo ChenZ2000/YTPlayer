@@ -365,12 +365,6 @@ namespace YTPlayer.Forms
 
             UpdateAllNodeTexts();
             RaiseAccessibilityAnnouncement(_hideSequenceNumbers ? "已隐藏序号" : "已显示序号");
-            _commentTree.ResetAccessibilityChildCache("comments_sequence_toggle");
-            var selected = _commentTree.SelectedNode;
-            if (selected != null)
-            {
-                _commentTree.NotifyAccessibilityItemNameChange(selected);
-            }
         }
 
         private string? ShowReplyDialog(string? userName)
@@ -599,7 +593,7 @@ namespace YTPlayer.Forms
             virtualTag.FixedSequenceNumber = parentTag.Comment.ReplyCount;
             virtualNode.Tag = virtualTag;
 
-            string text = BuildNodeText(newComment, virtualTag.FixedSequenceNumber, isTopLevel: false);
+            string text = BuildNodeText(newComment, virtualTag.FixedSequenceNumber, isTopLevel: false, includeSequence: true);
             ApplyNodeText(virtualNode, text, "VirtualReply");
 
             InsertVirtualFloorNode(parentNode, virtualNode);

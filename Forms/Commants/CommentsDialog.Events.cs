@@ -291,6 +291,7 @@ namespace YTPlayer.Forms
             {
                 _commentTree.NotifyAccessibilitySelection(e.Node);
             }
+            UpdateSelectedNodeAccessibilityName();
 
             MaybeLoadPrevTopPage();
             MaybeLoadNextTopPage();

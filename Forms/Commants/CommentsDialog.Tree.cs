@@ -4,6 +4,7 @@ using System.Linq;
 using System.Windows.Forms;
 using YTPlayer.Core;
 using YTPlayer.Models;
+using YTPlayer.Utils;
 
 namespace YTPlayer.Forms
 {
@@ -1269,7 +1270,7 @@ namespace YTPlayer.Forms
                 LoadFailed = false
             };
 
-            return new TreeNode(BuildPlaceholderText(tag, sequenceNumber))
+            return new TreeNode(BuildPlaceholderText(tag, sequenceNumber, includeSequence: true))
             {
                 Tag = tag
             };
@@ -1296,14 +1297,14 @@ namespace YTPlayer.Forms
             ApplyNodeText(node, text, "LoadMoreText");
         }
 
-        private string BuildPlaceholderText(CommentNodeTag tag, int sequenceNumber)
+        private string BuildPlaceholderText(CommentNodeTag tag, int sequenceNumber, bool includeSequence)
         {
             if (tag.IsTopLevel && tag.IsPlaceholder)
             {
                 return tag.LoadFailed ? "加载失败，按 Enter 重试" : "正在加载...";
             }
 
-            string prefix = _hideSequenceNumbers ? string.Empty : $"{sequenceNumber} 楼 ";
+            string prefix = includeSequence ? $"{sequenceNumber} 楼 " : string.Empty;
             string body = tag.LoadFailed ? "加载失败，按 Enter 重试" : "加载中...";
             return $"{prefix}{body}".Trim();
         }
@@ -1311,7 +1312,7 @@ namespace YTPlayer.Forms
         private void UpdatePlaceholderNodeText(TreeNode node, CommentNodeTag tag)
         {
             int sequenceNumber = tag.SequenceNumber > 0 ? tag.SequenceNumber : 0;
-            string text = BuildPlaceholderText(tag, sequenceNumber);
+            string text = BuildPlaceholderText(tag, sequenceNumber, includeSequence: true);
             ApplyNodeText(node, text, "PlaceholderText");
         }
 
@@ -1349,7 +1350,7 @@ namespace YTPlayer.Forms
                 PageNumber = 1
             };
 
-            var node = new TreeNode(BuildPlaceholderText(tag, 0))
+            var node = new TreeNode(BuildPlaceholderText(tag, 0, includeSequence: true))
             {
                 Tag = tag
             };
@@ -1595,7 +1596,7 @@ namespace YTPlayer.Forms
                 tag.SequenceNumber = sequenceNumber;
                 tag.IsTopLevel = true;
                 node.Tag = tag;
-                string text = BuildNodeText(tag.Comment, sequenceNumber, isTopLevel: true);
+                string text = BuildNodeText(tag.Comment, sequenceNumber, isTopLevel: true, includeSequence: true);
                 ApplyNodeText(node, text, "RecalcTop");
 
                 RecalculateFloorSequences(node);
@@ -1621,7 +1622,7 @@ namespace YTPlayer.Forms
                     node.Tag = tag;
                     if (tag.Comment != null)
                     {
-                        string virtualText = BuildNodeText(tag.Comment, fixedNumber, isTopLevel: false);
+                        string virtualText = BuildNodeText(tag.Comment, fixedNumber, isTopLevel: false, includeSequence: true);
                         ApplyNodeText(node, virtualText, "RecalcFloorVirtual");
                     }
                     if (fixedNumber > sequenceNumber)
@@ -1637,7 +1638,7 @@ namespace YTPlayer.Forms
                 node.Tag = tag;
                 if (tag.IsPlaceholder)
                 {
-                    string placeholderText = BuildPlaceholderText(tag, sequenceNumber);
+                    string placeholderText = BuildPlaceholderText(tag, sequenceNumber, includeSequence: true);
                     ApplyNodeText(node, placeholderText, "RecalcFloorPlaceholder");
                     continue;
                 }
@@ -1647,7 +1648,7 @@ namespace YTPlayer.Forms
                     continue;
                 }
 
-                string text = BuildNodeText(tag.Comment, sequenceNumber, isTopLevel: false);
+                string text = BuildNodeText(tag.Comment, sequenceNumber, isTopLevel: false, includeSequence: true);
                 ApplyNodeText(node, text, "RecalcFloor");
             }
         }
@@ -1685,14 +1686,14 @@ namespace YTPlayer.Forms
             tag.AutoLoadTriggered = false;
             node.Tag = tag;
 
-            string text = BuildNodeText(comment, sequenceNumber, isTopLevel);
+            string text = BuildNodeText(comment, sequenceNumber, isTopLevel, includeSequence: true);
             ApplyNodeText(node, text, "UpdateCommentNode");
         }
 
-        private string BuildNodeText(CommentInfo comment, int sequenceNumber, bool isTopLevel)
+        private string BuildNodeText(CommentInfo comment, int sequenceNumber, bool isTopLevel, bool includeSequence)
         {
             string prefix;
-            if (_hideSequenceNumbers)
+            if (!includeSequence)
             {
                 prefix = string.Empty;
             }
@@ -1836,8 +1837,81 @@ namespace YTPlayer.Forms
 
         private void UpdateAllNodeTexts()
         {
-            RecalculateTopLevelSequences();
+            if (_commentTree.Nodes.Count == 0)
+            {
+                return;
+            }
+
+            _commentTree.ResetAccessibilityChildCache("comments_sequence_toggle");
+            var selected = _commentTree.SelectedNode;
+            if (selected != null)
+            {
+                _commentTree.NotifyAccessibilityItemNameChange(selected);
+            }
+            UpdateSelectedNodeAccessibilityName();
         }
+
+        private void UpdateSelectedNodeAccessibilityName()
+        {
+            if (!_commentTree.IsHandleCreated)
+            {
+                return;
+            }
+
+            var node = _commentTree.SelectedNode;
+            if (node == null || node.Handle == IntPtr.Zero)
+            {
+                return;
+            }
+
+            string name = GetNodeDisplayText(node);
+            AccessibilityPropertyService.TrySetTreeItemName(_commentTree.Handle, node.Handle, name);
+            int accId = _commentTree.TryGetAccIdForNode(node);
+            if (accId > 0)
+            {
+                AccessibilityPropertyService.TrySetTreeItemNameByChildId(_commentTree.Handle, accId, name);
+            }
+
+            if (_hideSequenceNumbers && node.NextVisibleNode == null)
+            {
+                string nodeText = node.Text ?? string.Empty;
+                string namePreview = name.Length > 60 ? name.Substring(0, 60) : name;
+                string textPreview = nodeText.Length > 60 ? nodeText.Substring(0, 60) : nodeText;
+                LogComments($"SeqHideEndNode setName accId={accId} handle=0x{node.Handle.ToInt64():X} name='{namePreview}' text='{textPreview}'");
+            }
+        }
+
+        private string GetNodeDisplayText(TreeNode node)
+        {
+            if (node == null)
+            {
+                return string.Empty;
+            }
+
+            if (node.Tag is not CommentNodeTag tag)
+            {
+                return node.Text ?? string.Empty;
+            }
+
+            if (tag.IsLoadMoreNode)
+            {
+                return GetLoadMoreText(tag);
+            }
+
+            if (tag.IsPlaceholder)
+            {
+                int seq = tag.SequenceNumber > 0 ? tag.SequenceNumber : 0;
+                return BuildPlaceholderText(tag, seq, includeSequence: !_hideSequenceNumbers);
+            }
+
+            if (tag.Comment != null)
+            {
+                return BuildNodeText(tag.Comment, tag.SequenceNumber, tag.IsTopLevel, includeSequence: !_hideSequenceNumbers);
+            }
+
+            return node.Text ?? string.Empty;
+        }
+
 
         private static bool IsFloorReply(CommentInfo comment)
         {

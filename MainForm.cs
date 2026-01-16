@@ -1143,6 +1143,8 @@ public partial class MainForm : Form
 
 	private Button searchButton;
 
+        private Button backButton;
+
         private SafeTextBox searchTextBox;
 
 	private Label searchLabel;
@@ -2573,6 +2575,11 @@ public partial class MainForm : Form
 	{
 		await PerformSearch();
 	}
+
+        private void backButton_Click(object sender, EventArgs e)
+        {
+                GoBackAsync();
+        }
 
 	protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
 	{
@@ -11876,6 +11883,15 @@ private void searchTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
 			GoBackAsync();
 			return;
 		}
+		if (e.Control && !e.Alt && e.KeyCode == Keys.Return)
+		{
+			if (TryHandleDownloadShortcut())
+			{
+				e.Handled = true;
+				e.SuppressKeyPress = true;
+				return;
+			}
+		}
 		TextBox textBox = searchTextBox;
 		if (textBox == null || !textBox.ContainsFocus)
 		{
@@ -11979,6 +11995,76 @@ private void searchTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
 				e.SuppressKeyPress = true;
                                 OnPrevPageAsync().SafeFireAndForget("KeyDown PageUp");
 			}
+		}
+	}
+
+	private bool TryHandleDownloadShortcut()
+	{
+		if (_isCurrentPlayingMenuActive)
+		{
+			return false;
+		}
+		if (resultListView == null || !resultListView.ContainsFocus)
+		{
+			return false;
+		}
+		MenuContextSnapshot menuContextSnapshot = BuildMenuContextSnapshot(isCurrentPlayingRequest: false);
+		if (!menuContextSnapshot.IsValid)
+		{
+			return false;
+		}
+		switch (menuContextSnapshot.PrimaryEntity)
+		{
+		case MenuEntityKind.Song:
+		case MenuEntityKind.PodcastEpisode:
+			if (menuContextSnapshot.IsCloudView && menuContextSnapshot.Song != null && menuContextSnapshot.Song.IsCloudSong)
+			{
+				return false;
+			}
+			DownloadSong_Click(downloadSongMenuItem, EventArgs.Empty);
+			return true;
+		case MenuEntityKind.Playlist:
+			DownloadPlaylist_Click(downloadPlaylistMenuItem, EventArgs.Empty);
+			return true;
+		case MenuEntityKind.Album:
+			DownloadAlbum_Click(downloadAlbumMenuItem, EventArgs.Empty);
+			return true;
+		case MenuEntityKind.Podcast:
+			if (menuContextSnapshot.Podcast == null || menuContextSnapshot.Podcast.Id <= 0)
+			{
+				return false;
+			}
+			DownloadPodcast_Click(downloadPodcastMenuItem, EventArgs.Empty);
+			return true;
+		case MenuEntityKind.Category:
+			DownloadCategory_Click(downloadCategoryMenuItem, EventArgs.Empty);
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	private void UpdateDownloadMenuShortcutDisplay(bool showShortcuts)
+	{
+		if (downloadSongMenuItem != null)
+		{
+			downloadSongMenuItem.ShowShortcutKeys = showShortcuts;
+		}
+		if (downloadPlaylistMenuItem != null)
+		{
+			downloadPlaylistMenuItem.ShowShortcutKeys = showShortcuts;
+		}
+		if (downloadAlbumMenuItem != null)
+		{
+			downloadAlbumMenuItem.ShowShortcutKeys = showShortcuts;
+		}
+		if (downloadPodcastMenuItem != null)
+		{
+			downloadPodcastMenuItem.ShowShortcutKeys = showShortcuts;
+		}
+		if (downloadCategoryMenuItem != null)
+		{
+			downloadCategoryMenuItem.ShowShortcutKeys = showShortcuts;
 		}
 	}
 
@@ -15016,6 +15102,7 @@ private void UpdateHideControlBarMenuItemText()
 		}
 		EnsureSortMenuCheckMargins();
 		bool flag = songContextMenu?.OwnerItem == currentPlayingMenuItem || string.Equals(songContextMenu?.Tag as string, "current_playing_context", StringComparison.Ordinal);
+		UpdateDownloadMenuShortcutDisplay(!flag);
 		MenuContextSnapshot menuContextSnapshot = BuildMenuContextSnapshot(flag);
 		if (!menuContextSnapshot.IsValid)
 		{
@@ -19966,12 +20053,6 @@ private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlay
 						return albums;
 					}, quality);
 					break;
-				case "user_podcasts":
-					MessageBox.Show("请在“收藏的播客”列表中选择播客，使用右键菜单下载其节目。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
-					return;
-				case "recent_podcasts":
-					MessageBox.Show("请进入播客详情页，使用右键菜单中的“下载播客全部节目”来下载具体播客内容。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
-					return;
 				case "recent_listened":
 					await DownloadMixedCategory(categoryName, BuildRecentListenedEntries, quality);
 					return;
@@ -22832,6 +22913,7 @@ private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlay
 		this.searchTypeComboBox = new System.Windows.Forms.ComboBox();
 		this.searchTypeLabel = new System.Windows.Forms.Label();
 		this.searchButton = new System.Windows.Forms.Button();
+                this.backButton = new System.Windows.Forms.Button();
           this.searchTextBox = new SafeTextBox();
 		this.searchTextContextMenu = new System.Windows.Forms.ContextMenuStrip();
 		this.searchCopyMenuItem = new System.Windows.Forms.ToolStripMenuItem();
@@ -23116,6 +23198,7 @@ private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlay
 		this.searchPanel.Controls.Add(this.searchTypeComboBox);
 		this.searchPanel.Controls.Add(this.searchTypeLabel);
 		this.searchPanel.Controls.Add(this.searchButton);
+                this.searchPanel.Controls.Add(this.backButton);
 		this.searchPanel.Controls.Add(this.searchTextBox);
 		this.searchPanel.Controls.Add(this.searchLabel);
 		this.searchPanel.Dock = System.Windows.Forms.DockStyle.Top;
@@ -23147,6 +23230,14 @@ private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlay
 		this.searchButton.Text = "搜索";
 		this.searchButton.UseVisualStyleBackColor = true;
                 this.searchButton.Click += new System.EventHandler(searchButton_Click);
+                this.backButton.Font = new System.Drawing.Font("Microsoft YaHei UI", 12f, System.Drawing.FontStyle.Bold);
+                this.backButton.Location = new System.Drawing.Point(990, 15);
+                this.backButton.Name = "backButton";
+                this.backButton.Size = new System.Drawing.Size(100, 73);
+                this.backButton.TabStop = false;
+                this.backButton.Text = "返回";
+                this.backButton.UseVisualStyleBackColor = true;
+                this.backButton.Click += new System.EventHandler(backButton_Click);
 		this.searchTextContextMenu.ImageScalingSize = new System.Drawing.Size(20, 20);
 		this.searchTextContextMenu.Items.AddRange(this.searchCopyMenuItem, this.searchCutMenuItem, this.searchPasteMenuItem, this.searchHistorySeparator, this.searchClearHistoryMenuItem);
 		this.searchTextContextMenu.Name = "searchTextContextMenu";
@@ -23173,6 +23264,7 @@ private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlay
 		this.searchTextBox.Font = new System.Drawing.Font("Microsoft YaHei UI", 12f);
 		this.searchTextBox.Location = new System.Drawing.Point(130, 15);
           this.searchTextBox.Name = "searchTextBox";
+          this.searchTextBox.AccessibleDescription = "搜索或粘贴网易云网页 URL ，多 URL 以分号分隔";
           this.searchTextBox.Size = new System.Drawing.Size(470, 33);
           this.searchTextBox.TabIndex = 1;
           this.searchTextBox.ContextMenuStrip = this.searchTextContextMenu;
@@ -23184,7 +23276,7 @@ private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlay
                 this.searchLabel.Name = "searchLabel";
                 this.searchLabel.Size = new System.Drawing.Size(111, 27);
                 this.searchLabel.TabIndex = 0;
-                this.searchLabel.Text = "搜索关键词:";
+                this.searchLabel.Text = "搜索";
                 this.resultListView.Columns.AddRange(this.columnHeader0, this.columnHeader1, this.columnHeader2, this.columnHeader3, this.columnHeader4, this.columnHeader5);
 		this.resultListView.Dock = System.Windows.Forms.DockStyle.Fill;
 		this.resultListView.FullRowSelect = true;
@@ -23529,6 +23621,7 @@ private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlay
 		this.toolStripSeparatorDownload3.Size = new System.Drawing.Size(207, 6);
 		this.downloadSongMenuItem.Name = "downloadSongMenuItem";
 		this.downloadSongMenuItem.Size = new System.Drawing.Size(210, 24);
+		this.downloadSongMenuItem.ShortcutKeys = System.Windows.Forms.Keys.Control | System.Windows.Forms.Keys.Return;
 		this.downloadSongMenuItem.Text = "下载歌曲(&D)";
 		this.downloadSongMenuItem.Click += new System.EventHandler(DownloadSong_Click);
 		this.downloadLyricsMenuItem.Name = "downloadLyricsMenuItem";
@@ -23537,14 +23630,17 @@ private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlay
 		this.downloadLyricsMenuItem.Click += new System.EventHandler(DownloadLyrics_Click);
 		this.downloadPlaylistMenuItem.Name = "downloadPlaylistMenuItem";
 		this.downloadPlaylistMenuItem.Size = new System.Drawing.Size(210, 24);
+		this.downloadPlaylistMenuItem.ShortcutKeys = System.Windows.Forms.Keys.Control | System.Windows.Forms.Keys.Return;
 		this.downloadPlaylistMenuItem.Text = "下载歌单(&D)";
 		this.downloadPlaylistMenuItem.Click += new System.EventHandler(DownloadPlaylist_Click);
 		this.downloadAlbumMenuItem.Name = "downloadAlbumMenuItem";
 		this.downloadAlbumMenuItem.Size = new System.Drawing.Size(210, 24);
+		this.downloadAlbumMenuItem.ShortcutKeys = System.Windows.Forms.Keys.Control | System.Windows.Forms.Keys.Return;
 		this.downloadAlbumMenuItem.Text = "下载专辑(&D)";
 		this.downloadAlbumMenuItem.Click += new System.EventHandler(DownloadAlbum_Click);
 		this.downloadPodcastMenuItem.Name = "downloadPodcastMenuItem";
 		this.downloadPodcastMenuItem.Size = new System.Drawing.Size(210, 24);
+		this.downloadPodcastMenuItem.ShortcutKeys = System.Windows.Forms.Keys.Control | System.Windows.Forms.Keys.Return;
 		this.downloadPodcastMenuItem.Text = "下载播客全部节目(&R)...";
 		this.downloadPodcastMenuItem.Click += new System.EventHandler(DownloadPodcast_Click);
 		this.batchDownloadMenuItem.Name = "batchDownloadMenuItem";
@@ -23553,6 +23649,7 @@ private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlay
 		this.batchDownloadMenuItem.Click += new System.EventHandler(BatchDownloadSongs_Click);
 		this.downloadCategoryMenuItem.Name = "downloadCategoryMenuItem";
 		this.downloadCategoryMenuItem.Size = new System.Drawing.Size(210, 24);
+		this.downloadCategoryMenuItem.ShortcutKeys = System.Windows.Forms.Keys.Control | System.Windows.Forms.Keys.Return;
 		this.downloadCategoryMenuItem.Text = "下载分类(&C)...";
 		this.downloadCategoryMenuItem.Click += new System.EventHandler(DownloadCategory_Click);
 		this.batchDownloadPlaylistsMenuItem.Name = "batchDownloadPlaylistsMenuItem";
@@ -24089,7 +24186,7 @@ private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlay
 			else
 			{
 				removeFromPlaylistMenuItem.Text = "从歌单中移除(&R)";
-				removeFromPlaylistMenuItem.Visible = flag && flag6;
+				removeFromPlaylistMenuItem.Visible = flag && flag6 && !flag2;
 				removeFromPlaylistMenuItem.Tag = (removeFromPlaylistMenuItem.Visible ? songInfo : null);
 			}
 		}
