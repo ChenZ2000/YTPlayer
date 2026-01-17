@@ -32,8 +32,11 @@ namespace YTPlayer
             DebugLogger.Log(DebugLogger.LogLevel.Info, "Program", $"命令行参数: {string.Join(" ", args)}");
             DebugLogger.Log(DebugLogger.LogLevel.Info, "Program", "════════════════════════════════════════");
 
-            // ✅ 配置崩溃转储（抓取原生崩溃）
-            ConfigureCrashDumps();
+            // ✅ 配置崩溃转储（生产默认关闭，可通过环境变量开启）
+            if (ShouldEnableCrashDumps())
+            {
+                ConfigureCrashDumps();
+            }
 
             // ✅ 配置依赖加载路径（托管与本机）
             ConfigurePrivateLibPath();
@@ -279,6 +282,24 @@ namespace YTPlayer
             key.SetValue("DumpFolder", dumpRoot, RegistryValueKind.ExpandString);
             key.SetValue("DumpType", 2, RegistryValueKind.DWord);   // 2 = full dump
             key.SetValue("DumpCount", 10, RegistryValueKind.DWord);
+        }
+
+        private static bool ShouldEnableCrashDumps()
+        {
+#if DEBUG
+            return true;
+#else
+            string? value = Environment.GetEnvironmentVariable("YTPLAYER_ENABLE_DUMPS");
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return false;
+            }
+
+            value = value.Trim();
+            return value.Equals("1", StringComparison.OrdinalIgnoreCase) ||
+                   value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+                   value.Equals("yes", StringComparison.OrdinalIgnoreCase);
+#endif
         }
 
         private static string? GetRuntimeNativePath()
