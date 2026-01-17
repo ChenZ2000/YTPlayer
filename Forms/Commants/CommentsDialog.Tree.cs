@@ -1842,6 +1842,19 @@ namespace YTPlayer.Forms
                 return;
             }
 
+            _commentTree.BeginUpdate();
+            try
+            {
+                foreach (TreeNode node in _commentTree.Nodes)
+                {
+                    UpdateNodeTextRecursive(node);
+                }
+            }
+            finally
+            {
+                _commentTree.EndUpdate();
+            }
+
             _commentTree.ResetAccessibilityChildCache("comments_sequence_toggle");
             var selected = _commentTree.SelectedNode;
             if (selected != null)
@@ -1849,6 +1862,30 @@ namespace YTPlayer.Forms
                 _commentTree.NotifyAccessibilityItemNameChange(selected);
             }
             UpdateSelectedNodeAccessibilityName();
+        }
+
+        private void UpdateNodeTextRecursive(TreeNode node)
+        {
+            if (node == null)
+            {
+                return;
+            }
+
+            string text = GetNodeDisplayText(node);
+            if (!string.IsNullOrEmpty(text) && node.Text != text)
+            {
+                node.Text = text;
+            }
+
+            if (node.Nodes.Count == 0)
+            {
+                return;
+            }
+
+            foreach (TreeNode child in node.Nodes)
+            {
+                UpdateNodeTextRecursive(child);
+            }
         }
 
         private void UpdateSelectedNodeAccessibilityName()

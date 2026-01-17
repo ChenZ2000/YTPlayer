@@ -700,11 +700,11 @@ public partial class MainForm : Form
 
         private const int ListViewRepeatCooldownMs = 200;
 
-	private DateTime _lastNvdaCheckAt = DateTime.MinValue;
+	private DateTime _lastNarratorCheckAt = DateTime.MinValue;
 
-	private bool _isNvdaRunningCached = false;
+	private bool _isNarratorRunningCached = false;
 
-	private const int NvdaCheckIntervalMs = 1000;
+	private const int NarratorCheckIntervalMs = 1000;
 
 	private const int ListViewSpeechColumnIndex = 0;
 
@@ -1609,6 +1609,7 @@ public partial class MainForm : Form
         {
                 InitializeComponent();
                 InitializeAccessibilityAnnouncementLabel();
+                TtsHelper.NarratorFallbackSpeaker = SpeakNarratorAnnouncement;
                 UpdateStatusStripAccessibility(toolStripStatusLabel1?.Text);
                 UpdateWindowTitle(null);
                 if (songContextMenu != null)
@@ -10676,28 +10677,57 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 			BeginInvoke(new Action<SongInfo>(UpdatePlayButtonDescription), song);
 			return;
 		}
+		bool flag = IsNarratorRunningCached();
+		string text = ((!string.IsNullOrWhiteSpace(playPauseButton.Text)) ? playPauseButton.Text : "播放/暂停");
 		if (song == null)
 		{
-			playPauseButton.AccessibleDescription = "播放/暂停";
+			string text2 = "播放/暂停";
+			if (playPauseButton.AccessibleDescription != text2)
+			{
+				playPauseButton.AccessibleDescription = text2;
+				NotifyAccessibilityClients(playPauseButton, AccessibleEvents.DescriptionChange, -1);
+			}
+			string text3 = (flag ? text : null);
+			if (playPauseButton.AccessibleName != text3)
+			{
+				playPauseButton.AccessibleName = text3;
+				if (flag)
+				{
+					NotifyAccessibilityClients(playPauseButton, AccessibleEvents.NameChange, -1);
+				}
+			}
 			UpdateWindowTitle(null);
 			UpdateCurrentPlayingMenuItem(null);
 			return;
 		}
-		string text = (song.IsTrial ? (song.Name + "(试听版)") : song.Name);
-		string text2 = text + " - " + song.Artist;
+		string text4 = (song.IsTrial ? (song.Name + "(试听版)") : song.Name);
+		string text5 = text4 + " - " + song.Artist;
 		if (!string.IsNullOrEmpty(song.Album))
 		{
-			text2 = text2 + " [" + song.Album + "]";
+			text5 = text5 + " [" + song.Album + "]";
 		}
 		if (!string.IsNullOrEmpty(song.Level))
 		{
 			string qualityDisplayName = NeteaseApiClient.GetQualityDisplayName(song.Level);
-			text2 = text2 + " | " + qualityDisplayName;
+			text5 = text5 + " | " + qualityDisplayName;
 		}
-		playPauseButton.AccessibleDescription = text2;
-		UpdateWindowTitle(text2);
+		if (playPauseButton.AccessibleDescription != text5)
+		{
+			playPauseButton.AccessibleDescription = text5;
+			NotifyAccessibilityClients(playPauseButton, AccessibleEvents.DescriptionChange, -1);
+		}
+		string text6 = (flag ? (text + "，" + text5) : null);
+		if (playPauseButton.AccessibleName != text6)
+		{
+			playPauseButton.AccessibleName = text6;
+			if (flag)
+			{
+				NotifyAccessibilityClients(playPauseButton, AccessibleEvents.NameChange, -1);
+			}
+		}
+		UpdateWindowTitle(text5);
 		UpdateCurrentPlayingMenuItem(song);
-		Debug.WriteLine("[MainForm] 更新播放按钮描述: " + text2);
+		Debug.WriteLine("[MainForm] 更新播放按钮描述: " + text5);
 	}
 
 	private void UpdateCurrentPlayingMenuItem(SongInfo? song)
@@ -13373,7 +13403,7 @@ private void UpdateHideControlBarMenuItemText()
 		_hideSequenceNumbers = !_hideSequenceNumbers;
 		UpdateHideSequenceMenuItemText();
 		RefreshSequenceDisplayInPlace();
-		string message = (_hideSequenceNumbers ? "以隐藏序号" : "以显示序号");
+		string message = (_hideSequenceNumbers ? "已隐藏序号" : "已显示序号");
 		TtsHelper.SpeakText(message);
 		UpdateStatusBar(message);
 		Debug.WriteLine("[TTS] 序号隐藏: " + (_hideSequenceNumbers ? "开启" : "关闭"));

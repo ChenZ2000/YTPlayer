@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Drawing;
@@ -11,6 +12,7 @@ using System.Windows.Forms;
 using Newtonsoft.Json.Linq;
 using YTPlayer.Core;
 using YTPlayer.Utils;
+using Microsoft.Win32;
 
 namespace YTPlayer
 {
@@ -29,6 +31,9 @@ namespace YTPlayer
             DebugLogger.Log(DebugLogger.LogLevel.Info, "Program", "应用程序启动");
             DebugLogger.Log(DebugLogger.LogLevel.Info, "Program", $"命令行参数: {string.Join(" ", args)}");
             DebugLogger.Log(DebugLogger.LogLevel.Info, "Program", "════════════════════════════════════════");
+
+            // ✅ 配置崩溃转储（抓取原生崩溃）
+            ConfigureCrashDumps();
 
             // ✅ 配置依赖加载路径（托管与本机）
             ConfigurePrivateLibPath();
@@ -233,6 +238,47 @@ namespace YTPlayer
             {
                 DebugLogger.LogException("Program", ex, "配置依赖目录失败（非致命）");
             }
+        }
+
+        /// <summary>
+        /// 启用 Windows Error Reporting 本地转储（抓取原生崩溃）
+        /// </summary>
+        private static void ConfigureCrashDumps()
+        {
+            try
+            {
+                string dumpRoot = Path.Combine(PathHelper.ApplicationRootDirectory, "Dumps");
+                Directory.CreateDirectory(dumpRoot);
+
+                string currentExe = $"{Process.GetCurrentProcess().ProcessName}.exe";
+                ConfigureCrashDumpsForExe(currentExe, dumpRoot);
+
+                if (!string.Equals(currentExe, "dotnet.exe", StringComparison.OrdinalIgnoreCase))
+                {
+                    ConfigureCrashDumpsForExe("dotnet.exe", dumpRoot);
+                }
+
+                DebugLogger.Log(DebugLogger.LogLevel.Info, "CrashDump",
+                    $"已启用本地转储: exe={currentExe}, dir={dumpRoot}");
+            }
+            catch (Exception ex)
+            {
+                DebugLogger.LogException("CrashDump", ex, "配置崩溃转储失败（非致命）");
+            }
+        }
+
+        private static void ConfigureCrashDumpsForExe(string exeName, string dumpRoot)
+        {
+            using var key = Registry.CurrentUser.CreateSubKey(
+                $@"Software\Microsoft\Windows\Windows Error Reporting\LocalDumps\{exeName}");
+            if (key == null)
+            {
+                return;
+            }
+
+            key.SetValue("DumpFolder", dumpRoot, RegistryValueKind.ExpandString);
+            key.SetValue("DumpType", 2, RegistryValueKind.DWord);   // 2 = full dump
+            key.SetValue("DumpCount", 10, RegistryValueKind.DWord);
         }
 
         private static string? GetRuntimeNativePath()

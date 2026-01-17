@@ -31,12 +31,14 @@ namespace YTPlayer.Forms
             _commentTree.Enter += (_, _) =>
             {
                 _commentTree.SuppressControlRole(false);
+                UpdateNarratorTreeAccessibilityMode();
                 ApplyPendingSortRefreshOnTreeFocus();
                 AnnounceTreeIntroIfNeeded();
             };
             _commentTree.GotFocus += (_, _) =>
             {
                 _commentTree.SuppressControlRole(false);
+                UpdateNarratorTreeAccessibilityMode();
                 ApplyPendingSortRefreshOnTreeFocus();
                 AnnounceTreeIntroIfNeeded();
             };
@@ -108,6 +110,7 @@ namespace YTPlayer.Forms
 
         private async void OnDialogLoad(object? sender, EventArgs e)
         {
+            UpdateNarratorTreeAccessibilityMode();
             await RefreshCommentsAsync();
         }
 
@@ -292,6 +295,10 @@ namespace YTPlayer.Forms
                 _commentTree.NotifyAccessibilitySelection(e.Node);
             }
             UpdateSelectedNodeAccessibilityName();
+            if (e.Node != null)
+            {
+                AnnounceSelectedNodeForNarrator(e.Node);
+            }
 
             MaybeLoadPrevTopPage();
             MaybeLoadNextTopPage();

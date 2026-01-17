@@ -222,13 +222,30 @@ namespace YTPlayer
 
 	private bool IsNvdaRunningCached()
 	{
+		return false;
+	}
+
+	private bool IsNarratorRunningCached()
+	{
 		DateTime utcNow = DateTime.UtcNow;
-		if ((utcNow - _lastNvdaCheckAt).TotalMilliseconds >= 1000.0)
+		if ((utcNow - _lastNarratorCheckAt).TotalMilliseconds >= NarratorCheckIntervalMs)
 		{
-			_isNvdaRunningCached = TtsHelper.IsNvdaRunning();
-			_lastNvdaCheckAt = utcNow;
+			_isNarratorRunningCached = IsNarratorRunning();
+			_lastNarratorCheckAt = utcNow;
 		}
-		return _isNvdaRunningCached;
+		return _isNarratorRunningCached;
+	}
+
+	private static bool IsNarratorRunning()
+	{
+		try
+		{
+			return Process.GetProcessesByName("Narrator").Length > 0;
+		}
+		catch
+		{
+			return false;
+		}
 	}
 
 	private bool ShouldUseCustomListViewSpeech()
@@ -387,6 +404,42 @@ namespace YTPlayer
                 catch
                 {
                 }
+        }
+
+        private bool SpeakNarratorAnnouncement(string text)
+        {
+                if (string.IsNullOrWhiteSpace(text) || IsDisposed)
+                {
+                        return false;
+                }
+
+                if (InvokeRequired)
+                {
+                        try
+                        {
+                                BeginInvoke(new Action<string>(SpeakNarratorAnnouncementInternal), text);
+                                return true;
+                        }
+                        catch
+                        {
+                                return false;
+                        }
+                }
+
+                try
+                {
+                        SpeakNarratorAnnouncementInternal(text);
+                        return true;
+                }
+                catch
+                {
+                        return false;
+                }
+        }
+
+        private void SpeakNarratorAnnouncementInternal(string text)
+        {
+                RaiseAccessibilityAnnouncement(text);
         }
 
         private void UpdateStatusStripAccessibility(string message)

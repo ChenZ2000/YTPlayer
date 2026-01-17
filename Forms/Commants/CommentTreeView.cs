@@ -49,6 +49,9 @@ namespace YTPlayer.Forms
         private readonly Timer _restoreAccessibleTextTimer;
         private readonly Timer _accessibilityRefreshTimer;
         private string? _pendingAccessibilityRefreshReason;
+        [Browsable(false)]
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+        public bool PreferVisibleIndexMapping { get; set; }
 
         public CommentTreeView()
         {
@@ -369,11 +372,14 @@ namespace YTPlayer.Forms
                 return false;
             }
 
-            int accId = TryGetAccIdForNode(node);
-            if (accId > 0)
+            if (!PreferVisibleIndexMapping)
             {
-                childId = accId;
-                return true;
+                int accId = TryGetAccIdForNode(node);
+                if (accId > 0)
+                {
+                    childId = accId;
+                    return true;
+                }
             }
 
             int index = GetVisibleNodeIndex(node);
@@ -932,22 +938,25 @@ namespace YTPlayer.Forms
                 int count = _owner.GetVisibleNodeCountOrFallback();
                 int childId = index + 1;
                 TreeNode? node = null;
-                TreeNode? accNode = _owner.TryGetNodeByAccId(childId);
-                if (accNode != null && accNode.IsVisible)
+                if (!_owner.PreferVisibleIndexMapping)
                 {
-                    node = accNode;
-                    if (LogAccIdMapping)
+                    TreeNode? accNode = _owner.TryGetNodeByAccId(childId);
+                    if (accNode != null && accNode.IsVisible)
                     {
-                        int accIndex = _owner.GetVisibleNodeIndex(accNode);
-                        if (accIndex >= 0 && accIndex != index)
+                        node = accNode;
+                        if (LogAccIdMapping)
                         {
-                            _owner.LogTree($"AccChild accIdMapped idx={index} count={count} accId={childId} accIndex={accIndex} accNode={DescribeTreeNode(accNode)}");
+                            int accIndex = _owner.GetVisibleNodeIndex(accNode);
+                            if (accIndex >= 0 && accIndex != index)
+                            {
+                                _owner.LogTree($"AccChild accIdMapped idx={index} count={count} accId={childId} accIndex={accIndex} accNode={DescribeTreeNode(accNode)}");
+                            }
                         }
                     }
-                }
-                else if (accNode != null && LogAccIdMapping)
-                {
-                    _owner.LogTree($"AccChild accIdInvisible idx={index} count={count} accId={childId} accNode={DescribeTreeNode(accNode)}");
+                    else if (accNode != null && LogAccIdMapping)
+                    {
+                        _owner.LogTree($"AccChild accIdInvisible idx={index} count={count} accId={childId} accNode={DescribeTreeNode(accNode)}");
+                    }
                 }
 
                 if (node == null && index < count)

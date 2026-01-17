@@ -8,30 +8,48 @@ namespace YTPlayer.Utils
     internal sealed class SafeTextBox : TextBox
     {
         private bool _autoCompleteDisabled;
-        private bool _createHandleRetried;
+        private bool _handleCreatePending;
+        private bool _handleCreateInProgress;
+        private int _handleCreateAttempts;
+        private const int MaxHandleCreateAttempts = 3;
+        private const int ErrorInvalidWindowHandle = 1400;
 
         internal bool IsAutoCompleteDisabled => _autoCompleteDisabled;
 
         protected override void CreateHandle()
         {
+            if (_handleCreateInProgress || IsHandleCreated || IsDisposed)
+            {
+                return;
+            }
+
+            if (Parent == null || !Parent.IsHandleCreated)
+            {
+                ScheduleHandleCreate("parent-not-ready");
+                return;
+            }
+
             try
             {
+                _handleCreateInProgress = true;
                 base.CreateHandle();
             }
             catch (Win32Exception ex)
             {
-                if (_createHandleRetried)
+                if (ex.NativeErrorCode == ErrorInvalidWindowHandle)
                 {
-                    DebugLogger.LogException("SafeTextBox", ex,
-                        $"CreateHandle failed for {Name ?? "TextBox"}, error={ex.NativeErrorCode}");
-                    throw;
+                    ScheduleHandleCreate("invalid-window-handle");
+                    return;
                 }
 
-                _createHandleRetried = true;
                 DebugLogger.LogException("SafeTextBox", ex,
-                    $"CreateHandle failed for {Name ?? "TextBox"}, retrying without AutoComplete (error={ex.NativeErrorCode})");
+                    $"CreateHandle failed for {Name ?? "TextBox"}, error={ex.NativeErrorCode}");
                 DisableAutoComplete();
-                base.CreateHandle();
+                ScheduleHandleCreate("create-failed");
+            }
+            finally
+            {
+                _handleCreateInProgress = false;
             }
         }
 
@@ -94,6 +112,104 @@ namespace YTPlayer.Utils
             }
 
             return false;
+        }
+
+        private void ScheduleHandleCreate(string reason)
+        {
+            if (_handleCreatePending || IsDisposed || IsHandleCreated)
+            {
+                return;
+            }
+
+            if (_handleCreateAttempts >= MaxHandleCreateAttempts)
+            {
+                DebugLogger.Log(DebugLogger.LogLevel.Error, "SafeTextBox",
+                    $"CreateHandle retries exhausted for {Name ?? "TextBox"} reason={reason}");
+                return;
+            }
+
+            _handleCreatePending = true;
+            _handleCreateAttempts++;
+
+            Control? parent = Parent;
+            if (parent == null)
+            {
+                ParentChanged += SafeTextBox_ParentChanged;
+                return;
+            }
+
+            void OnParentHandleCreated(object? sender, EventArgs args)
+            {
+                parent.HandleCreated -= OnParentHandleCreated;
+                _handleCreatePending = false;
+                TryCreateHandleDeferred(reason);
+            }
+
+            if (!parent.IsHandleCreated)
+            {
+                parent.HandleCreated += OnParentHandleCreated;
+                return;
+            }
+
+            try
+            {
+                parent.BeginInvoke((MethodInvoker)(() =>
+                {
+                    _handleCreatePending = false;
+                    TryCreateHandleDeferred(reason);
+                }));
+            }
+            catch
+            {
+                _handleCreatePending = false;
+                TryCreateHandleDeferred(reason);
+            }
+        }
+
+        private void SafeTextBox_ParentChanged(object? sender, EventArgs e)
+        {
+            ParentChanged -= SafeTextBox_ParentChanged;
+            if (!_handleCreatePending)
+            {
+                ScheduleHandleCreate("parent-changed");
+            }
+        }
+
+        private void TryCreateHandleDeferred(string reason)
+        {
+            if (IsDisposed || IsHandleCreated)
+            {
+                return;
+            }
+
+            if (Parent == null || !Parent.IsHandleCreated)
+            {
+                ScheduleHandleCreate(reason);
+                return;
+            }
+
+            try
+            {
+                _handleCreateInProgress = true;
+                base.CreateHandle();
+            }
+            catch (Win32Exception ex)
+            {
+                if (ex.NativeErrorCode == ErrorInvalidWindowHandle)
+                {
+                    ScheduleHandleCreate("invalid-window-handle");
+                    return;
+                }
+
+                DebugLogger.LogException("SafeTextBox", ex,
+                    $"Deferred CreateHandle failed for {Name ?? "TextBox"}, error={ex.NativeErrorCode}");
+                DisableAutoComplete();
+                ScheduleHandleCreate("deferred-failed");
+            }
+            finally
+            {
+                _handleCreateInProgress = false;
+            }
         }
     }
 }

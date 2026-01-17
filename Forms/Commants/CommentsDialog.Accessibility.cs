@@ -1,6 +1,7 @@
 using System;
 using System.Drawing;
 using System.Reflection;
+using System.Diagnostics;
 using System.Windows.Forms;
 using System.Windows.Forms.Automation;
 using YTPlayer.Core;
@@ -18,6 +19,9 @@ namespace YTPlayer.Forms
         private int? _pendingLevelAnnouncement;
         private int? _lastSelectedLevel;
         private bool _levelAnnouncedBeforeSelect;
+        private DateTime _lastNarratorCheckAt = DateTime.MinValue;
+        private bool _isNarratorRunningCached;
+        private const int NarratorCheckIntervalMs = 1000;
         private const int LevelAnnouncementDelayMs = 140;
 
         private void InitializeAccessibilityAnnouncements()
@@ -143,6 +147,41 @@ namespace YTPlayer.Forms
             }
         }
 
+        private void AnnounceSelectedNodeForNarrator(TreeNode node)
+        {
+            if (node == null || _commentTree == null || !_commentTree.ContainsFocus)
+            {
+                return;
+            }
+
+            if (!IsNarratorRunningCached())
+            {
+                return;
+            }
+            UpdateNarratorTreeAccessibilityMode();
+
+            if (_commentTree.IsHandleCreated)
+            {
+                _commentTree.ResetAccessibilityChildCache("narrator_select");
+                _commentTree.NotifyAccessibilityItemNameChange(node);
+            }
+        }
+
+        private void UpdateNarratorTreeAccessibilityMode()
+        {
+            if (_commentTree == null)
+            {
+                return;
+            }
+
+            bool preferIndex = IsNarratorRunningCached();
+            if (_commentTree.PreferVisibleIndexMapping != preferIndex)
+            {
+                _commentTree.PreferVisibleIndexMapping = preferIndex;
+                _commentTree.ResetAccessibilityChildCache("narrator_mode");
+            }
+        }
+
         private void EnsureAccessibilityAnnouncementLabel()
         {
             if (_accessibilityAnnouncementLabel != null || IsDisposed)
@@ -263,6 +302,29 @@ namespace YTPlayer.Forms
             }
             catch
             {
+            }
+        }
+
+        private bool IsNarratorRunningCached()
+        {
+            DateTime utcNow = DateTime.UtcNow;
+            if ((utcNow - _lastNarratorCheckAt).TotalMilliseconds >= NarratorCheckIntervalMs)
+            {
+                _isNarratorRunningCached = IsNarratorRunning();
+                _lastNarratorCheckAt = utcNow;
+            }
+            return _isNarratorRunningCached;
+        }
+
+        private static bool IsNarratorRunning()
+        {
+            try
+            {
+                return Process.GetProcessesByName("Narrator").Length > 0;
+            }
+            catch
+            {
+                return false;
             }
         }
     }
