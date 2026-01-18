@@ -1034,6 +1034,8 @@ public partial class MainForm : Form
 
 	private int _currentPodcastCategoryTotalCount;
 
+	private readonly Dictionary<string, int> _podcastCategoryFetchOffsets = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
 	private SongRecognitionCoordinator? _songRecognitionCoordinator;
 
 	private ToolStripMenuItem? _listenRecognitionMenuItem;
@@ -5677,60 +5679,86 @@ private void ActivateMixedSearchTypeOption()
 					SaveNavigationState();
 				}
 				offset = Math.Max(0, offset);
+				if (offset == 0 && !skipSave)
+				{
+					ClearPodcastCategoryFetchOffsets(categoryId);
+				}
 				string categoryName = ResolvePodcastCategoryName(categoryId);
 				string viewSource = $"podcast_cat_{categoryId}:offset{offset}";
 				string accessibleName = (string.IsNullOrWhiteSpace(categoryName) ? "播客列表" : (categoryName + " 播客"));
+				int logicalOffset = offset;
+				int fetchOffsetSeed = ResolvePodcastCategoryFetchOffset(categoryId, logicalOffset);
 				ViewLoadRequest request = new ViewLoadRequest(viewSource, accessibleName, "正在加载播客...");
-				ViewLoadResult<(List<PodcastRadioInfo> Items, bool HasMore, int TotalCount)> loadResult = await RunViewLoadAsync(request, async delegate(CancellationToken token)
+				ViewLoadResult<(List<PodcastRadioInfo> Items, bool HasMore, int TotalCount, int FetchOffsetStart, int FetchOffsetNext)> loadResult = await RunViewLoadAsync(request, async delegate(CancellationToken token)
 				{
-					(List<PodcastRadioInfo> Podcasts, bool HasMore, int TotalCount) tuple = await _apiClient.GetPodcastsByCategoryAsync(categoryId, 50, offset, token).ConfigureAwait(continueOnCapturedContext: false);
-					token.ThrowIfCancellationRequested();
-					return (Items: tuple.Podcasts, HasMore: tuple.HasMore, TotalCount: tuple.TotalCount);
+					const int pageSize = 50;
+					int fetchOffset = Math.Max(0, fetchOffsetSeed);
+					int fetchOffsetStart = fetchOffset;
+					int totalCount = 0;
+					bool hasMore = true;
+					int safety = 0;
+					List<PodcastRadioInfo> podcasts = new List<PodcastRadioInfo>();
+					while (podcasts.Count < pageSize && hasMore && !token.IsCancellationRequested && safety < pageSize * 4)
+					{
+						int need = pageSize - podcasts.Count;
+						(List<PodcastRadioInfo> Podcasts, bool HasMore, int TotalCount) batch = await _apiClient.GetPodcastsByCategoryAsync(categoryId, need, fetchOffset, token).ConfigureAwait(continueOnCapturedContext: false);
+						token.ThrowIfCancellationRequested();
+						List<PodcastRadioInfo> batchItems = batch.Podcasts ?? new List<PodcastRadioInfo>();
+						totalCount = Math.Max(totalCount, batch.TotalCount);
+						if (batchItems.Count == 0)
+						{
+							hasMore = batch.HasMore;
+							if (hasMore)
+							{
+								fetchOffset = checked(fetchOffset + Math.Max(1, need));
+								safety++;
+								continue;
+							}
+							break;
+						}
+						podcasts.AddRange(batchItems);
+						fetchOffset = checked(fetchOffset + batchItems.Count);
+						hasMore = batch.HasMore;
+						safety++;
+					}
+					return (Items: podcasts, HasMore: hasMore, TotalCount: totalCount, FetchOffsetStart: fetchOffsetStart, FetchOffsetNext: fetchOffset);
 				}, "加载播客已取消").ConfigureAwait(continueOnCapturedContext: true);
 				if (loadResult.IsCanceled)
 				{
 					return;
 				}
-				(List<PodcastRadioInfo> Items, bool HasMore, int TotalCount) data = loadResult.Value;
+				(List<PodcastRadioInfo> Items, bool HasMore, int TotalCount, int FetchOffsetStart, int FetchOffsetNext) data = loadResult.Value;
 				List<PodcastRadioInfo> podcasts = data.Items ?? new List<PodcastRadioInfo>();
-				int totalCount = Math.Max(data.TotalCount, offset + podcasts.Count);
-				if (!data.HasMore)
+				int totalCount = Math.Max(data.TotalCount, logicalOffset + podcasts.Count);
+				bool hasMore = data.HasMore;
+				if (hasMore && totalCount <= logicalOffset + podcasts.Count)
 				{
-					_ = totalCount > offset + podcasts.Count;
+					totalCount = logicalOffset + podcasts.Count + 1;
 				}
-				int fetchOffset = offset + podcasts.Count;
-				while (podcasts.Count < 50 && totalCount > fetchOffset && !GetCurrentViewContentToken().IsCancellationRequested)
+				bool hasMoreFinal = hasMore || logicalOffset + podcasts.Count < totalCount;
+				SetPodcastCategoryFetchOffset(categoryId, logicalOffset, Math.Max(0, data.FetchOffsetStart));
+				if (podcasts.Count > 0)
 				{
-					int need = 50 - podcasts.Count;
-					(List<PodcastRadioInfo> Podcasts, bool HasMore, int TotalCount) extra = await _apiClient.GetPodcastsByCategoryAsync(categoryId, need, fetchOffset, GetCurrentViewContentToken()).ConfigureAwait(continueOnCapturedContext: false);
-					if (extra.Podcasts == null || extra.Podcasts.Count == 0)
-					{
-						break;
-					}
-					podcasts.AddRange(extra.Podcasts);
-					fetchOffset += extra.Podcasts.Count;
-					totalCount = Math.Max(totalCount, extra.TotalCount);
+					SetPodcastCategoryFetchOffset(categoryId, checked(logicalOffset + 50), Math.Max(0, data.FetchOffsetNext));
 				}
-				if (podcasts.Count > 50 && offset + 50 < totalCount)
-				{
-					podcasts = podcasts.Take(50).ToList();
-				}
-				bool hasMore = offset + podcasts.Count < totalCount;
 				_currentPodcastCategoryId = categoryId;
 				_currentPodcastCategoryName = categoryName;
-				_currentPodcastCategoryOffset = offset;
-				_currentPodcastCategoryHasMore = hasMore;
-				_currentPodcastCategoryTotalCount = Math.Max(totalCount, offset + podcasts.Count);
-				DisplayPodcasts(podcasts, showPagination: true, hasMore, offset + 1, preserveSelection: false, viewSource, accessibleName);
-				if (podcasts.Count == 0)
+				_currentPodcastCategoryOffset = logicalOffset;
+				_currentPodcastCategoryHasMore = hasMoreFinal;
+				_currentPodcastCategoryTotalCount = Math.Max(totalCount, logicalOffset + podcasts.Count);
+				int currentPage = unchecked(logicalOffset / 50) + 1;
+				int totalPages = Math.Max(1, (int)Math.Ceiling((double)Math.Max(totalCount, logicalOffset + podcasts.Count + (hasMoreFinal ? 1 : 0)) / 50.0));
+				await ExecuteOnUiThreadAsync(delegate
 				{
-					MessageBox.Show("该分类暂时没有播客。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
-					UpdateStatusBar("暂无播客");
-					return;
-				}
-				int currentPage = unchecked(offset / 50) + 1;
-				int totalPages = Math.Max(1, (int)Math.Ceiling((double)Math.Max(totalCount, offset + podcasts.Count) / 50.0));
-				UpdateStatusBar($"{accessibleName}：第 {currentPage}/{totalPages} 页，本页 {podcasts.Count} 个 / 总 {totalCount} 个（PageDown/Up 翻页）");
+					DisplayPodcasts(podcasts, showPagination: true, hasMoreFinal, logicalOffset + 1, preserveSelection: false, viewSource, accessibleName);
+					if (podcasts.Count == 0)
+					{
+						MessageBox.Show("该分类暂时没有播客。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+						UpdateStatusBar("暂无播客");
+						return;
+					}
+					UpdateStatusBar($"{accessibleName}：第 {currentPage}/{totalPages} 页，本页 {podcasts.Count} 个 / 总 {totalCount} 个（PageDown/Up 翻页）");
+				});
 			}
 			catch (Exception ex)
 			{
@@ -7373,9 +7401,48 @@ private void ActivateMixedSearchTypeOption()
 				{
 					num++;
 				}
-				num++;
+				if (_virtualHasPreviousPage || _virtualHasNextPage)
+				{
+					num++;
+				}
 			}
 			return num;
+		}
+	}
+
+	private static string BuildPodcastCategoryFetchOffsetKey(int categoryId, int logicalOffset)
+	{
+		return categoryId.ToString() + ":" + logicalOffset.ToString();
+	}
+
+	private int ResolvePodcastCategoryFetchOffset(int categoryId, int logicalOffset)
+	{
+		if (_podcastCategoryFetchOffsets.TryGetValue(BuildPodcastCategoryFetchOffsetKey(categoryId, logicalOffset), out var fetchOffset))
+		{
+			return fetchOffset;
+		}
+		return logicalOffset;
+	}
+
+	private void SetPodcastCategoryFetchOffset(int categoryId, int logicalOffset, int fetchOffset)
+	{
+		_podcastCategoryFetchOffsets[BuildPodcastCategoryFetchOffsetKey(categoryId, logicalOffset)] = fetchOffset;
+	}
+
+	private void ClearPodcastCategoryFetchOffsets(int categoryId)
+	{
+		string prefix = categoryId.ToString() + ":";
+		List<string> keysToRemove = new List<string>();
+		foreach (string key in _podcastCategoryFetchOffsets.Keys)
+		{
+			if (key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+			{
+				keysToRemove.Add(key);
+			}
+		}
+		foreach (string key in keysToRemove)
+		{
+			_podcastCategoryFetchOffsets.Remove(key);
 		}
 	}
 
@@ -7428,7 +7495,7 @@ private void ActivateMixedSearchTypeOption()
 			}
 			num2 = checked(num2 + 1);
 		}
-		if (_virtualShowPagination && index == num2)
+		if (_virtualShowPagination && (_virtualHasPreviousPage || _virtualHasNextPage) && index == num2)
 		{
 			return BuildPaginationItem("跳转", -4);
 		}
@@ -7576,16 +7643,19 @@ private void ActivateMixedSearchTypeOption()
 					}));
 					listViewItem3.Tag = -3;
 				}
-				ListViewItem listViewItem4 = resultListView.Items.Add(new ListViewItem(new string[6]
+				if (flag2 || hasNextPage)
 				{
-					string.Empty,
-					"跳转",
-					string.Empty,
-					string.Empty,
-					string.Empty,
-					string.Empty
-				}));
-				listViewItem4.Tag = -4;
+					ListViewItem listViewItem4 = resultListView.Items.Add(new ListViewItem(new string[6]
+					{
+						string.Empty,
+						"跳转",
+						string.Empty,
+						string.Empty,
+						string.Empty,
+						string.Empty
+					}));
+					listViewItem4.Tag = -4;
+				}
 			}
 			EndListViewUpdateAndRefreshAccessibility();
 			string text = accessibleName;
@@ -7978,19 +8048,22 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 					};
 					resultListView.Items.Add(value2);
 				}
-				ListViewItem value3 = new ListViewItem(new string[6]
+				if (hasPreviousPage || hasNextPage)
 				{
-					string.Empty,
-					"跳转",
-					string.Empty,
-					string.Empty,
-					string.Empty,
-					string.Empty
-				})
-				{
-					Tag = -4
-				};
-				resultListView.Items.Add(value3);
+					ListViewItem value3 = new ListViewItem(new string[6]
+					{
+						string.Empty,
+						"跳转",
+						string.Empty,
+						string.Empty,
+						string.Empty,
+						string.Empty
+					})
+					{
+						Tag = -4
+					};
+					resultListView.Items.Add(value3);
+				}
 			}
 			EndListViewUpdateAndRefreshAccessibility();
 			if (allowSelection && resultListView.Items.Count > 0)
@@ -8226,16 +8299,19 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 					}));
 					listViewItem3.Tag = -3;
 				}
-				ListViewItem listViewItem4 = resultListView.Items.Add(new ListViewItem(new string[6]
+				if (startIndex > 1 || hasNextPage)
 				{
-					string.Empty,
-					"跳转",
-					string.Empty,
-					string.Empty,
-					string.Empty,
-					string.Empty
-				}));
-				listViewItem4.Tag = -4;
+					ListViewItem listViewItem4 = resultListView.Items.Add(new ListViewItem(new string[6]
+					{
+						string.Empty,
+						"跳转",
+						string.Empty,
+						string.Empty,
+						string.Empty,
+						string.Empty
+					}));
+					listViewItem4.Tag = -4;
+				}
 			}
 			EndListViewUpdateAndRefreshAccessibility();
 			string text2 = accessibleName;
@@ -8366,19 +8442,22 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 					};
 					resultListView.Items.Add(value3);
 				}
-				ListViewItem value4 = new ListViewItem(new string[6]
+				if (hasPreviousPage || hasNextPage)
 				{
-					string.Empty,
-					"跳转",
-					string.Empty,
-					string.Empty,
-					string.Empty,
-					string.Empty
-				})
-				{
-					Tag = -4
-				};
-				resultListView.Items.Add(value4);
+					ListViewItem value4 = new ListViewItem(new string[6]
+					{
+						string.Empty,
+						"跳转",
+						string.Empty,
+						string.Empty,
+						string.Empty,
+						string.Empty
+					})
+					{
+						Tag = -4
+					};
+					resultListView.Items.Add(value4);
+				}
 			}
 			EndListViewUpdateAndRefreshAccessibility();
 			if (allowSelection && resultListView.Items.Count > 0)
@@ -8641,19 +8720,22 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 					};
 					resultListView.Items.Add(value2);
 				}
-				ListViewItem value3 = new ListViewItem(new string[6]
+				if (hasPreviousPage || hasNextPage)
 				{
-					string.Empty,
-					"跳转",
-					string.Empty,
-					string.Empty,
-					string.Empty,
-					string.Empty
-				})
-				{
-					Tag = -4
-				};
-				resultListView.Items.Add(value3);
+					ListViewItem value3 = new ListViewItem(new string[6]
+					{
+						string.Empty,
+						"跳转",
+						string.Empty,
+						string.Empty,
+						string.Empty,
+						string.Empty
+					})
+					{
+						Tag = -4
+					};
+					resultListView.Items.Add(value3);
+				}
 			}
 			EndListViewUpdateAndRefreshAccessibility();
 			if (resultListView.Items.Count > 0)
@@ -9996,16 +10078,19 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 					}));
 					listViewItem3.Tag = -3;
 				}
-				ListViewItem listViewItem4 = resultListView.Items.Add(new ListViewItem(new string[6]
+				if (startIndex > 1 || hasNextPage)
 				{
-					string.Empty,
-					"跳转",
-					string.Empty,
-					string.Empty,
-					string.Empty,
-					string.Empty
-				}));
-				listViewItem4.Tag = -4;
+					ListViewItem listViewItem4 = resultListView.Items.Add(new ListViewItem(new string[6]
+					{
+						string.Empty,
+						"跳转",
+						string.Empty,
+						string.Empty,
+						string.Empty,
+						string.Empty
+					}));
+					listViewItem4.Tag = -4;
+				}
 			}
 			EndListViewUpdateAndRefreshAccessibility();
 			string text = accessibleName;
@@ -10106,19 +10191,22 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 					};
 					resultListView.Items.Add(value3);
 				}
-				ListViewItem value4 = new ListViewItem(new string[6]
+				if (hasPreviousPage || hasNextPage)
 				{
-					string.Empty,
-					"跳转",
-					string.Empty,
-					string.Empty,
-					string.Empty,
-					string.Empty
-				})
-				{
-					Tag = -4
-				};
-				resultListView.Items.Add(value4);
+					ListViewItem value4 = new ListViewItem(new string[6]
+					{
+						string.Empty,
+						"跳转",
+						string.Empty,
+						string.Empty,
+						string.Empty,
+						string.Empty
+					})
+					{
+						Tag = -4
+					};
+					resultListView.Items.Add(value4);
+				}
 			}
 			EndListViewUpdateAndRefreshAccessibility();
 			if (allowSelection && resultListView.Items.Count > 0)
@@ -10234,16 +10322,19 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 				}));
 				listViewItem2.Tag = -3;
 			}
-			ListViewItem listViewItem3 = resultListView.Items.Add(new ListViewItem(new string[6]
+			if (startIndex > 1 || hasNextPage)
 			{
-				string.Empty,
-				"跳转",
-				string.Empty,
-				string.Empty,
-				string.Empty,
-				string.Empty
-			}));
-			listViewItem3.Tag = -4;
+				ListViewItem listViewItem3 = resultListView.Items.Add(new ListViewItem(new string[6]
+				{
+					string.Empty,
+					"跳转",
+					string.Empty,
+					string.Empty,
+					string.Empty,
+					string.Empty
+				}));
+				listViewItem3.Tag = -4;
+			}
 		}
 		EndListViewUpdateAndRefreshAccessibility();
                         string accessibleName2 = accessibleName ?? "播客列表";
@@ -10357,19 +10448,22 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 					};
 					resultListView.Items.Add(value3);
 				}
-				ListViewItem value4 = new ListViewItem(new string[6]
+				if (hasPreviousPage || hasNextPage)
 				{
-					string.Empty,
-					"跳转",
-					string.Empty,
-					string.Empty,
-					string.Empty,
-					string.Empty
-				})
-				{
-					Tag = -4
-				};
-				resultListView.Items.Add(value4);
+					ListViewItem value4 = new ListViewItem(new string[6]
+					{
+						string.Empty,
+						"跳转",
+						string.Empty,
+						string.Empty,
+						string.Empty,
+						string.Empty
+					})
+					{
+						Tag = -4
+					};
+					resultListView.Items.Add(value4);
+				}
 			}
 			EndListViewUpdateAndRefreshAccessibility();
 			if (allowSelection && resultListView.Items.Count > 0)
@@ -10480,16 +10574,19 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 					}));
 					listViewItem2.Tag = -3;
 				}
-				ListViewItem listViewItem3 = resultListView.Items.Add(new ListViewItem(new string[6]
+				if (startIndex > 1 || hasNextPage)
 				{
-					string.Empty,
-					"跳转",
-					string.Empty,
-					string.Empty,
-					string.Empty,
-					string.Empty
-				}));
-				listViewItem3.Tag = -4;
+					ListViewItem listViewItem3 = resultListView.Items.Add(new ListViewItem(new string[6]
+					{
+						string.Empty,
+						"跳转",
+						string.Empty,
+						string.Empty,
+						string.Empty,
+						string.Empty
+					}));
+					listViewItem3.Tag = -4;
+				}
 			}
                 EndListViewUpdateAndRefreshAccessibility();
                 ApplyListViewContext(viewSource, accessibleName, "播客节目", announceHeader: true);
@@ -21471,16 +21568,19 @@ private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlay
 					}));
 					listViewItem2.Tag = -3;
 				}
-				ListViewItem listViewItem3 = resultListView.Items.Add(new ListViewItem(new string[6]
+				if (startIndex > 1 || hasNextPage)
 				{
-					string.Empty,
-					"跳转",
-					string.Empty,
-					string.Empty,
-					string.Empty,
-					string.Empty
-				}));
-				listViewItem3.Tag = -4;
+					ListViewItem listViewItem3 = resultListView.Items.Add(new ListViewItem(new string[6]
+					{
+						string.Empty,
+						"跳转",
+						string.Empty,
+						string.Empty,
+						string.Empty,
+						string.Empty
+					}));
+					listViewItem3.Tag = -4;
+				}
 			}
 				}
 			}
@@ -21651,19 +21751,22 @@ private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlay
 					};
 					resultListView.Items.Add(value3);
 				}
-				ListViewItem value4 = new ListViewItem(new string[6]
+				if (hasPreviousPage || hasNextPage)
 				{
-					string.Empty,
-					"跳转",
-					string.Empty,
-					string.Empty,
-					string.Empty,
-					string.Empty
-				})
-				{
-					Tag = -4
-				};
-				resultListView.Items.Add(value4);
+					ListViewItem value4 = new ListViewItem(new string[6]
+					{
+						string.Empty,
+						"跳转",
+						string.Empty,
+						string.Empty,
+						string.Empty,
+						string.Empty
+					})
+					{
+						Tag = -4
+					};
+					resultListView.Items.Add(value4);
+				}
 			}
 			}
 			finally
