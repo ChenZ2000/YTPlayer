@@ -6217,6 +6217,15 @@ namespace YTPlayer.Core
 
             var artists = ParseArtistList(response?["artists"] as JArray ?? response?["list"] as JArray);
             int totalCount = response?["total"]?.Value<int>() ?? response?["count"]?.Value<int>() ?? artists.Count;
+            bool hasMore = response?["more"]?.Value<bool>() ?? false;
+            if (totalCount <= 0)
+            {
+                totalCount = offset + artists.Count;
+            }
+            if (hasMore && totalCount <= offset + artists.Count)
+            {
+                totalCount = offset + Math.Max(limit, artists.Count) + 1;
+            }
 
             return new SearchResult<ArtistInfo>(artists, totalCount, offset, limit, response);
         }

@@ -363,7 +363,7 @@ namespace YTPlayer
         TryDispatchPendingPlaceholderPlayback(updatedSongs);
 }
 
-	private void QueueFocusedListViewItemRefreshAnnouncement(int expectedIndex)
+	private void QueueFocusedListViewItemRefreshAnnouncement(int expectedIndex, bool interruptAnnouncement = true)
 	{
 		if (resultListView == null || expectedIndex < 0 || !resultListView.IsHandleCreated)
 		{
@@ -378,7 +378,7 @@ namespace YTPlayer
 				{
 					ListViewItem item = resultListView.Items[focusedListViewIndex];
 					UpdateListViewItemAccessibilityProperties(item, IsNvdaRunningCached());
-					AnnounceListViewItemAlert(item);
+					AnnounceListViewItemAlert(item, interruptAnnouncement);
 					if (ShouldUseCustomListViewSpeech())
 					{
 						SpeakListViewSelectionIfNeeded(item, forceRepeat: true, interrupt: false);
@@ -387,12 +387,12 @@ namespace YTPlayer
 								{
 									NotifyAccessibilityClients(resultListView, AccessibleEvents.NameChange, focusedListViewIndex);
 								}
-							}
-						}
-					});
+					}
+				}
+			});
 	}
 
-	private void AnnounceListViewItemAlert(ListViewItem item)
+	private void AnnounceListViewItemAlert(ListViewItem item, bool interruptAnnouncement = true)
 	{
 		if (item != null && _accessibilityAnnouncementLabel != null)
 		{
@@ -403,7 +403,14 @@ namespace YTPlayer
 			}
 			if (!string.IsNullOrWhiteSpace(text))
 			{
-				RaiseAccessibilityAnnouncement(text);
+				if (interruptAnnouncement)
+				{
+					RaiseAccessibilityAnnouncement(text);
+				}
+				else
+				{
+					RaiseAccessibilityAnnouncementUiOnly(text, AutomationNotificationProcessing.CurrentThenMostRecent, AutomationLiveSetting.Polite);
+				}
 			}
 		}
 	}
@@ -535,7 +542,12 @@ namespace YTPlayer
         {
                 if (interrupt)
                 {
-                        RaiseAccessibilityAnnouncement(text, preferInterrupt: true);
+                        if (IsNarratorRunningCached())
+                        {
+                                RaiseAccessibilityAnnouncement(text, preferInterrupt: true);
+                                return;
+                        }
+                        RaiseAccessibilityAnnouncementUiOnly(text, AutomationNotificationProcessing.ImportantMostRecent, AutomationLiveSetting.Assertive);
                         return;
                 }
                 RaiseAccessibilityAnnouncementUiOnly(text, AutomationNotificationProcessing.CurrentThenMostRecent, AutomationLiveSetting.Polite);
@@ -1167,7 +1179,11 @@ namespace YTPlayer
 		{
 			return;
 		}
-		UpdateListViewItemAccessibilityProperties(selectedListViewItemSafe, IsNvdaRunningCached());
+                bool isNvda = IsNvdaRunningCached();
+                if (!isNvda)
+                {
+                        UpdateListViewItemAccessibilityProperties(selectedListViewItemSafe, false);
+                }
 		if (resultListView.ContainsFocus && ShouldUseCustomListViewSpeech())
 		{
 			SpeakListViewSelectionIfNeeded(selectedListViewItemSafe);
@@ -1192,6 +1208,7 @@ namespace YTPlayer
 		if (resultListView != null && resultListView.Items.Count != 0)
 		{
 			index = Math.Max(0, Math.Min(index, checked(resultListView.Items.Count - 1)));
+                        bool isNvda = IsNvdaRunningCached();
 			ListViewItem listViewItem = null;
 			try
 			{
@@ -1201,9 +1218,9 @@ namespace YTPlayer
 			{
 				listViewItem = null;
 			}
-			if (listViewItem != null)
+			if (listViewItem != null && !isNvda)
 			{
-				UpdateListViewItemAccessibilityProperties(listViewItem, IsNvdaRunningCached());
+				UpdateListViewItemAccessibilityProperties(listViewItem, false);
 			}
 			NotifyAccessibilityClients(resultListView, AccessibleEvents.Focus, 0);
 			NotifyAccessibilityClients(resultListView, AccessibleEvents.Selection, index);
@@ -1563,7 +1580,7 @@ namespace YTPlayer
                         {
                                 baseSpeech = string.Empty;
                         }
-                        else if (_hideSequenceNumbers || IsDefaultSequenceHiddenView())
+                        else if (_hideSequenceNumbers || IsAlwaysSequenceHiddenView())
                         {
                                 baseSpeech = string.Empty;
                         }

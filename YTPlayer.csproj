@@ -273,6 +273,9 @@
     <Compile Include="Forms\JumpToPositionDialog.cs">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="Forms\PageJumpDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Include="Forms\Commants\CommentsDialog.cs">
       <SubType>Form</SubType>
     </Compile>

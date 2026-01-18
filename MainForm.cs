@@ -829,8 +829,6 @@ public partial class MainForm : Form
 
 	private CancellationTokenSource? _searchCts;
 
-	private const int CloudPageSize = 50;
-
 	private int _cloudPage = 1;
 
 	private bool _cloudHasMore = false;
@@ -941,6 +939,8 @@ public partial class MainForm : Form
 
 	private const int PodcastCategoryPageSize = 50;
 
+	private const int CloudPageSize = 50;
+
 	private static readonly char[] MultiUrlSeparators = new char[2] { ';', '；' };
 
 	private readonly Dictionary<LibraryEntityType, DateTime> _libraryCacheTimestamps = new Dictionary<LibraryEntityType, DateTime>
@@ -980,6 +980,8 @@ public partial class MainForm : Form
 
 	private bool _currentArtistAlbumsHasMore;
 
+	private int _currentArtistSongsTotalCount;
+
 	private int _currentArtistAlbumsTotalCount;
 
 	private SortState<ArtistSongSortOption> _artistSongSortState = new SortState<ArtistSongSortOption>(ArtistSongSortOption.Hot, new Dictionary<ArtistSongSortOption, string>
@@ -1016,6 +1018,8 @@ public partial class MainForm : Form
 
 	private bool _currentArtistCategoryHasMore;
 
+	private int _currentArtistCategoryTotalCount;
+
 	private readonly Dictionary<long, (int MusicCount, int AlbumCount)> _artistStatsCache = new Dictionary<long, (int, int)>();
 
 	private readonly HashSet<long> _artistStatsInFlight = new HashSet<long>();
@@ -1025,6 +1029,10 @@ public partial class MainForm : Form
 	private const int ArtistSongsPageSize = 100;
 
 	private const int ArtistAlbumsPageSize = 100;
+
+	private int _currentPodcastEpisodeTotalCount;
+
+	private int _currentPodcastCategoryTotalCount;
 
 	private SongRecognitionCoordinator? _songRecognitionCoordinator;
 
@@ -5286,11 +5294,12 @@ private void ActivateMixedSearchTypeOption()
 		return LoadRecentPlayedSongsAsync();
 	}
 
-	private async Task LoadHighQualityPlaylists()
+	private async Task LoadHighQualityPlaylists(int pendingFocusIndex = -1)
 	{
 		try
 		{
-			ViewLoadRequest request = new ViewLoadRequest("highquality_playlists", "精品歌单", "正在加载精品歌单...");
+			int requestFocusIndex = (pendingFocusIndex >= 0) ? pendingFocusIndex : 0;
+			ViewLoadRequest request = new ViewLoadRequest("highquality_playlists", "精品歌单", "正在加载精品歌单...", cancelActiveNavigation: true, pendingFocusIndex: requestFocusIndex);
 			ViewLoadResult<(List<PlaylistInfo> Items, string StatusText)?> loadResult = await RunViewLoadAsync(request, (Func<CancellationToken, Task<(List<PlaylistInfo>, string)?>>)async delegate(CancellationToken token)
 			{
 				(List<PlaylistInfo>, long, bool) result = await _apiClient.GetHighQualityPlaylistsAsync("全部", 50, 0L).ConfigureAwait(continueOnCapturedContext: false);
@@ -5305,7 +5314,7 @@ private void ActivateMixedSearchTypeOption()
 				(List<PlaylistInfo> Items, string StatusText)? data = loadResult.Value;
 				List<PlaylistInfo> playlists = data?.Items ?? new List<PlaylistInfo>();
 				DisplayPlaylists(playlists, preserveSelection: false, request.ViewSource, request.AccessibleName, 1, showPagination: false, hasNextPage: false, announceHeader: true, suppressFocus: true);
-				FocusListAfterEnrich(0);
+				FocusListAfterEnrich(request.PendingFocusIndex);
 				if (playlists.Count == 0)
 				{
 					MessageBox.Show("暂无精品歌单", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
@@ -5378,34 +5387,37 @@ private void ActivateMixedSearchTypeOption()
 
 	private async Task LoadNewSongsAll()
 	{
-		await LoadNewSongsByArea(0, "全部");
+		await LoadNewSongsByArea(0, "全部", "new_songs_all");
 	}
 
 	private async Task LoadNewSongsChinese()
 	{
-		await LoadNewSongsByArea(7, "华语");
+		await LoadNewSongsByArea(7, "华语", "new_songs_chinese");
 	}
 
 	private async Task LoadNewSongsWestern()
 	{
-		await LoadNewSongsByArea(96, "欧美");
+		await LoadNewSongsByArea(96, "欧美", "new_songs_western");
 	}
 
 	private async Task LoadNewSongsJapan()
 	{
-		await LoadNewSongsByArea(8, "日本");
+		await LoadNewSongsByArea(8, "日本", "new_songs_japan");
 	}
 
 	private async Task LoadNewSongsKorea()
 	{
-		await LoadNewSongsByArea(16, "韩国");
+		await LoadNewSongsByArea(16, "韩国", "new_songs_korea");
 	}
 
-	private async Task LoadNewSongsByArea(int areaType, string areaName)
+	private async Task LoadNewSongsByArea(int areaType, string areaName, string viewSource)
 	{
 		try
 		{
-			string viewSource = "new_songs_" + areaName.ToLower();
+			if (string.IsNullOrWhiteSpace(viewSource))
+			{
+				viewSource = "new_songs";
+			}
 			ViewLoadRequest request = new ViewLoadRequest(viewSource, areaName + "新歌速递", "正在加载" + areaName + "新歌...");
 			ViewLoadResult<List<SongInfo>?> loadResult = await RunViewLoadAsync(request, async delegate(CancellationToken token)
 			{
@@ -5435,11 +5447,12 @@ private void ActivateMixedSearchTypeOption()
 		}
 	}
 
-	private async Task LoadPersonalizedNewSong()
+	private async Task LoadPersonalizedNewSong(int pendingFocusIndex = -1)
 	{
 		try
 		{
-			ViewLoadRequest request = new ViewLoadRequest("personalized_newsong", "推荐新歌", "正在加载推荐新歌...");
+			int requestFocusIndex = (pendingFocusIndex >= 0) ? pendingFocusIndex : 0;
+			ViewLoadRequest request = new ViewLoadRequest("personalized_newsong", "推荐新歌", "正在加载推荐新歌...", cancelActiveNavigation: true, pendingFocusIndex: requestFocusIndex);
 			if (!(await RunViewLoadAsync(request, delegate
 			{
 				using (WorkScopes.BeginSkeleton("PersonalizedNewSong", request.ViewSource))
@@ -5449,7 +5462,7 @@ private void ActivateMixedSearchTypeOption()
 			}, "加载推荐新歌已取消").ConfigureAwait(continueOnCapturedContext: true)).IsCanceled)
 			{
 				UpdateStatusBar(request.LoadingText);
-				EnrichPersonalizedNewSongAsync(request.ViewSource, request.AccessibleName);
+				EnrichPersonalizedNewSongAsync(request.ViewSource, request.AccessibleName, request.PendingFocusIndex);
 			}
 		}
 		catch (Exception ex)
@@ -5465,7 +5478,7 @@ private void ActivateMixedSearchTypeOption()
 		}
 	}
 
-	private async Task EnrichPersonalizedNewSongAsync(string viewSource, string accessibleName)
+	private async Task EnrichPersonalizedNewSongAsync(string viewSource, string accessibleName, int pendingFocusIndex)
 	{
 		CancellationToken viewToken = GetCurrentViewContentToken();
 		using (WorkScopes.BeginEnrichment("PersonalizedNewSong", viewSource))
@@ -5491,7 +5504,7 @@ private void ActivateMixedSearchTypeOption()
 					{
 						DisplaySongs(songsResult, showPagination: false, hasNextPage: false, 1, preserveSelection: true, viewSource, accessibleName, skipAvailabilityCheck: false, announceHeader: false);
 						_currentPlaylist = null;
-						FocusListAfterEnrich(0);
+						FocusListAfterEnrich(pendingFocusIndex);
 						if (songsResult.Count == 0)
 						{
 							MessageBox.Show("暂无推荐新歌", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
@@ -5707,6 +5720,7 @@ private void ActivateMixedSearchTypeOption()
 				_currentPodcastCategoryName = categoryName;
 				_currentPodcastCategoryOffset = offset;
 				_currentPodcastCategoryHasMore = hasMore;
+				_currentPodcastCategoryTotalCount = Math.Max(totalCount, offset + podcasts.Count);
 				DisplayPodcasts(podcasts, showPagination: true, hasMore, offset + 1, preserveSelection: false, viewSource, accessibleName);
 				if (podcasts.Count == 0)
 				{
@@ -5772,11 +5786,12 @@ private void ActivateMixedSearchTypeOption()
 			{
 				ResetPendingListFocusIfViewChanged("user_liked_songs");
 			}
+			DebugLogListFocusState($"LoadUserLikedSongs: start preserve={preserveSelection} skipSave={skipSaveNavigation} pendingIndex={pendingIndex}", "user_liked_songs");
 			ViewLoadRequest request = new ViewLoadRequest("user_liked_songs", "喜欢的音乐", "正在加载喜欢的音乐...", !skipSaveNavigation, pendingIndex);
 			ViewLoadResult<(PlaylistInfo Playlist, List<SongInfo> Songs, string StatusText)?> loadResult = await RunViewLoadAsync(request, (CancellationToken token) => BuildPlaylistSkeletonViewDataAsync(async delegate(CancellationToken ct)
 			{
 				ct.ThrowIfCancellationRequested();
-				if (_userLikedPlaylist != null)
+				if (_userLikedPlaylist != null && _userLikedPlaylist.Songs != null && _userLikedPlaylist.Songs.Count > 0)
 				{
 					return _userLikedPlaylist;
 				}
@@ -5792,6 +5807,16 @@ private void ActivateMixedSearchTypeOption()
 				PlaylistInfo likedPlaylist = playlists?.FirstOrDefault((PlaylistInfo p) => IsLikedMusicPlaylist(p, userInfo.UserId));
 				if (likedPlaylist != null)
 				{
+					PlaylistInfo detail = await _apiClient.GetPlaylistDetailAsync(likedPlaylist.Id).ConfigureAwait(continueOnCapturedContext: false);
+					ct.ThrowIfCancellationRequested();
+					if (detail != null)
+					{
+						if (string.IsNullOrWhiteSpace(detail.Name))
+						{
+							detail.Name = likedPlaylist.Name;
+						}
+						likedPlaylist = detail;
+					}
 					_userLikedPlaylist = likedPlaylist;
 				}
 				return likedPlaylist;
@@ -5808,6 +5833,7 @@ private void ActivateMixedSearchTypeOption()
 				(PlaylistInfo Playlist, List<SongInfo> Songs, string StatusText) viewData = data.Value;
 				(_currentPlaylist, _, _) = viewData;
 				DisplaySongs(viewData.Songs, showPagination: false, hasNextPage: false, 1, preserveSelection, request.ViewSource, request.AccessibleName, skipAvailabilityCheck: true);
+				DebugLogListFocusState("LoadUserLikedSongs: after DisplaySongs", request.ViewSource);
 				UpdateStatusBar(viewData.StatusText);
 				EnrichCurrentPlaylistSongsAsync(viewData.Playlist, viewData.Songs, request.ViewSource, request.AccessibleName);
 			}
@@ -5937,7 +5963,7 @@ private void ActivateMixedSearchTypeOption()
 		}
 	}
 
-	private async Task LoadRecentListenedCategoryAsync(bool skipSave = false)
+	private async Task LoadRecentListenedCategoryAsync(bool skipSave = false, int pendingFocusIndex = -1)
 	{
 		if (!IsUserLoggedIn())
 		{
@@ -5947,14 +5973,15 @@ private void ActivateMixedSearchTypeOption()
 		}
 		try
 		{
-			ViewLoadRequest request = new ViewLoadRequest("recent_listened", "最近听过", "正在加载最近听过骨架...", !skipSave);
+			int requestFocusIndex = (pendingFocusIndex >= 0) ? pendingFocusIndex : 0;
+			ViewLoadRequest request = new ViewLoadRequest("recent_listened", "最近听过", "正在加载最近听过骨架...", !skipSave, requestFocusIndex);
 			ViewLoadResult<(List<ListItemInfo> Items, string StatusText)?> loadResult = await RunViewLoadAsync(request, (CancellationToken _) => Task.FromResult(((List<ListItemInfo>, string)?)BuildRecentListenedSkeletonViewData()), "加载最近听过已取消").ConfigureAwait(continueOnCapturedContext: true);
 			if (!loadResult.IsCanceled)
 			{
 				(List<ListItemInfo> Items, string StatusText) data = loadResult.Value ?? BuildRecentListenedSkeletonViewData();
 				DisplayListItems(data.Items, request.ViewSource, request.AccessibleName, preserveSelection: true, announceHeader: false);
 				UpdateStatusBar(data.StatusText);
-				FocusListAfterEnrich(0);
+				FocusListAfterEnrich(request.PendingFocusIndex);
 				EnrichRecentListenedAsync(request.ViewSource, request.AccessibleName);
 			}
 		}
@@ -6021,7 +6048,7 @@ private void ActivateMixedSearchTypeOption()
 		}
 	}
 
-	private async Task LoadRecentPlayedSongsAsync()
+	private async Task LoadRecentPlayedSongsAsync(int pendingFocusIndex = -1)
 	{
 		if (!IsUserLoggedIn())
 		{
@@ -6031,7 +6058,8 @@ private void ActivateMixedSearchTypeOption()
 		}
 		try
 		{
-			ViewLoadRequest request = new ViewLoadRequest("recent_play", "最近播放", "正在加载最近播放骨架...");
+			int requestFocusIndex = (pendingFocusIndex >= 0) ? pendingFocusIndex : 0;
+			ViewLoadRequest request = new ViewLoadRequest("recent_play", "最近播放", "正在加载最近播放骨架...", cancelActiveNavigation: true, pendingFocusIndex: requestFocusIndex);
 			ViewLoadResult<(List<SongInfo> Items, string StatusText)?> loadResult = await RunViewLoadAsync(request, (CancellationToken _) => Task.FromResult(((List<SongInfo>, string)?)BuildRecentSongsSkeletonViewData()), "加载最近播放已取消").ConfigureAwait(continueOnCapturedContext: true);
 			if (!loadResult.IsCanceled)
 			{
@@ -6156,7 +6184,7 @@ private void ActivateMixedSearchTypeOption()
 		}
 	}
 
-	private async Task LoadRecentPodcastsAsync()
+	private async Task LoadRecentPodcastsAsync(int pendingFocusIndex = -1)
 	{
 		if (!IsUserLoggedIn())
 		{
@@ -6166,7 +6194,8 @@ private void ActivateMixedSearchTypeOption()
 		}
 		try
 		{
-			ViewLoadRequest request = new ViewLoadRequest("recent_podcasts", "最近播客", "正在加载最近播客骨架...");
+			int requestFocusIndex = (pendingFocusIndex >= 0) ? pendingFocusIndex : 0;
+			ViewLoadRequest request = new ViewLoadRequest("recent_podcasts", "最近播客", "正在加载最近播客骨架...", cancelActiveNavigation: true, pendingFocusIndex: requestFocusIndex);
 			ViewLoadResult<(List<PodcastRadioInfo> Items, string StatusText)?> loadResult = await RunViewLoadAsync(request, (CancellationToken _) => Task.FromResult(((List<PodcastRadioInfo>, string)?)BuildRecentPodcastsSkeletonViewData()), "加载最近播客已取消").ConfigureAwait(continueOnCapturedContext: true);
 			if (!loadResult.IsCanceled)
 			{
@@ -6308,6 +6337,7 @@ private void ActivateMixedSearchTypeOption()
 				}
 				_currentPodcastSoundOffset = Math.Max(0, offset);
 				_currentPodcastHasMore = hasMore;
+				_currentPodcastEpisodeTotalCount = Math.Max(totalCount, offset + (episodes?.Count ?? 0));
 				DisplayPodcastEpisodes(episodes, unchecked(_currentPodcastSoundOffset > 0 || hasMore), hasMore, _currentPodcastSoundOffset + 1, preserveSelection: false, viewSource, accessibleName);
 				UpdatePodcastSortMenuChecks();
 				if (episodes == null || episodes.Count == 0)
@@ -6402,7 +6432,7 @@ private void ActivateMixedSearchTypeOption()
 		return string.Empty;
 	}
 
-	private async Task LoadRecentPlaylistsAsync()
+	private async Task LoadRecentPlaylistsAsync(int pendingFocusIndex = -1)
 	{
 		if (!IsUserLoggedIn())
 		{
@@ -6412,7 +6442,8 @@ private void ActivateMixedSearchTypeOption()
 		}
 		try
 		{
-			ViewLoadRequest request = new ViewLoadRequest("recent_playlists", "最近歌单", "正在加载最近歌单骨架...");
+			int requestFocusIndex = (pendingFocusIndex >= 0) ? pendingFocusIndex : 0;
+			ViewLoadRequest request = new ViewLoadRequest("recent_playlists", "最近歌单", "正在加载最近歌单骨架...", cancelActiveNavigation: true, pendingFocusIndex: requestFocusIndex);
 			ViewLoadResult<(List<PlaylistInfo> Items, string StatusText)?> loadResult = await RunViewLoadAsync(request, (CancellationToken _) => Task.FromResult(((List<PlaylistInfo>, string)?)BuildRecentPlaylistsSkeletonViewData()), "加载最近歌单已取消").ConfigureAwait(continueOnCapturedContext: true);
 			if (!loadResult.IsCanceled)
 			{
@@ -6492,7 +6523,7 @@ private void ActivateMixedSearchTypeOption()
 		}
 	}
 
-	private async Task LoadRecentAlbumsAsync()
+	private async Task LoadRecentAlbumsAsync(int pendingFocusIndex = -1)
 	{
 		if (!IsUserLoggedIn())
 		{
@@ -6502,7 +6533,8 @@ private void ActivateMixedSearchTypeOption()
 		}
 		try
 		{
-			ViewLoadRequest request = new ViewLoadRequest("recent_albums", "最近专辑", "正在加载最近专辑骨架...");
+			int requestFocusIndex = (pendingFocusIndex >= 0) ? pendingFocusIndex : 0;
+			ViewLoadRequest request = new ViewLoadRequest("recent_albums", "最近专辑", "正在加载最近专辑骨架...", cancelActiveNavigation: true, pendingFocusIndex: requestFocusIndex);
 			ViewLoadResult<(List<AlbumInfo> Items, string StatusText)?> loadResult = await RunViewLoadAsync(request, (CancellationToken _) => Task.FromResult(((List<AlbumInfo>, string)?)BuildRecentAlbumsSkeletonViewData()), "加载最近专辑已取消").ConfigureAwait(continueOnCapturedContext: true);
 			if (!loadResult.IsCanceled)
 			{
@@ -6623,11 +6655,12 @@ private void ActivateMixedSearchTypeOption()
 		return (Playlists: _personalizedPlaylistsCache, Songs: _personalizedNewSongsCache);
 	}
 
-	private async Task LoadDailyRecommend()
+	private async Task LoadDailyRecommend(int pendingFocusIndex = -1)
 	{
 		try
 		{
-			ViewLoadRequest request = new ViewLoadRequest("daily_recommend", "每日推荐", "正在加载每日推荐...");
+			int requestFocusIndex = (pendingFocusIndex >= 0) ? pendingFocusIndex : 0;
+			ViewLoadRequest request = new ViewLoadRequest("daily_recommend", "每日推荐", "正在加载每日推荐...", cancelActiveNavigation: true, pendingFocusIndex: requestFocusIndex);
 			ViewLoadResult<(List<ListItemInfo> Items, string StatusText)> loadResult = await RunViewLoadAsync(request, async delegate(CancellationToken viewToken)
 			{
 				(List<SongInfo> Songs, List<PlaylistInfo> Playlists) bundle = await FetchDailyRecommendBundleAsync(viewToken);
@@ -6663,7 +6696,7 @@ private void ActivateMixedSearchTypeOption()
 				(List<ListItemInfo> Items, string StatusText) data = loadResult.Value;
 				DisplayListItems(data.Items, request.ViewSource, request.AccessibleName, preserveSelection: true);
 				UpdateStatusBar(data.StatusText);
-				FocusListAfterEnrich(0);
+				FocusListAfterEnrich(request.PendingFocusIndex);
 			}
 		}
 		catch (Exception ex)
@@ -6675,11 +6708,12 @@ private void ActivateMixedSearchTypeOption()
 		}
 	}
 
-	private async Task LoadPersonalized()
+	private async Task LoadPersonalized(int pendingFocusIndex = -1)
 	{
 		try
 		{
-			ViewLoadRequest request = new ViewLoadRequest("personalized", "为您推荐", "正在加载为您推荐...");
+			int requestFocusIndex = (pendingFocusIndex >= 0) ? pendingFocusIndex : 0;
+			ViewLoadRequest request = new ViewLoadRequest("personalized", "为您推荐", "正在加载为您推荐...", cancelActiveNavigation: true, pendingFocusIndex: requestFocusIndex);
 			ViewLoadResult<(List<ListItemInfo> Items, string StatusText)> loadResult = await RunViewLoadAsync(request, async delegate(CancellationToken viewToken)
 			{
 				(List<PlaylistInfo> Playlists, List<SongInfo> Songs) bundle = await FetchPersonalizedBundleAsync(viewToken);
@@ -6715,7 +6749,7 @@ private void ActivateMixedSearchTypeOption()
 				(List<ListItemInfo> Items, string StatusText) data = loadResult.Value;
 				DisplayListItems(data.Items, request.ViewSource, request.AccessibleName, preserveSelection: true);
 				UpdateStatusBar(data.StatusText);
-				FocusListAfterEnrich(0);
+				FocusListAfterEnrich(request.PendingFocusIndex);
 			}
 		}
 		catch (Exception ex)
@@ -6727,11 +6761,11 @@ private void ActivateMixedSearchTypeOption()
 		}
 	}
 
-	private async Task LoadToplist()
+	private async Task LoadToplist(int pendingFocusIndex = 0)
 	{
 		try
 		{
-			ViewLoadRequest request = new ViewLoadRequest("toplist", "官方排行榜", "正在加载官方排行榜...");
+			ViewLoadRequest request = new ViewLoadRequest("toplist", "官方排行榜", "正在加载官方排行榜...", cancelActiveNavigation: true, pendingFocusIndex);
 			if (!(await RunViewLoadAsync(request, delegate
 			{
 				using (WorkScopes.BeginSkeleton("Toplist", request.ViewSource))
@@ -6741,7 +6775,7 @@ private void ActivateMixedSearchTypeOption()
 			}, "加载排行榜已取消").ConfigureAwait(continueOnCapturedContext: true)).IsCanceled)
 			{
 				UpdateStatusBar(request.LoadingText);
-				EnrichToplistAsync(request.ViewSource, request.AccessibleName);
+				EnrichToplistAsync(request.ViewSource, request.AccessibleName, request.PendingFocusIndex);
 			}
 		}
 		catch (Exception ex)
@@ -6757,7 +6791,7 @@ private void ActivateMixedSearchTypeOption()
 		}
 	}
 
-	private async Task EnrichToplistAsync(string viewSource, string accessibleName)
+	private async Task EnrichToplistAsync(string viewSource, string accessibleName, int pendingFocusIndex)
 	{
 		CancellationToken viewToken = GetCurrentViewContentToken();
 		using (WorkScopes.BeginEnrichment("Toplist", viewSource))
@@ -6780,7 +6814,7 @@ private void ActivateMixedSearchTypeOption()
 					if (!ShouldAbortViewRender(viewToken, "加载排行榜"))
 					{
 						DisplayPlaylists(playlists, preserveSelection: true, viewSource, accessibleName, 1, showPagination: false, hasNextPage: false, announceHeader: false);
-						FocusListAfterEnrich(0);
+						FocusListAfterEnrich((pendingFocusIndex >= 0) ? pendingFocusIndex : (-1));
 						if (playlists.Count == 0)
 						{
 							MessageBox.Show("暂无排行榜数据。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
@@ -6814,11 +6848,12 @@ private void ActivateMixedSearchTypeOption()
 		}
 	}
 
-	private async Task LoadDailyRecommendSongs()
+	private async Task LoadDailyRecommendSongs(int pendingFocusIndex = -1)
 	{
 		try
 		{
-			ViewLoadRequest request = new ViewLoadRequest("daily_recommend_songs", "每日推荐歌曲", "正在加载每日推荐歌曲...");
+			int requestFocusIndex = (pendingFocusIndex >= 0) ? pendingFocusIndex : 0;
+			ViewLoadRequest request = new ViewLoadRequest("daily_recommend_songs", "每日推荐歌曲", "正在加载每日推荐歌曲...", cancelActiveNavigation: true, pendingFocusIndex: requestFocusIndex);
 			if (!(await RunViewLoadAsync(request, delegate
 			{
 				using (WorkScopes.BeginSkeleton("DailyRecommendSongs", request.ViewSource))
@@ -6832,14 +6867,14 @@ private void ActivateMixedSearchTypeOption()
 				{
 					DisplaySongs(cachedSongs, showPagination: false, hasNextPage: false, 1, preserveSelection: true, request.ViewSource, request.AccessibleName, skipAvailabilityCheck: true);
 					UpdateStatusBar($"每日推荐歌曲（缓存）共 {cachedSongs.Count} 首，正在刷新...");
-					FocusListAfterEnrich(0);
+					FocusListAfterEnrich(request.PendingFocusIndex);
 				}
 				else
 				{
 					DisplaySongs(new List<SongInfo>(), showPagination: false, hasNextPage: false, 1, preserveSelection: false, request.ViewSource, request.AccessibleName, skipAvailabilityCheck: true);
 					UpdateStatusBar(request.LoadingText);
 				}
-				EnrichDailyRecommendSongsAsync(request.ViewSource, request.AccessibleName);
+				EnrichDailyRecommendSongsAsync(request.ViewSource, request.AccessibleName, request.PendingFocusIndex);
 			}
 		}
 		catch (Exception ex)
@@ -6855,7 +6890,7 @@ private void ActivateMixedSearchTypeOption()
 		}
 	}
 
-	private async Task EnrichDailyRecommendSongsAsync(string viewSource, string accessibleName)
+	private async Task EnrichDailyRecommendSongsAsync(string viewSource, string accessibleName, int pendingFocusIndex)
 	{
 		CancellationToken viewToken = GetCurrentViewContentToken();
 		using (WorkScopes.BeginEnrichment("DailyRecommendSongs", viewSource))
@@ -6870,7 +6905,7 @@ private void ActivateMixedSearchTypeOption()
 						if (!ShouldAbortViewRender(viewToken, "每日推荐歌曲"))
 						{
 							DisplaySongs(cachedSongs, showPagination: false, hasNextPage: false, 1, preserveSelection: true, viewSource, accessibleName, skipAvailabilityCheck: false, announceHeader: false);
-							FocusListAfterEnrich(0);
+							FocusListAfterEnrich(pendingFocusIndex);
 							UpdateStatusBar((cachedSongs.Count == 0) ? "暂无每日推荐歌曲" : $"每日推荐歌曲（缓存）共 {cachedSongs.Count} 首");
 						}
 					}).ConfigureAwait(continueOnCapturedContext: false);
@@ -6894,7 +6929,7 @@ private void ActivateMixedSearchTypeOption()
 					if (!ShouldAbortViewRender(viewToken, "每日推荐歌曲"))
 					{
 						DisplaySongs(songsResult, showPagination: false, hasNextPage: false, 1, preserveSelection: true, viewSource, accessibleName, skipAvailabilityCheck: false, announceHeader: false);
-						FocusListAfterEnrich(0);
+						FocusListAfterEnrich(pendingFocusIndex);
 						if (songsResult.Count == 0)
 						{
 							MessageBox.Show("今日暂无推荐歌曲。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
@@ -6928,11 +6963,12 @@ private void ActivateMixedSearchTypeOption()
 		}
 	}
 
-	private async Task LoadDailyRecommendPlaylists()
+	private async Task LoadDailyRecommendPlaylists(int pendingFocusIndex = -1)
 	{
 		try
 		{
-			ViewLoadRequest request = new ViewLoadRequest("daily_recommend_playlists", "每日推荐歌单", "正在加载每日推荐歌单...");
+			int requestFocusIndex = (pendingFocusIndex >= 0) ? pendingFocusIndex : 0;
+			ViewLoadRequest request = new ViewLoadRequest("daily_recommend_playlists", "每日推荐歌单", "正在加载每日推荐歌单...", cancelActiveNavigation: true, pendingFocusIndex: requestFocusIndex);
 			if (!(await RunViewLoadAsync(request, delegate
 			{
 				using (WorkScopes.BeginSkeleton("DailyRecommendPlaylists", request.ViewSource))
@@ -6946,14 +6982,14 @@ private void ActivateMixedSearchTypeOption()
 				{
 					DisplayPlaylists(cachedPlaylists, preserveSelection: true, request.ViewSource, request.AccessibleName, 1, showPagination: false, hasNextPage: false, announceHeader: false);
 					UpdateStatusBar($"每日推荐歌单（缓存）共 {cachedPlaylists.Count} 个，正在刷新...");
-					FocusListAfterEnrich(0);
+					FocusListAfterEnrich(request.PendingFocusIndex);
 				}
 				else
 				{
 					DisplayPlaylists(new List<PlaylistInfo>(), preserveSelection: false, request.ViewSource, request.AccessibleName, 1, showPagination: false, hasNextPage: false, announceHeader: false);
 					UpdateStatusBar(request.LoadingText);
 				}
-				EnrichDailyRecommendPlaylistsAsync(request.ViewSource, request.AccessibleName);
+				EnrichDailyRecommendPlaylistsAsync(request.ViewSource, request.AccessibleName, request.PendingFocusIndex);
 			}
 		}
 		catch (Exception ex)
@@ -6969,7 +7005,7 @@ private void ActivateMixedSearchTypeOption()
 		}
 	}
 
-	private async Task EnrichDailyRecommendPlaylistsAsync(string viewSource, string accessibleName)
+	private async Task EnrichDailyRecommendPlaylistsAsync(string viewSource, string accessibleName, int pendingFocusIndex)
 	{
 		CancellationToken viewToken = GetCurrentViewContentToken();
 		using (WorkScopes.BeginEnrichment("DailyRecommendPlaylists", viewSource))
@@ -6984,7 +7020,7 @@ private void ActivateMixedSearchTypeOption()
 						if (!ShouldAbortViewRender(viewToken, "每日推荐歌单"))
 						{
 							DisplayPlaylists(cachedPlaylists, preserveSelection: true, viewSource, accessibleName, 1, showPagination: false, hasNextPage: false, announceHeader: false);
-							FocusListAfterEnrich(0);
+							FocusListAfterEnrich(pendingFocusIndex);
 							UpdateStatusBar((cachedPlaylists.Count == 0) ? "暂无每日推荐歌单" : $"每日推荐歌单（缓存）共 {cachedPlaylists.Count} 个");
 						}
 					}).ConfigureAwait(continueOnCapturedContext: false);
@@ -7008,7 +7044,7 @@ private void ActivateMixedSearchTypeOption()
 					if (!ShouldAbortViewRender(viewToken, "每日推荐歌单"))
 					{
 						DisplayPlaylists(playlistsResult, preserveSelection: true, viewSource, accessibleName, 1, showPagination: false, hasNextPage: false, announceHeader: false);
-						FocusListAfterEnrich(0);
+						FocusListAfterEnrich(pendingFocusIndex);
 						if (playlistsResult.Count == 0)
 						{
 							MessageBox.Show("今日暂无推荐歌单。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
@@ -7042,11 +7078,12 @@ private void ActivateMixedSearchTypeOption()
 		}
 	}
 
-	private async Task LoadPersonalizedPlaylists()
+	private async Task LoadPersonalizedPlaylists(int pendingFocusIndex = -1)
 	{
 		try
 		{
-			ViewLoadRequest request = new ViewLoadRequest("personalized_playlists", "推荐歌单", "正在加载推荐歌单...");
+			int requestFocusIndex = (pendingFocusIndex >= 0) ? pendingFocusIndex : 0;
+			ViewLoadRequest request = new ViewLoadRequest("personalized_playlists", "推荐歌单", "正在加载推荐歌单...", cancelActiveNavigation: true, pendingFocusIndex: requestFocusIndex);
 			if (!(await RunViewLoadAsync(request, delegate
 			{
 				using (WorkScopes.BeginSkeleton("PersonalizedPlaylists", request.ViewSource))
@@ -7060,14 +7097,14 @@ private void ActivateMixedSearchTypeOption()
 				{
 					DisplayPlaylists(cachedPlaylists, preserveSelection: true, request.ViewSource, request.AccessibleName, 1, showPagination: false, hasNextPage: false, announceHeader: false);
 					UpdateStatusBar($"推荐歌单（缓存）共 {cachedPlaylists.Count} 个，正在刷新...");
-					FocusListAfterEnrich(0);
+					FocusListAfterEnrich(request.PendingFocusIndex);
 				}
 				else
 				{
 					DisplayPlaylists(new List<PlaylistInfo>(), preserveSelection: false, request.ViewSource, request.AccessibleName, 1, showPagination: false, hasNextPage: false, announceHeader: false);
 					UpdateStatusBar(request.LoadingText);
 				}
-				EnrichPersonalizedPlaylistsAsync(request.ViewSource, request.AccessibleName);
+				EnrichPersonalizedPlaylistsAsync(request.ViewSource, request.AccessibleName, request.PendingFocusIndex);
 			}
 		}
 		catch (Exception ex)
@@ -7083,7 +7120,7 @@ private void ActivateMixedSearchTypeOption()
 		}
 	}
 
-	private async Task EnrichPersonalizedPlaylistsAsync(string viewSource, string accessibleName)
+	private async Task EnrichPersonalizedPlaylistsAsync(string viewSource, string accessibleName, int pendingFocusIndex)
 	{
 		CancellationToken viewToken = GetCurrentViewContentToken();
 		using (WorkScopes.BeginEnrichment("PersonalizedPlaylists", viewSource))
@@ -7098,7 +7135,7 @@ private void ActivateMixedSearchTypeOption()
 						if (!ShouldAbortViewRender(viewToken, "推荐歌单"))
 						{
 							DisplayPlaylists(cachedPlaylists, preserveSelection: true, viewSource, accessibleName, 1, showPagination: false, hasNextPage: false, announceHeader: false);
-							FocusListAfterEnrich(0);
+							FocusListAfterEnrich(pendingFocusIndex);
 							UpdateStatusBar((cachedPlaylists.Count == 0) ? "暂无推荐歌单" : $"推荐歌单（缓存）共 {cachedPlaylists.Count} 个");
 						}
 					}).ConfigureAwait(continueOnCapturedContext: false);
@@ -7122,7 +7159,7 @@ private void ActivateMixedSearchTypeOption()
 					if (!ShouldAbortViewRender(viewToken, "推荐歌单"))
 					{
 						DisplayPlaylists(playlistsResult, preserveSelection: true, viewSource, accessibleName, 1, showPagination: false, hasNextPage: false, announceHeader: false);
-						FocusListAfterEnrich(0);
+						FocusListAfterEnrich(pendingFocusIndex);
 						if (playlistsResult.Count == 0)
 						{
 							MessageBox.Show("暂无推荐歌单。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
@@ -7156,11 +7193,12 @@ private void ActivateMixedSearchTypeOption()
 		}
 	}
 
-	private async Task LoadPersonalizedNewSongs()
+	private async Task LoadPersonalizedNewSongs(int pendingFocusIndex = -1)
 	{
 		try
 		{
-			ViewLoadRequest request = new ViewLoadRequest("personalized_newsongs", "推荐新歌", "正在加载推荐新歌...");
+			int requestFocusIndex = (pendingFocusIndex >= 0) ? pendingFocusIndex : 0;
+			ViewLoadRequest request = new ViewLoadRequest("personalized_newsongs", "推荐新歌", "正在加载推荐新歌...", cancelActiveNavigation: true, pendingFocusIndex: requestFocusIndex);
 			if (!(await RunViewLoadAsync(request, delegate
 			{
 				using (WorkScopes.BeginSkeleton("PersonalizedNewSongs", request.ViewSource))
@@ -7174,14 +7212,14 @@ private void ActivateMixedSearchTypeOption()
 				{
 					DisplaySongs(cachedSongs, showPagination: false, hasNextPage: false, 1, preserveSelection: true, request.ViewSource, request.AccessibleName, skipAvailabilityCheck: false, announceHeader: false);
 					UpdateStatusBar($"推荐新歌（缓存）共 {cachedSongs.Count} 首，正在刷新...");
-					FocusListAfterEnrich(0);
+					FocusListAfterEnrich(request.PendingFocusIndex);
 				}
 				else
 				{
 					DisplaySongs(new List<SongInfo>(), showPagination: false, hasNextPage: false, 1, preserveSelection: false, request.ViewSource, request.AccessibleName, skipAvailabilityCheck: true, announceHeader: false);
 					UpdateStatusBar(request.LoadingText);
 				}
-				EnrichPersonalizedNewSongsAsync(request.ViewSource, request.AccessibleName);
+				EnrichPersonalizedNewSongsAsync(request.ViewSource, request.AccessibleName, request.PendingFocusIndex);
 			}
 		}
 		catch (Exception ex)
@@ -7197,7 +7235,7 @@ private void ActivateMixedSearchTypeOption()
 		}
 	}
 
-	private async Task EnrichPersonalizedNewSongsAsync(string viewSource, string accessibleName)
+	private async Task EnrichPersonalizedNewSongsAsync(string viewSource, string accessibleName, int pendingFocusIndex)
 	{
 		CancellationToken viewToken = GetCurrentViewContentToken();
 		using (WorkScopes.BeginEnrichment("PersonalizedNewSongs", viewSource))
@@ -7212,7 +7250,7 @@ private void ActivateMixedSearchTypeOption()
 						if (!ShouldAbortViewRender(viewToken, "推荐新歌"))
 						{
 							DisplaySongs(cachedSongs, showPagination: false, hasNextPage: false, 1, preserveSelection: true, viewSource, accessibleName, skipAvailabilityCheck: false, announceHeader: false);
-							FocusListAfterEnrich(0);
+							FocusListAfterEnrich(pendingFocusIndex);
 							UpdateStatusBar((cachedSongs.Count == 0) ? "暂无推荐新歌" : $"推荐新歌（缓存）共 {cachedSongs.Count} 首");
 						}
 					}).ConfigureAwait(continueOnCapturedContext: false);
@@ -7236,7 +7274,7 @@ private void ActivateMixedSearchTypeOption()
 					if (!ShouldAbortViewRender(viewToken, "推荐新歌"))
 					{
 						DisplaySongs(songsResult, showPagination: false, hasNextPage: false, 1, preserveSelection: true, viewSource, accessibleName, skipAvailabilityCheck: false, announceHeader: false);
-						FocusListAfterEnrich(0);
+						FocusListAfterEnrich(pendingFocusIndex);
 						if (songsResult.Count == 0)
 						{
 							MessageBox.Show("暂无推荐新歌。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
@@ -7335,6 +7373,7 @@ private void ActivateMixedSearchTypeOption()
 				{
 					num++;
 				}
+				num++;
 			}
 			return num;
 		}
@@ -7381,9 +7420,17 @@ private void ActivateMixedSearchTypeOption()
 			}
 			num2 = checked(num2 + 1);
 		}
-		if (_virtualShowPagination && _virtualHasNextPage && index == num2)
+		if (_virtualShowPagination && _virtualHasNextPage)
 		{
-			return BuildPaginationItem("下一页", -3);
+			if (index == num2)
+			{
+				return BuildPaginationItem("下一页", -3);
+			}
+			num2 = checked(num2 + 1);
+		}
+		if (_virtualShowPagination && index == num2)
+		{
+			return BuildPaginationItem("跳转", -4);
 		}
 		return new ListViewItem(new string[6])
 		{
@@ -7453,6 +7500,7 @@ private void ActivateMixedSearchTypeOption()
 	private void DisplaySongs(List<SongInfo> songs, bool showPagination = false, bool hasNextPage = false, int startIndex = 1, bool preserveSelection = false, string? viewSource = null, string? accessibleName = null, bool skipAvailabilityCheck = false, bool announceHeader = true, bool suppressFocus = false, bool allowSelection = true)
 	{
 		ConfigureListViewDefault();
+		DebugLogListFocusState("DisplaySongs: start", viewSource);
 		int num = -1;
 		if (preserveSelection && resultListView.SelectedIndices.Count > 0)
 		{
@@ -7483,6 +7531,7 @@ private void ActivateMixedSearchTypeOption()
 			EndListViewUpdateAndRefreshAccessibility();
 			_currentPlaylistOwnedByUser = viewSource != null && viewSource.StartsWith("playlist:", StringComparison.OrdinalIgnoreCase) && _currentPlaylist != null && IsPlaylistOwnedByUser(_currentPlaylist, GetCurrentUserId());
                         ApplyListViewContext(viewSource, accessibleName, "歌曲列表", announceHeader);
+			DebugLogListFocusState("DisplaySongs: empty", viewSource);
                         return;
                 }
 		bool flag4 = false;
@@ -7527,6 +7576,16 @@ private void ActivateMixedSearchTypeOption()
 					}));
 					listViewItem3.Tag = -3;
 				}
+				ListViewItem listViewItem4 = resultListView.Items.Add(new ListViewItem(new string[6]
+				{
+					string.Empty,
+					"跳转",
+					string.Empty,
+					string.Empty,
+					string.Empty,
+					string.Empty
+				}));
+				listViewItem4.Tag = -4;
 			}
 			EndListViewUpdateAndRefreshAccessibility();
 			string text = accessibleName;
@@ -7597,6 +7656,7 @@ private void ActivateMixedSearchTypeOption()
 					}
 				}
 			}
+			DebugLogListFocusState("DisplaySongs: after selection", viewSource);
 			if (!skipAvailabilityCheck)
 			{
 				ScheduleAvailabilityCheck(list);
@@ -7761,7 +7821,7 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 
 	private string FormatIndex(int index)
 	{
-		return _hideSequenceNumbers ? string.Empty : index.ToString();
+		return (_hideSequenceNumbers || IsAlwaysSequenceHiddenView()) ? string.Empty : index.ToString();
 	}
 
 	private bool IsDefaultSequenceHiddenView()
@@ -7769,14 +7829,33 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 		return _currentListItems != null && _currentListItems.Count > 0 && _currentSongs.Count == 0 && _currentPlaylists.Count == 0 && _currentAlbums.Count == 0 && _currentPodcasts.Count == 0 && _currentPodcastSounds.Count == 0 && _currentArtists.Count == 0;
 	}
 
+	private bool IsAlwaysSequenceHiddenView()
+	{
+		if (IsDefaultSequenceHiddenView())
+		{
+			return true;
+		}
+		if (_currentArtists != null && _currentArtists.Count > 0 && _currentSongs.Count == 0 && _currentPlaylists.Count == 0 && _currentAlbums.Count == 0 && _currentPodcasts.Count == 0 && _currentPodcastSounds.Count == 0 && _currentListItems.Count == 0)
+		{
+			string viewSource = _currentViewSource ?? string.Empty;
+			if (viewSource.StartsWith("artist_category_list:", StringComparison.OrdinalIgnoreCase))
+			{
+				return false;
+			}
+			return true;
+		}
+		return false;
+	}
+
 	private void RefreshSequenceDisplayInPlace()
 	{
-		if ((!_hideSequenceNumbers && IsDefaultSequenceHiddenView()) || resultListView == null || resultListView.Items.Count == 0)
+		if (resultListView == null || resultListView.Items.Count == 0)
 		{
 			return;
 		}
 		if (_isVirtualSongListActive && resultListView.VirtualMode)
 		{
+			ResetVirtualItemCache();
 			resultListView.Invalidate();
 			return;
 		}
@@ -7785,6 +7864,7 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 		{
 			try
 			{
+				bool hideSequence = _hideSequenceNumbers || IsAlwaysSequenceHiddenView();
 				for (int i = 0; i < resultListView.Items.Count; i++)
 				{
 					ListViewItem listViewItem = resultListView.Items[i];
@@ -7794,9 +7874,10 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 						string a = ((listViewItem.SubItems.Count > 1) ? listViewItem.SubItems[1].Text : listViewItem.Text);
 						bool flag = (listViewItem.Tag is int num && num == -2) || string.Equals(a, "上一页", StringComparison.Ordinal);
 						bool flag2 = (listViewItem.Tag is int num2 && num2 == -3) || string.Equals(a, "下一页", StringComparison.Ordinal);
-						if (_hideSequenceNumbers)
+						bool flag3 = (listViewItem.Tag is int num3 && num3 == -4) || string.Equals(a, "跳转", StringComparison.Ordinal);
+						if (hideSequence)
 						{
-							listViewItem.SubItems[1].Text = (flag ? "上一页" : (flag2 ? "下一页" : string.Empty));
+							listViewItem.SubItems[1].Text = (flag ? "上一页" : (flag2 ? "下一页" : (flag3 ? "跳转" : string.Empty)));
 						}
 						else if (flag)
 						{
@@ -7806,16 +7887,20 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 						{
 							listViewItem.SubItems[1].Text = "下一页";
 						}
+						else if (flag3)
+						{
+							listViewItem.SubItems[1].Text = "跳转";
+						}
 						else
 						{
-							listViewItem.SubItems[1].Text = (i + 1).ToString();
+							listViewItem.SubItems[1].Text = FormatIndex(i + 1);
 						}
 					}
 				}
 			}
 			finally
 			{
-				resultListView.EndUpdate();
+				EndListViewUpdateAndRefreshAccessibility();
 			}
 		}
 	}
@@ -7893,6 +7978,19 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 					};
 					resultListView.Items.Add(value2);
 				}
+				ListViewItem value3 = new ListViewItem(new string[6]
+				{
+					string.Empty,
+					"跳转",
+					string.Empty,
+					string.Empty,
+					string.Empty,
+					string.Empty
+				})
+				{
+					Tag = -4
+				};
+				resultListView.Items.Add(value3);
 			}
 			EndListViewUpdateAndRefreshAccessibility();
 			if (allowSelection && resultListView.Items.Count > 0)
@@ -8128,6 +8226,16 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 					}));
 					listViewItem3.Tag = -3;
 				}
+				ListViewItem listViewItem4 = resultListView.Items.Add(new ListViewItem(new string[6]
+				{
+					string.Empty,
+					"跳转",
+					string.Empty,
+					string.Empty,
+					string.Empty,
+					string.Empty
+				}));
+				listViewItem4.Tag = -4;
 			}
 			EndListViewUpdateAndRefreshAccessibility();
 			string text2 = accessibleName;
@@ -8258,6 +8366,19 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 					};
 					resultListView.Items.Add(value3);
 				}
+				ListViewItem value4 = new ListViewItem(new string[6]
+				{
+					string.Empty,
+					"跳转",
+					string.Empty,
+					string.Empty,
+					string.Empty,
+					string.Empty
+				})
+				{
+					Tag = -4
+				};
+				resultListView.Items.Add(value4);
 			}
 			EndListViewUpdateAndRefreshAccessibility();
 			if (allowSelection && resultListView.Items.Count > 0)
@@ -8520,6 +8641,19 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 					};
 					resultListView.Items.Add(value2);
 				}
+				ListViewItem value3 = new ListViewItem(new string[6]
+				{
+					string.Empty,
+					"跳转",
+					string.Empty,
+					string.Empty,
+					string.Empty,
+					string.Empty
+				})
+				{
+					Tag = -4
+				};
+				resultListView.Items.Add(value3);
 			}
 			EndListViewUpdateAndRefreshAccessibility();
 			if (resultListView.Items.Count > 0)
@@ -8933,12 +9067,12 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 		}
 	}
 
-	private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo listItem, int displayIndex, bool preserveDisplayIndex = false)
-	{
-		string text = listItem.Name ?? "未知";
-		string text2 = listItem.Creator ?? "";
-		string text3 = listItem.ExtraInfo ?? "";
-		string text4 = listItem.Description ?? string.Empty;
+private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo listItem, int displayIndex, bool preserveDisplayIndex = false)
+{
+	string text = listItem.Name ?? "未知";
+	string text2 = listItem.Creator ?? "";
+	string text3 = listItem.ExtraInfo ?? "";
+	string text4 = listItem.Description ?? string.Empty;
 		if (listItem.Type == ListItemType.Song)
 		{
 			SongInfo song = listItem.Song;
@@ -8946,21 +9080,22 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 			{
 				text += "  [VIP]";
 			}
-		}
-		bool flag = string.Equals(_currentViewSource, "homepage", StringComparison.OrdinalIgnoreCase);
-		EnsureSubItemCount(item, 6);
-		if (!flag && (!preserveDisplayIndex || string.IsNullOrWhiteSpace(item.SubItems[1].Text)))
-		{
-			item.SubItems[1].Text = displayIndex.ToString();
-		}
-		else if (flag)
-		{
-			item.SubItems[1].Text = string.Empty;
-		}
-		item.SubItems[2].Text = text;
-		item.SubItems[3].Text = text2;
-		item.SubItems[4].Text = text3;
-		item.SubItems[5].Text = text4;
+	}
+	bool flag = string.Equals(_currentViewSource, "homepage", StringComparison.OrdinalIgnoreCase);
+	EnsureSubItemCount(item, 6);
+	string indexText = FormatIndex(displayIndex);
+	if (flag || string.IsNullOrWhiteSpace(indexText))
+	{
+		item.SubItems[1].Text = string.Empty;
+	}
+	else if (!preserveDisplayIndex || string.IsNullOrWhiteSpace(item.SubItems[1].Text))
+	{
+		item.SubItems[1].Text = indexText;
+	}
+	item.SubItems[2].Text = text;
+	item.SubItems[3].Text = text2;
+	item.SubItems[4].Text = text3;
+	item.SubItems[5].Text = text4;
 		item.Tag = listItem;
 		UpdateListViewItemAccessibilityProperties(item, IsNvdaRunningCached());
 	}
@@ -9861,6 +9996,16 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 					}));
 					listViewItem3.Tag = -3;
 				}
+				ListViewItem listViewItem4 = resultListView.Items.Add(new ListViewItem(new string[6]
+				{
+					string.Empty,
+					"跳转",
+					string.Empty,
+					string.Empty,
+					string.Empty,
+					string.Empty
+				}));
+				listViewItem4.Tag = -4;
 			}
 			EndListViewUpdateAndRefreshAccessibility();
 			string text = accessibleName;
@@ -9961,6 +10106,19 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 					};
 					resultListView.Items.Add(value3);
 				}
+				ListViewItem value4 = new ListViewItem(new string[6]
+				{
+					string.Empty,
+					"跳转",
+					string.Empty,
+					string.Empty,
+					string.Empty,
+					string.Empty
+				})
+				{
+					Tag = -4
+				};
+				resultListView.Items.Add(value4);
 			}
 			EndListViewUpdateAndRefreshAccessibility();
 			if (allowSelection && resultListView.Items.Count > 0)
@@ -10076,6 +10234,16 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 				}));
 				listViewItem2.Tag = -3;
 			}
+			ListViewItem listViewItem3 = resultListView.Items.Add(new ListViewItem(new string[6]
+			{
+				string.Empty,
+				"跳转",
+				string.Empty,
+				string.Empty,
+				string.Empty,
+				string.Empty
+			}));
+			listViewItem3.Tag = -4;
 		}
 		EndListViewUpdateAndRefreshAccessibility();
                         string accessibleName2 = accessibleName ?? "播客列表";
@@ -10117,7 +10285,7 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 					text = (string.IsNullOrWhiteSpace(text) ? podcastRadioInfo.Category : (text + " / " + podcastRadioInfo.Category));
 				}
 				string text2 = ((podcastRadioInfo != null && podcastRadioInfo.ProgramCount > 0) ? $"{podcastRadioInfo.ProgramCount} 个节目" : string.Empty);
-				listViewItem.SubItems[1].Text = (startIndex + i).ToString();
+				listViewItem.SubItems[1].Text = FormatIndex(startIndex + i);
 				listViewItem.SubItems[2].Text = podcastRadioInfo?.Name ?? "未知";
 				listViewItem.SubItems[3].Text = text;
 				listViewItem.SubItems[4].Text = text2;
@@ -10189,6 +10357,19 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 					};
 					resultListView.Items.Add(value3);
 				}
+				ListViewItem value4 = new ListViewItem(new string[6]
+				{
+					string.Empty,
+					"跳转",
+					string.Empty,
+					string.Empty,
+					string.Empty,
+					string.Empty
+				})
+				{
+					Tag = -4
+				};
+				resultListView.Items.Add(value4);
 			}
 			EndListViewUpdateAndRefreshAccessibility();
 			if (allowSelection && resultListView.Items.Count > 0)
@@ -10299,6 +10480,16 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 					}));
 					listViewItem2.Tag = -3;
 				}
+				ListViewItem listViewItem3 = resultListView.Items.Add(new ListViewItem(new string[6]
+				{
+					string.Empty,
+					"跳转",
+					string.Empty,
+					string.Empty,
+					string.Empty,
+					string.Empty
+				}));
+				listViewItem3.Tag = -4;
 			}
                 EndListViewUpdateAndRefreshAccessibility();
                 ApplyListViewContext(viewSource, accessibleName, "播客节目", announceHeader: true);
@@ -10397,6 +10588,10 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
                 else if (data == -3)
                 {
                         await OnNextPageAsync();
+                }
+                else if (data == -4)
+                {
+                        await OnJumpPageAsync();
                 }
         else if (data >= 0 && data < _currentSongs.Count)
         {
@@ -10677,6 +10872,153 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 				UpdateStatusBar("当前内容不支持翻页");
 			}
 		}
+	}
+
+        private async Task OnJumpPageAsync()
+        {
+		if (string.IsNullOrWhiteSpace(_currentViewSource))
+		{
+			UpdateStatusBar("当前内容不支持跳转");
+			return;
+		}
+		string viewSource = _currentViewSource;
+		int currentPage = 1;
+		int maxPage = -1;
+		Func<int, Task> jumpAction = null;
+		if (viewSource.StartsWith("search:", StringComparison.OrdinalIgnoreCase))
+		{
+			currentPage = Math.Max(1, _currentPage);
+			maxPage = _maxPage;
+			jumpAction = async delegate(int page)
+			{
+				if (!await ReloadCurrentSearchPageAsync(page))
+				{
+					UpdateStatusBar("无法加载指定页");
+				}
+			};
+		}
+		else if (viewSource.StartsWith("artist_songs:", StringComparison.OrdinalIgnoreCase))
+		{
+			ParseArtistListViewSource(viewSource, out var artistId, out var offset, out var order);
+			currentPage = (offset / ArtistSongsPageSize) + 1;
+			maxPage = CalculateMaxPage(_currentArtistSongsTotalCount, ArtistSongsPageSize, currentPage);
+			jumpAction = async delegate(int page)
+			{
+				int targetOffset = Math.Max(0, (page - 1) * ArtistSongsPageSize);
+				await LoadArtistSongsAsync(artistId, targetOffset, skipSave: true, orderOverride: ResolveArtistSongsOrder(order));
+			};
+		}
+		else if (viewSource.StartsWith("artist_albums:", StringComparison.OrdinalIgnoreCase))
+		{
+			ParseArtistListViewSource(viewSource, out var artistId2, out var offset2, out var order2, "latest");
+			if (_currentArtistAlbumsTotalCount <= 0)
+			{
+				await EnsureArtistAlbumsTotalCountAsync(artistId2);
+			}
+			currentPage = (offset2 / ArtistAlbumsPageSize) + 1;
+			maxPage = CalculateMaxPage(_currentArtistAlbumsTotalCount, ArtistAlbumsPageSize, currentPage);
+			jumpAction = async delegate(int page)
+			{
+				int targetOffset = Math.Max(0, (page - 1) * ArtistAlbumsPageSize);
+				await LoadArtistAlbumsAsync(artistId2, targetOffset, skipSave: true, sortOverride: ResolveArtistAlbumSort(order2));
+			};
+		}
+		else if (viewSource.StartsWith("artist_category_list:", StringComparison.OrdinalIgnoreCase))
+		{
+			ParseArtistCategoryListViewSource(viewSource, out var typeCode, out var areaCode, out var offset3);
+			currentPage = (offset3 / ArtistSongsPageSize) + 1;
+			maxPage = CalculateMaxPage(_currentArtistCategoryTotalCount, ArtistSongsPageSize, currentPage);
+			jumpAction = async delegate(int page)
+			{
+				int targetOffset = Math.Max(0, (page - 1) * ArtistSongsPageSize);
+				await LoadArtistsByCategoryAsync(typeCode, areaCode, targetOffset, skipSave: true);
+			};
+		}
+		else if (viewSource.StartsWith("podcast:", StringComparison.OrdinalIgnoreCase))
+		{
+			ParsePodcastViewSource(viewSource, out var podcastId, out var offset4, out var ascending);
+			if (podcastId <= 0)
+			{
+				UpdateStatusBar("无法定位播客页码");
+				return;
+			}
+			currentPage = (offset4 / PodcastSoundPageSize) + 1;
+			maxPage = CalculateMaxPage(_currentPodcastEpisodeTotalCount, PodcastSoundPageSize, currentPage);
+			jumpAction = async delegate(int page)
+			{
+				int targetOffset = Math.Max(0, (page - 1) * PodcastSoundPageSize);
+				await LoadPodcastEpisodesAsync(podcastId, targetOffset, skipSave: true, podcastInfo: null, sortAscendingOverride: ascending);
+			};
+		}
+		else if (viewSource.StartsWith("podcast_cat_", StringComparison.OrdinalIgnoreCase))
+		{
+			ParsePodcastCategoryViewSource(viewSource, out var categoryId, out var offset5);
+			currentPage = (offset5 / PodcastCategoryPageSize) + 1;
+			maxPage = CalculateMaxPage(_currentPodcastCategoryTotalCount, PodcastCategoryPageSize, currentPage);
+			jumpAction = async delegate(int page)
+			{
+				int targetOffset = Math.Max(0, (page - 1) * PodcastCategoryPageSize);
+				await LoadPodcastsByCategoryAsync(categoryId, targetOffset, skipSave: true);
+			};
+		}
+		else if (string.Equals(viewSource, "user_cloud", StringComparison.OrdinalIgnoreCase))
+		{
+			currentPage = Math.Max(1, _cloudPage);
+			maxPage = CalculateMaxPage(_cloudTotalCount, CloudPageSize, currentPage);
+			jumpAction = async delegate(int page)
+			{
+				_cloudPage = Math.Max(1, page);
+				await LoadCloudSongsAsync(skipSave: true);
+			};
+		}
+		else
+		{
+			UpdateStatusBar("当前内容不支持跳转");
+			return;
+		}
+		if (maxPage <= 0)
+		{
+			UpdateStatusBar("无法获取最大页数");
+			return;
+		}
+		if (maxPage <= 1)
+		{
+			UpdateStatusBar("只有一页，无法跳转");
+			return;
+		}
+		using PageJumpDialog dialog = new PageJumpDialog(currentPage, maxPage);
+		if (dialog.ShowDialog(this) != DialogResult.OK)
+		{
+			return;
+		}
+		int targetPage2 = dialog.TargetPage;
+		if (targetPage2 < 1 || targetPage2 > maxPage)
+		{
+			UpdateStatusBar("页码超出范围");
+			return;
+		}
+		if (targetPage2 == currentPage)
+		{
+			UpdateStatusBar("已在该页");
+			return;
+		}
+		if (jumpAction != null)
+		{
+			await jumpAction(targetPage2);
+		}
+	}
+
+	private static int CalculateMaxPage(int totalCount, int pageSize, int fallbackPage)
+	{
+		if (pageSize <= 0)
+		{
+			return Math.Max(1, fallbackPage);
+		}
+		if (totalCount <= 0)
+		{
+			return Math.Max(1, fallbackPage);
+		}
+		return Math.Max(1, (int)Math.Ceiling((double)totalCount / (double)pageSize));
 	}
 
 	private async Task<bool> ReloadCurrentSearchPageAsync(int targetPage)
@@ -13658,11 +14000,25 @@ private void UpdateHideControlBarMenuItemText()
         }
 }
 
+private void AnnounceFocusedListViewItemAfterSequenceToggle()
+{
+	if (resultListView == null || !resultListView.IsHandleCreated || !resultListView.ContainsFocus)
+	{
+		return;
+	}
+	int focusedIndex = GetFocusedListViewIndex();
+	if (focusedIndex >= 0)
+	{
+		QueueFocusedListViewItemRefreshAnnouncement(focusedIndex, interruptAnnouncement: false);
+	}
+}
+
 	private async Task ToggleSequenceNumberHiddenAsync()
 	{
 		_hideSequenceNumbers = !_hideSequenceNumbers;
 		UpdateHideSequenceMenuItemText();
 		RefreshSequenceDisplayInPlace();
+		AnnounceFocusedListViewItemAfterSequenceToggle();
 		string message = (_hideSequenceNumbers ? "已隐藏序号" : "已显示序号");
 		AnnounceUiMessage(message, interrupt: true);
 		UpdateStatusBar(message);
@@ -14811,10 +15167,54 @@ private void UpdateHideControlBarMenuItemText()
 		Debug.WriteLine($"[Navigation] 保存状态: {navigationHistoryItem.ViewName}, 类型={navigationHistoryItem.PageType}, 历史栈深度={_navigationHistory.Count}");
 	}
 
+	private void DebugLogListFocusState(string tag, string? viewSource = null, NavigationHistoryItem? state = null, int? resolvedIndex = null)
+	{
+		string source = viewSource ?? _currentViewSource ?? string.Empty;
+		if (!string.Equals(source, "user_liked_songs", StringComparison.OrdinalIgnoreCase))
+		{
+			return;
+		}
+		int selectedIndex = GetSelectedListViewIndex();
+		int focusedIndex = (resultListView != null && resultListView.FocusedItem != null) ? resultListView.FocusedItem.Index : -1;
+		int selectedDataIndex = -1;
+		if (resultListView != null && selectedIndex >= 0 && selectedIndex < resultListView.Items.Count && resultListView.Items[selectedIndex].Tag is int dataIndex)
+		{
+			selectedDataIndex = dataIndex;
+		}
+		string stateInfo = string.Empty;
+		if (state != null)
+		{
+			stateInfo = $", stateSel={state.SelectedIndex}, stateData={state.SelectedDataIndex}, stateView={state.ViewSource}, stateType={state.PageType}";
+		}
+		string resolvedInfo = resolvedIndex.HasValue ? $", resolved={resolvedIndex.Value}" : string.Empty;
+		Debug.WriteLine($"[NavDebug] {tag} view={source}, sel={selectedIndex}, focus={focusedIndex}, lastFocus={_lastListViewFocusedIndex}, dataIndex={selectedDataIndex}, items={resultListView?.Items.Count ?? -1}, pendingFocus={_pendingListFocusIndex}, pendingView={_pendingListFocusViewSource}{stateInfo}{resolvedInfo}");
+	}
+
 	private NavigationHistoryItem CreateCurrentState()
 	{
 		int selectedListViewIndex = GetSelectedListViewIndex();
-		ListViewItem selectedListViewItemSafe = GetSelectedListViewItemSafe();
+		if (resultListView != null && resultListView.FocusedItem != null)
+		{
+			int focusedIndex = resultListView.FocusedItem.Index;
+			if (focusedIndex >= 0)
+			{
+				selectedListViewIndex = focusedIndex;
+			}
+		}
+		ListViewItem selectedListViewItemSafe = null;
+		if (resultListView != null && selectedListViewIndex >= 0 && selectedListViewIndex < resultListView.Items.Count)
+		{
+			selectedListViewItemSafe = resultListView.Items[selectedListViewIndex];
+		}
+		else
+		{
+			selectedListViewItemSafe = GetSelectedListViewItemSafe();
+		}
+		if (selectedListViewIndex < 0 && resultListView != null && _lastListViewFocusedIndex >= 0 && _lastListViewFocusedIndex < resultListView.Items.Count)
+		{
+			selectedListViewIndex = _lastListViewFocusedIndex;
+			selectedListViewItemSafe = resultListView.Items[selectedListViewIndex];
+		}
 		NavigationHistoryItem navigationHistoryItem = new NavigationHistoryItem
 		{
 			ViewSource = _currentViewSource,
@@ -14826,6 +15226,7 @@ private void UpdateHideControlBarMenuItemText()
 		{
 			navigationHistoryItem.SelectedDataIndex = num;
 		}
+		DebugLogListFocusState("CreateCurrentState", _currentViewSource, navigationHistoryItem);
 		if (_isHomePage || string.Equals(_currentViewSource, "homepage", StringComparison.OrdinalIgnoreCase))
 		{
 			navigationHistoryItem.PageType = "homepage";
@@ -15115,7 +15516,67 @@ private void UpdateHideControlBarMenuItemText()
 					await LoadHomePageAsync(skipSave: true);
 					break;
 				case "category":
-					await LoadCategoryContent(state.CategoryId, skipSave: true);
+					int pendingCategoryIndex = (state.SelectedDataIndex >= 0) ? state.SelectedDataIndex : state.SelectedIndex;
+					if (string.Equals(state.CategoryId, "toplist", StringComparison.OrdinalIgnoreCase))
+					{
+						await LoadToplist(pendingCategoryIndex);
+					}
+					else if (string.Equals(state.CategoryId, "daily_recommend", StringComparison.OrdinalIgnoreCase))
+					{
+						await LoadDailyRecommend(pendingCategoryIndex);
+					}
+					else if (string.Equals(state.CategoryId, "personalized", StringComparison.OrdinalIgnoreCase))
+					{
+						await LoadPersonalized(pendingCategoryIndex);
+					}
+					else if (string.Equals(state.CategoryId, "daily_recommend_songs", StringComparison.OrdinalIgnoreCase))
+					{
+						await LoadDailyRecommendSongs(pendingCategoryIndex);
+					}
+					else if (string.Equals(state.CategoryId, "daily_recommend_playlists", StringComparison.OrdinalIgnoreCase))
+					{
+						await LoadDailyRecommendPlaylists(pendingCategoryIndex);
+					}
+					else if (string.Equals(state.CategoryId, "personalized_playlists", StringComparison.OrdinalIgnoreCase))
+					{
+						await LoadPersonalizedPlaylists(pendingCategoryIndex);
+					}
+					else if (string.Equals(state.CategoryId, "personalized_newsongs", StringComparison.OrdinalIgnoreCase))
+					{
+						await LoadPersonalizedNewSongs(pendingCategoryIndex);
+					}
+					else if (string.Equals(state.CategoryId, "personalized_newsong", StringComparison.OrdinalIgnoreCase))
+					{
+						await LoadPersonalizedNewSong(pendingCategoryIndex);
+					}
+					else if (string.Equals(state.CategoryId, "highquality_playlists", StringComparison.OrdinalIgnoreCase))
+					{
+						await LoadHighQualityPlaylists(pendingCategoryIndex);
+					}
+					else if (string.Equals(state.CategoryId, "recent_listened", StringComparison.OrdinalIgnoreCase))
+					{
+						await LoadRecentListenedCategoryAsync(skipSave: true, pendingFocusIndex: pendingCategoryIndex);
+					}
+					else if (string.Equals(state.CategoryId, "recent_play", StringComparison.OrdinalIgnoreCase))
+					{
+						await LoadRecentPlayedSongsAsync(pendingCategoryIndex);
+					}
+					else if (string.Equals(state.CategoryId, "recent_playlists", StringComparison.OrdinalIgnoreCase))
+					{
+						await LoadRecentPlaylistsAsync(pendingCategoryIndex);
+					}
+					else if (string.Equals(state.CategoryId, "recent_albums", StringComparison.OrdinalIgnoreCase))
+					{
+						await LoadRecentAlbumsAsync(pendingCategoryIndex);
+					}
+					else if (string.Equals(state.CategoryId, "recent_podcasts", StringComparison.OrdinalIgnoreCase))
+					{
+						await LoadRecentPodcastsAsync(pendingCategoryIndex);
+					}
+					else
+					{
+						await LoadCategoryContent(state.CategoryId, skipSave: true);
+					}
 					break;
 				case "playlist":
 					await LoadPlaylistById(state.PlaylistId, skipSave: true);
@@ -15182,7 +15643,8 @@ private void UpdateHideControlBarMenuItemText()
 					await LoadArtistCategoryAreasAsync(state.ArtistType, skipSave: true);
 					break;
 				case "artist_category_list":
-					await LoadArtistsByCategoryAsync(state.ArtistType, state.ArtistArea, state.ArtistOffset, skipSave: true);
+					await LoadArtistsByCategoryAsync(state.ArtistType, state.ArtistArea, state.ArtistOffset, skipSave: true, pendingFocusIndex: state.SelectedIndex);
+					handledByView = true;
 					break;
 				case "podcast":
 					if (state.PodcastRadioId <= 0)
@@ -15206,15 +15668,32 @@ private void UpdateHideControlBarMenuItemText()
 					UpdateStatusBar("返回到: " + state.ViewName);
 					return true;
 				}
+				DebugLogListFocusState("Restore: after load", _currentViewSource, state);
 				int resolvedIndex = -1;
 				if (state.SelectedIndex >= 0 && state.SelectedIndex < resultListView.Items.Count)
 				{
 					resolvedIndex = state.SelectedIndex;
 				}
+				else if (state.SelectedDataIndex >= 0 && resultListView.Items.Count > 0)
+				{
+					for (int i = 0; i < resultListView.Items.Count; i++)
+					{
+						if (resultListView.Items[i].Tag is int dataIndex && dataIndex == state.SelectedDataIndex)
+						{
+							resolvedIndex = i;
+							break;
+						}
+					}
+					if (resolvedIndex < 0 && state.SelectedDataIndex < resultListView.Items.Count)
+					{
+						resolvedIndex = state.SelectedDataIndex;
+					}
+				}
 				else if (resultListView.Items.Count > 0)
 				{
 					resolvedIndex = Math.Min(Math.Max(state.SelectedIndex, 0), resultListView.Items.Count - 1);
 				}
+				DebugLogListFocusState("Restore: resolved", _currentViewSource, state, resolvedIndex);
 				if (resolvedIndex >= 0 && resolvedIndex < resultListView.Items.Count)
 				{
 					resultListView.BeginUpdate();
@@ -15231,6 +15710,10 @@ private void UpdateHideControlBarMenuItemText()
 				{
 					resultListView.Focus();
 				}
+				DebugLogListFocusState("Restore: applied", _currentViewSource, state, resolvedIndex);
+				_pendingListFocusIndex = -1;
+				_pendingListFocusViewSource = null;
+				_pendingListFocusFromPlayback = false;
 				UpdateStatusBar("返回到: " + state.ViewName);
 				return true;
 			}
@@ -20960,35 +21443,45 @@ private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlay
 						resultListView.Items.Add(value);
 						num2++;
 					}
-					if (showPagination)
+			if (showPagination)
+			{
+				if (startIndex > 1)
+				{
+					ListViewItem listViewItem = resultListView.Items.Add(new ListViewItem(new string[6]
 					{
-						if (startIndex > 1)
-						{
-							ListViewItem listViewItem = resultListView.Items.Add(new ListViewItem(new string[6]
-							{
-								string.Empty,
-								"上一页",
-								string.Empty,
-								string.Empty,
-								string.Empty,
-								string.Empty
-							}));
-							listViewItem.Tag = -2;
-						}
-						if (hasNextPage)
-						{
-							ListViewItem listViewItem2 = resultListView.Items.Add(new ListViewItem(new string[6]
-							{
-								string.Empty,
-								"下一页",
-								string.Empty,
-								string.Empty,
-								string.Empty,
-								string.Empty
-							}));
-							listViewItem2.Tag = -3;
-						}
-					}
+						string.Empty,
+						"上一页",
+						string.Empty,
+						string.Empty,
+						string.Empty,
+						string.Empty
+					}));
+					listViewItem.Tag = -2;
+				}
+				if (hasNextPage)
+				{
+					ListViewItem listViewItem2 = resultListView.Items.Add(new ListViewItem(new string[6]
+					{
+						string.Empty,
+						"下一页",
+						string.Empty,
+						string.Empty,
+						string.Empty,
+						string.Empty
+					}));
+					listViewItem2.Tag = -3;
+				}
+				ListViewItem listViewItem3 = resultListView.Items.Add(new ListViewItem(new string[6]
+				{
+					string.Empty,
+					"跳转",
+					string.Empty,
+					string.Empty,
+					string.Empty,
+					string.Empty
+				}));
+				listViewItem3.Tag = -4;
+			}
 				}
 			}
 			finally
@@ -21142,23 +21635,36 @@ private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlay
 						};
 						resultListView.Items.Add(value2);
 					}
-					if (hasNextPage)
+				if (hasNextPage)
+				{
+					ListViewItem value3 = new ListViewItem(new string[6]
 					{
-						ListViewItem value3 = new ListViewItem(new string[6]
-						{
-							string.Empty,
-							"下一页",
-							string.Empty,
-							string.Empty,
-							string.Empty,
-							string.Empty
-						})
-						{
-							Tag = -3
-						};
-						resultListView.Items.Add(value3);
-					}
+						string.Empty,
+						"下一页",
+						string.Empty,
+						string.Empty,
+						string.Empty,
+						string.Empty
+					})
+					{
+						Tag = -3
+					};
+					resultListView.Items.Add(value3);
 				}
+				ListViewItem value4 = new ListViewItem(new string[6]
+				{
+					string.Empty,
+					"跳转",
+					string.Empty,
+					string.Empty,
+					string.Empty,
+					string.Empty
+				})
+				{
+					Tag = -4
+				};
+				resultListView.Items.Add(value4);
+			}
 			}
 			finally
 			{
@@ -21404,6 +21910,7 @@ private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlay
 					ArtistSongsViewData data = loadResult.Value ?? new ArtistSongsViewData(new List<SongInfo>(), hasMore: false, offset, 0, artistName + " 暂无歌曲");
 					_currentArtistSongsOffset = data.Offset;
 					_currentArtistSongsHasMore = data.HasMore;
+					_currentArtistSongsTotalCount = Math.Max(data.TotalCount, data.Offset + (data.Songs?.Count ?? 0));
 					DisplaySongs(data.Songs, showPagination: true, data.HasMore, data.Offset + 1, preserveSelection: false, viewSource, accessibleName, skipAvailabilityCheck: false, announceHeader: true, suppressFocus: true);
 					UpdateArtistSongsSortMenuChecks();
 					FocusListAfterEnrich(0);
@@ -21471,7 +21978,7 @@ private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlay
 					ArtistAlbumsViewData data = loadResult.Value ?? new ArtistAlbumsViewData(new List<AlbumInfo>(), hasMore: false, offset, 0, sortOption, artistName + " 暂无专辑");
 					_currentArtistAlbumsOffset = data.Offset;
 					_currentArtistAlbumsHasMore = data.HasMore;
-					_currentArtistAlbumsTotalCount = data.TotalCount;
+					_currentArtistAlbumsTotalCount = Math.Max(data.TotalCount, data.Offset + (data.Albums?.Count ?? 0));
 					DisplayAlbums(data.Albums, preserveSelection: false, viewSource, accessibleName, data.Offset + 1, showPagination: true, data.HasMore, announceHeader: true, suppressFocus: true);
 					UpdateArtistAlbumsSortMenuChecks();
 					FocusListAfterEnrich(0);
@@ -21586,52 +22093,113 @@ private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlay
 		}
 	}
 
-	private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int offset = 0, bool skipSave = false)
+private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int offset = 0, bool skipSave = false, int pendingFocusIndex = -1)
+{
+	try
 	{
-		try
-		{
+		const int pageSize = 100;
 			if (!skipSave)
 			{
 				SaveNavigationState();
 			}
 			_currentArtistTypeFilter = typeCode;
 			_currentArtistAreaFilter = areaCode;
-			string placeholderSource = $"artist_category_list:{typeCode}:{areaCode}";
-			string viewSource = $"{placeholderSource}:offset{offset}";
-			ViewLoadRequest request = new ViewLoadRequest(placeholderSource, "歌手分类列表", "正在加载歌手列表...", !skipSave);
-			ViewLoadResult<SearchResult<ArtistInfo>?> loadResult = await RunViewLoadAsync(request, async delegate(CancellationToken token)
+			string viewSource = $"artist_category_list:{typeCode}:{areaCode}:offset{offset}";
+			int page = (offset / pageSize) + 1;
+		int requestFocusIndex = (pendingFocusIndex >= 0) ? pendingFocusIndex : 0;
+		ViewLoadRequest request = new ViewLoadRequest(viewSource, "歌手分类列表", "正在加载歌手列表...", !skipSave, requestFocusIndex);
+		ViewLoadResult<SearchViewData<ArtistInfo>> loadResult = await RunViewLoadAsync(request, delegate
+		{
+			using (WorkScopes.BeginSkeleton("ArtistCategory", viewSource))
 			{
-				SearchResult<ArtistInfo> result2 = await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.GetArtistsByCategoryAsync(typeCode, areaCode, 100, offset), $"artist_category:{typeCode}:{areaCode}:offset{offset}", token, delegate(int attempt, Exception _)
-				{
-					SafeInvoke(delegate
-					{
-						UpdateStatusBar($"加载歌手分类失败，正在重试（第 {attempt} 次）...");
-					});
-				}).ConfigureAwait(continueOnCapturedContext: true);
-				token.ThrowIfCancellationRequested();
-				return result2;
-			}, "加载歌手分类已取消").ConfigureAwait(continueOnCapturedContext: true);
-			if (!loadResult.IsCanceled)
-			{
-				SearchResult<ArtistInfo> result = loadResult.Value;
-				if (result == null)
-				{
-					UpdateStatusBar("加载歌手分类失败");
-					return;
-				}
-				_currentArtistCategoryHasMore = result.HasMore;
-				List<ArtistInfo> artists = result.Items ?? new List<ArtistInfo>();
-				DisplayArtists(artists, result.HasMore, result.HasMore, checked(result.Offset + 1), preserveSelection: false, viewSource, request.AccessibleName);
-				UpdateStatusBar($"歌手分类列表：{artists.Count} 位");
+				return Task.FromResult(BuildSearchSkeletonViewData("歌手分类", "歌手", page, offset + 1, _currentArtists));
 			}
+		}, "加载歌手分类已取消").ConfigureAwait(continueOnCapturedContext: true);
+		if (!loadResult.IsCanceled)
+		{
+			SearchViewData<ArtistInfo> skeleton = loadResult.Value;
+			DisplayArtists(skeleton.Items, showPagination: false, hasNextPage: false, skeleton.StartIndex, preserveSelection: false, viewSource, request.AccessibleName);
+			UpdateStatusBar(request.LoadingText);
+			EnrichArtistCategoryResultsAsync(typeCode, areaCode, offset, viewSource, request.AccessibleName, pendingFocusIndex);
 		}
-		catch (Exception ex)
+	}
+	catch (Exception ex)
 		{
 			Exception ex2 = ex;
 			Exception ex3 = ex2;
 			Debug.WriteLine($"[Artist] 加载分类歌手失败: {ex3}");
 			MessageBox.Show("加载歌手分类失败：" + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 			UpdateStatusBar("加载歌手分类失败");
+		}
+	}
+
+	private async Task EnrichArtistCategoryResultsAsync(int typeCode, int areaCode, int offset, string viewSource, string accessibleName, int pendingFocusIndex = -1)
+	{
+		const int pageSize = 100;
+		CancellationToken viewToken = GetCurrentViewContentToken();
+		using (WorkScopes.BeginEnrichment("ArtistCategory", viewSource))
+		{
+			try
+			{
+				SearchResult<ArtistInfo> result = await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.GetArtistsByCategoryAsync(typeCode, areaCode, pageSize, offset), $"artist_category:{typeCode}:{areaCode}:offset{offset}", viewToken, delegate(int attempt, Exception _)
+				{
+					SafeInvoke(delegate
+					{
+						UpdateStatusBar($"加载歌手分类失败，正在重试（第 {attempt} 次）...");
+					});
+				}).ConfigureAwait(continueOnCapturedContext: true);
+				List<ArtistInfo> artists = result?.Items ?? new List<ArtistInfo>();
+				int totalCount = result?.TotalCount ?? artists.Count;
+				bool hasMore = result?.HasMore ?? false;
+				int page = (offset / pageSize) + 1;
+				int maxPage = (totalCount > 0) ? Math.Max(1, (int)Math.Ceiling((double)totalCount / pageSize)) : page;
+				if (viewToken.IsCancellationRequested)
+				{
+					return;
+				}
+				await ExecuteOnUiThreadAsync(delegate
+				{
+					if (!ShouldAbortViewRender(viewToken, "加载歌手分类"))
+					{
+						_currentArtists = CloneList(artists);
+						_currentArtistCategoryHasMore = hasMore;
+						_currentArtistCategoryTotalCount = Math.Max(totalCount, offset + _currentArtists.Count);
+						bool showPagination = offset > 0 || hasMore;
+						PatchArtists(_currentArtists, offset + 1, showPagination: showPagination, hasPreviousPage: offset > 0, hasNextPage: hasMore, pendingFocusIndex);
+						FocusListAfterEnrich(pendingFocusIndex);
+						if (_currentArtists.Count == 0)
+						{
+							UpdateStatusBar("暂无歌手");
+						}
+						else if (totalCount > 0)
+						{
+							UpdateStatusBar($"第 {page}/{maxPage} 页，本页 {_currentArtists.Count} 位 / 总 {totalCount} 位");
+						}
+						else
+						{
+							UpdateStatusBar($"第 {page} 页，本页 {_currentArtists.Count} 位{(hasMore ? "，还有更多" : string.Empty)}");
+						}
+					}
+				}).ConfigureAwait(continueOnCapturedContext: false);
+				await EnsureLibraryStateFreshAsync(LibraryEntityType.Artists);
+			}
+			catch (Exception ex)
+			{
+				Exception ex2 = ex;
+				if (TryHandleOperationCancelled(ex2, "加载歌手分类已取消"))
+				{
+					return;
+				}
+				Debug.WriteLine($"[Artist] 加载分类歌手失败: {ex2}");
+				await ExecuteOnUiThreadAsync(delegate
+				{
+					if (!ShouldAbortViewRender(viewToken, "加载歌手分类"))
+					{
+						MessageBox.Show("加载歌手分类失败：" + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+						UpdateStatusBar("加载歌手分类失败");
+					}
+				}).ConfigureAwait(continueOnCapturedContext: false);
+			}
 		}
 	}
 
