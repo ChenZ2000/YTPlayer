@@ -19,7 +19,7 @@ namespace YTPlayer.Utils
         private const int BoyCheckIntervalMs = 1000;
         private const string BoyCtrlDllName = "BoyCtrl.dll";
 
-        public static Func<string, bool>? NarratorFallbackSpeaker { get; set; }
+        public static Func<string, bool, bool>? NarratorFallbackSpeaker { get; set; }
 
         [DllImport("BoyCtrl.dll", CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode)]
         private static extern int BoyCtrlInitialize(string? reserved);
@@ -45,7 +45,7 @@ namespace YTPlayer.Utils
 
                     if (IsBoyPcReaderRunningCached())
                     {
-                        if (TryBoyCtrl(text, interrupt))
+                        if (TryBoyCtrl(text, interrupt, asyncMode: false))
                         {
                             _ttsInitialized = true;
                             return true;
@@ -58,7 +58,7 @@ namespace YTPlayer.Utils
                         return false;
                     }
 
-                    bool result = NarratorFallbackSpeaker(text);
+                    bool result = NarratorFallbackSpeaker(text, interrupt);
                     _ttsInitialized = result;
                     return result;
                 }
@@ -96,6 +96,44 @@ namespace YTPlayer.Utils
         }
 
         /// <summary>
+        /// Speak with high priority (BoyCtrl async+purge when available).
+        /// </summary>
+        public static bool SpeakPriorityText(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return false;
+            }
+
+            lock (_lock)
+            {
+                try
+                {
+                    if (TryBoyCtrl(text, interrupt: true, asyncMode: true))
+                    {
+                        _ttsInitialized = true;
+                        return true;
+                    }
+
+                    if (NarratorFallbackSpeaker == null)
+                    {
+                        _ttsInitialized = false;
+                        return false;
+                    }
+
+                    bool result = NarratorFallbackSpeaker(text, true);
+                    _ttsInitialized = result;
+                    return result;
+                }
+                catch
+                {
+                    _ttsInitialized = false;
+                    return false;
+                }
+            }
+        }
+
+        /// <summary>
         /// Reset TTS state.
         /// </summary>
         public static void Reset()
@@ -122,7 +160,7 @@ namespace YTPlayer.Utils
             }
         }
 
-        private static bool TryBoyCtrl(string text, bool interrupt)
+        private static bool TryBoyCtrl(string text, bool interrupt, bool asyncMode)
         {
             try
             {
@@ -138,13 +176,18 @@ namespace YTPlayer.Utils
                     return false;
                 }
 
-                int speakResult = BoyCtrlSpeak(text, async: false, purge: interrupt, spell: true, IntPtr.Zero);
+                int speakResult = BoyCtrlSpeak(text, async: asyncMode, purge: interrupt, spell: true, IntPtr.Zero);
                 return speakResult == 0;
             }
             catch
             {
                 return false;
             }
+        }
+
+        public static bool IsBoyPcReaderActive()
+        {
+            return IsBoyPcReaderRunningCached();
         }
 
         private static bool IsBoyPcReaderRunningCached()
@@ -163,12 +206,27 @@ namespace YTPlayer.Utils
         {
             try
             {
-                return Process.GetProcessesByName("BoyPCReader").Length > 0;
+                foreach (Process process in Process.GetProcesses())
+                {
+                    string name = process.ProcessName ?? string.Empty;
+                    if (name.Length == 0)
+                    {
+                        continue;
+                    }
+                    if (name.Equals("BoyPCReader", StringComparison.OrdinalIgnoreCase)
+                        || name.Equals("BoyPcReader", StringComparison.OrdinalIgnoreCase)
+                        || name.StartsWith("BoyPCReader", StringComparison.OrdinalIgnoreCase)
+                        || name.StartsWith("BoyPcReader", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
             }
             catch
             {
                 return false;
             }
+            return false;
         }
 
         private static string ResolveDllPath(string dllName)

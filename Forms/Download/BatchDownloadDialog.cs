@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Windows.Forms;
+using MessageBox = YTPlayer.MessageBox;
 
 namespace YTPlayer.Forms.Download
 {

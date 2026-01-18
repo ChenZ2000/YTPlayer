@@ -6,6 +6,7 @@ using System.Linq;
 using System.Text;
 using System.Windows.Forms;
 using YTPlayer.Models;
+using YTPlayer.Utils;
 
 namespace YTPlayer.Forms
 {
@@ -342,7 +343,7 @@ namespace YTPlayer.Forms
             {
                 Text = value,
                 Font = _statValueFont,
-                ForeColor = Color.FromArgb(220, 74, 59),
+                ForeColor = ThemeManager.Current.TextPrimary,
                 Dock = DockStyle.Top,
                 AutoSize = true,
                 Margin = new Padding(0),

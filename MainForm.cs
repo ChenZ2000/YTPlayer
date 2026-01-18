@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -696,6 +697,12 @@ public partial class MainForm : Form
 
         private CancellationTokenSource? _listViewFocusSpeechCts;
 
+        private string? _pendingListHeaderPrefix;
+
+        private string? _pendingListHeaderViewSource;
+
+        private CancellationTokenSource? _listViewHeaderFocusCts;
+
         private const int ListViewFocusSpeakDelayMs = 120;
 
         private const int ListViewRepeatCooldownMs = 200;
@@ -705,6 +712,18 @@ public partial class MainForm : Form
 	private bool _isNarratorRunningCached = false;
 
 	private const int NarratorCheckIntervalMs = 1000;
+
+        private DateTime _lastNvdaCheckAt = DateTime.MinValue;
+
+        private bool _isNvdaRunningCached = false;
+
+        private const int NvdaCheckIntervalMs = 1000;
+
+        private DateTime _lastZdsrCheckAt = DateTime.MinValue;
+
+        private bool _isZdsrRunningCached = false;
+
+        private const int ZdsrCheckIntervalMs = 1000;
 
 	private const int ListViewSpeechColumnIndex = 0;
 
@@ -751,6 +770,10 @@ public partial class MainForm : Form
 	private string _currentViewSource = "";
 
         private const string MixedSearchTypeDisplayName = "混合";
+
+        private const int DefaultControlCornerRadius = 10;
+
+        private readonly Dictionary<Control, int> _roundedControls = new Dictionary<Control, int>();
 
         private bool _isMixedSearchTypeActive = false;
 
@@ -1124,6 +1147,16 @@ public partial class MainForm : Form
 	private ToolStripMenuItem hideSequenceMenuItem;
 
 	private ToolStripMenuItem hideControlBarMenuItem;
+
+	private ToolStripMenuItem themeMenuItem;
+
+	private ToolStripMenuItem themeGrassFreshMenuItem;
+
+	private ToolStripMenuItem themeGrassSoftMenuItem;
+
+	private ToolStripMenuItem themeGrassWarmMenuItem;
+
+	private ToolStripMenuItem themeGrassMutedMenuItem;
 
 	private ToolStripMenuItem helpMenuItem;
 
@@ -1608,6 +1641,11 @@ public partial class MainForm : Form
         public MainForm()
         {
                 InitializeComponent();
+                ApplySearchPanelStyle();
+                ApplyResultListViewStyle();
+                ApplyControlPanelStyle();
+                UpdateThemeMenuChecks();
+                ThemeManager.ApplyTheme(trayContextMenu);
                 InitializeAccessibilityAnnouncementLabel();
                 TtsHelper.NarratorFallbackSpeaker = SpeakNarratorAnnouncement;
                 UpdateStatusStripAccessibility(toolStripStatusLabel1?.Text);
@@ -1637,6 +1675,182 @@ public partial class MainForm : Form
         protected override AccessibleObject CreateAccessibilityInstance()
         {
                 return new MainFormAccessibleObject(this);
+        }
+
+        private void ApplySearchPanelStyle()
+        {
+                if (searchPanel == null)
+                {
+                        return;
+                }
+
+                ThemePalette palette = ThemeManager.Current;
+                Color surface = palette.SurfaceBackground;
+                Color textPrimary = palette.TextPrimary;
+                Color border = palette.Border;
+                Color hover = palette.Highlight;
+                Color pressed = palette.Focus;
+
+                searchPanel.BackColor = surface;
+
+                if (searchLabel != null)
+                {
+                        searchLabel.ForeColor = textPrimary;
+                }
+
+                if (searchTypeLabel != null)
+                {
+                        searchTypeLabel.ForeColor = textPrimary;
+                }
+
+                if (searchTextBox != null)
+                {
+                        searchTextBox.BackColor = surface;
+                        searchTextBox.ForeColor = textPrimary;
+                        searchTextBox.BorderStyle = BorderStyle.FixedSingle;
+                        RegisterRoundedControl(searchTextBox, DefaultControlCornerRadius);
+                }
+
+                if (searchTypeComboBox != null)
+                {
+                        searchTypeComboBox.BackColor = surface;
+                        searchTypeComboBox.ForeColor = textPrimary;
+                        searchTypeComboBox.FlatStyle = FlatStyle.Flat;
+                        RegisterRoundedControl(searchTypeComboBox, DefaultControlCornerRadius);
+                }
+
+                if (searchButton != null)
+                {
+                        searchButton.BackColor = surface;
+                        searchButton.ForeColor = textPrimary;
+                        searchButton.FlatStyle = FlatStyle.Flat;
+                        searchButton.FlatAppearance.BorderSize = 1;
+                        searchButton.FlatAppearance.BorderColor = border;
+                        searchButton.FlatAppearance.MouseOverBackColor = hover;
+                        searchButton.FlatAppearance.MouseDownBackColor = pressed;
+                        RegisterRoundedControl(searchButton, DefaultControlCornerRadius);
+                }
+
+                if (backButton != null)
+                {
+                        backButton.BackColor = surface;
+                        backButton.ForeColor = textPrimary;
+                        backButton.FlatStyle = FlatStyle.Flat;
+                        backButton.FlatAppearance.BorderSize = 1;
+                        backButton.FlatAppearance.BorderColor = border;
+                        backButton.FlatAppearance.MouseOverBackColor = hover;
+                        backButton.FlatAppearance.MouseDownBackColor = pressed;
+                        backButton.TextAlign = ContentAlignment.MiddleCenter;
+                        backButton.AccessibleName = "返回";
+                        backButton.AccessibleDescription = "返回到上一层";
+                        RegisterCircularControl(backButton);
+                }
+        }
+
+        private void ApplyControlPanelStyle()
+        {
+                if (controlPanel != null)
+                {
+                        controlPanel.BackColor = ThemeManager.Current.SurfaceBackground;
+                }
+
+                RegisterRoundedControl(playPauseButton, DefaultControlCornerRadius);
+                RegisterRoundedControl(progressTrackBar, DefaultControlCornerRadius);
+                RegisterRoundedControl(volumeTrackBar, DefaultControlCornerRadius);
+                RegisterRoundedControl(lyricsLabel, DefaultControlCornerRadius);
+        }
+
+        private void ApplyResultListViewStyle()
+        {
+                if (resultListView == null)
+                {
+                        return;
+                }
+
+                ThemePalette palette = ThemeManager.Current;
+                resultListView.BackColor = palette.SurfaceBackground;
+                resultListView.ForeColor = palette.TextPrimary;
+                resultListView.BorderStyle = BorderStyle.FixedSingle;
+                RegisterRoundedControl(resultListView, DefaultControlCornerRadius);
+        }
+
+        private void RegisterRoundedControl(Control control, int radius)
+        {
+                if (control == null)
+                {
+                        return;
+                }
+
+                _roundedControls[control] = radius;
+                control.SizeChanged -= RoundedControl_SizeChanged;
+                control.SizeChanged += RoundedControl_SizeChanged;
+                ApplyRoundedRegion(control, radius);
+        }
+
+        private void RoundedControl_SizeChanged(object? sender, EventArgs e)
+        {
+                if (sender is Control control && _roundedControls.TryGetValue(control, out int radius))
+                {
+                        ApplyRoundedRegion(control, radius);
+                }
+        }
+
+        private void RegisterCircularControl(Control control)
+        {
+                if (control == null)
+                {
+                        return;
+                }
+
+                control.SizeChanged -= CircularControl_SizeChanged;
+                control.SizeChanged += CircularControl_SizeChanged;
+                CircularControl_SizeChanged(control, EventArgs.Empty);
+        }
+
+        private void CircularControl_SizeChanged(object? sender, EventArgs e)
+        {
+                if (sender is Control control)
+                {
+                        int radius = Math.Min(control.Width, control.Height) / 2;
+                        ApplyRoundedRegion(control, radius);
+                }
+        }
+
+        private static void ApplyRoundedRegion(Control control, int radius)
+        {
+                if (control == null || control.Width <= 0 || control.Height <= 0)
+                {
+                        return;
+                }
+
+                int safeRadius = Math.Max(0, Math.Min(radius, Math.Min(control.Width, control.Height) / 2));
+                Rectangle bounds = new Rectangle(0, 0, control.Width, control.Height);
+                using (GraphicsPath path = BuildRoundedRectanglePath(bounds, safeRadius))
+                {
+                        control.Region = new Region(path);
+                }
+        }
+
+        private static GraphicsPath BuildRoundedRectanglePath(Rectangle bounds, int radius)
+        {
+                GraphicsPath path = new GraphicsPath();
+                if (radius <= 0)
+                {
+                        path.AddRectangle(bounds);
+                        return path;
+                }
+
+                int diameter = radius * 2;
+                Rectangle arc = new Rectangle(bounds.Location, new Size(diameter, diameter));
+                path.AddArc(arc, 180, 90);
+                arc.X = bounds.Right - diameter;
+                path.AddArc(arc, 270, 90);
+                arc.Y = bounds.Bottom - diameter;
+                path.AddArc(arc, 0, 90);
+                arc.X = bounds.Left;
+                path.AddArc(arc, 90, 90);
+                path.CloseFigure();
+                return path;
         }
 
         private async void MainForm_Load(object sender, EventArgs e)
@@ -2579,7 +2793,12 @@ public partial class MainForm : Form
 
         private void backButton_Click(object sender, EventArgs e)
         {
-                GoBackAsync();
+                var args = new KeyEventArgs(Keys.Back);
+                MainForm_KeyDown(this, args);
+                if (!args.Handled)
+                {
+                        GoBackAsync();
+                }
         }
 
 	protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
@@ -7772,7 +7991,8 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 			string text = ((!string.IsNullOrWhiteSpace(accessibleName)) ? accessibleName : ((!string.IsNullOrWhiteSpace(resultListView.AccessibleName)) ? resultListView.AccessibleName : string.Empty));
 			if (!string.IsNullOrWhiteSpace(text) && (string.IsNullOrWhiteSpace(_currentViewSource) || !string.Equals(_lastAnnouncedViewSource, _currentViewSource, StringComparison.OrdinalIgnoreCase) || !string.Equals(_lastAnnouncedHeader, text, StringComparison.Ordinal)))
 			{
-				TtsHelper.SpeakText(text);
+				PrepareListViewHeaderPrefix(text, allowNvda: true);
+                                AnnounceListViewHeaderNotification(text, allowNvda: true);
 				_lastAnnouncedViewSource = _currentViewSource;
 				_lastAnnouncedHeader = text;
                         }
@@ -13352,6 +13572,46 @@ private void searchTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
 		ToggleControlBarHidden();
 	}
 
+	private void themeGrassFreshMenuItem_Click(object sender, EventArgs e)
+	{
+		ApplyThemeScheme(ThemeScheme.GrassFresh);
+	}
+
+	private void themeGrassSoftMenuItem_Click(object sender, EventArgs e)
+	{
+		ApplyThemeScheme(ThemeScheme.GrassSoft);
+	}
+
+	private void themeGrassWarmMenuItem_Click(object sender, EventArgs e)
+	{
+		ApplyThemeScheme(ThemeScheme.GrassWarm);
+	}
+
+	private void themeGrassMutedMenuItem_Click(object sender, EventArgs e)
+	{
+		ApplyThemeScheme(ThemeScheme.GrassMuted);
+	}
+
+	private void ApplyThemeScheme(ThemeScheme scheme)
+	{
+		ThemeManager.SetScheme(scheme);
+		ApplySearchPanelStyle();
+		ApplyResultListViewStyle();
+		ApplyControlPanelStyle();
+		ThemeManager.ApplyTheme(this);
+		ThemeManager.ApplyTheme(trayContextMenu);
+		UpdateThemeMenuChecks();
+	}
+
+	private void UpdateThemeMenuChecks()
+	{
+		ThemeScheme scheme = ThemeManager.Current.Scheme;
+		SetMenuItemCheckedState(themeGrassFreshMenuItem, scheme == ThemeScheme.GrassFresh);
+		SetMenuItemCheckedState(themeGrassSoftMenuItem, scheme == ThemeScheme.GrassSoft);
+		SetMenuItemCheckedState(themeGrassWarmMenuItem, scheme == ThemeScheme.GrassWarm);
+		SetMenuItemCheckedState(themeGrassMutedMenuItem, scheme == ThemeScheme.GrassMuted);
+	}
+
 private void ToggleAutoReadLyrics()
 {
         _autoReadLyrics = !_autoReadLyrics;
@@ -13368,7 +13628,7 @@ private void ToggleAutoReadLyrics()
         {
         }
 		string text = (_autoReadLyrics ? "已开启歌词朗读" : "已关闭歌词朗读");
-		TtsHelper.SpeakText(text);
+		AnnounceUiMessage(text, interrupt: true);
 		UpdateStatusBar(text);
 		Debug.WriteLine("[TTS] 歌词朗读: " + (_autoReadLyrics ? "开启" : "关闭"));
 		SaveConfig();
@@ -13404,7 +13664,7 @@ private void UpdateHideControlBarMenuItemText()
 		UpdateHideSequenceMenuItemText();
 		RefreshSequenceDisplayInPlace();
 		string message = (_hideSequenceNumbers ? "已隐藏序号" : "已显示序号");
-		TtsHelper.SpeakText(message);
+		AnnounceUiMessage(message, interrupt: true);
 		UpdateStatusBar(message);
 		Debug.WriteLine("[TTS] 序号隐藏: " + (_hideSequenceNumbers ? "开启" : "关闭"));
 		SaveConfig();
@@ -13438,7 +13698,7 @@ private void UpdateHideControlBarMenuItemText()
 		UpdateHideControlBarMenuItemText();
 		ApplyControlBarVisibility();
 		string text = (_hideControlBar ? "已隐藏控制栏" : "已显示控制栏");
-		TtsHelper.SpeakText(text);
+		AnnounceUiMessage(text, interrupt: true);
 		UpdateStatusBar(text);
 		Debug.WriteLine("[TTS] 控制栏隐藏: " + (_hideControlBar ? "开启" : "关闭"));
 		SaveConfig();
@@ -22934,6 +23194,11 @@ private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlay
 		this.autoReadLyricsMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.hideSequenceMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.hideControlBarMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+		this.themeMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+		this.themeGrassFreshMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+		this.themeGrassSoftMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+		this.themeGrassWarmMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+		this.themeGrassMutedMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.helpMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.checkUpdateMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.donateMenuItem = new System.Windows.Forms.ToolStripMenuItem();
@@ -23095,7 +23360,7 @@ private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlay
 		this.exitMenuItem.Size = new System.Drawing.Size(178, 26);
 		this.exitMenuItem.Text = "退出";
 		this.exitMenuItem.Click += new System.EventHandler(exitMenuItem_Click);
-		this.playControlMenuItem.DropDownItems.AddRange(this.playPauseMenuItem, this.toolStripSeparator1, this.playbackMenuItem, this.qualityMenuItem, this.outputDeviceMenuItem, this.prevMenuItem, this.nextMenuItem, this.jumpToPositionMenuItem, this.autoReadLyricsMenuItem, this.hideSequenceMenuItem, this.hideControlBarMenuItem);
+		this.playControlMenuItem.DropDownItems.AddRange(this.playPauseMenuItem, this.toolStripSeparator1, this.playbackMenuItem, this.qualityMenuItem, this.outputDeviceMenuItem, this.prevMenuItem, this.nextMenuItem, this.jumpToPositionMenuItem, this.autoReadLyricsMenuItem, this.hideSequenceMenuItem, this.hideControlBarMenuItem, this.themeMenuItem);
 		this.playControlMenuItem.Name = "playControlMenuItem";
 		this.playControlMenuItem.Size = new System.Drawing.Size(98, 24);
 		this.playControlMenuItem.Text = "播放/控制(&M)";
@@ -23205,6 +23470,26 @@ private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlay
           this.hideControlBarMenuItem.Text = "隐藏控制栏\tF7";
           this.hideControlBarMenuItem.CheckOnClick = true;
           this.hideControlBarMenuItem.Click += new System.EventHandler(hideControlBarMenuItem_Click);
+		this.themeMenuItem.DropDownItems.AddRange(this.themeGrassFreshMenuItem, this.themeGrassSoftMenuItem, this.themeGrassWarmMenuItem, this.themeGrassMutedMenuItem);
+		this.themeMenuItem.Name = "themeMenuItem";
+		this.themeMenuItem.Size = new System.Drawing.Size(180, 26);
+		this.themeMenuItem.Text = "配色方案";
+		this.themeGrassFreshMenuItem.Name = "themeGrassFreshMenuItem";
+		this.themeGrassFreshMenuItem.Size = new System.Drawing.Size(180, 26);
+		this.themeGrassFreshMenuItem.Text = "草绿清新";
+		this.themeGrassFreshMenuItem.Click += new System.EventHandler(themeGrassFreshMenuItem_Click);
+		this.themeGrassSoftMenuItem.Name = "themeGrassSoftMenuItem";
+		this.themeGrassSoftMenuItem.Size = new System.Drawing.Size(180, 26);
+		this.themeGrassSoftMenuItem.Text = "草绿柔和";
+		this.themeGrassSoftMenuItem.Click += new System.EventHandler(themeGrassSoftMenuItem_Click);
+		this.themeGrassWarmMenuItem.Name = "themeGrassWarmMenuItem";
+		this.themeGrassWarmMenuItem.Size = new System.Drawing.Size(180, 26);
+		this.themeGrassWarmMenuItem.Text = "草绿暖意";
+		this.themeGrassWarmMenuItem.Click += new System.EventHandler(themeGrassWarmMenuItem_Click);
+		this.themeGrassMutedMenuItem.Name = "themeGrassMutedMenuItem";
+		this.themeGrassMutedMenuItem.Size = new System.Drawing.Size(180, 26);
+		this.themeGrassMutedMenuItem.Text = "草绿静雅";
+		this.themeGrassMutedMenuItem.Click += new System.EventHandler(themeGrassMutedMenuItem_Click);
 		this.helpMenuItem.DropDownItems.AddRange(this.checkUpdateMenuItem, this.donateMenuItem, this.shortcutsMenuItem, this.aboutMenuItem);
 		this.helpMenuItem.Name = "helpMenuItem";
 		this.helpMenuItem.Size = new System.Drawing.Size(73, 24);
@@ -23234,39 +23519,43 @@ private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlay
 		this.searchPanel.Dock = System.Windows.Forms.DockStyle.Top;
 		this.searchPanel.Location = new System.Drawing.Point(0, 28);
 		this.searchPanel.Name = "searchPanel";
-		this.searchPanel.Padding = new System.Windows.Forms.Padding(10);
+		this.searchPanel.Padding = new System.Windows.Forms.Padding(16, 12, 16, 12);
 		this.searchPanel.Size = new System.Drawing.Size(1200, 72);
         this.searchPanel.TabIndex = 0;
           this.searchTypeComboBox.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
 		this.searchTypeComboBox.Font = new System.Drawing.Font("Microsoft YaHei UI", 10f);
 		this.searchTypeComboBox.FormattingEnabled = true;
         this.searchTypeComboBox.Items.AddRange("歌曲", "歌单", "专辑", "歌手", "播客");
-		this.searchTypeComboBox.Location = new System.Drawing.Point(620, 40);
+        this.searchTypeComboBox.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
+		this.searchTypeComboBox.Location = new System.Drawing.Point(896, 18);
 		this.searchTypeComboBox.Name = "searchTypeComboBox";
-		this.searchTypeComboBox.Size = new System.Drawing.Size(240, 31);
+		this.searchTypeComboBox.Size = new System.Drawing.Size(180, 32);
 		this.searchTypeComboBox.TabIndex = 2;
           this.searchTypeComboBox.SelectedIndexChanged += new System.EventHandler(searchTypeComboBox_SelectedIndexChanged);
 		this.searchTypeLabel.AutoSize = true;
-		this.searchTypeLabel.Location = new System.Drawing.Point(620, 18);
+        this.searchTypeLabel.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
+		this.searchTypeLabel.Location = new System.Drawing.Point(846, 22);
 		this.searchTypeLabel.Name = "searchTypeLabel";
 		this.searchTypeLabel.Size = new System.Drawing.Size(84, 20);
 		this.searchTypeLabel.TabIndex = 0;
 		this.searchTypeLabel.Text = "类型:";
 		this.searchButton.Font = new System.Drawing.Font("Microsoft YaHei UI", 12f, System.Drawing.FontStyle.Bold);
-		this.searchButton.Location = new System.Drawing.Point(880, 15);
+        this.searchButton.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
+		this.searchButton.Location = new System.Drawing.Point(1088, 18);
 		this.searchButton.Name = "searchButton";
-		this.searchButton.Size = new System.Drawing.Size(100, 73);
+		this.searchButton.Size = new System.Drawing.Size(96, 36);
 		this.searchButton.TabIndex = 3;
 		this.searchButton.Text = "搜索";
-		this.searchButton.UseVisualStyleBackColor = true;
+		this.searchButton.UseVisualStyleBackColor = false;
                 this.searchButton.Click += new System.EventHandler(searchButton_Click);
-                this.backButton.Font = new System.Drawing.Font("Microsoft YaHei UI", 12f, System.Drawing.FontStyle.Bold);
-                this.backButton.Location = new System.Drawing.Point(990, 15);
+                this.backButton.Font = new System.Drawing.Font("Microsoft YaHei UI", 14f, System.Drawing.FontStyle.Bold);
+        this.backButton.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left;
+                this.backButton.Location = new System.Drawing.Point(16, 14);
                 this.backButton.Name = "backButton";
-                this.backButton.Size = new System.Drawing.Size(100, 73);
+                this.backButton.Size = new System.Drawing.Size(44, 44);
                 this.backButton.TabStop = false;
-                this.backButton.Text = "返回";
-                this.backButton.UseVisualStyleBackColor = true;
+                this.backButton.Text = "⬅️";
+                this.backButton.UseVisualStyleBackColor = false;
                 this.backButton.Click += new System.EventHandler(backButton_Click);
 		this.searchTextContextMenu.ImageScalingSize = new System.Drawing.Size(20, 20);
 		this.searchTextContextMenu.Items.AddRange(this.searchCopyMenuItem, this.searchCutMenuItem, this.searchPasteMenuItem, this.searchHistorySeparator, this.searchClearHistoryMenuItem);
@@ -23292,17 +23581,19 @@ private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlay
 		this.searchClearHistoryMenuItem.Text = "清空历史";
 		this.searchClearHistoryMenuItem.Click += new System.EventHandler(searchClearHistoryMenuItem_Click);
 		this.searchTextBox.Font = new System.Drawing.Font("Microsoft YaHei UI", 12f);
-		this.searchTextBox.Location = new System.Drawing.Point(130, 15);
+        this.searchTextBox.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
+		this.searchTextBox.Location = new System.Drawing.Point(136, 18);
           this.searchTextBox.Name = "searchTextBox";
           this.searchTextBox.AccessibleDescription = "搜索或粘贴网易云网页 URL ，多 URL 以分号分隔";
-          this.searchTextBox.Size = new System.Drawing.Size(470, 33);
+          this.searchTextBox.Size = new System.Drawing.Size(694, 36);
           this.searchTextBox.TabIndex = 1;
           this.searchTextBox.ContextMenuStrip = this.searchTextContextMenu;
 		this.searchTextBox.TextChanged += new System.EventHandler(searchTextBox_TextChanged);
 		this.searchTextBox.KeyDown += new System.Windows.Forms.KeyEventHandler(searchTextBox_KeyDown);
 		this.searchLabel.AutoSize = true;
 		this.searchLabel.Font = new System.Drawing.Font("Microsoft YaHei UI", 12f);
-		this.searchLabel.Location = new System.Drawing.Point(13, 18);
+        this.searchLabel.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left;
+		this.searchLabel.Location = new System.Drawing.Point(72, 22);
                 this.searchLabel.Name = "searchLabel";
                 this.searchLabel.Size = new System.Drawing.Size(111, 27);
                 this.searchLabel.TabIndex = 0;

@@ -133,8 +133,9 @@ namespace YTPlayer.Forms
             string text = GetResolvedNodeText(e.Node);
             bool selected = (e.State & TreeNodeStates.Selected) != 0;
             bool focused = (e.State & TreeNodeStates.Focused) != 0;
-            Color backColor = selected && ContainsFocus ? SystemColors.Highlight : BackColor;
-            Color foreColor = selected && ContainsFocus ? SystemColors.HighlightText : ForeColor;
+            ThemePalette palette = ThemeManager.Current;
+            Color backColor = selected && ContainsFocus ? palette.Highlight : BackColor;
+            Color foreColor = selected && ContainsFocus ? palette.TextPrimary : ForeColor;
 
             using (var backBrush = new SolidBrush(backColor))
             {

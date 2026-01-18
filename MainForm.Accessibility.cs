@@ -222,8 +222,25 @@ namespace YTPlayer
 
 	private bool IsNvdaRunningCached()
 	{
-		return false;
+		DateTime utcNow = DateTime.UtcNow;
+		if ((utcNow - _lastNvdaCheckAt).TotalMilliseconds >= NvdaCheckIntervalMs)
+		{
+			_isNvdaRunningCached = IsNvdaRunning();
+			_lastNvdaCheckAt = utcNow;
+		}
+		return _isNvdaRunningCached;
 	}
+
+        private bool IsZdsrRunningCached()
+        {
+                DateTime utcNow = DateTime.UtcNow;
+                if ((utcNow - _lastZdsrCheckAt).TotalMilliseconds >= ZdsrCheckIntervalMs)
+                {
+                        _isZdsrRunningCached = IsZdsrRunning();
+                        _lastZdsrCheckAt = utcNow;
+                }
+                return _isZdsrRunningCached;
+        }
 
 	private bool IsNarratorRunningCached()
 	{
@@ -248,9 +265,45 @@ namespace YTPlayer
 		}
 	}
 
+        private static bool IsNvdaRunning()
+        {
+                try
+                {
+                        return Process.GetProcessesByName("nvda").Length > 0;
+                }
+                catch
+                {
+                        return false;
+                }
+        }
+
+        private static bool IsZdsrRunning()
+        {
+                try
+                {
+                        foreach (Process process in Process.GetProcesses())
+                        {
+                                string name = process.ProcessName ?? string.Empty;
+                                if (name.Length == 0)
+                                {
+                                        continue;
+                                }
+                                if (name.Equals("ZDSR", StringComparison.OrdinalIgnoreCase)
+                                        || name.StartsWith("ZDSR", StringComparison.OrdinalIgnoreCase))
+                                {
+                                        return true;
+                                }
+                        }
+                }
+                catch
+                {
+                }
+                return false;
+        }
+
 	private bool ShouldUseCustomListViewSpeech()
 	{
-		return !IsNvdaRunningCached();
+		return false;
 	}
 
 	private void EndListViewUpdateAndRefreshAccessibility()
@@ -355,7 +408,7 @@ namespace YTPlayer
 		}
 	}
 
-        private void RaiseAccessibilityAnnouncement(string text)
+        private void RaiseAccessibilityAnnouncement(string text, bool preferInterrupt = false)
         {
                 if (_accessibilityAnnouncementLabel == null)
                 {
@@ -378,9 +431,10 @@ namespace YTPlayer
 		{
 			return;
 		}
-		accessibilityAnnouncementLabel.Text = text2;
-		accessibilityAnnouncementLabel.AccessibleName = text2;
-		accessibilityAnnouncementLabel.AccessibleDescription = text2;
+                accessibilityAnnouncementLabel.Text = text2;
+                accessibilityAnnouncementLabel.AccessibleName = text2;
+                accessibilityAnnouncementLabel.AccessibleDescription = text2;
+                TrySetLiveRegionSetting(accessibilityAnnouncementLabel, preferInterrupt ? AutomationLiveSetting.Assertive : AutomationLiveSetting.Polite);
                 try
                 {
                         accessibilityAnnouncementLabel.AccessibilityObject.RaiseAutomationNotification(AutomationNotificationKind.Other, AutomationNotificationProcessing.ImportantMostRecent, text2);
@@ -404,9 +458,49 @@ namespace YTPlayer
                 catch
                 {
                 }
+                if (preferInterrupt)
+                {
+                        TryRaiseLiveRegionChanged(accessibilityAnnouncementLabel);
+                }
         }
 
-        private bool SpeakNarratorAnnouncement(string text)
+        private void RaiseAccessibilityAnnouncementUiOnly(string text, AutomationNotificationProcessing processing, AutomationLiveSetting liveSetting)
+        {
+                if (_accessibilityAnnouncementLabel == null)
+                {
+                        return;
+                }
+                string trimmed = text?.Trim() ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(trimmed))
+                {
+                        return;
+                }
+                DateTime utcNow = DateTime.UtcNow;
+                if (string.Equals(_lastAnnouncementText, trimmed, StringComparison.Ordinal) && utcNow - _lastAnnouncementAt < AnnouncementRepeatCooldown)
+                {
+                        return;
+                }
+                _lastAnnouncementText = trimmed;
+                _lastAnnouncementAt = utcNow;
+                Label accessibilityAnnouncementLabel = _accessibilityAnnouncementLabel;
+                if (accessibilityAnnouncementLabel.IsDisposed)
+                {
+                        return;
+                }
+                accessibilityAnnouncementLabel.Text = trimmed;
+                accessibilityAnnouncementLabel.AccessibleName = trimmed;
+                accessibilityAnnouncementLabel.AccessibleDescription = trimmed;
+                TrySetLiveRegionSetting(accessibilityAnnouncementLabel, liveSetting);
+                try
+                {
+                        accessibilityAnnouncementLabel.AccessibilityObject.RaiseAutomationNotification(AutomationNotificationKind.Other, processing, trimmed);
+                }
+                catch
+                {
+                }
+        }
+
+        private bool SpeakNarratorAnnouncement(string text, bool interrupt)
         {
                 if (string.IsNullOrWhiteSpace(text) || IsDisposed)
                 {
@@ -417,7 +511,7 @@ namespace YTPlayer
                 {
                         try
                         {
-                                BeginInvoke(new Action<string>(SpeakNarratorAnnouncementInternal), text);
+                                BeginInvoke(new Action<string, bool>(SpeakNarratorAnnouncementInternal), text, interrupt);
                                 return true;
                         }
                         catch
@@ -428,7 +522,7 @@ namespace YTPlayer
 
                 try
                 {
-                        SpeakNarratorAnnouncementInternal(text);
+                        SpeakNarratorAnnouncementInternal(text, interrupt);
                         return true;
                 }
                 catch
@@ -437,9 +531,14 @@ namespace YTPlayer
                 }
         }
 
-        private void SpeakNarratorAnnouncementInternal(string text)
+        private void SpeakNarratorAnnouncementInternal(string text, bool interrupt)
         {
-                RaiseAccessibilityAnnouncement(text);
+                if (interrupt)
+                {
+                        RaiseAccessibilityAnnouncement(text, preferInterrupt: true);
+                        return;
+                }
+                RaiseAccessibilityAnnouncementUiOnly(text, AutomationNotificationProcessing.CurrentThenMostRecent, AutomationLiveSetting.Polite);
         }
 
         private void UpdateStatusStripAccessibility(string message)
@@ -520,11 +619,11 @@ namespace YTPlayer
 		return num;
 	}
 
-	private void InitializeAccessibilityAnnouncementLabel()
-	{
+        private void InitializeAccessibilityAnnouncementLabel()
+        {
 		if (_accessibilityAnnouncementLabel == null && !base.IsDisposed)
 		{
-			_accessibilityAnnouncementLabel = new Label
+			_accessibilityAnnouncementLabel = new AccessibilityAnnouncementLabel
 			{
 				Name = "accessibilityAnnouncementLabel",
 				TabStop = false,
@@ -538,6 +637,62 @@ namespace YTPlayer
 			base.Controls.Add(_accessibilityAnnouncementLabel);
 		}
 	}
+
+        private static void TrySetLiveRegionSetting(Control control, AutomationLiveSetting setting)
+        {
+                if (control == null)
+                {
+                        return;
+                }
+                try
+                {
+                        if (control.AccessibilityObject is IAutomationLiveRegion liveRegion)
+                        {
+                                liveRegion.LiveSetting = setting;
+                        }
+                }
+                catch
+                {
+                }
+        }
+
+        private static void TryRaiseLiveRegionChanged(Control control)
+        {
+                if (control == null)
+                {
+                        return;
+                }
+                try
+                {
+                        control.AccessibilityObject?.RaiseLiveRegionChanged();
+                }
+                catch
+                {
+                }
+        }
+
+        private sealed class AccessibilityAnnouncementLabel : Label
+        {
+                protected override AccessibleObject CreateAccessibilityInstance()
+                {
+                        return new AccessibilityAnnouncementLabelAccessibleObject(this);
+                }
+
+                private sealed class AccessibilityAnnouncementLabelAccessibleObject : Control.ControlAccessibleObject, IAutomationLiveRegion
+                {
+                        private AutomationLiveSetting _liveSetting = AutomationLiveSetting.Polite;
+
+                        public AccessibilityAnnouncementLabelAccessibleObject(Control owner) : base(owner)
+                        {
+                        }
+
+                        public AutomationLiveSetting LiveSetting
+                        {
+                                get => _liveSetting;
+                                set => _liveSetting = value;
+                        }
+                }
+        }
 
         private AccessibleObject GetListViewItemAccessibleObject(int targetIndex)
 	{
@@ -733,8 +888,9 @@ namespace YTPlayer
 			return;
 		}
 		EnsureSubItemCount(item, 6);
-		string text = BuildListViewItemSpeech(item);
-		if (string.IsNullOrWhiteSpace(text))
+		string text = BuildListViewItemAccessibleName(item);
+                bool allowEmpty = TtsHelper.IsBoyPcReaderActive();
+		if (string.IsNullOrWhiteSpace(text) && !allowEmpty)
 		{
 			return;
 		}
@@ -754,12 +910,13 @@ namespace YTPlayer
         }
 
 
-        private void UpdateListViewAccessibleObjectNames()
+	private void UpdateListViewAccessibleObjectNames()
         {
                 if (resultListView == null || resultListView.Items.Count == 0 || !resultListView.IsHandleCreated)
                 {
                         return;
                 }
+                bool allowEmpty = TtsHelper.IsBoyPcReaderActive();
 		AccessibleObject accessibilityObject = resultListView.AccessibilityObject;
 		if (accessibilityObject == null)
 		{
@@ -805,16 +962,17 @@ namespace YTPlayer
 					continue;
 				}
 				ListViewItem item = resultListView.Items[num];
-				string text = BuildListViewItemSpeech(item);
-				if (!string.IsNullOrWhiteSpace(text))
+				string text = BuildListViewItemAccessibleName(item);
+				if (string.IsNullOrWhiteSpace(text) && !allowEmpty)
 				{
-					try
-					{
-						accessibleObject.Name = text;
-					}
-					catch
-					{
-					}
+					continue;
+				}
+				try
+				{
+					accessibleObject.Name = text;
+				}
+				catch
+				{
 				}
 				num++;
 			}
@@ -823,7 +981,8 @@ namespace YTPlayer
 
         private void UpdateListViewAccessibleObjectName(ListViewItem item, string speech)
         {
-                if (resultListView == null || item == null || string.IsNullOrWhiteSpace(speech) || !resultListView.IsHandleCreated)
+                bool allowEmpty = TtsHelper.IsBoyPcReaderActive();
+                if (resultListView == null || item == null || (!allowEmpty && string.IsNullOrWhiteSpace(speech)) || !resultListView.IsHandleCreated)
                 {
                         return;
 		}
@@ -1055,11 +1214,21 @@ namespace YTPlayer
         private void resultListView_Enter(object sender, EventArgs e)
         {
                 QueueListViewFocusSpeech();
+                PrepareListViewHeaderPrefix(allowNvda: false);
+                if (IsZdsrRunningCached())
+                {
+                        AnnounceListViewHeaderNotification(GetListViewHeaderSpeech(), allowNvda: false);
+                }
         }
 
         private void resultListView_GotFocus(object sender, EventArgs e)        
         {
                 QueueListViewFocusSpeech();
+                PrepareListViewHeaderPrefix(allowNvda: false);
+                if (IsZdsrRunningCached())
+                {
+                        AnnounceListViewHeaderNotification(GetListViewHeaderSpeech(), allowNvda: false);
+                }
         }
 
 	private void resultListView_MouseUp(object sender, MouseEventArgs e)
@@ -1067,6 +1236,11 @@ namespace YTPlayer
 		if (e.Button == MouseButtons.Left || e.Button == MouseButtons.Right)
 		{
 			QueueListViewFocusSpeech();
+			PrepareListViewHeaderPrefix(allowNvda: false);
+                        if (IsZdsrRunningCached())
+                        {
+                                AnnounceListViewHeaderNotification(GetListViewHeaderSpeech(), allowNvda: false);
+                        }
 		}
 	}
 
@@ -1150,23 +1324,25 @@ namespace YTPlayer
 		}
 	}
 
-        private void ApplyVirtualItemAccessibility(ListViewItem item, int itemIndex)
+	private void ApplyVirtualItemAccessibility(ListViewItem item, int itemIndex)
 	{
 		if (item == null)
 		{
 			return;
 		}
 		EnsureSubItemCount(item, 6);
-		string text = BuildListViewItemSpeech(item);
-		if (!string.IsNullOrWhiteSpace(text))
+		string text = BuildListViewItemAccessibleName(item);
+                bool allowEmpty = TtsHelper.IsBoyPcReaderActive();
+		if (string.IsNullOrWhiteSpace(text) && !allowEmpty)
 		{
-			item.SubItems[0].Text = text;
-			if (resultListView != null && resultListView.IsHandleCreated)
-			{
+			return;
+		}
+		item.SubItems[0].Text = text;
+		if (resultListView != null && resultListView.IsHandleCreated)
+		{
                         int? role = (IsNvdaRunningCached() ? new int?(41) : ((int?)null));
                         AccessibilityPropertyService.TrySetListItemProperties(resultListView.Handle, itemIndex, text, role);
                 }
-        }
         }
 
         private void QueueListViewFocusSpeech()
@@ -1181,6 +1357,108 @@ namespace YTPlayer
                         _ = QueueListViewFocusSpeechAsync(token);
                 }
         }
+
+        private void PrepareListViewHeaderPrefix(string header = null, bool allowNvda = false)
+        {
+                if (resultListView == null || resultListView.Items.Count == 0)
+                {
+                        return;
+                }
+                if (!allowNvda && IsNvdaRunningCached())
+                {
+                        return;
+                }
+                string resolved = header ?? GetListViewHeaderSpeech();
+                if (string.IsNullOrWhiteSpace(resolved))
+                {
+                        return;
+                }
+                _pendingListHeaderPrefix = resolved.Trim();
+                _pendingListHeaderViewSource = _currentViewSource;
+                ApplyPendingListViewHeaderPrefix();
+                QueueListViewHeaderFocusSequence();
+        }
+
+        private void ApplyPendingListViewHeaderPrefix()
+        {
+                if (string.IsNullOrWhiteSpace(_pendingListHeaderPrefix))
+                {
+                        return;
+                }
+                if (resultListView == null || !resultListView.ContainsFocus || resultListView.Items.Count == 0)
+                {
+                        return;
+                }
+                int focusedIndex = GetFocusedListViewIndex();
+                if (focusedIndex < 0)
+                {
+                        focusedIndex = GetSelectedListViewIndex();
+                }
+                if (focusedIndex < 0 || focusedIndex >= resultListView.Items.Count)
+                {
+                        return;
+                }
+                ListViewItem item = resultListView.Items[focusedIndex];
+                UpdateListViewItemAccessibilityProperties(item, IsNvdaRunningCached());
+                NotifyAccessibilityClients(resultListView, AccessibleEvents.NameChange, focusedIndex);
+        }
+
+        private void QueueListViewHeaderFocusSequence()
+        {
+                if (resultListView == null || resultListView.Items.Count == 0)
+                {
+                        return;
+                }
+                if (!resultListView.ContainsFocus)
+                {
+                        return;
+                }
+                bool isZdsr = IsZdsrRunningCached();
+                bool isBoy = TtsHelper.IsBoyPcReaderActive();
+                if (!isBoy || isZdsr)
+                {
+                        return;
+                }
+                int targetIndex = GetFocusedListViewIndex();
+                if (targetIndex < 0)
+                {
+                        targetIndex = GetSelectedListViewIndex();
+                }
+                if (targetIndex < 0 || targetIndex >= resultListView.Items.Count)
+                {
+                        return;
+                }
+                _listViewHeaderFocusCts?.Cancel();
+                _listViewHeaderFocusCts?.Dispose();
+                _listViewHeaderFocusCts = new CancellationTokenSource();
+                CancellationToken token = _listViewHeaderFocusCts.Token;
+                _ = QueueListViewHeaderFocusSequenceAsync(targetIndex, token);
+        }
+
+        private async Task QueueListViewHeaderFocusSequenceAsync(int targetIndex, CancellationToken token)
+        {
+                try
+                {
+                        await Task.Delay(80, token);
+                        if (token.IsCancellationRequested || base.IsDisposed || resultListView == null || !resultListView.ContainsFocus)
+                        {
+                                return;
+                        }
+                        if (targetIndex < 0 || targetIndex >= resultListView.Items.Count)
+                        {
+                                return;
+                        }
+                        BeginInvoke(new Action<int>(TryRaiseListViewItemAccessibleFocus), targetIndex);
+                }
+                catch (TaskCanceledException)
+                {
+                }
+                catch (Exception ex)
+                {
+                        Debug.WriteLine("[AccessibilityHelper] 列表标题朗读顺序调整失败: " + ex.Message);
+                }
+        }
+
 
 	private async Task QueueListViewFocusSpeechAsync(CancellationToken token)
 	{
@@ -1271,6 +1549,46 @@ namespace YTPlayer
 		}
 	}
 
+        private string BuildListViewItemAccessibleName(ListViewItem item)
+        {
+                if (item == null)
+                {
+                        return string.Empty;
+                }
+                string baseSpeech;
+                if (TtsHelper.IsBoyPcReaderActive())
+                {
+                        string indexText = (item.SubItems.Count > 1) ? (item.SubItems[1]?.Text?.Trim() ?? string.Empty) : string.Empty;
+                        if (string.IsNullOrWhiteSpace(indexText))
+                        {
+                                baseSpeech = string.Empty;
+                        }
+                        else if (_hideSequenceNumbers || IsDefaultSequenceHiddenView())
+                        {
+                                baseSpeech = string.Empty;
+                        }
+                        else
+                        {
+                                baseSpeech = indexText;
+                        }
+                }
+                else
+                {
+                        baseSpeech = BuildListViewItemSpeech(item);
+                }
+
+                if (!IsNvdaRunningCached() && TryConsumeListHeaderPrefix(item, out string header))
+                {
+                        if (string.IsNullOrWhiteSpace(baseSpeech))
+                        {
+                                return header;
+                        }
+                        return header + "，" + baseSpeech;
+                }
+
+                return baseSpeech;
+        }
+
         private static string BuildListViewItemSpeech(ListViewItem item)
         {
                 List<string> list = new List<string>();
@@ -1283,6 +1601,72 @@ namespace YTPlayer
 			}
                 }
                 return string.Join("；", list);
+        }
+
+        private void AnnounceListViewHeaderNotification(string header, bool allowNvda)
+        {
+                if (string.IsNullOrWhiteSpace(header))
+                {
+                        return;
+                }
+                if (!allowNvda && IsNvdaRunningCached())
+                {
+                        return;
+                }
+                if (TtsHelper.IsBoyPcReaderActive())
+                {
+                        TtsHelper.SpeakText(header, interrupt: false);
+                        return;
+                }
+                RaiseAccessibilityAnnouncementUiOnly(header, AutomationNotificationProcessing.CurrentThenMostRecent, AutomationLiveSetting.Polite);
+        }
+
+        private void AnnounceUiMessage(string text, bool interrupt = true)
+        {
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                        return;
+                }
+                bool spoken = interrupt
+                        ? TtsHelper.SpeakPriorityText(text)
+                        : TtsHelper.SpeakText(text, interrupt: false);
+                if (spoken)
+                {
+                        return;
+                }
+                AutomationNotificationProcessing processing = interrupt
+                        ? AutomationNotificationProcessing.ImportantMostRecent
+                        : AutomationNotificationProcessing.CurrentThenMostRecent;
+                AutomationLiveSetting liveSetting = interrupt ? AutomationLiveSetting.Assertive : AutomationLiveSetting.Polite;
+                RaiseAccessibilityAnnouncementUiOnly(text, processing, liveSetting);
+        }
+
+        private bool TryConsumeListHeaderPrefix(ListViewItem item, out string header)
+        {
+                header = string.Empty;
+                if (string.IsNullOrWhiteSpace(_pendingListHeaderPrefix))
+                {
+                        return false;
+                }
+                if (!string.Equals(_pendingListHeaderViewSource ?? string.Empty, _currentViewSource ?? string.Empty, StringComparison.OrdinalIgnoreCase))
+                {
+                        _pendingListHeaderPrefix = null;
+                        _pendingListHeaderViewSource = null;
+                        return false;
+                }
+                int focusedIndex = GetFocusedListViewIndex();
+                if (focusedIndex < 0)
+                {
+                        focusedIndex = GetSelectedListViewIndex();
+                }
+                if (focusedIndex < 0 || item.Index != focusedIndex)
+                {
+                        return false;
+                }
+                header = _pendingListHeaderPrefix ?? string.Empty;
+                _pendingListHeaderPrefix = null;
+                _pendingListHeaderViewSource = null;
+                return !string.IsNullOrWhiteSpace(header);
         }
 
         private void NotifyAccessibilityClients(Control control, AccessibleEvents accEvent, int childID)

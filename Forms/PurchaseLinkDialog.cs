@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.Windows.Forms;
+using MessageBox = YTPlayer.MessageBox;
 
 namespace YTPlayer.Forms
 {

@@ -3,10 +3,12 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
+using MessageBox = YTPlayer.MessageBox;
 using YTPlayer.Core.Download;
 using YTPlayer.Core.Upload;
 using YTPlayer.Models.Download;
 using YTPlayer.Models.Upload;
+using YTPlayer.Utils;
 
 namespace YTPlayer.Forms.Download
 {
@@ -701,11 +703,11 @@ namespace YTPlayer.Forms.Download
 
                 if (downloadTask.Status == DownloadStatus.Failed)
                 {
-                    existingItem.ForeColor = Color.Red;
+                    existingItem.ForeColor = ThemeManager.Current.TextPrimary;
                 }
                 else if (downloadTask.Status == DownloadStatus.Completed)
                 {
-                    existingItem.ForeColor = Color.Green;
+                    existingItem.ForeColor = ThemeManager.Current.TextPrimary;
                 }
                 else
                 {
@@ -728,11 +730,11 @@ namespace YTPlayer.Forms.Download
 
                 if (uploadTask.Status == UploadStatus.Failed)
                 {
-                    existingItem.ForeColor = Color.Red;
+                    existingItem.ForeColor = ThemeManager.Current.TextPrimary;
                 }
                 else if (uploadTask.Status == UploadStatus.Completed)
                 {
-                    existingItem.ForeColor = Color.Green;
+                    existingItem.ForeColor = ThemeManager.Current.TextPrimary;
                 }
                 else
                 {

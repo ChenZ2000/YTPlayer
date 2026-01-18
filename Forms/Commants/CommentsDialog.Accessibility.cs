@@ -174,7 +174,7 @@ namespace YTPlayer.Forms
                 return;
             }
 
-            bool preferIndex = IsNarratorRunningCached();
+            bool preferIndex = false;
             if (_commentTree.PreferVisibleIndexMapping != preferIndex)
             {
                 _commentTree.PreferVisibleIndexMapping = preferIndex;

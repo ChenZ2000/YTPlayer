@@ -1,6 +1,7 @@
 using System;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
+using MessageBox = YTPlayer.MessageBox;
 
 namespace YTPlayer.Forms
 {

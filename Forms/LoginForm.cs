@@ -7,6 +7,7 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using MessageBox = YTPlayer.MessageBox;
 using Microsoft.Web.WebView2.Core;
 using YTPlayer.Core.Auth;
 using YTPlayer.Core;
@@ -172,7 +173,7 @@ namespace YTPlayer.Forms
                 // 显示加载状态
                 qrPictureBox.Image = null;
                 qrStatusLabel.Text = "正在加载二维码...";
-                qrStatusLabel.ForeColor = Color.Gray;
+                qrStatusLabel.ForeColor = GetStatusTextColor(muted: true);
                 refreshQrButton.Enabled = false;
 
                 System.Diagnostics.Debug.WriteLine("[LoginForm] 调用_apiClient.CreateQrLoginSessionAsync()...");
@@ -180,7 +181,7 @@ namespace YTPlayer.Forms
                 if (_qrSession == null || string.IsNullOrEmpty(_qrSession.Key))
                 {
                     qrStatusLabel.Text = "获取二维码失败，请刷新重试";
-                    qrStatusLabel.ForeColor = Color.Red;
+                    qrStatusLabel.ForeColor = GetStatusTextColor();
                     refreshQrButton.Enabled = true;
                     return;
                 }
@@ -193,7 +194,7 @@ namespace YTPlayer.Forms
                 SetQrImage(qrImage);
 
                 qrStatusLabel.Text = "请使用网易云音乐APP扫码登录";
-                qrStatusLabel.ForeColor = Color.Blue;
+                qrStatusLabel.ForeColor = GetStatusTextColor();
                 refreshQrButton.Enabled = true;
 
                 // 开始轮询检查二维码状态
@@ -204,7 +205,7 @@ namespace YTPlayer.Forms
             {
                 System.Diagnostics.Debug.WriteLine($"[LoginForm] LoadQrCodeAsync异常: {ex.Message}");
                 qrStatusLabel.Text = $"加载失败: {ex.Message}";
-                qrStatusLabel.ForeColor = Color.Red;
+                qrStatusLabel.ForeColor = GetStatusTextColor();
                 refreshQrButton.Enabled = true;
             }
         }
@@ -240,7 +241,7 @@ namespace YTPlayer.Forms
                         if (consecutiveErrors >= maxConsecutiveErrors)
                         {
                             qrStatusLabel.Text = "登录失败：服务器返回异常响应，请稍后重试或改用短信登录";
-                            qrStatusLabel.ForeColor = Color.Red;
+                            qrStatusLabel.ForeColor = GetStatusTextColor();
                             refreshQrButton.Enabled = true;
                             return;
                         }
@@ -256,7 +257,7 @@ namespace YTPlayer.Forms
                         if (consecutiveErrors >= maxConsecutiveErrors)
                         {
                             qrStatusLabel.Text = "登录失败：服务器返回异常响应，请稍后重试或改用短信登录";
-                            qrStatusLabel.ForeColor = Color.Red;
+                            qrStatusLabel.ForeColor = GetStatusTextColor();
                             refreshQrButton.Enabled = true;
                             return;
                         }
@@ -272,13 +273,13 @@ namespace YTPlayer.Forms
                     {
                         case QrLoginState.WaitingForScan:
                             qrStatusLabel.Text = "等待扫码...";
-                            qrStatusLabel.ForeColor = Color.Gray;
+                            qrStatusLabel.ForeColor = GetStatusTextColor(muted: true);
                             delayMs = 2000;
                             break;
 
                         case QrLoginState.AwaitingConfirmation:
                             qrStatusLabel.Text = "已扫码，请在手机上确认登录";
-                            qrStatusLabel.ForeColor = Color.Orange;
+                            qrStatusLabel.ForeColor = GetStatusTextColor();
                             if (!userScanned)
                             {
                                 userScanned = true;
@@ -289,7 +290,7 @@ namespace YTPlayer.Forms
                         case QrLoginState.Authorized:
                         {
                             qrStatusLabel.Text = "登录成功！";
-                            qrStatusLabel.ForeColor = Color.Green;
+                            qrStatusLabel.ForeColor = GetStatusTextColor();
 
                             await _apiClient.RefreshLoginAsync();
 
@@ -348,7 +349,7 @@ namespace YTPlayer.Forms
 
                         case QrLoginState.Expired:
                             qrStatusLabel.Text = "二维码已过期，请刷新";
-                            qrStatusLabel.ForeColor = Color.Red;
+                            qrStatusLabel.ForeColor = GetStatusTextColor();
                             refreshQrButton.Enabled = true;
                             return;
 
@@ -356,7 +357,7 @@ namespace YTPlayer.Forms
                         {
                             string friendlyMessage = BuildQrFailureMessage(result);
                             qrStatusLabel.Text = friendlyMessage;
-                            qrStatusLabel.ForeColor = Color.Red;
+                            qrStatusLabel.ForeColor = GetStatusTextColor();
                             refreshQrButton.Enabled = true;
 
                             if (!string.IsNullOrEmpty(result.RedirectUrl) && !_riskLinkPromptShown)
@@ -389,7 +390,7 @@ namespace YTPlayer.Forms
 
                         case QrLoginState.Canceled:
                             qrStatusLabel.Text = "二维码登录已取消";
-                            qrStatusLabel.ForeColor = Color.Red;
+                            qrStatusLabel.ForeColor = GetStatusTextColor();
                             refreshQrButton.Enabled = true;
                             return;
 
@@ -398,7 +399,7 @@ namespace YTPlayer.Forms
                         {
                             string friendlyMessage = BuildQrFailureMessage(result);
                             qrStatusLabel.Text = friendlyMessage;
-                            qrStatusLabel.ForeColor = Color.Red;
+                            qrStatusLabel.ForeColor = GetStatusTextColor();
                             refreshQrButton.Enabled = true;
                             return;
                         }
@@ -414,7 +415,7 @@ namespace YTPlayer.Forms
                 if (!cancellationToken.IsCancellationRequested)
                 {
                     qrStatusLabel.Text = $"检查失败: {ex.Message}";
-                    qrStatusLabel.ForeColor = Color.Red;
+                    qrStatusLabel.ForeColor = GetStatusTextColor();
                     refreshQrButton.Enabled = true;
                 }
             }
@@ -449,7 +450,7 @@ namespace YTPlayer.Forms
                     var canvas = new Bitmap(targetSize, targetSize);
                     using (var g = Graphics.FromImage(canvas))
                     {
-                        g.Clear(Color.White);
+                        g.Clear(ThemeManager.Current.SurfaceBackground);
                         g.InterpolationMode = InterpolationMode.NearestNeighbor;
                         g.PixelOffsetMode = PixelOffsetMode.Half;
                         g.SmoothingMode = SmoothingMode.None;
@@ -1097,11 +1098,21 @@ namespace YTPlayer.Forms
                 return;
             }
 
+            ThemePalette palette = ThemeManager.Current;
+            bool muted = color.HasValue && IsMutedStatusColor(color.Value);
             webStatusLabel.Text = text;
-            if (color.HasValue)
-            {
-                webStatusLabel.ForeColor = color.Value;
-            }
+            webStatusLabel.ForeColor = muted ? palette.TextSecondary : palette.TextPrimary;
+        }
+
+        private static bool IsMutedStatusColor(Color color)
+        {
+            return color.ToArgb() == Color.Gray.ToArgb();
+        }
+
+        private static Color GetStatusTextColor(bool muted = false)
+        {
+            ThemePalette palette = ThemeManager.Current;
+            return muted ? palette.TextSecondary : palette.TextPrimary;
         }
 
         #endregion

@@ -21,7 +21,7 @@ namespace YTPlayer.Utils
 
         public static void TrySetListItemProperties(IntPtr hwnd, int itemIndex, string name, int? role)
         {
-            if (hwnd == IntPtr.Zero || itemIndex < 0 || string.IsNullOrWhiteSpace(name))
+            if (hwnd == IntPtr.Zero || itemIndex < 0 || name == null)
             {
                 return;
             }

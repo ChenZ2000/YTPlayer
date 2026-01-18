@@ -207,6 +207,8 @@
     <Compile Include="Utils\TaskExtensions.cs" />
     <Compile Include="Utils\TtsHelper.cs" />
     <Compile Include="Utils\AccessibilityPropertyService.cs" />
+    <Compile Include="Utils\ThemeManager.cs" />
+    <Compile Include="Utils\MessageBox.cs" />
     <Compile Include="Utils\ArtistMetadataHelper.cs" />
     <Compile Include="Utils\DocumentationLoader.cs" />
     <Compile Include="Utils\PathHelper.cs" />
@@ -258,6 +260,7 @@
     <Compile Include="Forms\AddToPlaylistDialog.Designer.cs">
       <DependentUpon>AddToPlaylistDialog.cs</DependentUpon>
     </Compile>
+    <Compile Include="Forms\ThemedMessageBoxForm.cs" />
     <Compile Include="Forms\NewPlaylistDialog.cs">
       <SubType>Form</SubType>
     </Compile>

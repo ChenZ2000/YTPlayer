@@ -71,6 +71,7 @@ namespace YTPlayer
                 DebugLogger.Log(DebugLogger.LogLevel.Info, "Program", "启动 GUI 模式");
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
+                ThemeManager.Initialize();
                 Application.Run(new MainForm());
             }
             catch (Exception ex)
