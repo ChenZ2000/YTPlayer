@@ -84,7 +84,7 @@ namespace YTPlayer.Forms
             //
             // createPlaylistButton
             //
-            this.createPlaylistButton.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
+            this.createPlaylistButton.Font = new System.Drawing.Font("Microsoft YaHei UI", 10F);
             this.createPlaylistButton.Location = new System.Drawing.Point(16, 365);
             this.createPlaylistButton.Name = "createPlaylistButton";
             this.createPlaylistButton.Size = new System.Drawing.Size(120, 32);
@@ -96,7 +96,7 @@ namespace YTPlayer.Forms
             // confirmButton
             //
             this.confirmButton.Enabled = false;
-            this.confirmButton.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
+            this.confirmButton.Font = new System.Drawing.Font("Microsoft YaHei UI", 10F);
             this.confirmButton.Location = new System.Drawing.Point(402, 365);
             this.confirmButton.Name = "confirmButton";
             this.confirmButton.Size = new System.Drawing.Size(80, 32);
@@ -108,7 +108,7 @@ namespace YTPlayer.Forms
             // cancelButton
             //
             this.cancelButton.DialogResult = System.Windows.Forms.DialogResult.Cancel;
-            this.cancelButton.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
+            this.cancelButton.Font = new System.Drawing.Font("Microsoft YaHei UI", 10F);
             this.cancelButton.Location = new System.Drawing.Point(488, 365);
             this.cancelButton.Name = "cancelButton";
             this.cancelButton.Size = new System.Drawing.Size(80, 32);
@@ -120,7 +120,7 @@ namespace YTPlayer.Forms
             // loadingLabel
             //
             this.loadingLabel.AutoSize = true;
-            this.loadingLabel.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
+            this.loadingLabel.Font = new System.Drawing.Font("Microsoft YaHei UI", 10F);
             this.loadingLabel.ForeColor = System.Drawing.SystemColors.GrayText;
             this.loadingLabel.Location = new System.Drawing.Point(13, 372);
             this.loadingLabel.Name = "loadingLabel";

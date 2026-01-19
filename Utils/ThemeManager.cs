@@ -21,32 +21,56 @@ namespace YTPlayer.Utils
         public string Name { get; }
         public Color BaseBackground { get; }
         public Color SurfaceBackground { get; }
+        public Color SurfaceAlt { get; }
         public Color TextPrimary { get; }
         public Color TextSecondary { get; }
         public Color Border { get; }
+        public Color Divider { get; }
         public Color Highlight { get; }
         public Color Focus { get; }
+        public Color Accent { get; }
+        public Color AccentHover { get; }
+        public Color AccentPressed { get; }
+        public Color AccentSoft { get; }
+        public Color AccentText { get; }
+        public Color FocusRing { get; }
 
         public ThemePalette(
             ThemeScheme scheme,
             string name,
             Color baseBackground,
             Color surfaceBackground,
+            Color surfaceAlt,
             Color textPrimary,
             Color textSecondary,
             Color border,
+            Color divider,
             Color highlight,
-            Color focus)
+            Color focus,
+            Color accent,
+            Color accentHover,
+            Color accentPressed,
+            Color accentSoft,
+            Color accentText,
+            Color focusRing)
         {
             Scheme = scheme;
             Name = name;
             BaseBackground = baseBackground;
             SurfaceBackground = surfaceBackground;
+            SurfaceAlt = surfaceAlt;
             TextPrimary = textPrimary;
             TextSecondary = textSecondary;
             Border = border;
+            Divider = divider;
             Highlight = highlight;
             Focus = focus;
+            Accent = accent;
+            AccentHover = accentHover;
+            AccentPressed = accentPressed;
+            AccentSoft = accentSoft;
+            AccentText = accentText;
+            FocusRing = focusRing;
         }
     }
 
@@ -58,43 +82,75 @@ namespace YTPlayer.Utils
             new ThemePalette(
                 ThemeScheme.GrassFresh,
                 "草绿清新",
-                Color.FromArgb(230, 246, 224),
-                Color.FromArgb(247, 241, 230),
-                Color.FromArgb(42, 42, 42),
-                Color.FromArgb(64, 64, 64),
-                Color.FromArgb(42, 42, 42),
-                Color.FromArgb(236, 228, 212),
-                Color.FromArgb(216, 236, 208)),
+                Color.FromArgb(247, 248, 246),
+                Color.FromArgb(255, 255, 255),
+                Color.FromArgb(238, 243, 239),
+                Color.FromArgb(31, 35, 31),
+                Color.FromArgb(76, 82, 78),
+                Color.FromArgb(214, 222, 212),
+                Color.FromArgb(230, 234, 228),
+                Color.FromArgb(238, 242, 239),
+                Color.FromArgb(196, 230, 210),
+                Color.FromArgb(47, 182, 106),
+                Color.FromArgb(37, 161, 92),
+                Color.FromArgb(33, 145, 84),
+                Color.FromArgb(223, 243, 231),
+                Color.FromArgb(255, 255, 255),
+                Color.FromArgb(122, 210, 161)),
             new ThemePalette(
                 ThemeScheme.GrassSoft,
                 "草绿柔和",
-                Color.FromArgb(226, 242, 216),
-                Color.FromArgb(245, 239, 228),
-                Color.FromArgb(43, 43, 43),
-                Color.FromArgb(66, 66, 66),
-                Color.FromArgb(43, 43, 43),
-                Color.FromArgb(234, 225, 209),
-                Color.FromArgb(214, 234, 204)),
+                Color.FromArgb(247, 247, 244),
+                Color.FromArgb(255, 255, 255),
+                Color.FromArgb(238, 241, 238),
+                Color.FromArgb(31, 35, 31),
+                Color.FromArgb(78, 83, 79),
+                Color.FromArgb(214, 221, 215),
+                Color.FromArgb(231, 234, 230),
+                Color.FromArgb(237, 239, 236),
+                Color.FromArgb(202, 224, 210),
+                Color.FromArgb(94, 158, 111),
+                Color.FromArgb(78, 138, 95),
+                Color.FromArgb(68, 122, 85),
+                Color.FromArgb(227, 239, 230),
+                Color.FromArgb(255, 255, 255),
+                Color.FromArgb(144, 194, 162)),
             new ThemePalette(
                 ThemeScheme.GrassWarm,
                 "草绿暖意",
-                Color.FromArgb(231, 247, 217),
-                Color.FromArgb(248, 241, 226),
-                Color.FromArgb(44, 44, 44),
-                Color.FromArgb(68, 68, 68),
-                Color.FromArgb(44, 44, 44),
-                Color.FromArgb(237, 228, 208),
-                Color.FromArgb(216, 235, 200)),
+                Color.FromArgb(248, 247, 243),
+                Color.FromArgb(255, 255, 255),
+                Color.FromArgb(240, 241, 233),
+                Color.FromArgb(31, 35, 31),
+                Color.FromArgb(80, 84, 79),
+                Color.FromArgb(221, 217, 206),
+                Color.FromArgb(234, 231, 222),
+                Color.FromArgb(240, 241, 233),
+                Color.FromArgb(216, 228, 197),
+                Color.FromArgb(122, 155, 77),
+                Color.FromArgb(107, 139, 68),
+                Color.FromArgb(96, 125, 61),
+                Color.FromArgb(237, 243, 224),
+                Color.FromArgb(255, 255, 255),
+                Color.FromArgb(182, 213, 142)),
             new ThemePalette(
                 ThemeScheme.GrassMuted,
                 "草绿静雅",
-                Color.FromArgb(224, 240, 214),
-                Color.FromArgb(244, 238, 226),
-                Color.FromArgb(41, 41, 41),
-                Color.FromArgb(63, 63, 63),
-                Color.FromArgb(41, 41, 41),
-                Color.FromArgb(232, 224, 208),
-                Color.FromArgb(210, 232, 204))
+                Color.FromArgb(246, 247, 245),
+                Color.FromArgb(255, 255, 255),
+                Color.FromArgb(238, 241, 239),
+                Color.FromArgb(30, 34, 31),
+                Color.FromArgb(75, 81, 78),
+                Color.FromArgb(213, 219, 214),
+                Color.FromArgb(230, 233, 230),
+                Color.FromArgb(238, 241, 239),
+                Color.FromArgb(198, 221, 210),
+                Color.FromArgb(62, 123, 90),
+                Color.FromArgb(52, 105, 77),
+                Color.FromArgb(46, 92, 68),
+                Color.FromArgb(224, 236, 229),
+                Color.FromArgb(255, 255, 255),
+                Color.FromArgb(127, 182, 154))
         };
 
         private static readonly HashSet<Form> ThemedForms = new HashSet<Form>();
@@ -186,7 +242,7 @@ namespace YTPlayer.Utils
             }
             else if (control is StatusStrip || control is MenuStrip || control is ContextMenuStrip || control is ToolStrip)
             {
-                control.BackColor = palette.SurfaceBackground;
+                control.BackColor = palette.SurfaceAlt;
                 control.ForeColor = palette.TextPrimary;
             }
             else if (control is Label label)
@@ -197,20 +253,21 @@ namespace YTPlayer.Utils
             else if (control is LinkLabel linkLabel)
             {
                 linkLabel.BackColor = Color.Transparent;
-                linkLabel.LinkColor = palette.TextPrimary;
-                linkLabel.ActiveLinkColor = palette.TextPrimary;
+                linkLabel.LinkColor = palette.Accent;
+                linkLabel.ActiveLinkColor = palette.AccentHover;
                 linkLabel.VisitedLinkColor = palette.TextSecondary;
                 linkLabel.ForeColor = palette.TextPrimary;
             }
             else if (control is Button button)
             {
+                bool isPrimary = IsPrimaryButton(button);
                 button.FlatStyle = FlatStyle.Flat;
                 button.FlatAppearance.BorderSize = 1;
-                button.FlatAppearance.BorderColor = palette.Border;
-                button.FlatAppearance.MouseOverBackColor = palette.Highlight;
-                button.FlatAppearance.MouseDownBackColor = palette.Focus;
-                button.BackColor = palette.SurfaceBackground;
-                button.ForeColor = palette.TextPrimary;
+                button.FlatAppearance.BorderColor = isPrimary ? palette.Accent : palette.Border;
+                button.FlatAppearance.MouseOverBackColor = isPrimary ? palette.AccentHover : palette.Highlight;
+                button.FlatAppearance.MouseDownBackColor = isPrimary ? palette.AccentPressed : palette.Focus;
+                button.BackColor = isPrimary ? palette.Accent : palette.SurfaceBackground;
+                button.ForeColor = isPrimary ? palette.AccentText : palette.TextPrimary;
                 button.UseVisualStyleBackColor = false;
                 TryApplyRounded(button, DefaultCornerRadius);
             }
@@ -270,14 +327,14 @@ namespace YTPlayer.Utils
             else if (control is DataGridView gridView)
             {
                 gridView.BackgroundColor = palette.SurfaceBackground;
-                gridView.GridColor = palette.Border;
+                gridView.GridColor = palette.Divider;
                 gridView.ForeColor = palette.TextPrimary;
                 gridView.EnableHeadersVisualStyles = false;
-                gridView.ColumnHeadersDefaultCellStyle.BackColor = palette.SurfaceBackground;
+                gridView.ColumnHeadersDefaultCellStyle.BackColor = palette.SurfaceAlt;
                 gridView.ColumnHeadersDefaultCellStyle.ForeColor = palette.TextPrimary;
                 gridView.DefaultCellStyle.BackColor = palette.SurfaceBackground;
                 gridView.DefaultCellStyle.ForeColor = palette.TextPrimary;
-                gridView.DefaultCellStyle.SelectionBackColor = palette.Highlight;
+                gridView.DefaultCellStyle.SelectionBackColor = palette.AccentSoft;
                 gridView.DefaultCellStyle.SelectionForeColor = palette.TextPrimary;
                 TryApplyRounded(gridView, DefaultCornerRadius);
             }
@@ -304,7 +361,7 @@ namespace YTPlayer.Utils
         private static void ApplyToolStripTheme(ToolStrip toolStrip)
         {
             ThemePalette palette = _current;
-            toolStrip.BackColor = palette.SurfaceBackground;
+            toolStrip.BackColor = palette.SurfaceAlt;
             toolStrip.ForeColor = palette.TextPrimary;
             toolStrip.Renderer = new ThemedToolStripRenderer(palette);
 
@@ -424,12 +481,12 @@ namespace YTPlayer.Utils
 
             protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e)
             {
-                e.Graphics.Clear(_palette.SurfaceBackground);
+                e.Graphics.Clear(_palette.SurfaceAlt);
             }
 
             protected override void OnRenderToolStripBorder(ToolStripRenderEventArgs e)
             {
-                using (var pen = new Pen(_palette.Border))
+                using (var pen = new Pen(_palette.Divider))
                 {
                     Rectangle rect = new Rectangle(Point.Empty, e.ToolStrip.Size);
                     rect.Width -= 1;
@@ -440,7 +497,7 @@ namespace YTPlayer.Utils
 
             protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e)
             {
-                Color backColor = e.Item.Selected ? _palette.Highlight : _palette.SurfaceBackground;
+                Color backColor = e.Item.Selected ? _palette.AccentSoft : _palette.SurfaceAlt;
                 using (var brush = new SolidBrush(backColor))
                 {
                     e.Graphics.FillRectangle(brush, new Rectangle(Point.Empty, e.Item.Size));
@@ -455,12 +512,27 @@ namespace YTPlayer.Utils
 
             protected override void OnRenderSeparator(ToolStripSeparatorRenderEventArgs e)
             {
-                using (var pen = new Pen(_palette.Border))
+                using (var pen = new Pen(_palette.Divider))
                 {
                     int y = e.Item.Bounds.Height / 2;
                     e.Graphics.DrawLine(pen, 2, y, e.Item.Bounds.Width - 2, y);
                 }
             }
+        }
+
+        private static bool IsPrimaryButton(Button button)
+        {
+            if (button == null)
+            {
+                return false;
+            }
+
+            if (button.Tag is string tag)
+            {
+                return string.Equals(tag, "Primary", StringComparison.OrdinalIgnoreCase);
+            }
+
+            return false;
         }
     }
 }

@@ -74,7 +74,7 @@ namespace YTPlayer.Forms
             //
             // logoutButton
             //
-            this.logoutButton.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
+            this.logoutButton.Font = new System.Drawing.Font("Microsoft YaHei UI", 10F);
             this.logoutButton.Location = new System.Drawing.Point(100, 12);
             this.logoutButton.Name = "logoutButton";
             this.logoutButton.Size = new System.Drawing.Size(120, 36);
@@ -85,7 +85,7 @@ namespace YTPlayer.Forms
             //
             // closeButton
             //
-            this.closeButton.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
+            this.closeButton.Font = new System.Drawing.Font("Microsoft YaHei UI", 10F);
             this.closeButton.Location = new System.Drawing.Point(260, 12);
             this.closeButton.Name = "closeButton";
             this.closeButton.Size = new System.Drawing.Size(120, 36);
@@ -102,7 +102,7 @@ namespace YTPlayer.Forms
             this.Controls.Add(this.infoTextBox);
             this.Controls.Add(this.buttonPanel);
             this.Controls.Add(this.loadingLabel);
-            this.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
+            this.Font = new System.Drawing.Font("Microsoft YaHei UI", 10F);
             this.Name = "UserInfoForm";
             this.Text = "用户信息";
             this.buttonPanel.ResumeLayout(false);

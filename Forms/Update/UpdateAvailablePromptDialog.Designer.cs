@@ -62,7 +62,7 @@ namespace YTPlayer.Forms
             // updateButton
             // 
             this.updateButton.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Right)));
-            this.updateButton.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F, System.Drawing.FontStyle.Bold);
+            this.updateButton.Font = new System.Drawing.Font("Microsoft YaHei UI", 10F, System.Drawing.FontStyle.Bold);
             this.updateButton.Location = new System.Drawing.Point(350, 290);
             this.updateButton.Name = "updateButton";
             this.updateButton.Size = new System.Drawing.Size(100, 36);
@@ -94,7 +94,7 @@ namespace YTPlayer.Forms
             this.Controls.Add(this.updateButton);
             this.Controls.Add(this.resultTextBox);
             this.Controls.Add(this.summaryLabel);
-            this.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
+            this.Font = new System.Drawing.Font("Microsoft YaHei UI", 10F);
             this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
             this.MinimizeBox = false;

@@ -366,8 +366,11 @@ public partial class MainForm : Form
 
                 protected override void OnPaint(PaintEventArgs e)
                 {
-                        Color color = ((base.Parent != null) ? base.Parent.BackColor : BackColor);
-                        e.Graphics.Clear(color);
+                        e.Graphics.Clear(BackColor);
+                        using (var pen = new Pen(ThemeManager.Current.Border))
+                        {
+                                e.Graphics.DrawLine(pen, 0, 0, Width, 0);
+                        }
                 }
         }
 
@@ -1192,6 +1195,8 @@ public partial class MainForm : Form
 
 	private Label searchLabel;
 
+	private bool _searchPanelPaintHooked;
+
 	private ContextMenuStrip searchTextContextMenu;
 
 	private ToolStripMenuItem searchCopyMenuItem;
@@ -1695,13 +1700,15 @@ public partial class MainForm : Form
                 }
 
                 ThemePalette palette = ThemeManager.Current;
-                Color surface = palette.SurfaceBackground;
+                Color panelSurface = palette.SurfaceAlt;
+                Color inputSurface = palette.SurfaceBackground;
                 Color textPrimary = palette.TextPrimary;
                 Color border = palette.Border;
                 Color hover = palette.Highlight;
                 Color pressed = palette.Focus;
 
-                searchPanel.BackColor = surface;
+                searchPanel.BackColor = panelSurface;
+                EnsureSearchPanelDividerPaint();
 
                 if (searchLabel != null)
                 {
@@ -1715,7 +1722,7 @@ public partial class MainForm : Form
 
                 if (searchTextBox != null)
                 {
-                        searchTextBox.BackColor = surface;
+                        searchTextBox.BackColor = inputSurface;
                         searchTextBox.ForeColor = textPrimary;
                         searchTextBox.BorderStyle = BorderStyle.FixedSingle;
                         RegisterRoundedControl(searchTextBox, DefaultControlCornerRadius);
@@ -1723,7 +1730,7 @@ public partial class MainForm : Form
 
                 if (searchTypeComboBox != null)
                 {
-                        searchTypeComboBox.BackColor = surface;
+                        searchTypeComboBox.BackColor = inputSurface;
                         searchTypeComboBox.ForeColor = textPrimary;
                         searchTypeComboBox.FlatStyle = FlatStyle.Flat;
                         RegisterRoundedControl(searchTypeComboBox, DefaultControlCornerRadius);
@@ -1731,19 +1738,19 @@ public partial class MainForm : Form
 
                 if (searchButton != null)
                 {
-                        searchButton.BackColor = surface;
-                        searchButton.ForeColor = textPrimary;
+                        searchButton.BackColor = palette.Accent;
+                        searchButton.ForeColor = palette.AccentText;
                         searchButton.FlatStyle = FlatStyle.Flat;
                         searchButton.FlatAppearance.BorderSize = 1;
-                        searchButton.FlatAppearance.BorderColor = border;
-                        searchButton.FlatAppearance.MouseOverBackColor = hover;
-                        searchButton.FlatAppearance.MouseDownBackColor = pressed;
+                        searchButton.FlatAppearance.BorderColor = palette.Accent;
+                        searchButton.FlatAppearance.MouseOverBackColor = palette.AccentHover;
+                        searchButton.FlatAppearance.MouseDownBackColor = palette.AccentPressed;
                         RegisterRoundedControl(searchButton, DefaultControlCornerRadius);
                 }
 
                 if (backButton != null)
                 {
-                        backButton.BackColor = surface;
+                        backButton.BackColor = inputSurface;
                         backButton.ForeColor = textPrimary;
                         backButton.FlatStyle = FlatStyle.Flat;
                         backButton.FlatAppearance.BorderSize = 1;
@@ -1759,15 +1766,62 @@ public partial class MainForm : Form
 
         private void ApplyControlPanelStyle()
         {
+                ThemePalette palette = ThemeManager.Current;
                 if (controlPanel != null)
                 {
-                        controlPanel.BackColor = ThemeManager.Current.SurfaceBackground;
+                        controlPanel.BackColor = palette.SurfaceAlt;
+                }
+
+                if (lyricsLabel != null)
+                {
+                        lyricsLabel.BackColor = palette.SurfaceBackground;
+                        lyricsLabel.ForeColor = palette.TextPrimary;
+                }
+
+                if (currentSongLabel != null)
+                {
+                        currentSongLabel.ForeColor = palette.TextPrimary;
+                }
+
+                if (timeLabel != null)
+                {
+                        timeLabel.ForeColor = palette.TextSecondary;
+                }
+
+                if (volumeLabel != null)
+                {
+                        volumeLabel.ForeColor = palette.TextSecondary;
                 }
 
                 RegisterRoundedControl(playPauseButton, DefaultControlCornerRadius);
                 RegisterRoundedControl(progressTrackBar, DefaultControlCornerRadius);
                 RegisterRoundedControl(volumeTrackBar, DefaultControlCornerRadius);
                 RegisterRoundedControl(lyricsLabel, DefaultControlCornerRadius);
+        }
+
+        private void EnsureSearchPanelDividerPaint()
+        {
+                if (searchPanel == null || _searchPanelPaintHooked)
+                {
+                        return;
+                }
+
+                searchPanel.Paint += SearchPanel_Paint;
+                _searchPanelPaintHooked = true;
+        }
+
+        private void SearchPanel_Paint(object sender, PaintEventArgs e)
+        {
+                if (searchPanel == null)
+                {
+                        return;
+                }
+
+                using (var pen = new Pen(ThemeManager.Current.Border))
+                {
+                        int y = searchPanel.Height - 1;
+                        e.Graphics.DrawLine(pen, 0, y, searchPanel.Width, y);
+                }
         }
 
         private void ApplyResultListViewStyle()
@@ -1781,6 +1835,7 @@ public partial class MainForm : Form
                 resultListView.BackColor = palette.SurfaceBackground;
                 resultListView.ForeColor = palette.TextPrimary;
                 resultListView.BorderStyle = BorderStyle.FixedSingle;
+                resultListView.GridLines = false;
                 RegisterRoundedControl(resultListView, DefaultControlCornerRadius);
         }
 
@@ -24190,17 +24245,17 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
 		this.searchPanel.Dock = System.Windows.Forms.DockStyle.Top;
 		this.searchPanel.Location = new System.Drawing.Point(0, 28);
 		this.searchPanel.Name = "searchPanel";
-		this.searchPanel.Padding = new System.Windows.Forms.Padding(16, 12, 16, 12);
-		this.searchPanel.Size = new System.Drawing.Size(1200, 72);
+		this.searchPanel.Padding = new System.Windows.Forms.Padding(16, 16, 16, 16);
+		this.searchPanel.Size = new System.Drawing.Size(1200, 84);
         this.searchPanel.TabIndex = 0;
           this.searchTypeComboBox.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
-		this.searchTypeComboBox.Font = new System.Drawing.Font("Microsoft YaHei UI", 10f);
+		this.searchTypeComboBox.Font = new System.Drawing.Font("Microsoft YaHei UI", 11f);
 		this.searchTypeComboBox.FormattingEnabled = true;
         this.searchTypeComboBox.Items.AddRange("歌曲", "歌单", "专辑", "歌手", "播客");
         this.searchTypeComboBox.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
-		this.searchTypeComboBox.Location = new System.Drawing.Point(896, 18);
+		this.searchTypeComboBox.Location = new System.Drawing.Point(888, 22);
 		this.searchTypeComboBox.Name = "searchTypeComboBox";
-		this.searchTypeComboBox.Size = new System.Drawing.Size(180, 32);
+		this.searchTypeComboBox.Size = new System.Drawing.Size(180, 40);
 		this.searchTypeComboBox.TabIndex = 2;
           this.searchTypeComboBox.SelectedIndexChanged += new System.EventHandler(searchTypeComboBox_SelectedIndexChanged);
 		this.searchTypeLabel.AutoSize = true;
@@ -24212,16 +24267,17 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
 		this.searchTypeLabel.Text = "类型:";
 		this.searchButton.Font = new System.Drawing.Font("Microsoft YaHei UI", 12f, System.Drawing.FontStyle.Bold);
         this.searchButton.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
-		this.searchButton.Location = new System.Drawing.Point(1088, 18);
+		this.searchButton.Location = new System.Drawing.Point(1080, 22);
 		this.searchButton.Name = "searchButton";
-		this.searchButton.Size = new System.Drawing.Size(96, 36);
+		this.searchButton.Size = new System.Drawing.Size(104, 40);
 		this.searchButton.TabIndex = 3;
 		this.searchButton.Text = "搜索";
 		this.searchButton.UseVisualStyleBackColor = false;
+		this.searchButton.Tag = "Primary";
                 this.searchButton.Click += new System.EventHandler(searchButton_Click);
                 this.backButton.Font = new System.Drawing.Font("Microsoft YaHei UI", 14f, System.Drawing.FontStyle.Bold);
         this.backButton.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left;
-                this.backButton.Location = new System.Drawing.Point(16, 14);
+                this.backButton.Location = new System.Drawing.Point(16, 20);
                 this.backButton.Name = "backButton";
                 this.backButton.Size = new System.Drawing.Size(44, 44);
                 this.backButton.TabStop = false;
@@ -24253,10 +24309,10 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
 		this.searchClearHistoryMenuItem.Click += new System.EventHandler(searchClearHistoryMenuItem_Click);
 		this.searchTextBox.Font = new System.Drawing.Font("Microsoft YaHei UI", 12f);
         this.searchTextBox.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
-		this.searchTextBox.Location = new System.Drawing.Point(136, 18);
+		this.searchTextBox.Location = new System.Drawing.Point(136, 22);
           this.searchTextBox.Name = "searchTextBox";
           this.searchTextBox.AccessibleDescription = "搜索或粘贴网易云网页 URL ，多 URL 以分号分隔";
-          this.searchTextBox.Size = new System.Drawing.Size(694, 36);
+          this.searchTextBox.Size = new System.Drawing.Size(736, 40);
           this.searchTextBox.TabIndex = 1;
           this.searchTextBox.ContextMenuStrip = this.searchTextContextMenu;
 		this.searchTextBox.TextChanged += new System.EventHandler(searchTextBox_TextChanged);
@@ -24264,7 +24320,7 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
 		this.searchLabel.AutoSize = true;
 		this.searchLabel.Font = new System.Drawing.Font("Microsoft YaHei UI", 12f);
         this.searchLabel.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left;
-		this.searchLabel.Location = new System.Drawing.Point(72, 22);
+		this.searchLabel.Location = new System.Drawing.Point(72, 26);
                 this.searchLabel.Name = "searchLabel";
                 this.searchLabel.Size = new System.Drawing.Size(111, 27);
                 this.searchLabel.TabIndex = 0;
@@ -24272,12 +24328,13 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
                 this.resultListView.Columns.AddRange(this.columnHeader0, this.columnHeader1, this.columnHeader2, this.columnHeader3, this.columnHeader4, this.columnHeader5);
 		this.resultListView.Dock = System.Windows.Forms.DockStyle.Fill;
 		this.resultListView.FullRowSelect = true;
-		this.resultListView.GridLines = true;
+		this.resultListView.GridLines = false;
 		this.resultListView.HideSelection = false;
-		this.resultListView.Location = new System.Drawing.Point(0, 100);
+		this.resultListView.Location = new System.Drawing.Point(0, 112);
         this.resultListView.MultiSelect = false;
         this.resultListView.Name = "resultListView";
-        this.resultListView.Size = new System.Drawing.Size(1200, 408);
+        this.resultListView.Size = new System.Drawing.Size(1200, 368);
+		this.resultListView.Font = new System.Drawing.Font("Microsoft YaHei UI", 10.5f);
         this.resultListView.TabIndex = 1;
         this.resultListView.UseCompatibleStateImageBehavior = false;
         this.resultListView.View = System.Windows.Forms.View.Details;
@@ -24312,34 +24369,34 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
                 this.controlPanel.Controls.Add(this.playPauseButton);
                 this.controlPanel.Controls.Add(this.currentSongLabel);
 		this.controlPanel.Dock = System.Windows.Forms.DockStyle.Bottom;
-		this.controlPanel.Location = new System.Drawing.Point(0, 500);
+		this.controlPanel.Location = new System.Drawing.Point(0, 480);
 		this.controlPanel.Name = "controlPanel";
-		this.controlPanel.Size = new System.Drawing.Size(1200, 150);
+		this.controlPanel.Size = new System.Drawing.Size(1200, 170);
                 this.controlPanel.TabIndex = 3;
 		this.controlPanel.TabStop = false;
 		this.controlPanel.Text = string.Empty;
 		this.controlPanel.AccessibleRole = System.Windows.Forms.AccessibleRole.Grouping;
 		this.lyricsLabel.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
 		this.lyricsLabel.BackColor = System.Drawing.Color.FromArgb(245, 245, 245);
-		this.lyricsLabel.Font = new System.Drawing.Font("Microsoft YaHei UI", 11f, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, 0);
+		this.lyricsLabel.Font = new System.Drawing.Font("Microsoft YaHei UI", 12f, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, 0);
 		this.lyricsLabel.ForeColor = System.Drawing.Color.FromArgb(51, 51, 51);
-		this.lyricsLabel.Location = new System.Drawing.Point(12, 90);
+		this.lyricsLabel.Location = new System.Drawing.Point(12, 120);
 		this.lyricsLabel.Name = "lyricsLabel";
 		this.lyricsLabel.Padding = new System.Windows.Forms.Padding(10, 8, 10, 8);
-		this.lyricsLabel.Size = new System.Drawing.Size(1176, 50);
+		this.lyricsLabel.Size = new System.Drawing.Size(1176, 44);
                 this.lyricsLabel.TabIndex = 7;
                 this.lyricsLabel.Text = "暂无歌词";
 		this.lyricsLabel.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
 		this.lyricsLabel.AccessibleRole = System.Windows.Forms.AccessibleRole.Text;
 		this.volumeLabel.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
-		this.volumeLabel.Location = new System.Drawing.Point(1130, 70);
+		this.volumeLabel.Location = new System.Drawing.Point(1130, 74);
 		this.volumeLabel.Name = "volumeLabel";
 		this.volumeLabel.Size = new System.Drawing.Size(58, 23);
                 this.volumeLabel.TabIndex = 6;
                 this.volumeLabel.Text = "100%";
                 this.volumeLabel.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
                 this.volumeTrackBar.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
-                this.volumeTrackBar.Location = new System.Drawing.Point(1000, 60);
+                this.volumeTrackBar.Location = new System.Drawing.Point(1000, 64);
                 this.volumeTrackBar.Maximum = 100;
                 this.volumeTrackBar.Name = "volumeTrackBar";
         this.volumeTrackBar.Size = new System.Drawing.Size(124, 56);
@@ -24350,14 +24407,14 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
         this.volumeTrackBar.KeyDown += new System.Windows.Forms.KeyEventHandler(volumeTrackBar_KeyDown);
         this.volumeTrackBar.Scroll += new System.EventHandler(volumeTrackBar_Scroll);
                 this.timeLabel.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
-                this.timeLabel.Location = new System.Drawing.Point(1050, 30);
+                this.timeLabel.Location = new System.Drawing.Point(1050, 34);
                 this.timeLabel.Name = "timeLabel";
                 this.timeLabel.Size = new System.Drawing.Size(138, 23);
                 this.timeLabel.TabIndex = 5;
                 this.timeLabel.Text = "00:00 / 00:00";
                 this.timeLabel.TextAlign = System.Drawing.ContentAlignment.MiddleRight;
                 this.progressTrackBar.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
-                this.progressTrackBar.Location = new System.Drawing.Point(120, 30);
+                this.progressTrackBar.Location = new System.Drawing.Point(120, 34);
                 this.progressTrackBar.Maximum = 1000;
                 this.progressTrackBar.Name = "progressTrackBar";
                 this.progressTrackBar.Size = new System.Drawing.Size(924, 56);
@@ -24369,17 +24426,18 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
         this.progressTrackBar.KeyDown += new System.Windows.Forms.KeyEventHandler(progressTrackBar_KeyDown);
         this.progressTrackBar.MouseDown += new System.Windows.Forms.MouseEventHandler(progressTrackBar_MouseDown);
         this.progressTrackBar.MouseUp += new System.Windows.Forms.MouseEventHandler(progressTrackBar_MouseUp);
-		this.playPauseButton.Font = new System.Drawing.Font("Microsoft YaHei UI", 10f, System.Drawing.FontStyle.Bold);
-		this.playPauseButton.Location = new System.Drawing.Point(12, 30);
+		this.playPauseButton.Font = new System.Drawing.Font("Microsoft YaHei UI", 11f, System.Drawing.FontStyle.Bold);
+		this.playPauseButton.Location = new System.Drawing.Point(12, 32);
 		this.playPauseButton.Name = "playPauseButton";
-		this.playPauseButton.Size = new System.Drawing.Size(100, 56);
+		this.playPauseButton.Size = new System.Drawing.Size(100, 60);
 		this.playPauseButton.TabIndex = 1;
 		this.playPauseButton.Text = "播放";
 		this.playPauseButton.UseVisualStyleBackColor = true;
+		this.playPauseButton.Tag = "Primary";
           this.playPauseButton.Click += new System.EventHandler(playPauseButton_Click);
 		this.currentSongLabel.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
-		this.currentSongLabel.Font = new System.Drawing.Font("Microsoft YaHei UI", 11f, System.Drawing.FontStyle.Bold);
-		this.currentSongLabel.Location = new System.Drawing.Point(12, 5);
+		this.currentSongLabel.Font = new System.Drawing.Font("Microsoft YaHei UI", 12f, System.Drawing.FontStyle.Bold);
+		this.currentSongLabel.Location = new System.Drawing.Point(12, 8);
 		this.currentSongLabel.Name = "currentSongLabel";
 		this.currentSongLabel.Size = new System.Drawing.Size(1176, 23);
 		this.currentSongLabel.TabIndex = 0;
@@ -24682,7 +24740,7 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
 		base.Controls.Add(this.controlPanel);
 		base.Controls.Add(this.statusStrip1);
 		base.Controls.Add(this.menuStrip1);
-		this.Font = new System.Drawing.Font("Microsoft YaHei UI", 9f);
+		this.Font = new System.Drawing.Font("Microsoft YaHei UI", 10.5f);
 		base.MainMenuStrip = this.menuStrip1;
 		this.MinimumSize = new System.Drawing.Size(1000, 700);
 		base.Name = "MainForm";

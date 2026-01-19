@@ -43,7 +43,7 @@ namespace YTPlayer
 
             // 与 .NET Framework 4.8 视觉一致（默认字体/高 DPI 行为）
             Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
-            Application.SetDefaultFont(new Font("Microsoft Sans Serif", 8.25f));
+            Application.SetDefaultFont(new Font("Microsoft YaHei UI", 10.5f));
 
             // ✅ 注册全局异常处理器
             AppDomain.CurrentDomain.UnhandledException += OnUnhandledException;

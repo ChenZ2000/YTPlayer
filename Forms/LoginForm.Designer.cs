@@ -137,7 +137,7 @@ namespace YTPlayer.Forms
             //
             // webReloadButton
             //
-            this.webReloadButton.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
+            this.webReloadButton.Font = new System.Drawing.Font("Microsoft YaHei UI", 10F);
             this.webReloadButton.Location = new System.Drawing.Point(360, 14);
             this.webReloadButton.Name = "webReloadButton";
             this.webReloadButton.Size = new System.Drawing.Size(90, 36);
@@ -149,7 +149,7 @@ namespace YTPlayer.Forms
             // webStatusLabel
             //
             this.webStatusLabel.AutoEllipsis = true;
-            this.webStatusLabel.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
+            this.webStatusLabel.Font = new System.Drawing.Font("Microsoft YaHei UI", 10F);
             this.webStatusLabel.Location = new System.Drawing.Point(12, 18);
             this.webStatusLabel.Name = "webStatusLabel";
             this.webStatusLabel.Size = new System.Drawing.Size(230, 24);

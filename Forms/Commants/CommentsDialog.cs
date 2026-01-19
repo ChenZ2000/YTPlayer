@@ -32,7 +32,7 @@ namespace YTPlayer.Forms
             MinimizeBox = false;
             MaximizeBox = false;
             AutoScaleMode = AutoScaleMode.Font;
-            Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Regular, GraphicsUnit.Point, 134);
+            Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Regular, GraphicsUnit.Point, 134);
             Width = 720;
             Height = 520;
             MinimumSize = new Size(560, 380);
@@ -86,7 +86,7 @@ namespace YTPlayer.Forms
                     ShowLines = true,
                     ShowPlusMinus = true,
                     ShowRootLines = true,
-                    DrawMode = TreeViewDrawMode.Normal,
+                    DrawMode = TreeViewDrawMode.OwnerDrawText,
                     AccessibleRole = AccessibleRole.Outline,
                     AccessibleName = "评论",
                     AccessibleDescription = "评论列表",

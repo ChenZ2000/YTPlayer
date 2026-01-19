@@ -26,7 +26,7 @@ namespace YTPlayer.Updater
             ConfigurePrivateLibPath();
 #if !NET48
             Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
-            Application.SetDefaultFont(new Font("Microsoft Sans Serif", 8.25f));
+            Application.SetDefaultFont(new Font("Microsoft YaHei UI", 10.5f));
 #endif
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
