@@ -55,6 +55,18 @@
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Properties\VersionInfo.g.cs" />
+    <Compile Include="..\Utils\ThemeManager.cs">
+      <Link>Utils\ThemeManager.cs</Link>
+    </Compile>
+    <Compile Include="..\Utils\ThemedProgressBar.cs">
+      <Link>Utils\ThemedProgressBar.cs</Link>
+    </Compile>
+    <Compile Include="..\Utils\MessageBox.cs">
+      <Link>Utils\MessageBox.cs</Link>
+    </Compile>
+    <Compile Include="..\Forms\ThemedMessageBoxForm.cs">
+      <Link>Forms\ThemedMessageBoxForm.cs</Link>
+    </Compile>
   </ItemGroup>
 
   <ItemGroup />

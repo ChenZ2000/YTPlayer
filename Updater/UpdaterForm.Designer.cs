@@ -18,10 +18,13 @@ namespace YTPlayer.Updater
             this.headingLabel = new System.Windows.Forms.Label();
             this.versionLabel = new System.Windows.Forms.Label();
             this.statusLabel = new System.Windows.Forms.Label();
-            this.progressBar = new System.Windows.Forms.ProgressBar();
+            this.progressBar = new YTPlayer.Utils.ThemedProgressBar();
+            this.logPanel = new System.Windows.Forms.Panel();
             this.logListBox = new System.Windows.Forms.ListBox();
+            this.logPlaceholderLabel = new System.Windows.Forms.Label();
             this.cancelButton = new System.Windows.Forms.Button();
             this.resumeButton = new System.Windows.Forms.Button();
+            this.logPanel.SuspendLayout();
             this.SuspendLayout();
             // 
             // headingLabel
@@ -61,15 +64,35 @@ namespace YTPlayer.Updater
             this.progressBar.Style = System.Windows.Forms.ProgressBarStyle.Continuous;
             this.progressBar.TabIndex = 3;
             // 
+            // logPanel
+            // 
+            this.logPanel.Controls.Add(this.logListBox);
+            this.logPanel.Controls.Add(this.logPlaceholderLabel);
+            this.logPanel.Location = new System.Drawing.Point(22, 140);
+            this.logPanel.Name = "logPanel";
+            this.logPanel.Size = new System.Drawing.Size(506, 184);
+            this.logPanel.TabIndex = 4;
+            // 
             // logListBox
             // 
+            this.logListBox.Dock = System.Windows.Forms.DockStyle.Fill;
             this.logListBox.FormattingEnabled = true;
             this.logListBox.HorizontalScrollbar = true;
             this.logListBox.ItemHeight = 20;
-            this.logListBox.Location = new System.Drawing.Point(22, 140);
             this.logListBox.Name = "logListBox";
             this.logListBox.Size = new System.Drawing.Size(506, 184);
-            this.logListBox.TabIndex = 4;
+            this.logListBox.TabIndex = 0;
+            // 
+            // logPlaceholderLabel
+            // 
+            this.logPlaceholderLabel.BackColor = System.Drawing.Color.Transparent;
+            this.logPlaceholderLabel.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.logPlaceholderLabel.Location = new System.Drawing.Point(0, 0);
+            this.logPlaceholderLabel.Name = "logPlaceholderLabel";
+            this.logPlaceholderLabel.Size = new System.Drawing.Size(506, 184);
+            this.logPlaceholderLabel.TabIndex = 1;
+            this.logPlaceholderLabel.Text = "暂无日志";
+            this.logPlaceholderLabel.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
             // 
             // cancelButton
             //
@@ -101,7 +124,7 @@ namespace YTPlayer.Updater
             this.ClientSize = new System.Drawing.Size(550, 380);
             this.Controls.Add(this.resumeButton);
             this.Controls.Add(this.cancelButton);
-            this.Controls.Add(this.logListBox);
+            this.Controls.Add(this.logPanel);
             this.Controls.Add(this.progressBar);
             this.Controls.Add(this.statusLabel);
             this.Controls.Add(this.versionLabel);
@@ -112,6 +135,7 @@ namespace YTPlayer.Updater
             this.Name = "UpdaterForm";
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
             this.Text = "易听 - 更新程序";
+            this.logPanel.ResumeLayout(false);
             this.ResumeLayout(false);
             this.PerformLayout();
 
@@ -122,8 +146,10 @@ namespace YTPlayer.Updater
         private System.Windows.Forms.Label headingLabel;
         private System.Windows.Forms.Label versionLabel;
         private System.Windows.Forms.Label statusLabel;
-        private System.Windows.Forms.ProgressBar progressBar;
+        private YTPlayer.Utils.ThemedProgressBar progressBar;
+        private System.Windows.Forms.Panel logPanel;
         private System.Windows.Forms.ListBox logListBox;
+        private System.Windows.Forms.Label logPlaceholderLabel;
         private System.Windows.Forms.Button cancelButton;
         private System.Windows.Forms.Button resumeButton;
     }

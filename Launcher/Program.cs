@@ -3,6 +3,8 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Windows.Forms;
+using MessageBox = YTPlayer.MessageBox;
+using YTPlayer.Utils;
 
 namespace YTPlayer.Launcher
 {
@@ -17,6 +19,10 @@ namespace YTPlayer.Launcher
         {
             try
             {
+                Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
+                ThemeManager.Initialize();
+
                 string rootDir = AppDomain.CurrentDomain.BaseDirectory;
                 string libsDir = Path.Combine(rootDir, LibsFolderName);
                 string mainExe = Path.Combine(libsDir, MainExeName);

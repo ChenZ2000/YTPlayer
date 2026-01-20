@@ -16,6 +16,7 @@ namespace YTPlayer.Forms
         public KeyboardShortcutsDialog()
         {
             InitializeComponent();
+            ThemeManager.ApplyTheme(this);
         }
 
         private void InitializeComponent()
@@ -422,3 +423,5 @@ namespace YTPlayer.Forms
         }
     }
 }
+
+

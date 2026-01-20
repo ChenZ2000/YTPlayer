@@ -3,7 +3,7 @@ namespace YTPlayer
 {
     internal static class VersionInfo
     {
-        public const string Version = "2.1.1";
-        public const string AssemblyVersion = "2.1.1.0";
+        public const string Version = "2.1.2";
+        public const string AssemblyVersion = "2.1.2.0";
     }
 }

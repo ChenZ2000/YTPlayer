@@ -1,7 +1,8 @@
 using System;
 using System.Diagnostics;
-using System.Drawing;
+using System.Drawing;
 using System.Windows.Forms;
+using YTPlayer.Utils;
 using MessageBox = YTPlayer.MessageBox;
 
 namespace YTPlayer.Forms
@@ -17,6 +18,7 @@ namespace YTPlayer.Forms
 
         public PurchaseLinkDialog(string songName, string albumName, string purchaseUrl)
         {
+            ThemeManager.ApplyTheme(this);
             _purchaseUrl = purchaseUrl ?? throw new ArgumentNullException(nameof(purchaseUrl));
             PurchaseRequested = false;
 
@@ -110,3 +112,5 @@ namespace YTPlayer.Forms
         }
     }
 }
+
+

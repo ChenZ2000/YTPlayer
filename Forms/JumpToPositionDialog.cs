@@ -1,6 +1,7 @@
 using System;
-using System.Text.RegularExpressions;
+using System.Text.RegularExpressions;
 using System.Windows.Forms;
+using YTPlayer.Utils;
 using MessageBox = YTPlayer.MessageBox;
 
 namespace YTPlayer.Forms
@@ -32,6 +33,7 @@ namespace YTPlayer.Forms
             _duration = duration;
 
             InitializeComponent();
+            ThemeManager.ApplyTheme(this);
             InitializeCustomComponents();
         }
 
@@ -272,4 +274,6 @@ namespace YTPlayer.Forms
         }
     }
 }
+
+
 

@@ -17,6 +17,7 @@ namespace YTPlayer.Forms
         public AboutDialog()
         {
             InitializeComponent();
+            ThemeManager.ApplyTheme(this);
         }
 
         private void InitializeComponent()
@@ -488,3 +489,5 @@ namespace YTPlayer.Forms
         }
     }
 }
+
+

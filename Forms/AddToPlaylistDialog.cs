@@ -2,8 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
-using System.Threading.Tasks;
+using System.Threading.Tasks;
 using System.Windows.Forms;
+using YTPlayer.Utils;
 using MessageBox = YTPlayer.MessageBox;
 using YTPlayer.Core;
 using YTPlayer.Models;
@@ -33,6 +34,7 @@ namespace YTPlayer.Forms
             _userId = userId;
 
             InitializeComponent();
+            ThemeManager.ApplyTheme(this);
         }
 
         private async void AddToPlaylistDialog_Load(object sender, EventArgs e)
@@ -373,3 +375,5 @@ namespace YTPlayer.Forms
         }
     }
 }
+
+

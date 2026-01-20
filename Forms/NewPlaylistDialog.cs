@@ -1,6 +1,7 @@
 using System;
-using System.Drawing;
+using System.Drawing;
 using System.Windows.Forms;
+using YTPlayer.Utils;
 
 namespace YTPlayer.Forms
 {
@@ -21,6 +22,7 @@ namespace YTPlayer.Forms
 
         public NewPlaylistDialog(string? initialName = null)
         {
+            ThemeManager.ApplyTheme(this);
             AutoScaleDimensions = new SizeF(96F, 96F);
             AutoScaleMode = AutoScaleMode.Dpi;
             ClientSize = new Size(420, 150);
@@ -100,3 +102,5 @@ namespace YTPlayer.Forms
         }
     }
 }
+
+

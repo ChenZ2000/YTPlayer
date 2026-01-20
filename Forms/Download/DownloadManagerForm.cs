@@ -37,6 +37,7 @@ namespace YTPlayer.Forms.Download
         public DownloadManagerForm()
         {
             InitializeComponent();
+            ThemeManager.ApplyTheme(this);
             this.KeyPreview = true;
             this.KeyDown += DownloadManagerForm_KeyDown;
 
@@ -987,3 +988,5 @@ namespace YTPlayer.Forms.Download
         #endregion
     }
 }
+
+

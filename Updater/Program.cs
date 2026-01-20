@@ -8,6 +8,8 @@ using System.Runtime.InteropServices;
 using System.Runtime.Loader;
 #endif
 using System.Windows.Forms;
+using MessageBox = YTPlayer.MessageBox;
+using YTPlayer.Utils;
 using YTPlayer.Update;
 
 namespace YTPlayer.Updater
@@ -30,6 +32,7 @@ namespace YTPlayer.Updater
 #endif
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
+            ThemeManager.Initialize();
 
             UpdaterOptions options;
             try

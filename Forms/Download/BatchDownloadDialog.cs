@@ -1,6 +1,7 @@
 using System;
-using System.Collections.Generic;
+using System.Collections.Generic;
 using System.Windows.Forms;
+using YTPlayer.Utils;
 using MessageBox = YTPlayer.MessageBox;
 
 namespace YTPlayer.Forms.Download
@@ -29,6 +30,7 @@ namespace YTPlayer.Forms.Download
         public BatchDownloadDialog(List<string> items, string title = "批量下载")
         {
             InitializeComponent();
+            ThemeManager.ApplyTheme(this);
 
             SelectedIndices = new List<int>();
 
@@ -130,3 +132,5 @@ namespace YTPlayer.Forms.Download
         #endregion
     }
 }
+
+

@@ -31,6 +31,7 @@ namespace YTPlayer.Forms
 
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
             InitializeComponent();
+            ThemeManager.ApplyTheme(this);
         }
 
         protected override void Dispose(bool disposing)
@@ -530,3 +531,5 @@ namespace YTPlayer.Forms
         }
     }
 }
+
+

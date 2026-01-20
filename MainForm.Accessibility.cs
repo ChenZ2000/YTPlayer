@@ -196,11 +196,24 @@ namespace YTPlayer
 
         private void FocusListAfterEnrich(int pendingFocusIndex)
         {
-            if ((!_pendingSongFocusSatisfied || string.IsNullOrWhiteSpace(_pendingSongFocusSatisfiedViewSource) || !string.Equals(_pendingSongFocusSatisfiedViewSource, _currentViewSource, StringComparison.OrdinalIgnoreCase)) && !IsListAutoFocusSuppressed && resultListView.Items.Count != 0)
+            if (IsListAutoFocusSuppressed || resultListView == null || resultListView.Items.Count == 0)
             {
-                int targetIndex = ((pendingFocusIndex >= 0) ? pendingFocusIndex : ((resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : 0));
-                RestoreListViewFocus(targetIndex);
+                return;
             }
+
+            bool viewMatched = _pendingSongFocusSatisfied
+                && !string.IsNullOrWhiteSpace(_pendingSongFocusSatisfiedViewSource)
+                && string.Equals(_pendingSongFocusSatisfiedViewSource, _currentViewSource, StringComparison.OrdinalIgnoreCase);
+            bool hasSelection = resultListView.SelectedIndices.Count > 0 || resultListView.FocusedItem != null;
+            if (viewMatched && hasSelection)
+            {
+                return;
+            }
+
+            int targetIndex = (pendingFocusIndex >= 0)
+                ? pendingFocusIndex
+                : ((resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : 0);
+            RestoreListViewFocus(targetIndex);
         }
 
         private Task EnsureListFocusedAfterUrlParseAsync(int fallbackIndex = 0)

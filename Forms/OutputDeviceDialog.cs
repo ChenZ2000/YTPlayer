@@ -1,8 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
-using System.Linq;
+using System.Linq;
 using System.Windows.Forms;
+using YTPlayer.Utils;
 using YTPlayer.Models;
 
 namespace YTPlayer.Forms
@@ -33,6 +34,7 @@ namespace YTPlayer.Forms
                 : activeDeviceId!;
 
             InitializeComponent();
+            ThemeManager.ApplyTheme(this);
             PopulateDevices();
         }
 
@@ -162,3 +164,5 @@ namespace YTPlayer.Forms
         }
     }
 }
+
+

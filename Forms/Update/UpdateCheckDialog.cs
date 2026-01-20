@@ -3,9 +3,10 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Windows.Forms;
+using YTPlayer.Utils;
 using MessageBox = YTPlayer.MessageBox;
-using System.ComponentModel;
+using System.ComponentModel;
+using System.Windows.Forms;
 using YTPlayer.Update;
 
 namespace YTPlayer.Forms
@@ -21,6 +22,7 @@ namespace YTPlayer.Forms
         public UpdateCheckDialog()
         {
             InitializeComponent();
+            ThemeManager.ApplyTheme(this);
             currentVersionLabel.Text = $"当前版本：v{VersionInfo.Version}";
             _updateClient = new UpdateServiceClient(UpdateConstants.DefaultEndpoint, "YTPlayer", VersionInfo.Version);
         }
@@ -378,3 +380,5 @@ namespace YTPlayer.Forms
         }
     }
 }
+
+

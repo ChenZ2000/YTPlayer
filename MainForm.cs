@@ -165,6 +165,21 @@ public partial class MainForm : Form
 		}
 	}
 
+	private sealed class ArtistSongIndexCache
+	{
+		public List<SongInfo> Songs { get; } = new List<SongInfo>();
+
+		public HashSet<string> SeenIds { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+		public List<AlbumInfo> Albums { get; set; } = new List<AlbumInfo>();
+
+		public int AlbumCursor { get; set; }
+
+		public bool IsComplete { get; set; }
+
+		public DateTime LastAccessUtc { get; set; } = DateTime.UtcNow;
+	}
+
 	private sealed class ArtistAlbumsViewData
 	{
 		public List<AlbumInfo> Albums { get; }
@@ -683,6 +698,28 @@ public partial class MainForm : Form
 	private int _maxPage = 1;
 
 	private bool _hasNextSearchPage = false;
+
+	private readonly object _paginationLimitLock = new object();
+
+	private readonly Dictionary<string, int> _paginationOffsetCaps = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+	private readonly object _artistSongCacheLock = new object();
+
+	private readonly Dictionary<string, ArtistSongIndexCache> _artistSongIndexCache = new Dictionary<string, ArtistSongIndexCache>(StringComparer.OrdinalIgnoreCase);
+
+	private readonly Dictionary<string, SemaphoreSlim> _artistSongIndexLocks = new Dictionary<string, SemaphoreSlim>(StringComparer.OrdinalIgnoreCase);
+
+	private readonly Dictionary<string, List<SongInfo>> _albumSongsCache = new Dictionary<string, List<SongInfo>>(StringComparer.OrdinalIgnoreCase);
+
+	private readonly Dictionary<string, SemaphoreSlim> _albumSongsLocks = new Dictionary<string, SemaphoreSlim>(StringComparer.OrdinalIgnoreCase);
+
+	private readonly Dictionary<string, int> _artistSongsTotalCountCache = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+	private const int ArtistSongIndexCacheLimit = 4;
+
+	private const int AlbumSongsCacheLimit = 64;
+
+	private const int ArtistSongsAlbumFetchConcurrency = 4;
 
 	private bool _isCurrentPlayingMenuActive = false;
 
@@ -1229,11 +1266,11 @@ public partial class MainForm : Form
 
 	private Label volumeLabel;
 
-        private TrackBar volumeTrackBar;
+        private AccessibleTrackBar volumeTrackBar;
 
 	private Label timeLabel;
 
-        private TrackBar progressTrackBar;
+        private AccessibleTrackBar progressTrackBar;
 
 	private Button playPauseButton;
 
@@ -3578,6 +3615,11 @@ private void ActivateMixedSearchTypeOption()
 					int totalCount = songResult?.TotalCount ?? songs.Count;
 					bool hasMore = songResult?.HasMore ?? false;
 					int maxPage = Math.Max(1, (int)Math.Ceiling((double)Math.Max(1, totalCount) / (double)Math.Max(1, _resultsPerPage)));
+					string paginationKey = BuildSearchPaginationKey(keyword, "歌曲");
+					if (TryHandlePaginationEmptyResult(paginationKey, offset, _resultsPerPage, totalCount, songs.Count, hasMore, viewSource, accessibleName))
+					{
+						return;
+					}
 					if (effectiveToken.IsCancellationRequested)
 					{
 						return;
@@ -3611,6 +3653,11 @@ private void ActivateMixedSearchTypeOption()
 				catch (Exception ex)
 				{
 					Exception ex2 = ex;
+					string paginationKey = BuildSearchPaginationKey(keyword, "歌曲");
+					if (TryHandlePaginationOffsetError(ex2, paginationKey, offset, _resultsPerPage, viewSource, accessibleName))
+					{
+						return;
+					}
 					if (TryHandleOperationCancelled(ex2, "搜索歌曲已取消"))
 					{
 						return;
@@ -3681,6 +3728,11 @@ private void ActivateMixedSearchTypeOption()
 					int totalCount = playlistResult?.TotalCount ?? playlists.Count;
 					bool hasMore = playlistResult?.HasMore ?? false;
 					int maxPage = Math.Max(1, (int)Math.Ceiling((double)Math.Max(1, totalCount) / (double)Math.Max(1, _resultsPerPage)));
+					string paginationKey = BuildSearchPaginationKey(keyword, "歌单");
+					if (TryHandlePaginationEmptyResult(paginationKey, offset, _resultsPerPage, totalCount, playlists.Count, hasMore, viewSource, accessibleName))
+					{
+						return;
+					}
 					if (effectiveToken.IsCancellationRequested)
 					{
 						return;
@@ -3713,6 +3765,11 @@ private void ActivateMixedSearchTypeOption()
 				catch (Exception ex)
 				{
 					Exception ex2 = ex;
+					string paginationKey = BuildSearchPaginationKey(keyword, "歌单");
+					if (TryHandlePaginationOffsetError(ex2, paginationKey, offset, _resultsPerPage, viewSource, accessibleName))
+					{
+						return;
+					}
 					if (TryHandleOperationCancelled(ex2, "搜索歌单已取消"))
 					{
 						return;
@@ -3783,6 +3840,11 @@ private void ActivateMixedSearchTypeOption()
 					int totalCount = albumResult?.TotalCount ?? albums.Count;
 					bool hasMore = albumResult?.HasMore ?? false;
 					int maxPage = Math.Max(1, (int)Math.Ceiling((double)Math.Max(1, totalCount) / (double)Math.Max(1, _resultsPerPage)));
+					string paginationKey = BuildSearchPaginationKey(keyword, "专辑");
+					if (TryHandlePaginationEmptyResult(paginationKey, offset, _resultsPerPage, totalCount, albums.Count, hasMore, viewSource, accessibleName))
+					{
+						return;
+					}
 					if (effectiveToken.IsCancellationRequested)
 					{
 						return;
@@ -3815,6 +3877,11 @@ private void ActivateMixedSearchTypeOption()
 				catch (Exception ex)
 				{
 					Exception ex2 = ex;
+					string paginationKey = BuildSearchPaginationKey(keyword, "专辑");
+					if (TryHandlePaginationOffsetError(ex2, paginationKey, offset, _resultsPerPage, viewSource, accessibleName))
+					{
+						return;
+					}
 					if (TryHandleOperationCancelled(ex2, "搜索专辑已取消"))
 					{
 						return;
@@ -3885,6 +3952,11 @@ private void ActivateMixedSearchTypeOption()
 					int totalCount = artistResult?.TotalCount ?? artists.Count;
 					bool hasMore = artistResult?.HasMore ?? false;
 					int maxPage = Math.Max(1, (int)Math.Ceiling((double)Math.Max(1, totalCount) / (double)Math.Max(1, _resultsPerPage)));
+					string paginationKey = BuildSearchPaginationKey(keyword, "歌手");
+					if (TryHandlePaginationEmptyResult(paginationKey, offset, _resultsPerPage, totalCount, artists.Count, hasMore, viewSource, accessibleName))
+					{
+						return;
+					}
 					if (effectiveToken.IsCancellationRequested)
 					{
 						return;
@@ -3917,6 +3989,11 @@ private void ActivateMixedSearchTypeOption()
 				catch (Exception ex)
 				{
 					Exception ex2 = ex;
+					string paginationKey = BuildSearchPaginationKey(keyword, "歌手");
+					if (TryHandlePaginationOffsetError(ex2, paginationKey, offset, _resultsPerPage, viewSource, accessibleName))
+					{
+						return;
+					}
 					if (TryHandleOperationCancelled(ex2, "搜索歌手已取消"))
 					{
 						return;
@@ -3987,6 +4064,11 @@ private void ActivateMixedSearchTypeOption()
 					int totalCount = podcastResult?.TotalCount ?? podcasts.Count;
 					bool hasMore = podcastResult?.HasMore ?? false;
 					int maxPage = Math.Max(1, (int)Math.Ceiling((double)Math.Max(1, totalCount) / (double)Math.Max(1, _resultsPerPage)));
+					string paginationKey = BuildSearchPaginationKey(keyword, "播客");
+					if (TryHandlePaginationEmptyResult(paginationKey, offset, _resultsPerPage, totalCount, podcasts.Count, hasMore, viewSource, accessibleName))
+					{
+						return;
+					}
 					if (effectiveToken.IsCancellationRequested)
 					{
 						return;
@@ -4019,6 +4101,11 @@ private void ActivateMixedSearchTypeOption()
 				catch (Exception ex)
 				{
 					Exception ex2 = ex;
+					string paginationKey = BuildSearchPaginationKey(keyword, "播客");
+					if (TryHandlePaginationOffsetError(ex2, paginationKey, offset, _resultsPerPage, viewSource, accessibleName))
+					{
+						return;
+					}
 					if (TryHandleOperationCancelled(ex2, "搜索播客已取消"))
 					{
 						return;
@@ -5726,6 +5813,8 @@ private void ActivateMixedSearchTypeOption()
 		}
 		checked
 		{
+			string viewSource = string.Empty;
+			string accessibleName = "播客列表";
 			try
 			{
 				UpdateStatusBar("正在加载播客...");
@@ -5734,13 +5823,22 @@ private void ActivateMixedSearchTypeOption()
 					SaveNavigationState();
 				}
 				offset = Math.Max(0, offset);
+				string paginationKey = BuildPodcastCategoryPaginationKey(categoryId);
+				bool offsetClamped;
+				int normalizedOffset = NormalizeOffsetWithCap(paginationKey, PodcastCategoryPageSize, offset, out offsetClamped);
+				if (offsetClamped)
+				{
+					int page = (normalizedOffset / PodcastCategoryPageSize) + 1;
+					UpdateStatusBar($"页码过大，已跳到第 {page} 页");
+				}
+				offset = normalizedOffset;
 				if (offset == 0 && !skipSave)
 				{
 					ClearPodcastCategoryFetchOffsets(categoryId);
 				}
 				string categoryName = ResolvePodcastCategoryName(categoryId);
-				string viewSource = $"podcast_cat_{categoryId}:offset{offset}";
-				string accessibleName = (string.IsNullOrWhiteSpace(categoryName) ? "播客列表" : (categoryName + " 播客"));
+				viewSource = $"podcast_cat_{categoryId}:offset{offset}";
+				accessibleName = (string.IsNullOrWhiteSpace(categoryName) ? "播客列表" : (categoryName + " 播客"));
 				int logicalOffset = offset;
 				int fetchOffsetSeed = ResolvePodcastCategoryFetchOffset(categoryId, logicalOffset);
 				ViewLoadRequest request = new ViewLoadRequest(viewSource, accessibleName, "正在加载播客...");
@@ -5796,6 +5894,10 @@ private void ActivateMixedSearchTypeOption()
 				{
 					SetPodcastCategoryFetchOffset(categoryId, checked(logicalOffset + 50), Math.Max(0, data.FetchOffsetNext));
 				}
+				if (TryHandlePaginationEmptyResult(paginationKey, logicalOffset, PodcastCategoryPageSize, totalCount, podcasts.Count, hasMoreFinal, viewSource, accessibleName))
+				{
+					return;
+				}
 				_currentPodcastCategoryId = categoryId;
 				_currentPodcastCategoryName = categoryName;
 				_currentPodcastCategoryOffset = logicalOffset;
@@ -5817,6 +5919,11 @@ private void ActivateMixedSearchTypeOption()
 			}
 			catch (Exception ex)
 			{
+				string paginationKey = BuildPodcastCategoryPaginationKey(categoryId);
+				if (TryHandlePaginationOffsetError(ex, paginationKey, offset, PodcastCategoryPageSize, viewSource, accessibleName))
+				{
+					return;
+				}
 				if (!TryHandleOperationCancelled(ex, "加载播客已取消"))
 				{
 					Debug.WriteLine($"[LoadPodcastsByCategory] 异常: {ex}");
@@ -6403,22 +6510,35 @@ private void ActivateMixedSearchTypeOption()
 				{
 					_podcastSortState.SetOption(option: false);
 				}
-				if (sortAscendingOverride.HasValue)
-				{
-					_podcastSortState.SetOption(sortAscendingOverride.Value);
-				}
-				bool isAscending = _podcastSortState.CurrentOption;
-				(List<PodcastEpisodeInfo> Episodes, bool HasMore, int TotalCount) tuple = await _apiClient.GetPodcastEpisodesAsync(radioId, 50, Math.Max(0, offset), isAscending);
-				List<PodcastEpisodeInfo> episodes = tuple.Episodes;
-				bool hasMore = tuple.HasMore;
-				int totalCount = tuple.TotalCount;
-				string accessibleName = _currentPodcast?.Name ?? "播客节目";
-				string viewSource = $"podcast:{radioId}:offset{Math.Max(0, offset)}";
-				if (isAscending)
-				{
-					viewSource += ":asc1";
-				}
-				_currentPodcastSoundOffset = Math.Max(0, offset);
+			if (sortAscendingOverride.HasValue)
+			{
+				_podcastSortState.SetOption(sortAscendingOverride.Value);
+			}
+			bool isAscending = _podcastSortState.CurrentOption;
+			string paginationKey = BuildPodcastEpisodesPaginationKey(radioId, isAscending);
+			bool offsetClamped;
+			int normalizedOffset = NormalizeOffsetWithCap(paginationKey, PodcastSoundPageSize, Math.Max(0, offset), out offsetClamped);
+			if (offsetClamped)
+			{
+				int page = (normalizedOffset / PodcastSoundPageSize) + 1;
+				UpdateStatusBar($"页码过大，已跳到第 {page} 页");
+			}
+			offset = normalizedOffset;
+			(List<PodcastEpisodeInfo> Episodes, bool HasMore, int TotalCount) tuple = await _apiClient.GetPodcastEpisodesAsync(radioId, 50, Math.Max(0, offset), isAscending);
+			List<PodcastEpisodeInfo> episodes = tuple.Episodes;
+			bool hasMore = tuple.HasMore;
+			int totalCount = tuple.TotalCount;
+			string accessibleName = _currentPodcast?.Name ?? "播客节目";
+			string viewSource = $"podcast:{radioId}:offset{Math.Max(0, offset)}";
+			if (isAscending)
+			{
+				viewSource += ":asc1";
+			}
+			if (TryHandlePaginationEmptyResult(paginationKey, Math.Max(0, offset), PodcastSoundPageSize, totalCount, episodes?.Count ?? 0, hasMore, viewSource, accessibleName))
+			{
+				return;
+			}
+			_currentPodcastSoundOffset = Math.Max(0, offset);
 				_currentPodcastHasMore = hasMore;
 				_currentPodcastEpisodeTotalCount = Math.Max(totalCount, offset + (episodes?.Count ?? 0));
 				DisplayPodcastEpisodes(episodes, unchecked(_currentPodcastSoundOffset > 0 || hasMore), hasMore, _currentPodcastSoundOffset + 1, preserveSelection: false, viewSource, accessibleName);
@@ -6434,6 +6554,18 @@ private void ActivateMixedSearchTypeOption()
 			}
 			catch (Exception ex)
 			{
+				bool isAscending = _podcastSortState.CurrentOption;
+				string paginationKey = BuildPodcastEpisodesPaginationKey(radioId, isAscending);
+				string accessibleName = _currentPodcast?.Name ?? "播客节目";
+				string viewSource = $"podcast:{radioId}:offset{Math.Max(0, offset)}";
+				if (isAscending)
+				{
+					viewSource += ":asc1";
+				}
+				if (TryHandlePaginationOffsetError(ex, paginationKey, offset, PodcastSoundPageSize, viewSource, accessibleName))
+				{
+					return;
+				}
 				Debug.WriteLine($"[Podcast] 加载播客失败: {ex}");
 				MessageBox.Show("加载播客失败: " + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 				UpdateStatusBar("加载播客失败");
@@ -7845,18 +7977,7 @@ private bool TryQueuePlaceholderPlayback(SongInfo song, int? songIndex = null)
         {
                 return false;
         }
-        int index = songIndex ?? ResolveSongIndexInCurrentSongs(song);
-        if (index < 0)
-        {
-                Debug.WriteLine("[MainForm] 占位歌曲播放请求无法定位索引，已忽略");
-                UpdateStatusBar("歌曲正在加载中，请稍候...");
-                return true;
-        }
-        string viewSource = song.ViewSource ?? _currentViewSource ?? string.Empty;
-        _pendingPlaceholderPlaybackIndex = index;
-        _pendingPlaceholderPlaybackViewSource = viewSource;
-        Debug.WriteLine($"[MainForm] 占位歌曲播放已排队: index={index}, viewSource={viewSource}");
-        UpdateStatusBar($"已选择加载中歌曲，等待加载完成后自动播放（第 {index + 1} 首）");
+        UpdateStatusBar("歌曲正在加载中，请稍候...");
         return true;
 }
 
@@ -11036,9 +11157,16 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 		string viewSource = _currentViewSource;
 		int currentPage = 1;
 		int maxPage = -1;
+		int pageSize = 0;
+		string paginationKey = string.Empty;
 		Func<int, Task> jumpAction = null;
 		if (viewSource.StartsWith("search:", StringComparison.OrdinalIgnoreCase))
 		{
+			ParseSearchViewSource(viewSource, out var parsedType, out var parsedKeyword, out var _);
+			string keyKeyword = (!string.IsNullOrWhiteSpace(parsedKeyword)) ? parsedKeyword : _lastKeyword;
+			string keyType = (!string.IsNullOrWhiteSpace(parsedType)) ? parsedType : _currentSearchType;
+			paginationKey = BuildSearchPaginationKey(keyKeyword ?? string.Empty, keyType ?? string.Empty);
+			pageSize = _resultsPerPage;
 			currentPage = Math.Max(1, _currentPage);
 			maxPage = _maxPage;
 			jumpAction = async delegate(int page)
@@ -11052,8 +11180,14 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 		else if (viewSource.StartsWith("artist_songs:", StringComparison.OrdinalIgnoreCase))
 		{
 			ParseArtistListViewSource(viewSource, out var artistId, out var offset, out var order);
+			if (_currentArtistSongsTotalCount <= 0)
+			{
+				_currentArtistSongsTotalCount = await EnsureArtistSongsTotalCountAsync(artistId, order, GetCurrentViewContentToken());
+			}
 			currentPage = (offset / ArtistSongsPageSize) + 1;
 			maxPage = CalculateMaxPage(_currentArtistSongsTotalCount, ArtistSongsPageSize, currentPage);
+			pageSize = ArtistSongsPageSize;
+			paginationKey = BuildArtistSongsPaginationKey(artistId, order);
 			jumpAction = async delegate(int page)
 			{
 				int targetOffset = Math.Max(0, (page - 1) * ArtistSongsPageSize);
@@ -11069,6 +11203,8 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 			}
 			currentPage = (offset2 / ArtistAlbumsPageSize) + 1;
 			maxPage = CalculateMaxPage(_currentArtistAlbumsTotalCount, ArtistAlbumsPageSize, currentPage);
+			pageSize = ArtistAlbumsPageSize;
+			paginationKey = BuildArtistAlbumsPaginationKey(artistId2, ResolveArtistAlbumSort(order2));
 			jumpAction = async delegate(int page)
 			{
 				int targetOffset = Math.Max(0, (page - 1) * ArtistAlbumsPageSize);
@@ -11080,6 +11216,8 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 			ParseArtistCategoryListViewSource(viewSource, out var typeCode, out var areaCode, out var offset3);
 			currentPage = (offset3 / ArtistSongsPageSize) + 1;
 			maxPage = CalculateMaxPage(_currentArtistCategoryTotalCount, ArtistSongsPageSize, currentPage);
+			pageSize = ArtistSongsPageSize;
+			paginationKey = BuildArtistCategoryPaginationKey(typeCode, areaCode);
 			jumpAction = async delegate(int page)
 			{
 				int targetOffset = Math.Max(0, (page - 1) * ArtistSongsPageSize);
@@ -11096,6 +11234,8 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 			}
 			currentPage = (offset4 / PodcastSoundPageSize) + 1;
 			maxPage = CalculateMaxPage(_currentPodcastEpisodeTotalCount, PodcastSoundPageSize, currentPage);
+			pageSize = PodcastSoundPageSize;
+			paginationKey = BuildPodcastEpisodesPaginationKey(podcastId, ascending);
 			jumpAction = async delegate(int page)
 			{
 				int targetOffset = Math.Max(0, (page - 1) * PodcastSoundPageSize);
@@ -11107,6 +11247,8 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 			ParsePodcastCategoryViewSource(viewSource, out var categoryId, out var offset5);
 			currentPage = (offset5 / PodcastCategoryPageSize) + 1;
 			maxPage = CalculateMaxPage(_currentPodcastCategoryTotalCount, PodcastCategoryPageSize, currentPage);
+			pageSize = PodcastCategoryPageSize;
+			paginationKey = BuildPodcastCategoryPaginationKey(categoryId);
 			jumpAction = async delegate(int page)
 			{
 				int targetOffset = Math.Max(0, (page - 1) * PodcastCategoryPageSize);
@@ -11117,6 +11259,8 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 		{
 			currentPage = Math.Max(1, _cloudPage);
 			maxPage = CalculateMaxPage(_cloudTotalCount, CloudPageSize, currentPage);
+			pageSize = CloudPageSize;
+			paginationKey = BuildCloudPaginationKey();
 			jumpAction = async delegate(int page)
 			{
 				_cloudPage = Math.Max(1, page);
@@ -11127,6 +11271,10 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 		{
 			UpdateStatusBar("当前内容不支持跳转");
 			return;
+		}
+		if (pageSize > 0 && !string.IsNullOrWhiteSpace(paginationKey))
+		{
+			maxPage = ResolveCappedMaxPage(paginationKey, pageSize, maxPage);
 		}
 		if (maxPage <= 0)
 		{
@@ -11173,6 +11321,495 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 		return Math.Max(1, (int)Math.Ceiling((double)totalCount / (double)pageSize));
 	}
 
+	private string BuildSearchPaginationKey(string keyword, string searchType)
+	{
+		return $"search:{searchType}:{keyword}";
+	}
+
+	private string BuildArtistSongsPaginationKey(long artistId, string orderToken)
+	{
+		return $"artist_songs:{artistId}:order{orderToken}";
+	}
+
+	private string BuildArtistAlbumsPaginationKey(long artistId, ArtistAlbumSortOption sortOption)
+	{
+		return $"artist_albums:{artistId}:order{MapArtistAlbumSort(sortOption)}";
+	}
+
+	private string BuildArtistCategoryPaginationKey(int typeCode, int areaCode)
+	{
+		return $"artist_category_list:{typeCode}:{areaCode}";
+	}
+
+	private string BuildPodcastEpisodesPaginationKey(long radioId, bool ascending)
+	{
+		return $"podcast:{radioId}:asc{(ascending ? 1 : 0)}";
+	}
+
+	private string BuildPodcastCategoryPaginationKey(int categoryId)
+	{
+		return $"podcast_cat_{categoryId}";
+	}
+
+	private string BuildCloudPaginationKey()
+	{
+		return "user_cloud";
+	}
+
+	private int GetPaginationOffsetCap(string key)
+	{
+		if (string.IsNullOrWhiteSpace(key))
+		{
+			return -1;
+		}
+		lock (_paginationLimitLock)
+		{
+			if (_paginationOffsetCaps.TryGetValue(key, out int cap))
+			{
+				return cap;
+			}
+		}
+		return -1;
+	}
+
+	private void SetPaginationOffsetCap(string key, int capOffset)
+	{
+		if (string.IsNullOrWhiteSpace(key) || capOffset < 0)
+		{
+			return;
+		}
+		lock (_paginationLimitLock)
+		{
+			if (_paginationOffsetCaps.TryGetValue(key, out int existing))
+			{
+				if (existing <= 0 || capOffset < existing)
+				{
+					_paginationOffsetCaps[key] = capOffset;
+				}
+			}
+			else
+			{
+				_paginationOffsetCaps[key] = capOffset;
+			}
+		}
+	}
+
+	private int ResolveCappedMaxPage(string key, int pageSize, int maxPageFromTotal)
+	{
+		int maxPage = Math.Max(1, maxPageFromTotal);
+		if (pageSize <= 0)
+		{
+			return maxPage;
+		}
+		int cap = GetPaginationOffsetCap(key);
+		if (cap >= 0)
+		{
+			int capMaxPage = Math.Max(1, (cap / pageSize) + 1);
+			maxPage = Math.Min(maxPage, capMaxPage);
+		}
+		return maxPage;
+	}
+
+	private int NormalizeOffsetWithCap(string key, int pageSize, int offset, out bool clamped)
+	{
+		clamped = false;
+		int safeOffset = Math.Max(0, offset);
+		if (pageSize <= 0)
+		{
+			return safeOffset;
+		}
+		int cap = GetPaginationOffsetCap(key);
+		if (cap >= 0 && safeOffset > cap)
+		{
+			int maxPage = Math.Max(1, (cap / pageSize) + 1);
+			int normalizedOffset = Math.Max(0, (maxPage - 1) * pageSize);
+			clamped = normalizedOffset != safeOffset;
+			return normalizedOffset;
+		}
+		return safeOffset;
+	}
+
+	private int NormalizePageWithCap(string key, int pageSize, int requestedPage, int maxPageFromTotal, out bool clamped, out int cappedMaxPage)
+	{
+		int maxPage = ResolveCappedMaxPage(key, pageSize, maxPageFromTotal);
+		int page = Math.Max(1, requestedPage);
+		clamped = page > maxPage;
+		if (clamped)
+		{
+			page = maxPage;
+		}
+		cappedMaxPage = maxPage;
+		return page;
+	}
+
+	private static bool IsPaginationOffsetError(Exception ex)
+	{
+		Exception current = ex;
+		while (current != null)
+		{
+			if (current is ArgumentException)
+			{
+				return true;
+			}
+			string message = current.Message ?? string.Empty;
+			if (message.IndexOf("请求参数错误", StringComparison.OrdinalIgnoreCase) >= 0 || message.IndexOf("参数错误", StringComparison.OrdinalIgnoreCase) >= 0)
+			{
+				return true;
+			}
+			current = current.InnerException;
+		}
+		return false;
+	}
+
+	private bool TryHandlePaginationOffsetError(Exception ex, string key, int offset, int pageSize, string? viewSource, string? accessibleName)
+	{
+		if (!IsPaginationOffsetError(ex))
+		{
+			return false;
+		}
+		if (pageSize > 0)
+		{
+			SetPaginationOffsetCap(key, Math.Max(0, offset - 1));
+		}
+		int cappedMaxPage = ResolveCappedMaxPage(key, pageSize, int.MaxValue);
+		string hint = (cappedMaxPage > 0 && cappedMaxPage < int.MaxValue) ? $"页码过大，最大可到第 {cappedMaxPage} 页" : "页码过大";
+		UpdateStatusBar($"{hint}，请重新跳转");
+		ShowListErrorRow(viewSource, accessibleName, $"加载失败：{hint}，请重新跳转。按回车重新跳转。");
+		return true;
+	}
+
+	private bool TryHandlePaginationEmptyResult(string key, int offset, int pageSize, int totalCount, int itemsCount, bool hasMore, string? viewSource, string? accessibleName)
+	{
+		if (pageSize <= 0)
+		{
+			return false;
+		}
+		if (itemsCount > 0)
+		{
+			return false;
+		}
+		if (totalCount <= 0)
+		{
+			return false;
+		}
+		if (totalCount <= offset)
+		{
+			return false;
+		}
+		SetPaginationOffsetCap(key, Math.Max(0, offset - 1));
+		int cappedMaxPage = ResolveCappedMaxPage(key, pageSize, int.MaxValue);
+		string hint = (cappedMaxPage > 0 && cappedMaxPage < int.MaxValue) ? $"接口限制最多到第 {cappedMaxPage} 页" : "接口限制导致无法继续翻页";
+		UpdateStatusBar($"{hint}，请重新跳转");
+		ShowListErrorRow(viewSource, accessibleName, $"加载失败：{hint}，请重新跳转。按回车重新跳转。");
+		return true;
+	}
+
+	private static int NormalizeOffsetWithTotal(int totalCount, int pageSize, int offset, out bool clamped)
+	{
+		clamped = false;
+		int safeOffset = Math.Max(0, offset);
+		if (pageSize <= 0 || totalCount <= 0)
+		{
+			return safeOffset;
+		}
+		int maxStart = ((totalCount - 1) / pageSize) * pageSize;
+		if (safeOffset > maxStart)
+		{
+			clamped = true;
+			return maxStart;
+		}
+		return safeOffset;
+	}
+
+	private ArtistSongIndexCache GetOrCreateArtistSongIndex(string key)
+	{
+		bool added = false;
+		ArtistSongIndexCache cache;
+		lock (_artistSongCacheLock)
+		{
+			if (!_artistSongIndexCache.TryGetValue(key, out cache))
+			{
+				cache = new ArtistSongIndexCache();
+				_artistSongIndexCache[key] = cache;
+				added = true;
+			}
+			cache.LastAccessUtc = DateTime.UtcNow;
+		}
+		if (added)
+		{
+			TrimArtistSongIndexCache();
+		}
+		return cache;
+	}
+
+	private SemaphoreSlim GetArtistSongIndexLock(string key)
+	{
+		lock (_artistSongCacheLock)
+		{
+			if (!_artistSongIndexLocks.TryGetValue(key, out var gate))
+			{
+				gate = new SemaphoreSlim(1, 1);
+				_artistSongIndexLocks[key] = gate;
+			}
+			return gate;
+		}
+	}
+
+	private SemaphoreSlim GetAlbumSongsLock(string albumId)
+	{
+		lock (_artistSongCacheLock)
+		{
+			if (!_albumSongsLocks.TryGetValue(albumId, out var gate))
+			{
+				gate = new SemaphoreSlim(1, 1);
+				_albumSongsLocks[albumId] = gate;
+			}
+			return gate;
+		}
+	}
+
+	private void TrimArtistSongIndexCache()
+	{
+		lock (_artistSongCacheLock)
+		{
+			if (_artistSongIndexCache.Count <= ArtistSongIndexCacheLimit)
+			{
+				return;
+			}
+			var oldest = _artistSongIndexCache.OrderBy(kv => kv.Value.LastAccessUtc).FirstOrDefault();
+			if (!string.IsNullOrWhiteSpace(oldest.Key))
+			{
+				_artistSongIndexCache.Remove(oldest.Key);
+				_artistSongIndexLocks.Remove(oldest.Key);
+			}
+		}
+	}
+
+	private void TrimAlbumSongsCache()
+	{
+		lock (_artistSongCacheLock)
+		{
+			if (_albumSongsCache.Count <= AlbumSongsCacheLimit)
+			{
+				return;
+			}
+			int removeCount = _albumSongsCache.Count - AlbumSongsCacheLimit;
+			var removeKeys = _albumSongsCache.Keys.Take(removeCount).ToList();
+			foreach (var key in removeKeys)
+			{
+				_albumSongsCache.Remove(key);
+				_albumSongsLocks.Remove(key);
+			}
+		}
+	}
+
+	private int GetArtistSongsTotalCount(string key)
+	{
+		lock (_artistSongCacheLock)
+		{
+			if (_artistSongsTotalCountCache.TryGetValue(key, out int total))
+			{
+				return total;
+			}
+		}
+		return 0;
+	}
+
+	private void SetArtistSongsTotalCount(string key, int total)
+	{
+		if (string.IsNullOrWhiteSpace(key) || total <= 0)
+		{
+			return;
+		}
+		lock (_artistSongCacheLock)
+		{
+			_artistSongsTotalCountCache[key] = total;
+		}
+	}
+
+	private async Task<int> EnsureArtistSongsTotalCountAsync(long artistId, string orderToken, CancellationToken token)
+	{
+		string key = BuildArtistSongsPaginationKey(artistId, orderToken);
+		int cachedTotal = GetArtistSongsTotalCount(key);
+		if (cachedTotal > 0 && !string.Equals(orderToken, "time", StringComparison.OrdinalIgnoreCase))
+		{
+			return cachedTotal;
+		}
+		int resolvedTotal = cachedTotal;
+		try
+		{
+			(List<SongInfo> Songs, bool HasMore, int TotalCount) result = await _apiClient.GetArtistSongsAsync(artistId, 1, 0, orderToken).ConfigureAwait(continueOnCapturedContext: false);
+			token.ThrowIfCancellationRequested();
+			if (result.TotalCount > 0)
+			{
+				resolvedTotal = Math.Max(resolvedTotal, result.TotalCount);
+			}
+		}
+		catch (Exception ex)
+		{
+			Debug.WriteLine($"[ArtistSongs] 获取歌曲总数失败: {ex.Message}");
+		}
+		try
+		{
+			ArtistDetail detail = await _apiClient.GetArtistDetailAsync(artistId, includeIntroduction: false).ConfigureAwait(continueOnCapturedContext: false);
+			int total = detail?.MusicCount ?? 0;
+			if (total > 0)
+			{
+				resolvedTotal = Math.Max(resolvedTotal, total);
+			}
+		}
+		catch (Exception ex)
+		{
+			Debug.WriteLine($"[ArtistSongs] 获取歌手统计失败: {ex.Message}");
+		}
+		if (resolvedTotal > 0)
+		{
+			SetArtistSongsTotalCount(key, resolvedTotal);
+		}
+		return resolvedTotal;
+	}
+
+	private async Task<List<AlbumInfo>> LoadArtistAlbumsOrderedAsync(long artistId, bool newestFirst, CancellationToken token)
+	{
+		List<AlbumInfo> albums = await LoadArtistAlbumsAscendingListAsync(artistId).ConfigureAwait(continueOnCapturedContext: false);
+		token.ThrowIfCancellationRequested();
+		if (albums == null)
+		{
+			return new List<AlbumInfo>();
+		}
+		if (newestFirst)
+		{
+			albums = albums.AsEnumerable().Reverse().ToList();
+		}
+		return albums;
+	}
+
+	private async Task<List<SongInfo>> GetAlbumSongsCachedAsync(string albumId, CancellationToken token)
+	{
+		if (string.IsNullOrWhiteSpace(albumId))
+		{
+			return new List<SongInfo>();
+		}
+		lock (_artistSongCacheLock)
+		{
+			if (_albumSongsCache.TryGetValue(albumId, out var cached))
+			{
+				return cached;
+			}
+		}
+		SemaphoreSlim gate = GetAlbumSongsLock(albumId);
+		await gate.WaitAsync(token).ConfigureAwait(continueOnCapturedContext: false);
+		try
+		{
+			lock (_artistSongCacheLock)
+			{
+				if (_albumSongsCache.TryGetValue(albumId, out var cached))
+				{
+					return cached;
+				}
+			}
+			List<SongInfo> songs = new List<SongInfo>();
+			try
+			{
+				songs = await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.GetAlbumSongsAsync(albumId), $"album_songs:{albumId}", token, maxAttempts: 3).ConfigureAwait(continueOnCapturedContext: false);
+			}
+			catch (Exception ex)
+			{
+				Debug.WriteLine($"[ArtistSongs] 获取专辑歌曲失败: album={albumId}, err={ex.Message}");
+			}
+			songs ??= new List<SongInfo>();
+			lock (_artistSongCacheLock)
+			{
+				_albumSongsCache[albumId] = songs;
+			}
+			TrimAlbumSongsCache();
+			return songs;
+		}
+		finally
+		{
+			gate.Release();
+		}
+	}
+
+	private async Task<ArtistSongIndexCache> EnsureArtistSongIndexAsync(string cacheKey, long artistId, bool newestFirst, int requiredCount, CancellationToken token, string artistName)
+	{
+		ArtistSongIndexCache cache = GetOrCreateArtistSongIndex(cacheKey);
+		if (cache.Songs.Count >= requiredCount)
+		{
+			return cache;
+		}
+		SemaphoreSlim gate = GetArtistSongIndexLock(cacheKey);
+		await gate.WaitAsync(token).ConfigureAwait(continueOnCapturedContext: false);
+		try
+		{
+			cache = GetOrCreateArtistSongIndex(cacheKey);
+			if (cache.Albums == null || cache.Albums.Count == 0)
+			{
+				cache.Albums = await LoadArtistAlbumsOrderedAsync(artistId, newestFirst, token).ConfigureAwait(continueOnCapturedContext: false);
+				cache.AlbumCursor = 0;
+				cache.IsComplete = cache.Albums.Count == 0;
+			}
+			int totalAlbums = cache.Albums.Count;
+			while (cache.Songs.Count < requiredCount && cache.AlbumCursor < totalAlbums)
+			{
+				token.ThrowIfCancellationRequested();
+				int remaining = totalAlbums - cache.AlbumCursor;
+				int batchSize = Math.Min(ArtistSongsAlbumFetchConcurrency, remaining);
+				List<AlbumInfo> batchAlbums = new List<AlbumInfo>(batchSize);
+				for (int i = 0; i < batchSize; i++)
+				{
+					AlbumInfo album = cache.Albums[cache.AlbumCursor];
+					cache.AlbumCursor = checked(cache.AlbumCursor + 1);
+					if (album != null && !string.IsNullOrWhiteSpace(album.Id))
+					{
+						batchAlbums.Add(album);
+					}
+				}
+				if (batchAlbums.Count == 0)
+				{
+					continue;
+				}
+				if (cache.AlbumCursor % 8 == 0 || cache.AlbumCursor >= totalAlbums)
+				{
+					SafeInvoke(delegate
+					{
+						UpdateStatusBar($"正在整理 {artistName} 的歌曲... {cache.AlbumCursor}/{totalAlbums}");
+					});
+				}
+				var fetchTasks = batchAlbums
+					.Select(a => GetAlbumSongsCachedAsync(a.Id!, token))
+					.ToArray();
+				List<SongInfo>[] batchResults = await Task.WhenAll(fetchTasks).ConfigureAwait(continueOnCapturedContext: false);
+				for (int i = 0; i < batchAlbums.Count; i++)
+				{
+					List<SongInfo> albumSongs = batchResults[i];
+					if (albumSongs == null || albumSongs.Count == 0)
+					{
+						continue;
+					}
+					foreach (SongInfo song in albumSongs)
+					{
+						if (song == null || string.IsNullOrWhiteSpace(song.Id))
+						{
+							continue;
+						}
+						if (cache.SeenIds.Add(song.Id))
+						{
+							cache.Songs.Add(song);
+						}
+					}
+				}
+			}
+			cache.IsComplete = cache.AlbumCursor >= totalAlbums;
+			cache.LastAccessUtc = DateTime.UtcNow;
+			return cache;
+		}
+		finally
+		{
+			gate.Release();
+		}
+	}
+
 	private async Task<bool> ReloadCurrentSearchPageAsync(int targetPage)
 	{
 		if (string.IsNullOrWhiteSpace(_currentViewSource) || !_currentViewSource.StartsWith("search:", StringComparison.OrdinalIgnoreCase))
@@ -11190,6 +11827,15 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 		{
 			targetPage = ((parsedPage <= 0) ? 1 : parsedPage);
 		}
+		string paginationKey = BuildSearchPaginationKey(keyword, searchType);
+		bool clamped;
+		int cappedMaxPage;
+		int normalizedPage = NormalizePageWithCap(paginationKey, _resultsPerPage, targetPage, Math.Max(1, _maxPage), out clamped, out cappedMaxPage);
+		if (clamped)
+		{
+			UpdateStatusBar($"页码过大，已跳到第 {normalizedPage} 页");
+		}
+		targetPage = normalizedPage;
 		CancellationTokenSource searchCts = null;
 		try
 		{
@@ -18315,14 +18961,19 @@ private static void SetMenuItemCheckedState(ToolStripMenuItem? menuItem, bool is
 		{
 			using CancellationTokenSource unblockTimeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(8L));
 			CancellationToken unblockToken = unblockTimeoutCts.Token;
-			if ((song.Duration <= 0 || string.IsNullOrWhiteSpace(song.AlbumId) || song.ArtistNames == null || song.ArtistNames.Count == 0) && _apiClient != null)
+			bool shouldRefreshDetail = song.IsAvailable == false ||
+			                           song.Duration <= 0 ||
+			                           string.IsNullOrWhiteSpace(song.AlbumId) ||
+			                           song.ArtistNames == null ||
+			                           song.ArtistNames.Count == 0;
+			if (shouldRefreshDetail && _apiClient != null)
 			{
 				try
 				{
 					SongInfo detail = (await _apiClient.GetSongDetailAsync(new string[1] { song.Id }).ConfigureAwait(continueOnCapturedContext: false))?.FirstOrDefault();
 					if (detail != null)
 					{
-						if (song.Duration <= 0 && detail.Duration > 0)
+						if (detail.Duration > 0 && (song.Duration <= 0 || Math.Abs(detail.Duration - song.Duration) > 1))
 						{
 							song.Duration = detail.Duration;
 						}
@@ -22036,6 +22687,156 @@ private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlay
 		}
 	}
 
+	private async Task LoadArtistSongsByApiAsync(long artistId, int offset, bool skipSave, string orderToken, string artistName)
+	{
+		string paginationKey = BuildArtistSongsPaginationKey(artistId, orderToken);
+		int totalCount = await EnsureArtistSongsTotalCountAsync(artistId, orderToken, GetCurrentViewContentToken());
+		bool offsetClamped;
+		int normalizedOffset = NormalizeOffsetWithTotal(totalCount, ArtistSongsPageSize, offset, out offsetClamped);
+		if (offsetClamped)
+		{
+			int page = (normalizedOffset / ArtistSongsPageSize) + 1;
+			UpdateStatusBar($"页码过大，已跳到第 {page} 页");
+		}
+		offset = normalizedOffset;
+		string viewSource = $"artist_songs:{artistId}:order{orderToken}:offset{offset}";
+		string accessibleName = artistName + " 的歌曲";
+		ViewLoadRequest request = new ViewLoadRequest(viewSource, accessibleName, "正在加载 " + artistName + " 的歌曲...", !skipSave);
+		ViewLoadResult<ArtistSongsViewData?> loadResult = await RunViewLoadAsync(request, async delegate(CancellationToken token)
+		{
+			(List<SongInfo> Songs, bool HasMore, int TotalCount) result = await _apiClient.GetArtistSongsAsync(artistId, ArtistSongsPageSize, offset, orderToken).ConfigureAwait(continueOnCapturedContext: false);
+			List<SongInfo> songs = result.Songs ?? new List<SongInfo>();
+			token.ThrowIfCancellationRequested();
+			int resolvedTotal = result.TotalCount;
+			if (resolvedTotal <= 0)
+			{
+				resolvedTotal = totalCount > 0 ? totalCount : (offset + songs.Count + (result.HasMore ? 1 : 0));
+			}
+			if (resolvedTotal > 0)
+			{
+				SetArtistSongsTotalCount(paginationKey, resolvedTotal);
+			}
+			bool hasMore = resolvedTotal > 0 ? (offset + songs.Count < resolvedTotal) : result.HasMore;
+			string statusText;
+			if (songs.Count == 0)
+			{
+				statusText = artistName + " 暂无歌曲";
+			}
+			else if (resolvedTotal > 0)
+			{
+				statusText = $"已加载 {artistName} 的歌曲 {offset + 1}-{offset + songs.Count} / {resolvedTotal}首";
+			}
+			else
+			{
+				statusText = $"已加载 {artistName} 的歌曲 {offset + 1}-{offset + songs.Count}";
+			}
+			return new ArtistSongsViewData(songs, hasMore, offset, resolvedTotal, statusText);
+		}, "加载歌手歌曲已取消").ConfigureAwait(continueOnCapturedContext: true);
+		if (!loadResult.IsCanceled)
+		{
+			ArtistSongsViewData data = loadResult.Value ?? new ArtistSongsViewData(new List<SongInfo>(), hasMore: false, offset, 0, artistName + " 暂无歌曲");
+			if (data.Songs == null || data.Songs.Count == 0)
+			{
+				if (data.TotalCount > 0 && data.Offset >= data.TotalCount)
+				{
+					int maxPage = CalculateMaxPage(data.TotalCount, ArtistSongsPageSize, 1);
+					UpdateStatusBar($"页码超出范围，最大可到第 {maxPage} 页");
+					ShowListErrorRow(viewSource, accessibleName, $"加载失败：页码超出范围，最大可到第 {maxPage} 页。按回车重新跳转。");
+					return;
+				}
+				if (data.TotalCount > data.Offset)
+				{
+					string hint = "接口返回空列表，可能存在接口限制";
+					string advise = string.Equals(orderToken, "hot", StringComparison.OrdinalIgnoreCase) ? "建议切换到按发布时间排序" : "请稍后重试";
+					UpdateStatusBar($"{hint}，{advise}");
+					ShowListErrorRow(viewSource, accessibleName, $"加载失败：{hint}，{advise}。按回车重新跳转。");
+					return;
+				}
+			}
+			_currentArtistSongsOffset = data.Offset;
+			_currentArtistSongsHasMore = data.HasMore;
+			_currentArtistSongsTotalCount = Math.Max(data.TotalCount, data.Offset + (data.Songs?.Count ?? 0));
+			DisplaySongs(data.Songs, showPagination: true, data.HasMore, data.Offset + 1, preserveSelection: false, viewSource, accessibleName, skipAvailabilityCheck: false, announceHeader: true, suppressFocus: true);
+			UpdateArtistSongsSortMenuChecks();
+			FocusListAfterEnrich(0);
+			UpdateStatusBar(data.StatusText);
+		}
+	}
+
+	private async Task LoadArtistSongsByAlbumIndexAsync(long artistId, int offset, bool skipSave, string orderToken, string artistName)
+	{
+		string paginationKey = BuildArtistSongsPaginationKey(artistId, orderToken);
+		int totalCount = await EnsureArtistSongsTotalCountAsync(artistId, orderToken, GetCurrentViewContentToken());
+		bool offsetClamped;
+		int normalizedOffset = NormalizeOffsetWithTotal(totalCount, ArtistSongsPageSize, offset, out offsetClamped);
+		if (offsetClamped)
+		{
+			int page = (normalizedOffset / ArtistSongsPageSize) + 1;
+			UpdateStatusBar($"页码过大，已跳到第 {page} 页");
+		}
+		offset = normalizedOffset;
+		string viewSource = $"artist_songs:{artistId}:order{orderToken}:offset{offset}";
+		string accessibleName = artistName + " 的歌曲";
+		ViewLoadRequest request = new ViewLoadRequest(viewSource, accessibleName, "正在加载 " + artistName + " 的歌曲...", !skipSave);
+		ViewLoadResult<ArtistSongsViewData?> loadResult = await RunViewLoadAsync(request, async delegate(CancellationToken token)
+		{
+			int requiredCount = Math.Max(1, checked(offset + ArtistSongsPageSize));
+			ArtistSongIndexCache cache = await EnsureArtistSongIndexAsync(paginationKey, artistId, newestFirst: true, requiredCount, token, artistName).ConfigureAwait(continueOnCapturedContext: false);
+			List<SongInfo> songs = cache.Songs.Skip(offset).Take(ArtistSongsPageSize).ToList();
+			int resolvedTotal = totalCount;
+			if (cache.IsComplete && cache.Songs.Count > 0)
+			{
+				resolvedTotal = Math.Max(resolvedTotal, cache.Songs.Count);
+			}
+			if (resolvedTotal > 0)
+			{
+				SetArtistSongsTotalCount(paginationKey, resolvedTotal);
+			}
+			bool hasMore = resolvedTotal > 0 ? (offset + songs.Count < resolvedTotal) : !cache.IsComplete;
+			string statusText;
+			if (songs.Count == 0)
+			{
+				statusText = artistName + " 暂无歌曲";
+			}
+			else if (resolvedTotal > 0)
+			{
+				statusText = $"已加载 {artistName} 的歌曲 {offset + 1}-{offset + songs.Count} / {resolvedTotal}首";
+			}
+			else
+			{
+				statusText = $"已加载 {artistName} 的歌曲 {offset + 1}-{offset + songs.Count}";
+			}
+			return new ArtistSongsViewData(songs, hasMore, offset, resolvedTotal, statusText);
+		}, "加载歌手歌曲已取消").ConfigureAwait(continueOnCapturedContext: true);
+		if (!loadResult.IsCanceled)
+		{
+			ArtistSongsViewData data = loadResult.Value ?? new ArtistSongsViewData(new List<SongInfo>(), hasMore: false, offset, 0, artistName + " 暂无歌曲");
+			if (data.Songs == null || data.Songs.Count == 0)
+			{
+				if (data.TotalCount > 0 && data.Offset >= data.TotalCount)
+				{
+					int maxPage = CalculateMaxPage(data.TotalCount, ArtistSongsPageSize, 1);
+					UpdateStatusBar($"页码超出范围，最大可到第 {maxPage} 页");
+					ShowListErrorRow(viewSource, accessibleName, $"加载失败：页码超出范围，最大可到第 {maxPage} 页。按回车重新跳转。");
+					return;
+				}
+				if (data.TotalCount > data.Offset)
+				{
+					UpdateStatusBar("未能加载到该页，请稍后重试");
+					ShowListErrorRow(viewSource, accessibleName, "加载失败：未能加载到该页，请稍后重试。按回车重新跳转。");
+					return;
+				}
+			}
+			_currentArtistSongsOffset = data.Offset;
+			_currentArtistSongsHasMore = data.HasMore;
+			_currentArtistSongsTotalCount = Math.Max(data.TotalCount, data.Offset + (data.Songs?.Count ?? 0));
+			DisplaySongs(data.Songs, showPagination: true, data.HasMore, data.Offset + 1, preserveSelection: false, viewSource, accessibleName, skipAvailabilityCheck: false, announceHeader: true, suppressFocus: true);
+			UpdateArtistSongsSortMenuChecks();
+			FocusListAfterEnrich(0);
+			UpdateStatusBar(data.StatusText);
+		}
+	}
+
 	private async Task LoadArtistSongsAsync(long artistId, int offset = 0, bool skipSave = false, ArtistSongSortOption? orderOverride = null)
 	{
 		checked
@@ -22052,33 +22853,31 @@ private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlay
 					_artistSongSortState.SetOption(orderOverride.Value);
 				}
 				string orderToken = MapArtistSongsOrder(_artistSongSortState.CurrentOption);
-				string viewSource = $"artist_songs:{artistId}:order{orderToken}:offset{offset}";
-				string accessibleName = artistName + " 的歌曲";
-				ViewLoadRequest request = new ViewLoadRequest(viewSource, accessibleName, "正在加载 " + artistName + " 的歌曲...", !skipSave);
-				ViewLoadResult<ArtistSongsViewData?> loadResult = await RunViewLoadAsync(request, async delegate(CancellationToken token)
+				if (string.Equals(orderToken, "time", StringComparison.OrdinalIgnoreCase))
 				{
-					(List<SongInfo> Songs, bool HasMore, int TotalCount) result = await _apiClient.GetArtistSongsAsync(artistId, 100, offset, orderToken).ConfigureAwait(continueOnCapturedContext: false);
-					List<SongInfo> songs = result.Songs ?? new List<SongInfo>();
-					token.ThrowIfCancellationRequested();
-					string statusText = ((songs.Count == 0) ? (artistName + " 暂无歌曲") : $"已加载 {artistName} 的歌曲 {offset + 1}-{offset + songs.Count} / {result.TotalCount}首");
-					return new ArtistSongsViewData(songs, result.HasMore, offset, result.TotalCount, statusText);
-				}, "加载歌手歌曲已取消").ConfigureAwait(continueOnCapturedContext: true);
-				if (!loadResult.IsCanceled)
+					await LoadArtistSongsByAlbumIndexAsync(artistId, offset, skipSave, orderToken, artistName);
+				}
+				else
 				{
-					ArtistSongsViewData data = loadResult.Value ?? new ArtistSongsViewData(new List<SongInfo>(), hasMore: false, offset, 0, artistName + " 暂无歌曲");
-					_currentArtistSongsOffset = data.Offset;
-					_currentArtistSongsHasMore = data.HasMore;
-					_currentArtistSongsTotalCount = Math.Max(data.TotalCount, data.Offset + (data.Songs?.Count ?? 0));
-					DisplaySongs(data.Songs, showPagination: true, data.HasMore, data.Offset + 1, preserveSelection: false, viewSource, accessibleName, skipAvailabilityCheck: false, announceHeader: true, suppressFocus: true);
-					UpdateArtistSongsSortMenuChecks();
-					FocusListAfterEnrich(0);
-					UpdateStatusBar(data.StatusText);
+					await LoadArtistSongsByApiAsync(artistId, offset, skipSave, orderToken, artistName);
 				}
 			}
 			catch (Exception ex)
 			{
 				Exception ex2 = ex;
 				Exception ex3 = ex2;
+				string orderToken = MapArtistSongsOrder(_artistSongSortState.CurrentOption);
+				string fallbackName = _currentArtist?.Name ?? $"歌手 {artistId}";
+				string accessibleName = fallbackName + " 的歌曲";
+				string viewSource = $"artist_songs:{artistId}:order{orderToken}:offset{offset}";
+				if (IsPaginationOffsetError(ex3))
+				{
+					int maxPage = (_currentArtistSongsTotalCount > 0) ? CalculateMaxPage(_currentArtistSongsTotalCount, ArtistSongsPageSize, 1) : 0;
+					string hint = maxPage > 0 ? $"页码过大，最大可到第 {maxPage} 页" : "页码过大";
+					UpdateStatusBar($"{hint}，请重新跳转");
+					ShowListErrorRow(viewSource, accessibleName, $"加载失败：{hint}，请重新跳转。按回车重新跳转。");
+					return;
+				}
 				Debug.WriteLine($"[Artist] 加载歌曲失败: {ex3}");
 				MessageBox.Show("加载歌手的歌曲失败：" + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 				UpdateStatusBar("加载歌手的歌曲失败");
@@ -22102,6 +22901,15 @@ private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlay
 					_artistAlbumSortState.SetOption(sortOverride.Value);
 				}
 				ArtistAlbumSortOption sortOption = _artistAlbumSortState.CurrentOption;
+				string paginationKey = BuildArtistAlbumsPaginationKey(artistId, sortOption);
+				bool offsetClamped;
+				int normalizedOffset = NormalizeOffsetWithCap(paginationKey, ArtistAlbumsPageSize, offset, out offsetClamped);
+				if (offsetClamped)
+				{
+					int page = (normalizedOffset / ArtistAlbumsPageSize) + 1;
+					UpdateStatusBar($"页码过大，已跳到第 {page} 页");
+				}
+				offset = normalizedOffset;
 				string viewSource = string.Format("artist_albums:{0}:order{1}:offset{2}", arg1: MapArtistAlbumSort(sortOption), arg0: artistId, arg2: offset);
 				string accessibleName = artistName + " 的专辑";
 				ViewLoadRequest request = new ViewLoadRequest(viewSource, accessibleName, "正在加载 " + artistName + " 的专辑...", !skipSave);
@@ -22134,6 +22942,10 @@ private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlay
 				if (!loadResult.IsCanceled)
 				{
 					ArtistAlbumsViewData data = loadResult.Value ?? new ArtistAlbumsViewData(new List<AlbumInfo>(), hasMore: false, offset, 0, sortOption, artistName + " 暂无专辑");
+					if (TryHandlePaginationEmptyResult(paginationKey, data.Offset, ArtistAlbumsPageSize, data.TotalCount, data.Albums?.Count ?? 0, data.HasMore, viewSource, accessibleName))
+					{
+						return;
+					}
 					_currentArtistAlbumsOffset = data.Offset;
 					_currentArtistAlbumsHasMore = data.HasMore;
 					_currentArtistAlbumsTotalCount = Math.Max(data.TotalCount, data.Offset + (data.Albums?.Count ?? 0));
@@ -22147,6 +22959,15 @@ private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlay
 			{
 				Exception ex2 = ex;
 				Exception ex3 = ex2;
+				ArtistAlbumSortOption sortOption = _artistAlbumSortState.CurrentOption;
+				string paginationKey = BuildArtistAlbumsPaginationKey(artistId, sortOption);
+				string fallbackName = _currentArtist?.Name ?? $"歌手 {artistId}";
+				string accessibleName = fallbackName + " 的专辑";
+				string viewSource = $"artist_albums:{artistId}:order{MapArtistAlbumSort(sortOption)}:offset{offset}";
+				if (TryHandlePaginationOffsetError(ex3, paginationKey, offset, ArtistAlbumsPageSize, viewSource, accessibleName))
+				{
+					return;
+				}
 				Debug.WriteLine($"[Artist] 加载专辑失败: {ex3}");
 				MessageBox.Show("加载歌手专辑失败：" + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 				UpdateStatusBar("加载歌手专辑失败");
@@ -22256,6 +23077,15 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
 	try
 	{
 		const int pageSize = 100;
+		string paginationKey = BuildArtistCategoryPaginationKey(typeCode, areaCode);
+		bool offsetClamped;
+		int normalizedOffset = NormalizeOffsetWithCap(paginationKey, pageSize, offset, out offsetClamped);
+		if (offsetClamped)
+		{
+			int normalizedPage = (normalizedOffset / pageSize) + 1;
+			UpdateStatusBar($"页码过大，已跳到第 {normalizedPage} 页");
+		}
+		offset = normalizedOffset;
 			if (!skipSave)
 			{
 				SaveNavigationState();
@@ -22309,6 +23139,11 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
 				List<ArtistInfo> artists = result?.Items ?? new List<ArtistInfo>();
 				int totalCount = result?.TotalCount ?? artists.Count;
 				bool hasMore = result?.HasMore ?? false;
+				string paginationKey = BuildArtistCategoryPaginationKey(typeCode, areaCode);
+				if (TryHandlePaginationEmptyResult(paginationKey, offset, pageSize, totalCount, artists.Count, hasMore, viewSource, accessibleName))
+				{
+					return;
+				}
 				int page = (offset / pageSize) + 1;
 				int maxPage = (totalCount > 0) ? Math.Max(1, (int)Math.Ceiling((double)totalCount / pageSize)) : page;
 				if (viewToken.IsCancellationRequested)
@@ -22344,6 +23179,11 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
 			catch (Exception ex)
 			{
 				Exception ex2 = ex;
+				string paginationKey = BuildArtistCategoryPaginationKey(typeCode, areaCode);
+				if (TryHandlePaginationOffsetError(ex2, paginationKey, offset, pageSize, viewSource, accessibleName))
+				{
+					return;
+				}
 				if (TryHandleOperationCancelled(ex2, "加载歌手分类已取消"))
 				{
 					return;
@@ -22908,6 +23748,16 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
 				try
 				{
 					_cloudLoading = true;
+					string paginationKey = BuildCloudPaginationKey();
+					bool offsetClamped;
+					int requestedOffset = Math.Max(0, (_cloudPage - 1) * CloudPageSize);
+					int normalizedOffset = NormalizeOffsetWithCap(paginationKey, CloudPageSize, requestedOffset, out offsetClamped);
+					if (offsetClamped)
+					{
+						int page = (normalizedOffset / CloudPageSize) + 1;
+						_cloudPage = page;
+						UpdateStatusBar($"页码过大，已跳到第 {page} 页");
+					}
 					int pendingIndex = 0;
 					int num;
 					if (preserveSelection)
@@ -22944,6 +23794,10 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
 					if (!loadResult.IsCanceled)
 					{
 						CloudPageViewData data = loadResult.Value ?? new CloudPageViewData(new List<SongInfo>(), hasMore: false, 0, 0L, 0L, Math.Max(0, (_cloudPage - 1) * 50));
+						if (TryHandlePaginationEmptyResult(paginationKey, data.Offset, CloudPageSize, data.TotalCount, data.Songs?.Count ?? 0, data.HasMore, "user_cloud", "云盘歌曲"))
+						{
+							return;
+						}
 						_cloudHasMore = data.HasMore;
 						_cloudTotalCount = data.TotalCount;
 						_cloudUsedSize = data.UsedSize;
@@ -22960,6 +23814,12 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
 				{
 					Exception ex2 = ex;
 					Exception ex3 = ex2;
+					string paginationKey = BuildCloudPaginationKey();
+					int offset = Math.Max(0, (_cloudPage - 1) * CloudPageSize);
+					if (TryHandlePaginationOffsetError(ex3, paginationKey, offset, CloudPageSize, "user_cloud", "云盘歌曲"))
+					{
+						return;
+					}
 					Debug.WriteLine($"[Cloud] 加载云盘失败: {ex3}");
 					MessageBox.Show("加载云盘失败: " + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 					UpdateStatusBar("加载云盘失败");
@@ -23674,6 +24534,44 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
         ApplyListViewContext(viewSource, accessibleName, "列表", announceHeader: true);
 	}
 
+	private void ShowListErrorRowCore(string? viewSource, string? accessibleName, string message)
+	{
+		DisableVirtualSongList();
+		resultListView.BeginUpdate();
+		try
+		{
+			ResetListViewSelectionState();
+			resultListView.Items.Clear();
+			ListViewItem value = new ListViewItem(new string[6]
+			{
+				string.Empty,
+				message,
+				string.Empty,
+				string.Empty,
+				string.Empty,
+				string.Empty
+			})
+			{
+				Tag = -4
+			};
+			resultListView.Items.Add(value);
+		}
+		finally
+		{
+			EndListViewUpdateAndRefreshAccessibility();
+		}
+		ApplyListViewContext(viewSource, accessibleName, "列表", announceHeader: true);
+		ApplyStandardListViewSelection(0, allowSelection: true, suppressFocus: false);
+	}
+
+	private void ShowListErrorRow(string? viewSource, string? accessibleName, string message)
+	{
+		SafeInvoke(delegate
+		{
+			ShowListErrorRowCore(viewSource, accessibleName, message);
+		});
+	}
+
 	private void ShowLoadingPlaceholder(string? viewSource, string? accessibleName, string loadingText)
 	{
 		SafeInvoke(delegate
@@ -24016,9 +24914,9 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
 		this.trayMenuSeparator = new System.Windows.Forms.ToolStripSeparator();
 		this.trayExitMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.volumeLabel = new System.Windows.Forms.Label();
-        this.volumeTrackBar = new System.Windows.Forms.TrackBar();
+        this.volumeTrackBar = new YTPlayer.AccessibleTrackBar();
 		this.timeLabel = new System.Windows.Forms.Label();
-        this.progressTrackBar = new System.Windows.Forms.TrackBar();
+        this.progressTrackBar = new YTPlayer.AccessibleTrackBar();
 		this.playPauseButton = new System.Windows.Forms.Button();
 		this.currentSongLabel = new System.Windows.Forms.Label();
         this.statusStrip1 = new System.Windows.Forms.StatusStrip();
@@ -24334,7 +25232,7 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
         this.resultListView.MultiSelect = false;
         this.resultListView.Name = "resultListView";
         this.resultListView.Size = new System.Drawing.Size(1200, 368);
-		this.resultListView.Font = new System.Drawing.Font("Microsoft YaHei UI", 10.5f);
+        this.resultListView.Font = new System.Drawing.Font("Microsoft YaHei UI", 11.5f);
         this.resultListView.TabIndex = 1;
         this.resultListView.UseCompatibleStateImageBehavior = false;
         this.resultListView.View = System.Windows.Forms.View.Details;
@@ -24397,11 +25295,13 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
                 this.volumeLabel.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
                 this.volumeTrackBar.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
                 this.volumeTrackBar.Location = new System.Drawing.Point(1000, 64);
+                this.volumeTrackBar.AutoSize = false;
                 this.volumeTrackBar.Maximum = 100;
                 this.volumeTrackBar.Name = "volumeTrackBar";
-        this.volumeTrackBar.Size = new System.Drawing.Size(124, 56);
+        this.volumeTrackBar.Size = new System.Drawing.Size(124, 30);
         this.volumeTrackBar.TabIndex = 4;
         this.volumeTrackBar.TickFrequency = 10;
+        this.volumeTrackBar.TickStyle = System.Windows.Forms.TickStyle.None;
         this.volumeTrackBar.Value = 100;
         this.volumeTrackBar.AccessibleName = "音量";
         this.volumeTrackBar.KeyDown += new System.Windows.Forms.KeyEventHandler(volumeTrackBar_KeyDown);
@@ -24415,11 +25315,13 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
                 this.timeLabel.TextAlign = System.Drawing.ContentAlignment.MiddleRight;
                 this.progressTrackBar.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
                 this.progressTrackBar.Location = new System.Drawing.Point(120, 34);
+                this.progressTrackBar.AutoSize = false;
                 this.progressTrackBar.Maximum = 1000;
                 this.progressTrackBar.Name = "progressTrackBar";
-                this.progressTrackBar.Size = new System.Drawing.Size(924, 56);
+                this.progressTrackBar.Size = new System.Drawing.Size(924, 30);
         this.progressTrackBar.TabIndex = 3;
         this.progressTrackBar.TickFrequency = 50;
+        this.progressTrackBar.TickStyle = System.Windows.Forms.TickStyle.None;
         this.progressTrackBar.LargeChange = 10;
         this.progressTrackBar.SmallChange = 1;
         this.progressTrackBar.Scroll += new System.EventHandler(progressTrackBar_Scroll);
@@ -25377,8 +26279,16 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
 		{
 			return true;
 		}
+		if (ex is ArgumentException)
+		{
+			return true;
+		}
 		string text = ex.Message ?? string.Empty;
 		if (text.IndexOf("不存在", StringComparison.OrdinalIgnoreCase) >= 0 || text.IndexOf("下架", StringComparison.OrdinalIgnoreCase) >= 0 || text.IndexOf("被移除", StringComparison.OrdinalIgnoreCase) >= 0 || text.IndexOf("版权", StringComparison.OrdinalIgnoreCase) >= 0)
+		{
+			return true;
+		}
+		if (text.IndexOf("请求参数错误", StringComparison.OrdinalIgnoreCase) >= 0 || text.IndexOf("参数错误", StringComparison.OrdinalIgnoreCase) >= 0)
 		{
 			return true;
 		}

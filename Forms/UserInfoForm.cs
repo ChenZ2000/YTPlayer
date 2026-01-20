@@ -1,8 +1,9 @@
 using System;
 using System.Drawing;
 using System.Text;
-using System.Threading.Tasks;
+using System.Threading.Tasks;
 using System.Windows.Forms;
+using YTPlayer.Utils;
 using MessageBox = YTPlayer.MessageBox;
 using YTPlayer.Core;
 using YTPlayer.Models;
@@ -25,6 +26,7 @@ namespace YTPlayer.Forms
             _configManager = configManager;
             _onLogout = onLogout;
             InitializeComponent();
+            ThemeManager.ApplyTheme(this);
 
             // 设置窗体属性
             this.StartPosition = FormStartPosition.CenterParent;
@@ -34,7 +36,6 @@ namespace YTPlayer.Forms
             this.ShowIcon = false;
             this.Text = "用户信息";
             this.Size = new Size(500, 400);
-            this.BackColor = SystemColors.Control;
             this.KeyPreview = true;
             this.KeyDown += UserInfoForm_KeyDown;
 
@@ -282,6 +283,7 @@ namespace YTPlayer.Forms
                 dialog.Controls.Add(layout);
                 dialog.AcceptButton = okButton;
                 dialog.CancelButton = okButton;
+                ThemeManager.ApplyTheme(dialog);
 
                 return dialog.ShowDialog(this);
             }
@@ -354,9 +356,12 @@ namespace YTPlayer.Forms
                 dialog.Controls.Add(layout);
                 dialog.AcceptButton = yesButton;
                 dialog.CancelButton = noButton;
+                ThemeManager.ApplyTheme(dialog);
 
                 return dialog.ShowDialog(this);
             }
         }
     }
 }
+
+

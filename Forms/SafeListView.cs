@@ -18,7 +18,7 @@ namespace YTPlayer
             {
                 SmallImageList = new ImageList
                 {
-                    ImageSize = new Size(1, 28),
+                    ImageSize = new Size(1, 30),
                     ColorDepth = ColorDepth.Depth8Bit
                 };
             }
@@ -95,7 +95,8 @@ namespace YTPlayer
 
             DrawRowBackground(e);
             ThemePalette palette = ThemeManager.Current;
-            Color textColor = ResolveItemTextColor(e.Item, palette);
+            bool selected = (e.State & ListViewItemStates.Selected) != 0;
+            Color textColor = ResolveItemTextColor(e.Item, palette, selected);
             TextFormatFlags flags = BuildTextFlags(HorizontalAlignment.Left);
             Rectangle textBounds = InflateTextBounds(e.Bounds);
             TextRenderer.DrawText(e.Graphics, e.Item.Text, Font, textBounds, textColor, flags);
@@ -115,7 +116,8 @@ namespace YTPlayer
             }
 
             ThemePalette palette = ThemeManager.Current;
-            Color textColor = ResolveSubItemTextColor(e.SubItem, e.Item, palette);
+            bool selected = (e.ItemState & ListViewItemStates.Selected) != 0;
+            Color textColor = ResolveSubItemTextColor(e.SubItem, e.Item, palette, selected);
             TextFormatFlags flags = BuildTextFlags(e.Header?.TextAlign ?? HorizontalAlignment.Left);
             Rectangle textBounds = InflateTextBounds(e.Bounds);
             TextRenderer.DrawText(e.Graphics, e.SubItem.Text, Font, textBounds, textColor, flags);
@@ -124,8 +126,9 @@ namespace YTPlayer
         private void DrawRowBackground(DrawListViewItemEventArgs e)
         {
             ThemePalette palette = ThemeManager.Current;
-            bool selected = e.Item.Selected;
-            Color backColor = selected ? palette.AccentSoft : BackColor;
+            bool selected = (e.State & ListViewItemStates.Selected) != 0;
+            bool hot = (e.State & ListViewItemStates.Hot) != 0;
+            Color backColor = selected ? palette.AccentSoft : (hot ? BlendColor(BackColor, palette.Highlight, 0.12f) : BackColor);
             Rectangle rowBounds = new Rectangle(0, e.Bounds.Top, ClientRectangle.Width, e.Bounds.Height);
 
             using (var backBrush = new SolidBrush(backColor))
@@ -166,24 +169,33 @@ namespace YTPlayer
             return Rectangle.FromLTRB(bounds.Left + padding, bounds.Top, bounds.Right - padding, bounds.Bottom);
         }
 
-        private static Color ResolveItemTextColor(ListViewItem item, ThemePalette palette)
+        private static Color BlendColor(Color baseColor, Color overlay, float amount)
+        {
+            amount = Math.Max(0f, Math.Min(1f, amount));
+            int r = (int)(baseColor.R + (overlay.R - baseColor.R) * amount);
+            int g = (int)(baseColor.G + (overlay.G - baseColor.G) * amount);
+            int b = (int)(baseColor.B + (overlay.B - baseColor.B) * amount);
+            return Color.FromArgb(baseColor.A, r, g, b);
+        }
+
+        private static Color ResolveItemTextColor(ListViewItem item, ThemePalette palette, bool selected)
         {
             Color color = item.ForeColor;
-            if (color.IsEmpty || color == SystemColors.WindowText)
+            if (color.IsEmpty || color == SystemColors.WindowText || color == SystemColors.HighlightText)
             {
                 color = palette.TextPrimary;
             }
             return color;
         }
 
-        private static Color ResolveSubItemTextColor(ListViewItem.ListViewSubItem subItem, ListViewItem item, ThemePalette palette)
+        private static Color ResolveSubItemTextColor(ListViewItem.ListViewSubItem subItem, ListViewItem item, ThemePalette palette, bool selected)
         {
             Color color = subItem.ForeColor;
             if (color.IsEmpty || color == SystemColors.WindowText)
             {
                 color = item.ForeColor;
             }
-            if (color.IsEmpty || color == SystemColors.WindowText)
+            if (color.IsEmpty || color == SystemColors.WindowText || color == SystemColors.HighlightText)
             {
                 color = palette.TextPrimary;
             }

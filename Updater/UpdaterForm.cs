@@ -1,11 +1,13 @@
 using System;
 using System.Diagnostics;
+using System.Drawing;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using YTPlayer.Utils;
 using YTPlayer.Update;
 
 namespace YTPlayer.Updater
@@ -44,6 +46,10 @@ namespace YTPlayer.Updater
             Directory.CreateDirectory(_extractionDirectory);
 
             InitializeComponent();
+            Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Regular);
+            ThemeManager.ApplyTheme(this);
+            logPlaceholderLabel.ForeColor = ThemeManager.Current.TextSecondary;
+            UpdateLogPlaceholder();
 
             string formattedVersion = GetFormattedVersion();
             headingLabel.Text = $"正在更新至 {formattedVersion}";
@@ -437,6 +443,17 @@ namespace YTPlayer.Updater
             string line = $"[{DateTime.Now:HH:mm:ss}] {message}";
             logListBox.Items.Add(line);
             logListBox.TopIndex = logListBox.Items.Count - 1;
+            UpdateLogPlaceholder();
+        }
+
+        private void UpdateLogPlaceholder()
+        {
+            if (logPlaceholderLabel == null || logListBox == null)
+            {
+                return;
+            }
+
+            logPlaceholderLabel.Visible = logListBox.Items.Count == 0;
         }
 
         private void EnableResumeOption()

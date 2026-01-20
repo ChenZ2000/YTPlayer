@@ -323,6 +323,14 @@ namespace YTPlayer.Utils
             {
                 trackBar.BackColor = palette.SurfaceBackground;
                 trackBar.ForeColor = palette.TextPrimary;
+                TrySetTickColor(trackBar, palette.Divider);
+                trackBar.Invalidate();
+            }
+            else if (control is ThemedProgressBar themedProgressBar)
+            {
+                themedProgressBar.BackColor = palette.SurfaceAlt;
+                themedProgressBar.ForeColor = palette.Accent;
+                themedProgressBar.Invalidate();
             }
             else if (control is DataGridView gridView)
             {
@@ -394,6 +402,21 @@ namespace YTPlayer.Utils
                 catch
                 {
                 }
+            }
+        }
+
+        private static void TrySetTickColor(TrackBar trackBar, Color color)
+        {
+            try
+            {
+                var property = trackBar.GetType().GetProperty("TickColor");
+                if (property != null && property.CanWrite)
+                {
+                    property.SetValue(trackBar, color, null);
+                }
+            }
+            catch
+            {
             }
         }
 

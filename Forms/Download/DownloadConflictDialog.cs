@@ -1,7 +1,8 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
+using System.Linq;
 using System.Windows.Forms;
+using YTPlayer.Utils;
 using YTPlayer.Models.Download;
 
 namespace YTPlayer.Forms.Download
@@ -36,6 +37,7 @@ namespace YTPlayer.Forms.Download
         public DownloadConflictDialog(List<string> conflictPaths)
         {
             InitializeComponent();
+            ThemeManager.ApplyTheme(this);
 
             _conflictPaths = conflictPaths ?? new List<string>();
             _hasMultipleConflicts = _conflictPaths.Count > 1;
@@ -108,3 +110,5 @@ namespace YTPlayer.Forms.Download
         #endregion
     }
 }
+
+

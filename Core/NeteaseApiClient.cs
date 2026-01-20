@@ -5621,6 +5621,63 @@ namespace YTPlayer.Core
         }
 
         /// <summary>
+        /// 获取专辑内的所有歌曲ID（优先使用加密接口，避免公开接口返回异常JSON）。
+        /// </summary>
+        public async Task<List<string>> GetAlbumSongIdsAsync(string albumId, CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(albumId))
+            {
+                return new List<string>();
+            }
+
+            JObject? response = null;
+
+            try
+            {
+                response = await PostWeApiAsync<JObject>($"/api/v1/album/{albumId}", new Dictionary<string, object>(), cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[API] 获取专辑歌曲ID（v1）失败: {ex.Message}");
+            }
+
+            if (response == null)
+            {
+                try
+                {
+                    var payload = new Dictionary<string, object>
+                    {
+                        { "id", albumId }
+                    };
+                    response = await PostWeApiAsync<JObject>("/api/album/v3/detail", payload, cancellationToken: cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[API] 获取专辑歌曲ID（v3）失败: {ex.Message}");
+                }
+            }
+
+            var songsToken = response?["songs"] as JArray ?? response?["album"]?["songs"] as JArray;
+            if (songsToken == null || songsToken.Count == 0)
+            {
+                return new List<string>();
+            }
+
+            List<string> ids = new List<string>(songsToken.Count);
+            foreach (var songToken in songsToken)
+            {
+                string id = songToken?["id"]?.ToString();
+                if (!string.IsNullOrWhiteSpace(id))
+                {
+                    ids.Add(id);
+                }
+            }
+            return ids;
+        }
+
+        /// <summary>
         /// 歌单收藏/取消收藏（参考 Python 版本 _playlist_subscribe_weapi，6761-6775行）
         /// </summary>
         /// <param name="playlistId">歌单ID</param>

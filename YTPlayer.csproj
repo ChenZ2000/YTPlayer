@@ -208,6 +208,7 @@
     <Compile Include="Utils\TtsHelper.cs" />
     <Compile Include="Utils\AccessibilityPropertyService.cs" />
     <Compile Include="Utils\ThemeManager.cs" />
+    <Compile Include="Utils\ThemedProgressBar.cs" />
     <Compile Include="Utils\MessageBox.cs" />
     <Compile Include="Utils\ArtistMetadataHelper.cs" />
     <Compile Include="Utils\DocumentationLoader.cs" />

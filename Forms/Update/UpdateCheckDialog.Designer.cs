@@ -1,3 +1,4 @@
+using System.Windows.Forms;
 namespace YTPlayer.Forms
 {
     partial class UpdateCheckDialog
@@ -20,7 +21,7 @@ namespace YTPlayer.Forms
             this.latestVersionLabel = new System.Windows.Forms.Label();
             this.assetLabel = new System.Windows.Forms.Label();
             this.statusLabel = new System.Windows.Forms.Label();
-            this.progressBar = new System.Windows.Forms.ProgressBar();
+            this.progressBar = new YTPlayer.Utils.ThemedProgressBar();
             this.resultLabel = new System.Windows.Forms.Label();
             this.resultTextBox = new System.Windows.Forms.TextBox();
             this.buttonPanel = new System.Windows.Forms.FlowLayoutPanel();
@@ -185,7 +186,7 @@ namespace YTPlayer.Forms
         private System.Windows.Forms.Label latestVersionLabel;
         private System.Windows.Forms.Label assetLabel;
         private System.Windows.Forms.Label statusLabel;
-        private System.Windows.Forms.ProgressBar progressBar;
+        private YTPlayer.Utils.ThemedProgressBar progressBar;
         private System.Windows.Forms.Label resultLabel;
         private System.Windows.Forms.TextBox resultTextBox;
         private System.Windows.Forms.FlowLayoutPanel buttonPanel;

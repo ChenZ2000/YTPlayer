@@ -1,3 +1,4 @@
+using System.Windows.Forms;
 namespace YTPlayer.Forms.Download
 {
     partial class DownloadManagerForm

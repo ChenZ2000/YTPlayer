@@ -64,6 +64,7 @@ namespace YTPlayer.Forms
 
             _apiClient = apiClient;
             InitializeComponent();
+            ThemeManager.ApplyTheme(this);
             InitializeCustomComponents();
         }
 
@@ -1200,5 +1201,7 @@ namespace YTPlayer.Forms
         public string AvatarUrl { get; set; } = string.Empty;
     }
 }
+
+
 
 

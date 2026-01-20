@@ -1,7 +1,8 @@
 using System;
 using System.Drawing;
-using System.IO;
+using System.IO;
 using System.Windows.Forms;
+using YTPlayer.Utils;
 
 namespace YTPlayer.Forms
 {
@@ -19,6 +20,7 @@ namespace YTPlayer.Forms
             _subtitleLabel = new Label();
 
             InitializeComponent();
+            ThemeManager.ApplyTheme(this);
             TryLoadQrImage();
         }
 
@@ -120,3 +122,5 @@ namespace YTPlayer.Forms
         }
     }
 }
+
+

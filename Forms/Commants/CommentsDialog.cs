@@ -1,6 +1,7 @@
 using System;
 using System.Drawing;
 using System.Windows.Forms;
+using YTPlayer.Utils;
 using YTPlayer.Core;
 using YTPlayer.Models;
 
@@ -18,6 +19,7 @@ namespace YTPlayer.Forms
 
         public CommentsDialog(NeteaseApiClient apiClient, CommentTarget target, string? currentUserId, bool isLoggedIn)
         {
+            ThemeManager.ApplyTheme(this);
             _ = apiClient ?? throw new ArgumentNullException(nameof(apiClient));
             _ = target ?? throw new ArgumentNullException(nameof(target));
             _apiClient = apiClient;
@@ -204,3 +206,5 @@ namespace YTPlayer.Forms
         }
     }
 }
+
+

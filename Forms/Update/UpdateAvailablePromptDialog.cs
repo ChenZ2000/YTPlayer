@@ -1,9 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Windows.Forms;
+using YTPlayer.Utils;
 using MessageBox = YTPlayer.MessageBox;
-using System.ComponentModel;
+using System.ComponentModel;
+using System.Windows.Forms;
 using YTPlayer.Update;
 
 namespace YTPlayer.Forms
@@ -17,6 +18,7 @@ namespace YTPlayer.Forms
         {
             _plan = plan ?? throw new ArgumentNullException(nameof(plan));
             InitializeComponent();
+            ThemeManager.ApplyTheme(this);
 
             _versionLabel = string.IsNullOrWhiteSpace(versionLabel)
                 ? UpdateFormatting.FormatVersionLabel(plan, null)
@@ -91,3 +93,5 @@ namespace YTPlayer.Forms
         }
     }
 }
+
+
