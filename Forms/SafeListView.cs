@@ -89,7 +89,7 @@ namespace YTPlayer
         {
             if (View == View.Details)
             {
-                DrawRowBackground(e);
+                // Avoid clearing full rows on partial redraws; subitems handle painting in Details view.
                 return;
             }
 
@@ -115,12 +115,44 @@ namespace YTPlayer
                 return;
             }
 
+            DrawSubItemBackground(e);
+
             ThemePalette palette = ThemeManager.Current;
             bool selected = (e.ItemState & ListViewItemStates.Selected) != 0;
             Color textColor = ResolveSubItemTextColor(e.SubItem, e.Item, palette, selected);
             TextFormatFlags flags = BuildTextFlags(e.Header?.TextAlign ?? HorizontalAlignment.Left);
             Rectangle textBounds = InflateTextBounds(e.Bounds);
             TextRenderer.DrawText(e.Graphics, e.SubItem.Text, Font, textBounds, textColor, flags);
+        }
+
+        private void DrawSubItemBackground(DrawListViewSubItemEventArgs e)
+        {
+            ThemePalette palette = ThemeManager.Current;
+            bool selected = (e.ItemState & ListViewItemStates.Selected) != 0;
+            bool hot = (e.ItemState & ListViewItemStates.Hot) != 0;
+            Color backColor = selected ? palette.AccentSoft : (hot ? BlendColor(BackColor, palette.Highlight, 0.12f) : BackColor);
+
+            using (var backBrush = new SolidBrush(backColor))
+            {
+                e.Graphics.FillRectangle(backBrush, e.Bounds);
+            }
+
+            if (selected && e.ColumnIndex == 0)
+            {
+                using (var accentBrush = new SolidBrush(palette.Accent))
+                {
+                    e.Graphics.FillRectangle(accentBrush, new Rectangle(0, e.Bounds.Top, 5, e.Bounds.Height));
+                }
+            }
+
+            if (e.ColumnIndex >= 0 && e.ColumnIndex == Columns.Count - 1)
+            {
+                using (var pen = new Pen(palette.Divider))
+                {
+                    int y = e.Bounds.Bottom - 1;
+                    e.Graphics.DrawLine(pen, 0, y, ClientRectangle.Width, y);
+                }
+            }
         }
 
         private void DrawRowBackground(DrawListViewItemEventArgs e)
