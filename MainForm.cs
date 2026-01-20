@@ -789,6 +789,8 @@ public partial class MainForm : Form
 
 	private int _virtualStartIndex = 1;
 
+	private int _currentSequenceStartIndex = 1;
+
 	private bool _virtualShowPagination = false;
 
 	private bool _virtualHasPreviousPage = false;
@@ -7754,6 +7756,7 @@ private void ActivateMixedSearchTypeOption()
 	private void DisplaySongs(List<SongInfo> songs, bool showPagination = false, bool hasNextPage = false, int startIndex = 1, bool preserveSelection = false, string? viewSource = null, string? accessibleName = null, bool skipAvailabilityCheck = false, bool announceHeader = true, bool suppressFocus = false, bool allowSelection = true)
 	{
 		ConfigureListViewDefault();
+		UpdateSequenceStartIndex(startIndex);
 		DebugLogListFocusState("DisplaySongs: start", viewSource);
 		int num = -1;
 		if (preserveSelection && resultListView.SelectedIndices.Count > 0)
@@ -8065,6 +8068,11 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 		return (source is List<T> collection) ? new List<T>(collection) : new List<T>(source);
 	}
 
+	private void UpdateSequenceStartIndex(int startIndex)
+	{
+		_currentSequenceStartIndex = Math.Max(1, startIndex);
+	}
+
 	private string FormatIndex(int index)
 	{
 		return (_hideSequenceNumbers || IsAlwaysSequenceHiddenView()) ? string.Empty : index.ToString();
@@ -8111,6 +8119,7 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 			try
 			{
 				bool hideSequence = _hideSequenceNumbers || IsAlwaysSequenceHiddenView();
+				int baseIndex = Math.Max(1, _currentSequenceStartIndex);
 				for (int i = 0; i < resultListView.Items.Count; i++)
 				{
 					ListViewItem listViewItem = resultListView.Items[i];
@@ -8139,7 +8148,12 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 						}
 						else
 						{
-							listViewItem.SubItems[1].Text = FormatIndex(i + 1);
+							int dataIndex = i;
+							if (listViewItem.Tag is int tagIndex && tagIndex >= 0)
+							{
+								dataIndex = tagIndex;
+							}
+							listViewItem.SubItems[1].Text = FormatIndex(checked(baseIndex + dataIndex));
 						}
 					}
 				}
@@ -8153,6 +8167,7 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 
 	private void PatchSongs(List<SongInfo> songs, int startIndex, bool skipAvailabilityCheck = false, bool showPagination = false, bool hasPreviousPage = false, bool hasNextPage = false, int pendingFocusIndex = -1, bool allowSelection = true)
 	{
+		UpdateSequenceStartIndex(startIndex);
 		int num = ((resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : pendingFocusIndex);
 		List<SongInfo> list = (_currentSongs = CloneList(songs));
 		ApplySongLikeStates(list);
@@ -8404,6 +8419,7 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 	private void DisplayPlaylists(List<PlaylistInfo> playlists, bool preserveSelection = false, string? viewSource = null, string? accessibleName = null, int startIndex = 1, bool showPagination = false, bool hasNextPage = false, bool announceHeader = true, bool suppressFocus = false, bool allowSelection = true)
 	{
 		ConfigureListViewDefault();
+		UpdateSequenceStartIndex(startIndex);
 		int num = -1;
 		if (preserveSelection && resultListView.SelectedIndices.Count > 0)
 		{
@@ -8534,6 +8550,7 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 
 	private void PatchPlaylists(List<PlaylistInfo> playlists, int startIndex, bool showPagination = false, bool hasPreviousPage = false, bool hasNextPage = false, int pendingFocusIndex = -1, bool allowSelection = true)
 	{
+		UpdateSequenceStartIndex(startIndex);
 		int num = ((resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : pendingFocusIndex);
 		_currentSongs.Clear();
 		List<PlaylistInfo> list = (_currentPlaylists = CloneList(playlists));
@@ -8648,6 +8665,7 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 	private void DisplayListItems(List<ListItemInfo> items, string? viewSource = null, string? accessibleName = null, bool preserveSelection = false, bool announceHeader = true, bool suppressFocus = false, bool allowSelection = true)
 	{
 		ConfigureListViewDefault();
+		UpdateSequenceStartIndex(1);
 		int num = -1;
 		if (preserveSelection && resultListView.SelectedIndices.Count > 0)
 		{
@@ -10184,6 +10202,7 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 	private void DisplayAlbums(List<AlbumInfo> albums, bool preserveSelection = false, string? viewSource = null, string? accessibleName = null, int startIndex = 1, bool showPagination = false, bool hasNextPage = false, bool announceHeader = true, bool suppressFocus = false, bool allowSelection = true)
 	{
 		ConfigureListViewDefault();
+		UpdateSequenceStartIndex(startIndex);
 		int num = -1;
 		if (preserveSelection && resultListView.SelectedIndices.Count > 0)
 		{
@@ -10282,6 +10301,7 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 
 	private void PatchAlbums(List<AlbumInfo> albums, int startIndex, bool showPagination = false, bool hasPreviousPage = false, bool hasNextPage = false, int pendingFocusIndex = -1, bool allowSelection = true)
 	{
+		UpdateSequenceStartIndex(startIndex);
 		int num = ((resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : pendingFocusIndex);
 		_currentSongs.Clear();
 		_currentPlaylists.Clear();
@@ -10419,6 +10439,7 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 	private void DisplayPodcasts(List<PodcastRadioInfo> podcasts, bool showPagination = false, bool hasNextPage = false, int startIndex = 1, bool preserveSelection = false, string? viewSource = null, string? accessibleName = null, bool announceHeader = true, bool suppressFocus = false, bool allowSelection = true, bool includeNavigationRows = true)
 	{
 		ConfigureListViewForPodcasts();
+		UpdateSequenceStartIndex(startIndex);
 		int num = -1;
 		if (preserveSelection && resultListView.SelectedIndices.Count > 0)
 		{
@@ -10521,6 +10542,7 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 
 	private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool showPagination = false, bool hasPreviousPage = false, bool hasNextPage = false, int pendingFocusIndex = -1, bool allowSelection = true, bool includeNavigationRows = true)
 	{
+		UpdateSequenceStartIndex(startIndex);
 		int num = ((resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : pendingFocusIndex);
 		_currentSongs.Clear();
 		_currentPlaylists.Clear();
@@ -10654,6 +10676,7 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 	private void DisplayPodcastEpisodes(List<PodcastEpisodeInfo> episodes, bool showPagination = false, bool hasNextPage = false, int startIndex = 1, bool preserveSelection = false, string? viewSource = null, string? accessibleName = null)
 	{
 		ConfigureListViewForPodcastEpisodes();
+		UpdateSequenceStartIndex(startIndex);
 		int num = -1;
 		if (preserveSelection && resultListView.SelectedIndices.Count > 0)
 		{
@@ -22183,6 +22206,7 @@ private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlay
 			return;
 		}
 		ResetPendingListFocusIfViewChanged(viewSource);
+		UpdateSequenceStartIndex(startIndex);
 		int num = -1;
 		if (preserveSelection && resultListView.SelectedIndices.Count > 0)
 		{
@@ -22345,6 +22369,7 @@ private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlay
 			return;
 		}
 		ResetPendingListFocusIfViewChanged(_currentViewSource);
+		UpdateSequenceStartIndex(startIndex);
 		int num = ((resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : pendingFocusIndex);
 		List<ArtistInfo> list = (_currentArtists = CloneList(artists));
 		_currentSongs.Clear();
