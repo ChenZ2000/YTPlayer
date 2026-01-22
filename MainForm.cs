@@ -2907,6 +2907,13 @@ public partial class MainForm : Form
 
 	protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
 	{
+		if (keyData == (Keys.Control | Keys.Return))
+		{
+			if (TryHandleDownloadShortcut())
+			{
+				return true;
+			}
+		}
 		if (keyData == Keys.Return)
 		{
 			TextBox textBox = searchTextBox;
@@ -2928,7 +2935,7 @@ public partial class MainForm : Form
 
 	private void searchTextBox_KeyDown(object sender, KeyEventArgs e)
 	{
-		if (e.KeyCode == Keys.Return)
+		if (e.KeyCode == Keys.Return && !e.Control && !e.Shift && !e.Alt)
 		{
 			e.Handled = true;
 			e.SuppressKeyPress = true;
@@ -13296,15 +13303,6 @@ private void searchTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
 			GoBackAsync();
 			return;
 		}
-		if (e.Control && !e.Alt && e.KeyCode == Keys.Return)
-		{
-			if (TryHandleDownloadShortcut())
-			{
-				e.Handled = true;
-				e.SuppressKeyPress = true;
-				return;
-			}
-		}
 		TextBox textBox = searchTextBox;
 		if (textBox == null || !textBox.ContainsFocus)
 		{
@@ -13417,7 +13415,11 @@ private void searchTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
 		{
 			return false;
 		}
-		if (resultListView == null || !resultListView.ContainsFocus)
+		if (resultListView == null)
+		{
+			return false;
+		}
+		if (!resultListView.ContainsFocus && !HasListViewSelection())
 		{
 			return false;
 		}
