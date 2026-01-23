@@ -747,6 +747,12 @@ public partial class MainForm : Form
 
         private const int ListViewRepeatCooldownMs = 200;
 
+        private bool _isApplyingListViewLayout;
+
+        private const int ListViewMaxRowHeight = 512;
+        private const int ListViewMultiLineMaxLines = 3;
+        private int _listViewShortInfoColumnIndex = 4;
+
 	private DateTime _lastNarratorCheckAt = DateTime.MinValue;
 
 	private bool _isNarratorRunningCached = false;
@@ -1876,6 +1882,976 @@ public partial class MainForm : Form
                 resultListView.BorderStyle = BorderStyle.FixedSingle;
                 resultListView.GridLines = false;
                 RegisterRoundedControl(resultListView, DefaultControlCornerRadius);
+                ApplyResultListViewLayout();
+        }
+
+        private void ApplyResultListViewLayout()
+        {
+                if (resultListView == null || _isApplyingListViewLayout)
+                {
+                        return;
+                }
+                if (!IsResultListViewLayoutReady())
+                {
+                        return;
+                }
+                try
+                {
+                        _isApplyingListViewLayout = true;
+                        try
+                        {
+                                ApplyResultListViewColumnAlignment();
+                                UpdateResultListViewColumnWidths();
+                                UpdateResultListViewRowHeight();
+                        }
+                        catch (InvalidOperationException ex)
+                        {
+                                Debug.WriteLine("[ListViewLayout] 应用列布局失败: " + ex.Message);
+                        }
+                }
+                finally
+                {
+                        _isApplyingListViewLayout = false;
+                }
+        }
+
+        private bool IsResultListViewLayoutReady()
+        {
+                if (resultListView == null || !resultListView.IsHandleCreated)
+                {
+                        return false;
+                }
+                if (resultListView.View != View.Details)
+                {
+                        return false;
+                }
+                if (resultListView.Columns.Count < ListViewTotalColumnCount)
+                {
+                        return false;
+                }
+                if (columnHeader0.Index < 0 || columnHeader1.Index < 0 || columnHeader2.Index < 0 || columnHeader3.Index < 0 || columnHeader4.Index < 0 || columnHeader5.Index < 0)
+                {
+                        return false;
+                }
+                return true;
+        }
+
+        private void ApplyResultListViewColumnAlignment()
+        {
+                if (resultListView == null || resultListView.View != View.Details)
+                {
+                        return;
+                }
+                columnHeader0.TextAlign = HorizontalAlignment.Left;
+                columnHeader1.TextAlign = HorizontalAlignment.Center;
+                columnHeader2.TextAlign = HorizontalAlignment.Center;
+                columnHeader3.TextAlign = HorizontalAlignment.Center;
+                columnHeader4.TextAlign = HorizontalAlignment.Center;
+                columnHeader5.TextAlign = HorizontalAlignment.Center;
+        }
+
+        private void UpdateResultListViewColumnWidths()
+        {
+                if (resultListView == null)
+                {
+                        return;
+                }
+
+                int availableWidth = GetResultListViewAvailableWidth();
+                if (availableWidth <= 0)
+                {
+                        return;
+                }
+
+                bool hideSequence = _hideSequenceNumbers || IsAlwaysSequenceHiddenView();
+                int[] ratioWeights = new int[5] { hideSequence ? 0 : 5, 40, 40, 5, 10 };
+                int[] baseWidths = AllocatePercentWidths(availableWidth, ratioWeights);
+
+                (int shortColumnIndex, int extraColumnIndex, bool hasShortContent, bool hasExtraContent) = ResolveShortInfoColumns();
+                _listViewShortInfoColumnIndex = shortColumnIndex;
+                UpdateResultListViewLineSettings(shortColumnIndex);
+
+                int seqMinWidth = hideSequence ? 0 : CalculateSequenceColumnWidth();
+                int shortMinWidth = hasShortContent ? CalculateShortInfoColumnWidth(shortColumnIndex) : 0;
+                int threeCharMinWidth = CalculateThreeCharColumnWidth();
+                int nameMinWidth = threeCharMinWidth;
+                int artistMinWidth = threeCharMinWidth;
+                int extraMinWidth = hasExtraContent ? threeCharMinWidth : 0;
+
+                int seqWidth = hideSequence ? 0 : Math.Max(baseWidths[0], seqMinWidth);
+                int nameWidth = Math.Max(baseWidths[1], nameMinWidth);
+                int artistWidth = Math.Max(baseWidths[2], artistMinWidth);
+                int shortWidth = hasShortContent ? Math.Max(baseWidths[3], shortMinWidth) : 0;
+                int extraWidth = hasExtraContent ? Math.Max(baseWidths[4], extraMinWidth) : 0;
+
+                int total = seqWidth + nameWidth + artistWidth + shortWidth + extraWidth;
+                if (total > availableWidth)
+                {
+                        int overflow = total - availableWidth;
+                        overflow = ReduceWidthToMin(ref extraWidth, extraMinWidth, overflow);
+                        overflow = ReduceWidthPairToMin(ref nameWidth, nameMinWidth, ref artistWidth, artistMinWidth, overflow);
+                        if (overflow > 0)
+                        {
+                                overflow = ReduceWidth(ref extraWidth, overflow);
+                                overflow = ReduceWidthProportionally(ref nameWidth, ref artistWidth, overflow);
+                        }
+                        if (overflow > 0)
+                        {
+                                overflow = ReduceWidth(ref shortWidth, overflow);
+                                overflow = ReduceWidth(ref seqWidth, overflow);
+                        }
+                        if (overflow > 0)
+                        {
+                                overflow = ReduceWidth(ref extraWidth, overflow);
+                                overflow = ReduceWidthProportionally(ref nameWidth, ref artistWidth, overflow);
+                        }
+                }
+                else if (total < availableWidth)
+                {
+                        int slack = availableWidth - total;
+                        DistributeSlack(ref nameWidth, ref artistWidth, ref extraWidth, slack, hasExtraContent);
+                }
+
+                columnHeader0.Width = 0;
+                columnHeader1.Width = seqWidth;
+                columnHeader2.Width = nameWidth;
+                columnHeader3.Width = artistWidth;
+
+                columnHeader4.Width = 0;
+                columnHeader5.Width = 0;
+                if (shortColumnIndex == 4)
+                {
+                        columnHeader4.Width = shortWidth;
+                        columnHeader5.Width = extraWidth;
+                }
+                else
+                {
+                        columnHeader5.Width = shortWidth;
+                        columnHeader4.Width = extraWidth;
+                }
+        }
+
+        private void UpdateResultListViewLineSettings(int shortColumnIndex)
+        {
+                if (resultListView is SafeListView safeListView)
+                {
+                        safeListView.MultiLineMaxLines = Math.Max(1, ListViewMultiLineMaxLines);
+                        safeListView.ShortInfoColumnIndex = shortColumnIndex;
+                }
+        }
+
+        private (int shortColumnIndex, int extraColumnIndex, bool hasShortContent, bool hasExtraContent) ResolveShortInfoColumns()
+        {
+                ColumnLengthStats column4 = new ColumnLengthStats();
+                ColumnLengthStats column5 = new ColumnLengthStats();
+                int column4ShortInfoHits = 0;
+                int column5ShortInfoHits = 0;
+                foreach (ListViewRowSnapshot row in EnumerateResultListViewRows())
+                {
+                        column4.Add(row.Column4);
+                        column5.Add(row.Column5);
+                        if (LooksLikeShortInfo(row.Column4))
+                        {
+                                column4ShortInfoHits++;
+                        }
+                        if (LooksLikeShortInfo(row.Column5))
+                        {
+                                column5ShortInfoHits++;
+                        }
+                }
+
+                bool col4Has = column4.HasContent;
+                bool col5Has = column5.HasContent;
+                if (!col4Has && !col5Has)
+                {
+                        return (4, 5, false, false);
+                }
+                if (col4Has && !col5Has)
+                {
+                        return (4, 5, true, false);
+                }
+                if (!col4Has && col5Has)
+                {
+                        return (5, 4, true, false);
+                }
+
+                if (column4ShortInfoHits != column5ShortInfoHits)
+                {
+                        return (column4ShortInfoHits > column5ShortInfoHits) ? (4, 5, true, true) : (5, 4, true, true);
+                }
+
+                if (column4.AverageLength <= column5.AverageLength)
+                {
+                        return (4, 5, true, true);
+                }
+                return (5, 4, true, true);
+        }
+
+        private static bool LooksLikeShortInfo(string text)
+        {
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                        return false;
+                }
+
+                string value = text.Trim();
+                if (LooksLikeTime(value) || LooksLikeDate(value))
+                {
+                        return true;
+                }
+
+                if (value.Length <= 20 && ContainsDigit(value) && ContainsUnit(value))
+                {
+                        return true;
+                }
+
+                return false;
+        }
+
+        private static bool LooksLikeTime(string value)
+        {
+                if (string.IsNullOrWhiteSpace(value))
+                {
+                        return false;
+                }
+
+                bool hasDigit = false;
+                for (int i = 0; i < value.Length; i++)
+                {
+                        char ch = value[i];
+                        if (char.IsDigit(ch))
+                        {
+                                hasDigit = true;
+                        }
+                }
+                return hasDigit && value.IndexOf(':') >= 0;
+        }
+
+        private static bool LooksLikeDate(string value)
+        {
+                if (string.IsNullOrWhiteSpace(value))
+                {
+                        return false;
+                }
+
+                int dashCount = 0;
+                int slashCount = 0;
+                bool hasDigit = false;
+                for (int i = 0; i < value.Length; i++)
+                {
+                        char ch = value[i];
+                        if (char.IsDigit(ch))
+                        {
+                                hasDigit = true;
+                        }
+                        else if (ch == '-')
+                        {
+                                dashCount++;
+                        }
+                        else if (ch == '/')
+                        {
+                                slashCount++;
+                        }
+                }
+                return hasDigit && (dashCount >= 2 || slashCount >= 2);
+        }
+
+        private static bool ContainsDigit(string value)
+        {
+                for (int i = 0; i < value.Length; i++)
+                {
+                        if (char.IsDigit(value[i]))
+                        {
+                                return true;
+                        }
+                }
+                return false;
+        }
+
+        private static bool ContainsUnit(string value)
+        {
+                return value.Contains("首", StringComparison.Ordinal) ||
+                       value.Contains("个", StringComparison.Ordinal) ||
+                       value.Contains("张", StringComparison.Ordinal) ||
+                       value.Contains("类", StringComparison.Ordinal) ||
+                       value.Contains("位", StringComparison.Ordinal) ||
+                       value.Contains("节目", StringComparison.Ordinal) ||
+                       value.Contains("集", StringComparison.Ordinal) ||
+                       value.Contains("期", StringComparison.Ordinal) ||
+                       value.Contains("条", StringComparison.Ordinal) ||
+                       value.Contains("人", StringComparison.Ordinal);
+        }
+
+        private int CalculateShortInfoColumnWidth(int columnIndex)
+        {
+                int maxWidth = 0;
+                foreach (ListViewRowSnapshot row in EnumerateResultListViewRows())
+                {
+                        string text = columnIndex == 4 ? row.Column4 : row.Column5;
+                        if (!string.IsNullOrWhiteSpace(text))
+                        {
+                                maxWidth = Math.Max(maxWidth, MeasureSingleLineWidth(text));
+                        }
+                }
+                if (maxWidth <= 0)
+                {
+                        maxWidth = MeasureSingleLineWidth("00:00");
+                }
+                return Math.Max(36, maxWidth + 12);
+        }
+
+        private int CalculateThreeCharColumnWidth()
+        {
+                int maxWidth = 0;
+                maxWidth = Math.Max(maxWidth, MeasureSingleLineWidth("中中中"));
+                maxWidth = Math.Max(maxWidth, MeasureSingleLineWidth("888"));
+                if (maxWidth <= 0)
+                {
+                        maxWidth = MeasureSingleLineWidth("AAA");
+                }
+                return Math.Max(36, maxWidth + 12);
+        }
+
+        private static int ReduceWidthToMin(ref int width, int minWidth, int overflow)
+        {
+                if (overflow <= 0)
+                {
+                        return overflow;
+                }
+                minWidth = Math.Max(0, minWidth);
+                if (width <= minWidth)
+                {
+                        return overflow;
+                }
+                int reducible = width - minWidth;
+                if (reducible <= 0)
+                {
+                        return overflow;
+                }
+                int delta = Math.Min(reducible, overflow);
+                width -= delta;
+                return overflow - delta;
+        }
+
+        private static int ReduceWidthPairToMin(ref int widthA, int minA, ref int widthB, int minB, int overflow)
+        {
+                if (overflow <= 0)
+                {
+                        return overflow;
+                }
+                minA = Math.Max(0, minA);
+                minB = Math.Max(0, minB);
+                int reducibleA = widthA - minA;
+                int reducibleB = widthB - minB;
+                if (reducibleA <= 0 && reducibleB <= 0)
+                {
+                        return overflow;
+                }
+
+                int totalReducible = Math.Max(0, reducibleA) + Math.Max(0, reducibleB);
+                if (overflow >= totalReducible)
+                {
+                        if (reducibleA > 0)
+                        {
+                                widthA -= reducibleA;
+                        }
+                        if (reducibleB > 0)
+                        {
+                                widthB -= reducibleB;
+                        }
+                        return overflow - totalReducible;
+                }
+
+                int total = widthA + widthB;
+                if (total <= 0)
+                {
+                        return overflow;
+                }
+
+                int reduceA = (int)Math.Floor((double)overflow * widthA / total);
+                int reduceB = overflow - reduceA;
+                if (reduceA > reducibleA)
+                {
+                        reduceA = Math.Max(0, reducibleA);
+                        reduceB = overflow - reduceA;
+                }
+                if (reduceB > reducibleB)
+                {
+                        reduceB = Math.Max(0, reducibleB);
+                        reduceA = overflow - reduceB;
+                        if (reduceA > reducibleA)
+                        {
+                                reduceA = Math.Max(0, reducibleA);
+                        }
+                }
+                widthA -= reduceA;
+                widthB -= reduceB;
+                return overflow - (reduceA + reduceB);
+        }
+
+        private static int ReduceWidth(ref int width, int overflow)
+        {
+                if (overflow <= 0 || width <= 0)
+                {
+                        return overflow;
+                }
+                int delta = Math.Min(width, overflow);
+                width -= delta;
+                return overflow - delta;
+        }
+
+        private static int ReduceWidthProportionally(ref int widthA, ref int widthB, int overflow)
+        {
+                if (overflow <= 0)
+                {
+                        return overflow;
+                }
+                int total = widthA + widthB;
+                if (total <= 0)
+                {
+                        return overflow;
+                }
+                int reduceA = (int)Math.Floor((double)overflow * widthA / total);
+                int reduceB = overflow - reduceA;
+                int actualReduceA = Math.Min(widthA, reduceA);
+                widthA -= actualReduceA;
+                int remaining = overflow - actualReduceA;
+                int actualReduceB = Math.Min(widthB, reduceB);
+                widthB -= actualReduceB;
+                remaining -= actualReduceB;
+                if (remaining > 0 && widthA > 0)
+                {
+                        int extraA = Math.Min(widthA, remaining);
+                        widthA -= extraA;
+                        remaining -= extraA;
+                }
+                if (remaining > 0 && widthB > 0)
+                {
+                        int extraB = Math.Min(widthB, remaining);
+                        widthB -= extraB;
+                        remaining -= extraB;
+                }
+                return Math.Max(0, remaining);
+        }
+
+        private static void DistributeSlack(ref int widthA, ref int widthB, ref int widthC, int slack, bool allowExtra)
+        {
+                if (slack <= 0)
+                {
+                        return;
+                }
+                if (!allowExtra)
+                {
+                        int addLeft = slack / 2;
+                        int addRight = slack - addLeft;
+                        widthA += addLeft;
+                        widthB += addRight;
+                        return;
+                }
+
+                int totalWeight = 90;
+                int addLeftWeighted = (int)Math.Floor((double)slack * 40 / totalWeight);
+                int addRightWeighted = (int)Math.Floor((double)slack * 40 / totalWeight);
+                int addExtraWeighted = slack - addLeftWeighted - addRightWeighted;
+                widthA += addLeftWeighted;
+                widthB += addRightWeighted;
+                widthC += addExtraWeighted;
+        }
+
+        private static int[] AllocatePercentWidths(int totalWidth, int[] weights)
+        {
+                int count = weights.Length;
+                int[] widths = new int[count];
+                int weightSum = 0;
+                for (int i = 0; i < count; i++)
+                {
+                        weightSum += Math.Max(0, weights[i]);
+                }
+                if (weightSum <= 0 || totalWidth <= 0)
+                {
+                        return widths;
+                }
+
+                int assigned = 0;
+                for (int i = 0; i < count; i++)
+                {
+                        int weight = Math.Max(0, weights[i]);
+                        if (weight == 0)
+                        {
+                                widths[i] = 0;
+                                continue;
+                        }
+                        widths[i] = (int)Math.Floor((double)totalWidth * weight / weightSum);
+                        assigned += widths[i];
+                }
+
+                int remainder = totalWidth - assigned;
+                int index = 0;
+                while (remainder > 0)
+                {
+                        if (weights[index] > 0)
+                        {
+                                widths[index]++;
+                                remainder--;
+                        }
+                        index = (index + 1) % count;
+                }
+
+                return widths;
+        }
+
+        private sealed class ColumnLengthStats
+        {
+                public int TotalLength { get; private set; }
+
+                public int NonEmptyCount { get; private set; }
+
+                public bool HasContent => NonEmptyCount > 0;
+
+                public double AverageLength => NonEmptyCount == 0 ? 0 : (double)TotalLength / NonEmptyCount;
+
+                public void Add(string text)
+                {
+                        string value = text?.Trim() ?? string.Empty;
+                        if (value.Length == 0)
+                        {
+                                return;
+                        }
+                        NonEmptyCount++;
+                        TotalLength += value.Length;
+                }
+        }
+
+        private int GetResultListViewAvailableWidth()
+        {
+                if (resultListView == null)
+                {
+                        return 0;
+                }
+
+                int width = resultListView.ClientSize.Width;
+                if (width <= 0)
+                {
+                        return width;
+                }
+
+                if (ShouldReserveListViewScrollBarSpace())
+                {
+                        width -= SystemInformation.VerticalScrollBarWidth;
+                }
+
+                return Math.Max(0, width);
+        }
+
+        private bool ShouldReserveListViewScrollBarSpace()
+        {
+                if (resultListView == null)
+                {
+                        return false;
+                }
+
+                int itemCount = GetResultListViewItemCount();
+                if (itemCount <= 0)
+                {
+                        return false;
+                }
+
+                int rowHeight = GetListViewCurrentRowHeight();
+                int visibleRows = Math.Max(1, resultListView.ClientSize.Height / Math.Max(1, rowHeight));
+                return itemCount > visibleRows;
+        }
+
+        private int GetListViewCurrentRowHeight()
+        {
+                if (resultListView is SafeListView safeListView)
+                {
+                        return safeListView.GetRowHeight();
+                }
+                return Math.Max(1, resultListView?.Font?.Height ?? 1);
+        }
+
+        private int GetResultListViewItemCount()
+        {
+                if (resultListView == null)
+                {
+                        return 0;
+                }
+                return resultListView.VirtualMode ? resultListView.VirtualListSize : resultListView.Items.Count;
+        }
+
+        private int CalculateSequenceColumnWidth()
+        {
+                bool hideSequence = _hideSequenceNumbers || IsAlwaysSequenceHiddenView();
+                bool hasIndexText = !hideSequence;
+                if (hideSequence)
+                {
+                        hasIndexText = HasListViewIndexText();
+                }
+
+                if (!hasIndexText)
+                {
+                        return 0;
+                }
+
+                int maxWidth = 0;
+                if (!hideSequence)
+                {
+                        int maxIndex = Math.Max(1, _currentSequenceStartIndex + Math.Max(0, GetResultListViewItemCount() - 1));
+                        string digits = new string('8', maxIndex.ToString().Length);
+                        maxWidth = Math.Max(maxWidth, MeasureSingleLineWidth(digits));
+                }
+
+                maxWidth = Math.Max(maxWidth, MeasureSingleLineWidth("上一页"));
+                maxWidth = Math.Max(maxWidth, MeasureSingleLineWidth("下一页"));
+                maxWidth = Math.Max(maxWidth, MeasureSingleLineWidth("跳转"));
+                return Math.Max(36, maxWidth + 12);
+        }
+
+        private bool HasListViewIndexText()
+        {
+                if (resultListView == null)
+                {
+                        return false;
+                }
+
+                if (resultListView.VirtualMode && _isVirtualSongListActive)
+                {
+                        return _virtualShowPagination && (_virtualHasPreviousPage || _virtualHasNextPage);
+                }
+
+                foreach (ListViewRowSnapshot row in EnumerateResultListViewRows())
+                {
+                        if (!string.IsNullOrWhiteSpace(row.IndexText))
+                        {
+                                return true;
+                        }
+                }
+                return false;
+        }
+
+        private int[] GetResultListViewContentWeights()
+        {
+                int[] maxLengths = new int[4];
+                foreach (ListViewRowSnapshot row in EnumerateResultListViewRows())
+                {
+                        UpdateMaxLength(maxLengths, 0, row.Column2);
+                        UpdateMaxLength(maxLengths, 1, row.Column3);
+                        UpdateMaxLength(maxLengths, 2, row.Column4);
+                        UpdateMaxLength(maxLengths, 3, row.Column5);
+                }
+
+                int[] weights = new int[4];
+                int nameWeight = Math.Max(1, Math.Min(60, maxLengths[0])) * 3;
+                int artistWeight = Math.Max(1, Math.Min(45, maxLengths[1])) * 2;
+                int albumWeight = Math.Max(1, Math.Min(45, maxLengths[2])) * 2;
+                int extraWeight = Math.Max(1, Math.Min(35, maxLengths[3]));
+                weights[0] = nameWeight;
+                weights[1] = artistWeight;
+                weights[2] = albumWeight;
+                weights[3] = extraWeight;
+                return weights;
+        }
+
+        private static void UpdateMaxLength(int[] maxLengths, int index, string text)
+        {
+                if (maxLengths == null || index < 0 || index >= maxLengths.Length)
+                {
+                        return;
+                }
+                int length = string.IsNullOrWhiteSpace(text) ? 0 : text.Trim().Length;
+                if (length > maxLengths[index])
+                {
+                        maxLengths[index] = length;
+                }
+        }
+
+        private int[] GetResultListViewMinimumColumnWidths()
+        {
+                if (resultListView == null)
+                {
+                        return new int[4];
+                }
+
+                int baseMin = GetResultListViewMinimumColumnWidth();
+                int nameMin = baseMin + 40;
+                int artistMin = baseMin + 20;
+                int albumMin = baseMin + 20;
+                int extraMin = baseMin;
+                return new int[4] { nameMin, artistMin, albumMin, extraMin };
+        }
+
+        private int GetResultListViewMinimumColumnWidth()
+        {
+                if (resultListView == null)
+                {
+                        return 0;
+                }
+
+                Size size = TextRenderer.MeasureText("8888", resultListView.Font, new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
+                return Math.Max(80, size.Width + 12);
+        }
+
+        private static int[] DistributeListViewColumnWidths(int totalWidth, int[] minWidths, int[] weightHints, int maxExtraWidth)
+        {
+                int count = minWidths.Length;
+                int[] widths = new int[count];
+                if (totalWidth <= 0)
+                {
+                        return widths;
+                }
+
+                int minTotal = 0;
+                for (int i = 0; i < count; i++)
+                {
+                        minTotal += Math.Max(0, minWidths[i]);
+                }
+
+                if (totalWidth <= minTotal)
+                {
+                        int assigned = 0;
+                        for (int i = 0; i < count; i++)
+                        {
+                                widths[i] = (int)Math.Floor((double)totalWidth * minWidths[i] / minTotal);
+                                assigned += widths[i];
+                        }
+                        int remainder = totalWidth - assigned;
+                        for (int i = 0; remainder > 0; i = (i + 1) % count)
+                        {
+                                widths[i]++;
+                                remainder--;
+                        }
+                        return widths;
+                }
+
+                int extra = totalWidth - minTotal;
+                int weightSum = 0;
+                for (int i = 0; i < count; i++)
+                {
+                        weightSum += Math.Max(1, weightHints[i]);
+                }
+
+                int extraAssigned = 0;
+                for (int i = 0; i < count; i++)
+                {
+                        int weight = Math.Max(1, weightHints[i]);
+                        int add = (int)Math.Floor((double)extra * weight / weightSum);
+                        widths[i] = minWidths[i] + add;
+                        extraAssigned += add;
+                }
+
+                int extraRemainder = extra - extraAssigned;
+                for (int i = 0; extraRemainder > 0; i = (i + 1) % count)
+                {
+                        widths[i]++;
+                        extraRemainder--;
+                }
+
+                if (count >= 4 && maxExtraWidth > 0 && widths[3] > maxExtraWidth)
+                {
+                        int overflow = widths[3] - maxExtraWidth;
+                        widths[3] = maxExtraWidth;
+                        int[] redistributeWeights = new int[3]
+                        {
+                                Math.Max(1, weightHints[0]),
+                                Math.Max(1, weightHints[1]),
+                                Math.Max(1, weightHints[2])
+                        };
+                        int redistributeSum = redistributeWeights[0] + redistributeWeights[1] + redistributeWeights[2];
+                        int distributed = 0;
+                        for (int i = 0; i < 3; i++)
+                        {
+                                int add = (int)Math.Floor((double)overflow * redistributeWeights[i] / redistributeSum);
+                                widths[i] += add;
+                                distributed += add;
+                        }
+                        int remaining = overflow - distributed;
+                        for (int i = 0; remaining > 0; i = (i + 1) % 3)
+                        {
+                                widths[i]++;
+                                remaining--;
+                        }
+                }
+                return widths;
+        }
+
+        private int MeasureSingleLineWidth(string text)
+        {
+                if (resultListView == null || string.IsNullOrEmpty(text))
+                {
+                        return 0;
+                }
+                Size size = TextRenderer.MeasureText(text, resultListView.Font, new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
+                return size.Width;
+        }
+
+        private void UpdateResultListViewRowHeight()
+        {
+                if (resultListView == null)
+                {
+                        return;
+                }
+
+                int lineHeight = TextRenderer.MeasureText("A", resultListView.Font, new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix).Height;
+                int defaultHeight = Math.Max(30, lineHeight + 10);
+                int maxAllowedHeight = Math.Max(defaultHeight, lineHeight * ListViewMultiLineMaxLines + 10);
+                int maxHeight = 0;
+                int[] columnWidths = new int[5]
+                {
+                        columnHeader1.Width,
+                        columnHeader2.Width,
+                        columnHeader3.Width,
+                        columnHeader4.Width,
+                        columnHeader5.Width
+                };
+
+                foreach (ListViewRowSnapshot row in EnumerateResultListViewRows())
+                {
+                        int rowHeight = MeasureRowHeight(row, columnWidths, lineHeight, maxAllowedHeight);
+                        if (rowHeight > maxHeight)
+                        {
+                                maxHeight = rowHeight;
+                        }
+                }
+
+                maxHeight = Math.Min(maxHeight, maxAllowedHeight);
+                int targetHeight = Math.Min(maxAllowedHeight, Math.Max(defaultHeight, maxHeight + 4));
+                if (resultListView is SafeListView safeListView)
+                {
+                        safeListView.SetRowHeight(targetHeight);
+                }
+        }
+
+        private int MeasureRowHeight(ListViewRowSnapshot row, int[] columnWidths, int lineHeight, int maxAllowedHeight)
+        {
+                int height = 0;
+                height = Math.Max(height, MeasureTextHeight(row.IndexText, columnWidths[0], lineHeight, maxAllowedHeight, GetColumnMaxLines(1)));
+                height = Math.Max(height, MeasureTextHeight(row.Column2, columnWidths[1], lineHeight, maxAllowedHeight, GetColumnMaxLines(2)));
+                height = Math.Max(height, MeasureTextHeight(row.Column3, columnWidths[2], lineHeight, maxAllowedHeight, GetColumnMaxLines(3)));
+                height = Math.Max(height, MeasureTextHeight(row.Column4, columnWidths[3], lineHeight, maxAllowedHeight, GetColumnMaxLines(4)));
+                height = Math.Max(height, MeasureTextHeight(row.Column5, columnWidths[4], lineHeight, maxAllowedHeight, GetColumnMaxLines(5)));
+                return height;
+        }
+
+        private int GetColumnMaxLines(int columnIndex)
+        {
+                if (columnIndex <= 1)
+                {
+                        return 1;
+                }
+                if (columnIndex == _listViewShortInfoColumnIndex)
+                {
+                        return 1;
+                }
+                return ListViewMultiLineMaxLines;
+        }
+
+        private int MeasureTextHeight(string text, int columnWidth, int lineHeight, int maxAllowedHeight, int maxLines)
+        {
+                if (resultListView == null || string.IsNullOrWhiteSpace(text) || columnWidth <= 0)
+                {
+                        return 0;
+                }
+                int availableWidth = Math.Max(1, columnWidth - 12);
+                int boundedHeight = Math.Max(1, maxAllowedHeight);
+                if (maxLines <= 1)
+                {
+                        return Math.Min(lineHeight, boundedHeight);
+                }
+
+                int maxHeight = Math.Min(boundedHeight, lineHeight * maxLines);
+                TextFormatFlags flags = TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.TextBoxControl | TextFormatFlags.NoPadding;
+                Size measured = TextRenderer.MeasureText(text, resultListView.Font, new Size(availableWidth, maxHeight), flags);
+                return Math.Min(measured.Height, maxHeight);
+        }
+
+        private IEnumerable<ListViewRowSnapshot> EnumerateResultListViewRows()
+        {
+                if (resultListView == null)
+                {
+                        yield break;
+                }
+
+                if (resultListView.VirtualMode && _isVirtualSongListActive)
+                {
+                        int songCount = _virtualSongs?.Count ?? 0;
+                        for (int i = 0; i < songCount; i++)
+                        {
+                                SongInfo song = _virtualSongs[i];
+                                if (song == null)
+                                {
+                                        continue;
+                                }
+                                string title = string.IsNullOrWhiteSpace(song.Name) ? "未知" : song.Name;
+                                if (song.RequiresVip)
+                                {
+                                        title += "  [VIP]";
+                                }
+                                string duration = song.FormattedDuration ?? string.Empty;
+                                if (song.IsAvailable == false)
+                                {
+                                        duration = string.IsNullOrWhiteSpace(duration) ? "不可播放" : duration + " (不可播放)";
+                                }
+                                yield return new ListViewRowSnapshot(
+                                        FormatIndex(checked(_virtualStartIndex + i)),
+                                        title,
+                                        song.Artist ?? string.Empty,
+                                        song.Album ?? string.Empty,
+                                        duration);
+                        }
+
+                        if (_virtualShowPagination)
+                        {
+                                if (_virtualHasPreviousPage)
+                                {
+                                        yield return new ListViewRowSnapshot("上一页", string.Empty, string.Empty, string.Empty, string.Empty);
+                                }
+                                if (_virtualHasNextPage)
+                                {
+                                        yield return new ListViewRowSnapshot("下一页", string.Empty, string.Empty, string.Empty, string.Empty);
+                                }
+                                if (_virtualHasPreviousPage || _virtualHasNextPage)
+                                {
+                                        yield return new ListViewRowSnapshot("跳转", string.Empty, string.Empty, string.Empty, string.Empty);
+                                }
+                        }
+                        yield break;
+                }
+
+                foreach (ListViewItem item in resultListView.Items)
+                {
+                        if (item == null)
+                        {
+                                continue;
+                        }
+                        string indexText = (item.SubItems.Count > 1 ? item.SubItems[1].Text : item.Text) ?? string.Empty;
+                        string col2 = (item.SubItems.Count > 2 ? item.SubItems[2].Text : string.Empty) ?? string.Empty;
+                        string col3 = (item.SubItems.Count > 3 ? item.SubItems[3].Text : string.Empty) ?? string.Empty;
+                        string col4 = (item.SubItems.Count > 4 ? item.SubItems[4].Text : string.Empty) ?? string.Empty;
+                        string col5 = (item.SubItems.Count > 5 ? item.SubItems[5].Text : string.Empty) ?? string.Empty;
+                        yield return new ListViewRowSnapshot(indexText, col2, col3, col4, col5);
+                }
+        }
+
+        private readonly struct ListViewRowSnapshot
+        {
+                public string IndexText { get; }
+
+                public string Column2 { get; }
+
+                public string Column3 { get; }
+
+                public string Column4 { get; }
+
+                public string Column5 { get; }
+
+                public ListViewRowSnapshot(string indexText, string column2, string column3, string column4, string column5)
+                {
+                        IndexText = indexText ?? string.Empty;
+                        Column2 = column2 ?? string.Empty;
+                        Column3 = column3 ?? string.Empty;
+                        Column4 = column4 ?? string.Empty;
+                        Column5 = column5 ?? string.Empty;
+                }
         }
 
         private void RegisterRoundedControl(Control control, int radius)
@@ -7579,6 +8555,7 @@ private void ActivateMixedSearchTypeOption()
 			}
 			resultListView.VirtualListSize = virtualSongListSize;
 			resultListView.Invalidate();
+			ApplyResultListViewLayout();
 		}
 	}
 
@@ -8118,6 +9095,7 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 		{
 			ResetVirtualItemCache();
 			resultListView.Invalidate();
+			ApplyResultListViewLayout();
 			return;
 		}
 		resultListView.BeginUpdate();
@@ -9341,6 +10319,7 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 				{
 					ListViewItem item = resultListView.Items[index];
 					FillListViewItemFromListItemInfo(item, clone, checked(index + 1), preserveDisplayIndex: true);
+					ApplyResultListViewLayout();
 					if (GetFocusedListViewIndex() == index)
 					{
 						QueueFocusedListViewItemRefreshAnnouncement(index);
@@ -10902,8 +11881,8 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
         }
 }
 
-	private async void resultListView_DoubleClick(object sender, EventArgs e)
-	{
+        private async void resultListView_DoubleClick(object sender, EventArgs e)
+        {
 		ListViewItem item = GetSelectedListViewItemSafe();
 		if (item == null)
 		{
@@ -10982,6 +11961,11 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
                         AnnounceSongLoadingForActivation(song2);
                         await PlaySong(song2);
                 }
+        }
+
+        private void resultListView_SizeChanged(object sender, EventArgs e)
+        {
+                ApplyResultListViewLayout();
         }
 
         private async Task OnPrevPageAsync()
@@ -15253,6 +16237,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 			{
 				resultListView.EndUpdate();
 			}
+			ApplyResultListViewLayout();
 			if (selectedListViewIndex >= 0 && selectedListViewIndex < resultListView.Items.Count && !HasListViewSelection())
 			{
 				try
@@ -25274,6 +26259,7 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
 		this.resultListView.RetrieveVirtualItem += new System.Windows.Forms.RetrieveVirtualItemEventHandler(resultListView_RetrieveVirtualItem);
 		this.resultListView.VirtualItemsSelectionRangeChanged += new System.Windows.Forms.ListViewVirtualItemsSelectionRangeChangedEventHandler(resultListView_VirtualItemsSelectionRangeChanged);
 		this.resultListView.SelectedIndexChanged += new System.EventHandler(resultListView_SelectedIndexChanged);
+		this.resultListView.SizeChanged += new System.EventHandler(resultListView_SizeChanged);
 		this.columnHeader0.Text = string.Empty;
 		this.columnHeader0.Width = 0;
 		this.columnHeader1.Text = string.Empty;

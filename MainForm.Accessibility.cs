@@ -322,6 +322,7 @@ namespace YTPlayer
 	private void EndListViewUpdateAndRefreshAccessibility()
 	{
 		resultListView.EndUpdate();
+		ApplyResultListViewLayout();
 		RefreshListViewAccessibilityProperties();
 	}
 
@@ -365,6 +366,7 @@ namespace YTPlayer
 		{
 			resultListView.EndUpdate();
 		}
+		ApplyResultListViewLayout();
 		if (selectedListViewItemSafe != null)
 		{
 			UpdateListViewItemAccessibilityProperties(selectedListViewItemSafe, setRole);
@@ -1296,6 +1298,7 @@ namespace YTPlayer
 
 	private void resultListView_HandleCreated(object sender, EventArgs e)
 	{
+		ApplyResultListViewLayout();
 		RefreshListViewAccessibilityProperties();
 	}
 
