@@ -1265,6 +1265,10 @@ namespace YTPlayer
 
 	private void resultListView_MouseUp(object sender, MouseEventArgs e)
 	{
+		if (HandleListViewRowResizeMouseUp(e))
+		{
+			return;
+		}
 		if (e.Button == MouseButtons.Left || e.Button == MouseButtons.Right)
 		{
 			QueueListViewFocusSpeech();

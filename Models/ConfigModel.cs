@@ -155,9 +155,69 @@ namespace YTPlayer.Models
         public bool ControlBarHidden { get; set; } = false;
 
         /// <summary>
+        /// 主窗口左上角 X 坐标（像素）。
+        /// </summary>
+        public int? WindowX { get; set; }
+
+        /// <summary>
+        /// 主窗口左上角 Y 坐标（像素）。
+        /// </summary>
+        public int? WindowY { get; set; }
+
+        /// <summary>
+        /// 主窗口宽度（像素）。
+        /// </summary>
+        public int? WindowWidth { get; set; }
+
+        /// <summary>
+        /// 主窗口高度（像素）。
+        /// </summary>
+        public int? WindowHeight { get; set; }
+
+        /// <summary>
+        /// 主窗口状态（Normal/Maximized）。
+        /// </summary>
+        public string? WindowState { get; set; }
+
+        /// <summary>
+        /// 列表序号列宽度。
+        /// </summary>
+        public int? ListViewColumnWidthIndex { get; set; }
+
+        /// <summary>
+        /// 列表标题列宽度。
+        /// </summary>
+        public int? ListViewColumnWidthName { get; set; }
+
+        /// <summary>
+        /// 列表作者列宽度。
+        /// </summary>
+        public int? ListViewColumnWidthCreator { get; set; }
+
+        /// <summary>
+        /// 列表额外信息列宽度。
+        /// </summary>
+        public int? ListViewColumnWidthExtra { get; set; }
+
+        /// <summary>
+        /// 列表描述列宽度。
+        /// </summary>
+        public int? ListViewColumnWidthDescription { get; set; }
+
+        /// <summary>
+        /// 列表行高（像素）。
+        /// </summary>
+        public int? ListViewRowHeight { get; set; }
+
+        /// <summary>
         /// 是否启用播放数据上报，保持“最近播放/听歌排行”与官方账号同步
         /// </summary>
         public bool PlaybackReportingEnabled { get; set; } = true;
+
+        /// <summary>
+        /// 播放时禁止系统睡眠（默认开启）
+        /// </summary>
+        public bool PreventSleepDuringPlayback { get; set; } = true;
 
         #endregion
     }

@@ -38,6 +38,12 @@ namespace YTPlayer.Core.Playback
             public string Url { get; set; } = string.Empty;
             public string Level { get; set; } = string.Empty;
             public long Size { get; set; }
+            public bool IsTrial { get; set; }
+            public long TrialStart { get; set; }
+            public long TrialEnd { get; set; }
+            public bool IsUnblocked { get; set; }
+            public string UnblockSource { get; set; } = string.Empty;
+            public Dictionary<string, string>? CustomHeaders { get; set; }
             public SmartCacheManager CacheManager { get; set; } = null!;
             public BassStreamProvider StreamProvider { get; set; } = null!;  // ⭐ 新增：流提供者
             public int StreamHandle { get; set; }                    // ⭐ 新增：BASS 流句柄
@@ -51,6 +57,7 @@ namespace YTPlayer.Core.Playback
 
         private readonly object _lock = new object();
         private readonly NeteaseApiClient _apiClient;
+        private readonly Func<SongInfo, QualityLevel, CancellationToken, Task<SongResolveResult>> _resolvePlaybackAsync;
         private readonly HttpClient _httpClient;
         private readonly Dictionary<string, PreloadedSongData> _preloadedData; // 按 SongId 存储
         private CancellationTokenSource? _preloadCts;
@@ -73,9 +80,10 @@ namespace YTPlayer.Core.Playback
 
         #region 构造与析构
 
-        public NextSongPreloader(NeteaseApiClient apiClient)
+        public NextSongPreloader(NeteaseApiClient apiClient, Func<SongInfo, QualityLevel, CancellationToken, Task<SongResolveResult>> resolvePlaybackAsync)
         {
             _apiClient = apiClient ?? throw new ArgumentNullException(nameof(apiClient));
+            _resolvePlaybackAsync = resolvePlaybackAsync ?? throw new ArgumentNullException(nameof(resolvePlaybackAsync));
             _httpClient = Core.Streaming.OptimizedHttpClientFactory.CreateForMainPlayback(TimeSpan.FromSeconds(60));
             _preloadedData = new Dictionary<string, PreloadedSongData>(StringComparer.Ordinal);
         }
@@ -209,112 +217,28 @@ namespace YTPlayer.Core.Playback
                 notifiedPreload = true;
                 System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] 开始预加载: {nextSong.Name}");
 
-                // 步骤 1: 获取 URL（支持多音质缓存 + 音质一致性检查）
-
-                // 子步骤1：确定当前选择的音质
-                string qualityLevel = quality.ToString().ToLower();
-
-                // 子步骤2：检查是否需要重新获取URL
-                bool needRefreshUrl = string.IsNullOrEmpty(nextSong.Url);
-
-                if (!needRefreshUrl && !string.IsNullOrEmpty(nextSong.Level))
+                // 步骤 1: 使用统一播放解析流程获取 URL
+                System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] 使用统一流程解析: {nextSong.Name}");
+                SongResolveResult resolveResult = await _resolvePlaybackAsync(nextSong, quality, cancellationToken).ConfigureAwait(false);
+                if (resolveResult.Status != SongResolveStatus.Success)
                 {
-                    // ⭐⭐ 音质一致性检查：如果缓存的音质与当前选择的不一致，必须重新获取
-                    string cachedLevel = nextSong.Level.ToLower();
-                    if (cachedLevel != qualityLevel)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] ⚠ 音质不一致（缓存: {nextSong.Level}, 当前选择: {qualityLevel}），重新获取URL");
-                        nextSong.Url = null;
-                        nextSong.Level = null;
-                        nextSong.Size = 0;
-                        needRefreshUrl = true;
-                    }
-                    else
-                    {
-                        System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] ✓ 音质一致性检查通过: {nextSong.Name}, 音质: {nextSong.Level}");
-                    }
+                    System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] URL 解析失败: {nextSong.Name}, 状态: {resolveResult.Status}");
+                    return false;
                 }
-
-                // 子步骤3：如果需要获取URL
-                if (needRefreshUrl)
+                if (cancellationToken.IsCancellationRequested)
                 {
-                    // ⭐⭐ 首先检查多音质缓存
-                    var cachedQuality = nextSong.GetQualityUrl(qualityLevel);
-                    if (cachedQuality != null && !string.IsNullOrEmpty(cachedQuality.Url))
-                    {
-                        System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] ✓ 命中多音质缓存: {nextSong.Name}, 音质: {qualityLevel}, 试听: {cachedQuality.IsTrial}");
-                        nextSong.Url = cachedQuality.Url;
-                        nextSong.Level = cachedQuality.Level;
-                        nextSong.Size = cachedQuality.Size;
-                        nextSong.IsTrial = cachedQuality.IsTrial;
-                        nextSong.TrialStart = cachedQuality.TrialStart;
-                        nextSong.TrialEnd = cachedQuality.TrialEnd;
-                    }
-                    else
-                    {
-                        // 没有缓存，需要获取URL
-                        bool shouldSkipCheck = false; // 始终执行可用性预检，确保缺失资源被及时标记
-                        System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] 获取 URL: {nextSong.Name}, 音质: {qualityLevel}, IsAvailable={nextSong.IsAvailable}, skipCheck={shouldSkipCheck}");
-
-                        var urlResult = await _apiClient.GetSongUrlAsync(
-                            new[] { nextSong.Id },
-                            quality,
-                            skipAvailabilityCheck: shouldSkipCheck).ConfigureAwait(false);
-
-                        if (cancellationToken.IsCancellationRequested) return false;
-
-                        if (urlResult == null ||
-                            !urlResult.TryGetValue(nextSong.Id, out var songUrl) ||
-                            string.IsNullOrEmpty(songUrl?.Url))
-                        {
-                            // 🎯 标记歌曲为不可用，下次预加载会自动跳过
-                            nextSong.IsAvailable = false;
-                            System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] 🎯 无法获取 URL，标记为不可用: {nextSong.Name}");
-                            return false;
-                        }
-
-                        // ⭐ 设置试听信息
-                        bool isTrial = songUrl.FreeTrialInfo != null;
-                        long trialStart = songUrl.FreeTrialInfo?.Start ?? 0;
-                        long trialEnd = songUrl.FreeTrialInfo?.End ?? 0;
-
-                        if (isTrial)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] 🎵 试听版本: {nextSong.Name}, 片段: {trialStart/1000}s - {trialEnd/1000}s");
-                        }
-
-                        // ⭐⭐ 将获取的URL缓存到多音质字典中（包含试听信息）
-                        long resolvedSize = songUrl.Size;
-                        if (resolvedSize <= 0)
-                        {
-                            var (_, contentLength) = await HttpRangeHelper.CheckRangeSupportAsync(songUrl.Url, _httpClient, cancellationToken, nextSong.CustomHeaders).ConfigureAwait(false);
-                            if (contentLength > 0)
-                            {
-                                resolvedSize = contentLength;
-                            }
-                        }
-                        if (resolvedSize <= 0)
-                        {
-                            resolvedSize = StreamSizeEstimator.EstimateSizeFromBitrate(songUrl.Br, nextSong.Duration);
-                        }
-
-                        string actualLevel = songUrl.Level?.ToLower() ?? qualityLevel;
-
-                        nextSong.SetQualityUrl(actualLevel, songUrl.Url, resolvedSize, true, isTrial, trialStart, trialEnd);
-                        System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] ✓ 已缓存音质URL: {nextSong.Name}, 音质: {actualLevel}, 大小: {resolvedSize}, 试听: {isTrial}");
-
-                        // ✅ 成功获取 URL，标记为可用并更新当前字段
-                        nextSong.IsAvailable = true;
-                        nextSong.Url = songUrl.Url;
-                        nextSong.Level = songUrl.Level;
-                        nextSong.Size = resolvedSize;
-                        nextSong.IsTrial = isTrial;
-                        nextSong.TrialStart = trialStart;
-                        nextSong.TrialEnd = trialEnd;
-                    }
+                    return false;
                 }
-
+                if (string.IsNullOrEmpty(nextSong.Url))
+                {
+                    System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] URL 为空，取消预加载: {nextSong.Name}");
+                    return false;
+                }
                 System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] URL 已获取: {nextSong.Url}");
+                if (nextSong.IsTrial)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] 🎵 试听版本: {nextSong.Name}, 片段: {nextSong.TrialStart / 1000}s - {nextSong.TrialEnd / 1000}s");
+                }
 
                 // 步骤 2: 创建 SmartCacheManager 并预下载首段
                 var cacheManager = new SmartCacheManager(
@@ -393,6 +317,12 @@ namespace YTPlayer.Core.Playback
                         Url = nextSong.Url,
                         Level = nextSong.Level,
                         Size = nextSong.Size,
+                        IsTrial = nextSong.IsTrial,
+                        TrialStart = nextSong.TrialStart,
+                        TrialEnd = nextSong.TrialEnd,
+                        IsUnblocked = nextSong.IsUnblocked,
+                        UnblockSource = nextSong.UnblockSource ?? string.Empty,
+                        CustomHeaders = nextSong.CustomHeaders != null ? new Dictionary<string, string>(nextSong.CustomHeaders, StringComparer.OrdinalIgnoreCase) : null,
                         CacheManager = cacheManager,
                         StreamProvider = streamProvider,
                         StreamHandle = streamHandle,
@@ -449,6 +379,12 @@ namespace YTPlayer.Core.Playback
                         Url = data.Url,
                         Level = data.Level,
                         Size = data.Size,
+                        IsTrial = data.IsTrial,
+                        TrialStart = data.TrialStart,
+                        TrialEnd = data.TrialEnd,
+                        IsUnblocked = data.IsUnblocked,
+                        UnblockSource = data.UnblockSource,
+                        CustomHeaders = data.CustomHeaders != null ? new Dictionary<string, string>(data.CustomHeaders, StringComparer.OrdinalIgnoreCase) : null,
                         CacheManager = data.CacheManager,
                         StreamProvider = data.StreamProvider,
                         StreamHandle = data.StreamHandle,
@@ -548,6 +484,12 @@ namespace YTPlayer.Core.Playback
         public string Url { get; set; } = string.Empty;
         public string Level { get; set; } = string.Empty;
         public long Size { get; set; }
+        public bool IsTrial { get; set; }
+        public long TrialStart { get; set; }
+        public long TrialEnd { get; set; }
+        public bool IsUnblocked { get; set; }
+        public string UnblockSource { get; set; } = string.Empty;
+        public Dictionary<string, string>? CustomHeaders { get; set; }
         public SmartCacheManager CacheManager { get; set; } = null!;
 
         // ⭐ 新增：完整的流对象信息

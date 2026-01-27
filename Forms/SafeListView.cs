@@ -11,6 +11,7 @@ namespace YTPlayer
         private const int TextPadding = 6;
         private const int MaxRowHeight = 512;
         private const int SequenceColumnIndex = 1;
+        private const int GridLineAlpha = 150;
 
         [System.ComponentModel.Browsable(false)]
         [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
@@ -120,7 +121,8 @@ namespace YTPlayer
             Rectangle textBounds = AlignTextBounds(e.Graphics, e.Bounds, text, Font, flags);
             TextRenderer.DrawText(e.Graphics, text, Font, textBounds, palette.TextSecondary, flags);
 
-            using (var pen = new Pen(palette.Divider))
+            DrawColumnSeparatorLine(e.Graphics, palette, e.Bounds, e.ColumnIndex, Columns.Count);
+            using (var pen = new Pen(GetGridLineColor(palette)))
             {
                 int y = e.Bounds.Bottom - 1;
                 e.Graphics.DrawLine(pen, e.Bounds.Left, y, e.Bounds.Right, y);
@@ -175,6 +177,12 @@ namespace YTPlayer
             TextRenderer.DrawText(e.Graphics, text, Font, textBounds, textColor, flags);
         }
 
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            DrawListBorder(e.Graphics);
+        }
+
         private void DrawSubItemBackground(DrawListViewSubItemEventArgs e)
         {
             ThemePalette palette = ThemeManager.Current;
@@ -195,9 +203,10 @@ namespace YTPlayer
                 }
             }
 
+            DrawColumnSeparatorLine(e.Graphics, palette, e.Bounds, e.ColumnIndex, Columns.Count);
             if (e.ColumnIndex >= 0 && e.ColumnIndex == Columns.Count - 1)
             {
-                using (var pen = new Pen(palette.Divider))
+                using (var pen = new Pen(GetGridLineColor(palette)))
                 {
                     int y = e.Bounds.Bottom - 1;
                     e.Graphics.DrawLine(pen, 0, y, ClientRectangle.Width, y);
@@ -226,10 +235,55 @@ namespace YTPlayer
                 }
             }
 
-            using (var pen = new Pen(palette.Divider))
+            using (var pen = new Pen(GetGridLineColor(palette)))
             {
                 int y = e.Bounds.Bottom - 1;
                 e.Graphics.DrawLine(pen, 0, y, ClientRectangle.Width, y);
+            }
+        }
+
+        private static void DrawColumnSeparatorLine(Graphics graphics, ThemePalette palette, Rectangle bounds, int columnIndex, int columnCount)
+        {
+            if (graphics == null || columnIndex < 0 || columnIndex >= columnCount - 1)
+            {
+                return;
+            }
+
+            if (bounds.Width <= 0)
+            {
+                return;
+            }
+
+            using (var pen = new Pen(GetGridLineColor(palette)))
+            {
+                int x = bounds.Right - 1;
+                graphics.DrawLine(pen, x, bounds.Top + 2, x, bounds.Bottom - 2);
+            }
+        }
+
+        private static Color GetGridLineColor(ThemePalette palette)
+        {
+            Color baseColor = palette.TextSecondary;
+            return Color.FromArgb(GridLineAlpha, baseColor.R, baseColor.G, baseColor.B);
+        }
+
+        private void DrawListBorder(Graphics graphics)
+        {
+            if (graphics == null)
+            {
+                return;
+            }
+
+            Rectangle rect = ClientRectangle;
+            if (rect.Width <= 1 || rect.Height <= 1)
+            {
+                return;
+            }
+
+            ThemePalette palette = ThemeManager.Current;
+            using (var pen = new Pen(GetGridLineColor(palette)))
+            {
+                graphics.DrawRectangle(pen, new Rectangle(0, 0, rect.Width - 1, rect.Height - 1));
             }
         }
 

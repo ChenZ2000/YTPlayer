@@ -653,6 +653,8 @@ public partial class MainForm : Form
 
 	private bool _hideControlBar = false;
 
+	private bool _preventSleepDuringPlayback = true;
+
 	private CancellationTokenSource? _lyricsSpeechCts;
 
 	private readonly object _lyricsSpeechLock = new object();
@@ -678,6 +680,14 @@ public partial class MainForm : Form
 	private bool _isApplicationExitRequested = false;
 
 	private bool _isFormClosing = false;
+
+	private IntPtr _powerRequestHandle = IntPtr.Zero;
+
+	private IntPtr _powerRequestReasonBuffer = IntPtr.Zero;
+
+	private bool _powerRequestSleepActive = false;
+
+	private bool _powerRequestInitFailed = false;
 
 	private DateTime _appStartTime = DateTime.Now;
 
@@ -752,6 +762,23 @@ public partial class MainForm : Form
         private const int ListViewMaxRowHeight = 512;
         private const int ListViewMultiLineMaxLines = 3;
         private int _listViewShortInfoColumnIndex = 4;
+        private const int ListViewRowResizeGripHeight = 4;
+        private const int ListViewRowResizeMinHeight = 20;
+        private bool _isListViewRowResizing;
+        private int _listViewRowResizeStartY;
+        private int _listViewRowResizeStartHeight;
+        private Cursor? _listViewRowResizeOriginalCursor;
+        private int? _customListViewRowHeight;
+        private int? _customListViewIndexWidth;
+        private int? _customListViewNameWidth;
+        private int? _customListViewCreatorWidth;
+        private int? _customListViewExtraWidth;
+        private int? _customListViewDescriptionWidth;
+        private bool _listViewLayoutInitialized;
+        private System.Windows.Forms.Timer? _listViewLayoutPersistTimer;
+        private FormWindowState _lastWindowState = FormWindowState.Normal;
+        private bool _isApplyingWindowLayout;
+        private System.Windows.Forms.Timer? _windowLayoutPersistTimer;
 
 	private DateTime _lastNarratorCheckAt = DateTime.MinValue;
 
@@ -1201,6 +1228,8 @@ public partial class MainForm : Form
 	private ToolStripMenuItem jumpToPositionMenuItem;
 
 	private ToolStripMenuItem autoReadLyricsMenuItem;
+
+	private ToolStripMenuItem preventSleepMenuItem;
 
 	private ToolStripMenuItem hideSequenceMenuItem;
 
@@ -1737,6 +1766,17 @@ public partial class MainForm : Form
                 return new MainFormAccessibleObject(this);
         }
 
+        protected override void WndProc(ref Message m)
+        {
+                base.WndProc(ref m);
+                const int WM_EXITSIZEMOVE = 0x0232;
+                if (m.Msg == WM_EXITSIZEMOVE)
+                {
+                        _windowLayoutPersistTimer?.Stop();
+                        PersistWindowLayoutConfig();
+                }
+        }
+
         private void ApplySearchPanelStyle()
         {
                 if (searchPanel == null)
@@ -1879,7 +1919,7 @@ public partial class MainForm : Form
                 ThemePalette palette = ThemeManager.Current;
                 resultListView.BackColor = palette.SurfaceBackground;
                 resultListView.ForeColor = palette.TextPrimary;
-                resultListView.BorderStyle = BorderStyle.FixedSingle;
+                resultListView.BorderStyle = BorderStyle.None;
                 resultListView.GridLines = false;
                 RegisterRoundedControl(resultListView, DefaultControlCornerRadius);
                 ApplyResultListViewLayout();
@@ -2012,23 +2052,20 @@ public partial class MainForm : Form
                         DistributeSlack(ref nameWidth, ref artistWidth, ref extraWidth, slack, hasExtraContent);
                 }
 
-                columnHeader0.Width = 0;
-                columnHeader1.Width = seqWidth;
-                columnHeader2.Width = nameWidth;
-                columnHeader3.Width = artistWidth;
+                int column4AutoWidth = (shortColumnIndex == 4) ? shortWidth : extraWidth;
+                int column5AutoWidth = (shortColumnIndex == 5) ? shortWidth : extraWidth;
+                int finalSeqWidth = hideSequence ? 0 : (_customListViewIndexWidth ?? seqWidth);
+                int finalNameWidth = _customListViewNameWidth ?? nameWidth;
+                int finalCreatorWidth = _customListViewCreatorWidth ?? artistWidth;
+                int finalExtraWidth = _customListViewExtraWidth ?? column4AutoWidth;
+                int finalDescriptionWidth = _customListViewDescriptionWidth ?? column5AutoWidth;
 
-                columnHeader4.Width = 0;
-                columnHeader5.Width = 0;
-                if (shortColumnIndex == 4)
-                {
-                        columnHeader4.Width = shortWidth;
-                        columnHeader5.Width = extraWidth;
-                }
-                else
-                {
-                        columnHeader5.Width = shortWidth;
-                        columnHeader4.Width = extraWidth;
-                }
+                columnHeader0.Width = 0;
+                columnHeader1.Width = Math.Max(0, finalSeqWidth);
+                columnHeader2.Width = Math.Max(0, finalNameWidth);
+                columnHeader3.Width = Math.Max(0, finalCreatorWidth);
+                columnHeader4.Width = Math.Max(0, finalExtraWidth);
+                columnHeader5.Width = Math.Max(0, finalDescriptionWidth);
         }
 
         private void UpdateResultListViewLineSettings(int shortColumnIndex)
@@ -2691,6 +2728,17 @@ public partial class MainForm : Form
                         return;
                 }
 
+                if (_customListViewRowHeight.HasValue)
+                {
+                        int minHeight = Math.Max(ListViewRowResizeMinHeight, resultListView.Font?.Height ?? ListViewRowResizeMinHeight);
+                        int target = Math.Max(minHeight, Math.Min(ListViewMaxRowHeight, _customListViewRowHeight.Value));
+                        if (resultListView is SafeListView customSafeListView)
+                        {
+                                customSafeListView.SetRowHeight(target);
+                        }
+                        return;
+                }
+
                 int lineHeight = TextRenderer.MeasureText("A", resultListView.Font, new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix).Height;
                 int defaultHeight = Math.Max(30, lineHeight + 10);
                 int maxAllowedHeight = Math.Max(defaultHeight, lineHeight * ListViewMultiLineMaxLines + 10);
@@ -3040,7 +3088,7 @@ public partial class MainForm : Form
 			_lyricsLoader = new LyricsLoader(_apiClient);
 			_lyricsDisplayManager.LyricUpdated += OnLyricUpdated;
 			_audioEngine.PositionChanged += OnAudioPositionChanged;
-			_nextSongPreloader = new NextSongPreloader(_apiClient);
+			_nextSongPreloader = new NextSongPreloader(_apiClient, (song, quality, token) => ResolveSongPlaybackAsync(song, quality, token, suppressStatusUpdates: true));
 			_seekManager = new SeekManager(_audioEngine);
 			_seekManager.SeekCompleted += OnSeekCompleted;
 			_updateTimer = new System.Windows.Forms.Timer();
@@ -3104,6 +3152,8 @@ public partial class MainForm : Form
 		base.KeyDown += MainForm_KeyDown;
 		base.KeyUp += MainForm_KeyUp;
 		base.Deactivate += MainForm_Deactivate;
+		base.SizeChanged += MainForm_SizeChanged;
+		base.LocationChanged += MainForm_LocationChanged;
 	}
 
 	private ConfigModel EnsureConfigInitialized()
@@ -3178,10 +3228,14 @@ public partial class MainForm : Form
 		_autoReadLyrics = configModel.LyricsReadingEnabled;
 		_hideSequenceNumbers = configModel.SequenceNumberHidden;
 		_hideControlBar = configModel.ControlBarHidden;
+		_preventSleepDuringPlayback = configModel.PreventSleepDuringPlayback;
+		ApplyWindowLayoutFromConfig(configModel);
+		ApplyListViewLayoutFromConfig(configModel);
 		try
 		{
             SetMenuItemCheckedState(autoReadLyricsMenuItem, _autoReadLyrics);
             autoReadLyricsMenuItem.Text = (_autoReadLyrics ? "关闭歌词朗读\tF11" : "打开歌词朗读\tF11");
+			SetMenuItemCheckedState(preventSleepMenuItem, _preventSleepDuringPlayback);
 			UpdateHideSequenceMenuItemText();
 			UpdateHideControlBarMenuItemText();
 			if (_hideSequenceNumbers)
@@ -3189,6 +3243,7 @@ public partial class MainForm : Form
 				RefreshSequenceDisplayInPlace();
 			}
 			ApplyControlBarVisibility();
+			UpdatePlaybackPowerRequests(IsPlaybackActiveState(GetCachedPlaybackState()));
 		}
 		catch
 		{
@@ -3196,19 +3251,222 @@ public partial class MainForm : Form
 		Debug.WriteLine($"[CONFIG] LyricsReadingEnabled={_autoReadLyrics}");
 		Debug.WriteLine($"[CONFIG] SequenceNumberHidden={_hideSequenceNumbers}");
 		Debug.WriteLine($"[CONFIG] ControlBarHidden={_hideControlBar}");
+		Debug.WriteLine($"[CONFIG] PreventSleepDuringPlayback={_preventSleepDuringPlayback}");
 		_playbackReportingService?.UpdateSettings(_config);
-		Debug.WriteLine($"[CONFIG] UsePersonalCookie={_apiClient.UsePersonalCookie} (自动检测)");
-		Debug.WriteLine($"[CONFIG] AccountState.IsLoggedIn={_accountState?.IsLoggedIn}");
-		Debug.WriteLine("[CONFIG] AccountState.MusicU=" + (string.IsNullOrEmpty(_accountState?.MusicU) ? "未设置" : "已设置"));
-		Debug.WriteLine("[CONFIG] AccountState.CsrfToken=" + (string.IsNullOrEmpty(_accountState?.CsrfToken) ? "未设置" : "已设置"));
-		if (_apiClient.UsePersonalCookie)
-		{
+        Debug.WriteLine($"[CONFIG] UsePersonalCookie={_apiClient.UsePersonalCookie} (自动检测)");
+        Debug.WriteLine($"[CONFIG] AccountState.IsLoggedIn={_accountState?.IsLoggedIn}");
+        Debug.WriteLine("[CONFIG] AccountState.MusicU=" + (string.IsNullOrEmpty(_accountState?.MusicU) ? "未设置" : "已设置"));
+        Debug.WriteLine("[CONFIG] AccountState.CsrfToken=" + (string.IsNullOrEmpty(_accountState?.CsrfToken) ? "未设置" : "已设置"));
+        if (_apiClient.UsePersonalCookie)
+        {
 			Task.Run(async delegate
 			{
 				await EnsureLoginProfileAsync();
-			});
-		}
-	}
+            });
+        }
+    }
+
+    private void ApplyWindowLayoutFromConfig(ConfigModel configModel)
+    {
+        if (configModel == null || base.IsDisposed)
+        {
+            return;
+        }
+
+        bool hasWidth = configModel.WindowWidth.HasValue && configModel.WindowWidth.Value > 0;
+        bool hasHeight = configModel.WindowHeight.HasValue && configModel.WindowHeight.Value > 0;
+        bool hasLocation = configModel.WindowX.HasValue && configModel.WindowY.HasValue;
+        bool hasState = !string.IsNullOrWhiteSpace(configModel.WindowState);
+
+        if (!hasWidth && !hasHeight && !hasLocation && !hasState)
+        {
+            return;
+        }
+
+        _isApplyingWindowLayout = true;
+        try
+        {
+            if (hasWidth || hasHeight || hasLocation)
+            {
+                int width = hasWidth ? configModel.WindowWidth!.Value : base.Width;
+                int height = hasHeight ? configModel.WindowHeight!.Value : base.Height;
+                int x = hasLocation ? configModel.WindowX!.Value : base.Location.X;
+                int y = hasLocation ? configModel.WindowY!.Value : base.Location.Y;
+                Rectangle targetBounds = EnsureWindowBoundsVisible(new Rectangle(x, y, width, height));
+                StartPosition = FormStartPosition.Manual;
+                Bounds = targetBounds;
+            }
+
+            if (hasState)
+            {
+                string state = configModel.WindowState!.Trim();
+                if (string.Equals(state, "Maximized", StringComparison.OrdinalIgnoreCase))
+                {
+                    WindowState = FormWindowState.Maximized;
+                }
+                else if (string.Equals(state, "Normal", StringComparison.OrdinalIgnoreCase))
+                {
+                    WindowState = FormWindowState.Normal;
+                }
+            }
+
+            _lastWindowState = WindowState;
+        }
+        finally
+        {
+            _isApplyingWindowLayout = false;
+        }
+    }
+
+    private static Rectangle EnsureWindowBoundsVisible(Rectangle bounds)
+    {
+        if (bounds.Width <= 0 || bounds.Height <= 0)
+        {
+            return bounds;
+        }
+
+        Rectangle workingArea = Screen.FromRectangle(bounds).WorkingArea;
+        int width = Math.Min(bounds.Width, workingArea.Width);
+        int height = Math.Min(bounds.Height, workingArea.Height);
+        int x = Math.Max(workingArea.Left, Math.Min(bounds.X, workingArea.Right - width));
+        int y = Math.Max(workingArea.Top, Math.Min(bounds.Y, workingArea.Bottom - height));
+        return new Rectangle(x, y, width, height);
+    }
+
+    private void ApplyListViewLayoutFromConfig(ConfigModel configModel)
+    {
+        if (configModel == null)
+        {
+            return;
+        }
+
+        _customListViewIndexWidth = configModel.ListViewColumnWidthIndex;
+        _customListViewNameWidth = configModel.ListViewColumnWidthName;
+        _customListViewCreatorWidth = configModel.ListViewColumnWidthCreator;
+        _customListViewExtraWidth = configModel.ListViewColumnWidthExtra;
+        _customListViewDescriptionWidth = configModel.ListViewColumnWidthDescription;
+        _customListViewRowHeight = configModel.ListViewRowHeight;
+
+        if (_customListViewRowHeight.HasValue && resultListView is SafeListView safeListView)
+        {
+            int minHeight = Math.Max(ListViewRowResizeMinHeight, resultListView.Font?.Height ?? ListViewRowResizeMinHeight);
+            int target = Math.Max(minHeight, Math.Min(ListViewMaxRowHeight, _customListViewRowHeight.Value));
+            safeListView.SetRowHeight(target);
+        }
+
+        ApplyResultListViewLayout();
+        _listViewLayoutInitialized = true;
+    }
+
+    private void UpdateListViewLayoutConfig(ConfigModel configModel)
+    {
+        if (configModel == null)
+        {
+            return;
+        }
+
+        configModel.ListViewColumnWidthIndex = _customListViewIndexWidth;
+        configModel.ListViewColumnWidthName = _customListViewNameWidth;
+        configModel.ListViewColumnWidthCreator = _customListViewCreatorWidth;
+        configModel.ListViewColumnWidthExtra = _customListViewExtraWidth;
+        configModel.ListViewColumnWidthDescription = _customListViewDescriptionWidth;
+        configModel.ListViewRowHeight = _customListViewRowHeight;
+    }
+
+    private void UpdateWindowLayoutConfig(ConfigModel configModel)
+    {
+        if (configModel == null || WindowState == FormWindowState.Minimized)
+        {
+            return;
+        }
+
+        Rectangle bounds = (WindowState == FormWindowState.Normal) ? Bounds : RestoreBounds;
+        configModel.WindowX = bounds.X;
+        configModel.WindowY = bounds.Y;
+        configModel.WindowWidth = bounds.Width;
+        configModel.WindowHeight = bounds.Height;
+        configModel.WindowState = (WindowState == FormWindowState.Maximized) ? "Maximized" : "Normal";
+    }
+
+    private void ScheduleListViewLayoutPersist()
+    {
+        if (_listViewLayoutPersistTimer == null)
+        {
+            _listViewLayoutPersistTimer = new System.Windows.Forms.Timer();
+            _listViewLayoutPersistTimer.Interval = 400;
+            _listViewLayoutPersistTimer.Tick += (_, _) =>
+            {
+                _listViewLayoutPersistTimer.Stop();
+                PersistListViewLayoutConfig();
+            };
+        }
+
+        _listViewLayoutPersistTimer.Stop();
+        _listViewLayoutPersistTimer.Start();
+    }
+
+    private void PersistListViewLayoutConfig()
+    {
+        try
+        {
+            ConfigModel configModel = EnsureConfigInitialized();
+            if (configModel == null || _configManager == null)
+            {
+                return;
+            }
+            UpdateListViewLayoutConfig(configModel);
+            _configManager.Save(configModel);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine("[Config] 保存列表布局失败: " + ex.Message);
+        }
+    }
+
+    private void ScheduleWindowLayoutPersist()
+    {
+        if (_isApplyingWindowLayout || WindowState == FormWindowState.Minimized)
+        {
+            return;
+        }
+
+        if (_windowLayoutPersistTimer == null)
+        {
+            _windowLayoutPersistTimer = new System.Windows.Forms.Timer();
+            _windowLayoutPersistTimer.Interval = 400;
+            _windowLayoutPersistTimer.Tick += (_, _) =>
+            {
+                _windowLayoutPersistTimer.Stop();
+                PersistWindowLayoutConfig();
+            };
+        }
+
+        _windowLayoutPersistTimer.Stop();
+        _windowLayoutPersistTimer.Start();
+    }
+
+    private void PersistWindowLayoutConfig()
+    {
+        if (_isApplyingWindowLayout || WindowState == FormWindowState.Minimized)
+        {
+            return;
+        }
+
+        try
+        {
+            ConfigModel configModel = EnsureConfigInitialized();
+            if (configModel == null || _configManager == null)
+            {
+                return;
+            }
+            UpdateWindowLayoutConfig(configModel);
+            _configManager.Save(configModel);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine("[Config] 保存窗口布局失败: " + ex.Message);
+        }
+    }
 
 	private void InitializeSearchHistoryUi(IReadOnlyCollection<string> history)
 	{
@@ -3739,6 +3997,9 @@ public partial class MainForm : Form
 			configModel.LyricsReadingEnabled = _autoReadLyrics;
 			configModel.SequenceNumberHidden = _hideSequenceNumbers;
 			configModel.ControlBarHidden = _hideControlBar;
+			configModel.PreventSleepDuringPlayback = _preventSleepDuringPlayback;
+			UpdateWindowLayoutConfig(configModel);
+			UpdateListViewLayoutConfig(configModel);
 			PersistPlaybackState(includeQueue: true, persistToDisk: false);
 			_configManager.Save(configModel);
 		}
@@ -11968,6 +12229,182 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
                 ApplyResultListViewLayout();
         }
 
+        private void MainForm_SizeChanged(object? sender, EventArgs e)
+        {
+                if (_isApplyingWindowLayout || WindowState == FormWindowState.Minimized)
+                {
+                        return;
+                }
+                if (_lastWindowState != WindowState)
+                {
+                        _lastWindowState = WindowState;
+                        ScheduleWindowLayoutPersist();
+                        return;
+                }
+                if (WindowState == FormWindowState.Normal)
+                {
+                        ScheduleWindowLayoutPersist();
+                }
+        }
+
+        private void MainForm_LocationChanged(object? sender, EventArgs e)
+        {
+                if (_isApplyingWindowLayout || WindowState != FormWindowState.Normal)
+                {
+                        return;
+                }
+                ScheduleWindowLayoutPersist();
+        }
+
+        private void resultListView_ColumnWidthChanged(object sender, ColumnWidthChangedEventArgs e)
+        {
+                if (!_listViewLayoutInitialized || _isApplyingListViewLayout || resultListView == null)
+                {
+                        return;
+                }
+                if (e.ColumnIndex <= 0 || e.ColumnIndex >= resultListView.Columns.Count)
+                {
+                        return;
+                }
+                int width = resultListView.Columns[e.ColumnIndex].Width;
+                switch (e.ColumnIndex)
+                {
+                case 1:
+                        _customListViewIndexWidth = width;
+                        break;
+                case 2:
+                        _customListViewNameWidth = width;
+                        break;
+                case 3:
+                        _customListViewCreatorWidth = width;
+                        break;
+                case 4:
+                        _customListViewExtraWidth = width;
+                        break;
+                case 5:
+                        _customListViewDescriptionWidth = width;
+                        break;
+                }
+                ScheduleListViewLayoutPersist();
+        }
+
+        private void resultListView_MouseDown(object sender, MouseEventArgs e)
+        {
+                if (e.Button != MouseButtons.Left || resultListView == null)
+                {
+                        return;
+                }
+
+                if (!TryGetListViewRowResizeTarget(new Point(e.X, e.Y)))
+                {
+                        return;
+                }
+
+                if (resultListView is SafeListView safeListView)
+                {
+                        _isListViewRowResizing = true;
+                        _listViewRowResizeStartY = e.Y;
+                        _listViewRowResizeStartHeight = safeListView.GetRowHeight();
+                        if (_listViewRowResizeOriginalCursor == null)
+                        {
+                                _listViewRowResizeOriginalCursor = resultListView.Cursor;
+                        }
+                        resultListView.Cursor = Cursors.SizeNS;
+                        resultListView.Capture = true;
+                }
+        }
+
+        private void resultListView_MouseMove(object sender, MouseEventArgs e)
+        {
+                if (resultListView == null)
+                {
+                        return;
+                }
+
+                if (_isListViewRowResizing)
+                {
+                        UpdateListViewRowResize(e.Y);
+                        return;
+                }
+
+                UpdateListViewRowResizeCursor(new Point(e.X, e.Y));
+        }
+
+        private bool HandleListViewRowResizeMouseUp(MouseEventArgs e)
+        {
+                if (!_isListViewRowResizing || resultListView == null)
+                {
+                        return false;
+                }
+
+                _isListViewRowResizing = false;
+                resultListView.Capture = false;
+                if (_listViewRowResizeOriginalCursor != null)
+                {
+                        resultListView.Cursor = _listViewRowResizeOriginalCursor;
+                }
+                _listViewRowResizeOriginalCursor = null;
+                ScheduleListViewLayoutPersist();
+                return true;
+        }
+
+        private void UpdateListViewRowResize(int currentY)
+        {
+                if (resultListView == null || !_isListViewRowResizing)
+                {
+                        return;
+                }
+                int delta = currentY - _listViewRowResizeStartY;
+                int targetHeight = _listViewRowResizeStartHeight + delta;
+                int minHeight = Math.Max(ListViewRowResizeMinHeight, resultListView.Font?.Height ?? ListViewRowResizeMinHeight);
+                targetHeight = Math.Max(minHeight, Math.Min(ListViewMaxRowHeight, targetHeight));
+                _customListViewRowHeight = targetHeight;
+                if (resultListView is SafeListView safeListView)
+                {
+                        safeListView.SetRowHeight(targetHeight);
+                        resultListView.Invalidate();
+                }
+        }
+
+        private void UpdateListViewRowResizeCursor(Point location)
+        {
+                if (resultListView == null || _isListViewRowResizing)
+                {
+                        return;
+                }
+
+                bool hit = TryGetListViewRowResizeTarget(location);
+                if (hit)
+                {
+                        if (resultListView.Cursor != Cursors.SizeNS)
+                        {
+                                _listViewRowResizeOriginalCursor = resultListView.Cursor;
+                                resultListView.Cursor = Cursors.SizeNS;
+                        }
+                }
+                else if (_listViewRowResizeOriginalCursor != null)
+                {
+                        resultListView.Cursor = _listViewRowResizeOriginalCursor;
+                        _listViewRowResizeOriginalCursor = null;
+                }
+        }
+
+        private bool TryGetListViewRowResizeTarget(Point location)
+        {
+                if (resultListView == null || resultListView.Items.Count == 0)
+                {
+                        return false;
+                }
+                ListViewItem item = resultListView.GetItemAt(location.X, location.Y);
+                if (item == null)
+                {
+                        return false;
+                }
+                Rectangle bounds = item.Bounds;
+                int distance = Math.Abs(location.Y - bounds.Bottom);
+                return distance <= ListViewRowResizeGripHeight;
+        }
+
         private async Task OnPrevPageAsync()
         {
 		checked
@@ -14246,6 +14683,38 @@ private static extern bool SetForegroundWindow(nint hWnd);
 	[DllImport("user32.dll")]
 	private static extern bool ShowWindow(nint hWnd, int nCmdShow);
 
+	private const uint POWER_REQUEST_CONTEXT_VERSION = 0;
+
+	private const uint POWER_REQUEST_CONTEXT_SIMPLE_STRING = 1;
+
+	private enum PowerRequestType
+	{
+		PowerRequestDisplayRequired = 0,
+		PowerRequestSystemRequired = 1,
+		PowerRequestAwayModeRequired = 2,
+		PowerRequestExecutionRequired = 3
+	}
+
+	[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+	private struct ReasonContext
+	{
+		public uint Version;
+		public uint Flags;
+		public IntPtr ReasonString;
+	}
+
+	[DllImport("kernel32.dll", SetLastError = true)]
+	private static extern IntPtr PowerCreateRequest(ref ReasonContext context);
+
+	[DllImport("kernel32.dll", SetLastError = true)]
+	private static extern bool PowerSetRequest(IntPtr powerRequest, PowerRequestType requestType);
+
+	[DllImport("kernel32.dll", SetLastError = true)]
+	private static extern bool PowerClearRequest(IntPtr powerRequest, PowerRequestType requestType);
+
+	[DllImport("kernel32.dll", SetLastError = true)]
+	private static extern bool CloseHandle(IntPtr handle);
+
 private void searchTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
 {
         if (_suppressSearchTypeComboEvents)
@@ -14637,7 +15106,14 @@ private void searchTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
 		}
 		else if (e.Button == MouseButtons.Right)
 		{
-			ShowTrayContextMenu(System.Windows.Forms.Cursor.Position);
+			if (!base.Visible)
+			{
+				ShowTrayContextMenu(System.Windows.Forms.Cursor.Position);
+			}
+			else
+			{
+				RestoreFromTray();
+			}
 		}
 	}
 
@@ -14992,6 +15468,11 @@ private void searchTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
 	{
 		if (_contextMenuHost == null || trayContextMenu == null)
 		{
+			return;
+		}
+		if (base.Visible)
+		{
+			RestoreFromTray();
 			return;
 		}
 		try
@@ -15709,6 +16190,16 @@ private void searchTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
 	private void autoReadLyricsMenuItem_Click(object sender, EventArgs e)
 	{
 		ToggleAutoReadLyrics();
+	}
+
+	private void preventSleepMenuItem_Click(object sender, EventArgs e)
+	{
+		_preventSleepDuringPlayback = preventSleepMenuItem.Checked;
+		UpdatePlaybackPowerRequests(IsPlaybackActiveState(GetCachedPlaybackState()));
+		string message = _preventSleepDuringPlayback ? "已开启播放时禁止睡眠" : "已关闭播放时禁止睡眠";
+		UpdateStatusBar(message);
+		AnnounceUiMessage(message, interrupt: true);
+		SaveConfig();
 	}
 
 	private async void hideSequenceMenuItem_Click(object sender, EventArgs e)
@@ -19777,6 +20268,7 @@ private static void SetMenuItemCheckedState(ToolStripMenuItem? menuItem, bool is
                 CompleteActivePlaybackSession(PlaybackEndReason.Stopped);
 		try
 		{
+			ClearPlaybackPowerRequests();
 			_playbackCancellation?.Cancel();
 			_playbackCancellation?.Dispose();
 			_availabilityCheckCts?.Cancel();
@@ -20090,8 +20582,194 @@ private static void SetMenuItemCheckedState(ToolStripMenuItem? menuItem, bool is
 		}
 	}
 
-private async Task PlaySong(SongInfo song)
-{
+	private async Task<SongResolveResult> ResolveSongPlaybackAsync(SongInfo song, QualityLevel selectedQuality, CancellationToken cancellationToken, bool suppressStatusUpdates)
+	{
+		if (song == null || string.IsNullOrWhiteSpace(song.Id))
+		{
+			return SongResolveResult.Failed();
+		}
+
+		string selectedQualityLevel = selectedQuality.ToString().ToLower();
+		bool needRefreshUrl = string.IsNullOrEmpty(song.Url) || song.IsTrial;
+
+		void ApplyOfficialUrl(SongUrlInfo songUrl, long resolvedSize, bool isTrial, long trialStart, long trialEnd)
+		{
+			string actualLevel = songUrl.Level?.ToLower() ?? selectedQualityLevel;
+			song.SetQualityUrl(actualLevel, songUrl.Url, resolvedSize, isAvailable: true, isTrial, trialStart, trialEnd);
+			Debug.WriteLine($"[MainForm] ✓ 已缓存音质URL: {song.Name}, 音质: {actualLevel}, 大小: {resolvedSize}, 试听: {isTrial}");
+			song.Url = songUrl.Url;
+			song.Level = songUrl.Level;
+			song.Size = resolvedSize;
+			song.IsTrial = isTrial;
+			song.TrialStart = trialStart;
+			song.TrialEnd = trialEnd;
+			OptimizedHttpClientFactory.PreWarmConnection(song.Url);
+		}
+
+		if (song.IsAvailable == false)
+		{
+			Debug.WriteLine("[MainForm] 歌曲资源不可用（预检缓存）: " + song.Name);
+			if (await TryApplyUnblockAsync(song, GetQualityLevelString(GetCurrentQuality()), cancellationToken).ConfigureAwait(continueOnCapturedContext: false))
+			{
+				return SongResolveResult.Success(usedUnblock: true);
+			}
+			return SongResolveResult.NotAvailable();
+		}
+
+		if (!needRefreshUrl && !string.IsNullOrEmpty(song.Level))
+		{
+			string cachedLevel = song.Level.ToLower();
+			if (cachedLevel != selectedQualityLevel)
+			{
+				Debug.WriteLine("[MainForm] ⚠ 音质不一致（缓存: " + song.Level + ", 当前选择: " + selectedQualityLevel + "），重新获取URL");
+				song.Url = null;
+				song.Level = null;
+				song.Size = 0L;
+				needRefreshUrl = true;
+			}
+			else
+			{
+				Debug.WriteLine("[MainForm] ✓ 音质一致性检查通过: " + song.Name + ", 音质: " + song.Level);
+			}
+		}
+
+		if (!needRefreshUrl)
+		{
+			return SongResolveResult.Success();
+		}
+
+		QualityUrlInfo cachedQuality = song.GetQualityUrl(selectedQualityLevel);
+		if (cachedQuality != null && !string.IsNullOrEmpty(cachedQuality.Url) && cachedQuality.IsTrial)
+		{
+			Debug.WriteLine("[MainForm] ⚠\ufe0f 命中试听版缓存，播放前尝试解封: " + song.Name + ", 音质: " + selectedQualityLevel);
+			if (await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(continueOnCapturedContext: false))
+			{
+				return SongResolveResult.Success(usedUnblock: true);
+			}
+			Debug.WriteLine("[MainForm] 试听版缓存未解封成功，丢弃缓存并重新拉取官方链接");
+			cachedQuality = null;
+		}
+
+		if (cachedQuality != null && !string.IsNullOrEmpty(cachedQuality.Url))
+		{
+			Debug.WriteLine($"[MainForm] ✓ 命中多音质缓存: {song.Name}, 音质: {selectedQualityLevel}, 试听: {cachedQuality.IsTrial}");
+			song.Url = cachedQuality.Url;
+			song.Level = cachedQuality.Level;
+			song.Size = cachedQuality.Size;
+			song.IsTrial = cachedQuality.IsTrial;
+			song.TrialStart = cachedQuality.TrialStart;
+			song.TrialEnd = cachedQuality.TrialEnd;
+			return SongResolveResult.Success();
+		}
+
+		if (cancellationToken.IsCancellationRequested)
+		{
+			return SongResolveResult.Canceled();
+		}
+
+		if (!song.IsAvailable.HasValue && !(await EnsureSongAvailabilityAsync(song, selectedQuality, cancellationToken).ConfigureAwait(continueOnCapturedContext: false)))
+		{
+			Debug.WriteLine("[MainForm] 单曲可用性检查判定为不可用: " + song.Name);
+			if (await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(continueOnCapturedContext: false))
+			{
+				return SongResolveResult.Success(usedUnblock: true);
+			}
+			song.IsAvailable = false;
+			return SongResolveResult.NotAvailable();
+		}
+
+		Dictionary<string, SongUrlInfo> urlResult;
+		try
+		{
+			urlResult = await GetSongUrlWithRetryAsync(new string[1] { song.Id }, selectedQuality, cancellationToken, 3, suppressStatusUpdates: suppressStatusUpdates).ConfigureAwait(continueOnCapturedContext: false);
+		}
+		catch (SongResourceNotFoundException ex)
+		{
+			Debug.WriteLine("[MainForm] 获取播放链接时检测到歌曲缺失: " + ex.Message);
+			song.IsAvailable = false;
+			if (await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(continueOnCapturedContext: false))
+			{
+				return SongResolveResult.Success(usedUnblock: true);
+			}
+			return SongResolveResult.NotAvailable();
+		}
+		catch (PaidAlbumNotPurchasedException ex2)
+		{
+			Debug.WriteLine("[MainForm] 歌曲属于付费专辑且未购买: " + ex2.Message);
+			return SongResolveResult.PaidAlbumNotPurchased();
+		}
+		catch (OperationCanceledException)
+		{
+			Debug.WriteLine("[MainForm] 播放链接获取被取消");
+			return SongResolveResult.Canceled();
+		}
+		catch (Exception ex3)
+		{
+			Debug.WriteLine("[MainForm] 获取播放链接失败: " + ex3.Message);
+			if (await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(continueOnCapturedContext: false))
+			{
+				return SongResolveResult.Success(usedUnblock: true);
+			}
+			return SongResolveResult.Failed();
+		}
+
+		if (cancellationToken.IsCancellationRequested)
+		{
+			return SongResolveResult.Canceled();
+		}
+
+		if (!urlResult.TryGetValue(song.Id, out SongUrlInfo songUrl) || string.IsNullOrEmpty(songUrl?.Url))
+		{
+			Debug.WriteLine("[MainForm] 官方返回 URL 为空，尝试解封: " + song.Name);
+			if (await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(continueOnCapturedContext: false))
+			{
+				return SongResolveResult.Success(usedUnblock: true);
+			}
+			return SongResolveResult.Failed();
+		}
+
+		long resolvedSize = songUrl.Size;
+		if (resolvedSize <= 0)
+		{
+			long contentLength = (await HttpRangeHelper.CheckRangeSupportAsync(songUrl.Url, null, cancellationToken, song.CustomHeaders).ConfigureAwait(continueOnCapturedContext: false)).Item2;
+			if (contentLength > 0)
+			{
+				resolvedSize = contentLength;
+			}
+		}
+		if (resolvedSize <= 0)
+		{
+			resolvedSize = StreamSizeEstimator.EstimateSizeFromBitrate(songUrl.Br, song.Duration);
+		}
+
+		bool isTrial = songUrl.FreeTrialInfo != null;
+		long trialStart = songUrl.FreeTrialInfo?.Start ?? 0;
+		long trialEnd = songUrl.FreeTrialInfo?.End ?? 0;
+		if (isTrial)
+		{
+			Debug.WriteLine($"[MainForm] \ud83c\udfb5 试听版本: {song.Name}, 片段: {trialStart / 1000}s - {trialEnd / 1000}s");
+			if (await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(continueOnCapturedContext: false))
+			{
+				return SongResolveResult.Success(usedUnblock: true);
+			}
+			if (!(trialEnd > trialStart && resolvedSize > 0))
+			{
+				Debug.WriteLine($"[MainForm] ⚠\ufe0f 试听片段无效（start={trialStart}, end={trialEnd}, size={resolvedSize}），视为资源不可用");
+				song.IsAvailable = false;
+				if (await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(continueOnCapturedContext: false))
+				{
+					return SongResolveResult.Success(usedUnblock: true);
+				}
+				return SongResolveResult.NotAvailable();
+			}
+		}
+
+		ApplyOfficialUrl(songUrl, resolvedSize, isTrial, trialStart, trialEnd);
+		return SongResolveResult.Success();
+	}
+
+	private async Task PlaySong(SongInfo song)
+	{
         Debug.WriteLine("[MainForm] PlaySong 被调用（用户主动播放）: song=" + song?.Name);
         if (song == null)
         {
@@ -20157,7 +20835,7 @@ private Task PlaySongByIndex(int index)
         return PlaySong(song);
 }
 
-private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlayback = false)
+	private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlayback = false)
 {
         Debug.WriteLine($"[MainForm] PlaySongDirectWithCancellation 被调用: song={song?.Name}, isAutoPlayback={isAutoPlayback}");
         if (_isApplicationExitRequested)
@@ -20297,6 +20975,15 @@ private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlay
 			song.Url = preloadedData.Url;
 			song.Level = preloadedData.Level;
 			song.Size = preloadedData.Size;
+			song.IsTrial = preloadedData.IsTrial;
+			song.TrialStart = preloadedData.TrialStart;
+			song.TrialEnd = preloadedData.TrialEnd;
+			song.IsUnblocked = preloadedData.IsUnblocked;
+			song.UnblockSource = preloadedData.UnblockSource ?? string.Empty;
+			if (preloadedData.CustomHeaders != null)
+			{
+				song.CustomHeaders = new Dictionary<string, string>(preloadedData.CustomHeaders, StringComparer.OrdinalIgnoreCase);
+			}
 		}
 		bool loadingStateActive = false;
 		try
@@ -20306,226 +20993,50 @@ private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlay
 			string defaultQualityName = _config.DefaultQuality ?? "超清母带";
 			QualityLevel selectedQuality = NeteaseApiClient.GetQualityLevelFromName(defaultQualityName);
 			string selectedQualityLevel = selectedQuality.ToString().ToLower();
-			bool needRefreshUrl = string.IsNullOrEmpty(song.Url) || song.IsTrial;
-			SongUrlInfo songUrl;
-			long resolvedSize;
-			bool isTrial;
-			long trialStart;
-			long trialEnd;
-			if (song.IsAvailable == false)
+			SongResolveResult resolveResult = await ResolveSongPlaybackAsync(song, selectedQuality, cancellationToken, suppressStatusUpdates: false).ConfigureAwait(continueOnCapturedContext: false);
+			switch (resolveResult.Status)
 			{
-				Debug.WriteLine("[MainForm] 歌曲资源不可用（预检缓存）: " + song.Name);
-				if (!(await TryApplyUnblockAsync(song, GetQualityLevelString(GetCurrentQuality()), cancellationToken).ConfigureAwait(continueOnCapturedContext: false)))
+			case SongResolveStatus.Success:
+				break;
+			case SongResolveStatus.Canceled:
+				UpdateLoadingState(isLoading: false, "播放已取消", playRequestVersion);
+				loadingStateActive = false;
+				return;
+			case SongResolveStatus.NotAvailable:
+				UpdateLoadingState(isLoading: false, "歌曲不存在，已跳过", playRequestVersion);
+				loadingStateActive = false;
+				HandleSongResourceNotFoundDuringPlayback(song, isAutoPlayback);
+				return;
+			case SongResolveStatus.PaidAlbumNotPurchased:
+				UpdateLoadingState(isLoading: false, "此歌曲属于付费数字专辑，需购买后才能播放。", playRequestVersion);
+				loadingStateActive = false;
+				if (!(_accountState?.IsLoggedIn ?? false) || string.IsNullOrWhiteSpace(song.Id))
 				{
-					UpdateLoadingState(isLoading: false, "歌曲不存在，已跳过", playRequestVersion);
-					loadingStateActive = false;
-					HandleSongResourceNotFoundDuringPlayback(song, isAutoPlayback);
-					return;
+					SafeInvoke(delegate
+					{
+						MessageBox.Show(this, "该歌曲属于付费数字专辑，你需要登录/注册网易云音乐官方客户端购买后，登录本应用重试。", "需要购买", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+					});
+					UpdateStatusBar("无法播放：未购买付费专辑");
 				}
+				else if (await ShowPurchaseLinkDialogAsync(song, cancellationToken).ConfigureAwait(continueOnCapturedContext: false))
+				{
+					UpdateStatusBar("已打开官方购买页面，请完成购买后重新播放。");
+				}
+				else
+				{
+					UpdateStatusBar("购买已取消");
+				}
+				return;
+			default:
+				UpdateLoadingState(isLoading: false, "获取播放链接失败", playRequestVersion);
+				loadingStateActive = false;
+				SafeInvoke(delegate
+				{
+					MessageBox.Show(this, "无法获取播放链接，请尝试播放其他歌曲", "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+				});
+				UpdateStatusBar("获取播放链接失败");
+				return;
 			}
-			else
-			{
-				if (!needRefreshUrl && !string.IsNullOrEmpty(song.Level))
-				{
-					string cachedLevel = song.Level.ToLower();
-					if (cachedLevel != selectedQualityLevel)
-					{
-						Debug.WriteLine("[MainForm] ⚠ 音质不一致（缓存: " + song.Level + ", 当前选择: " + selectedQualityLevel + "），重新获取URL");
-						song.Url = null;
-						song.Level = null;
-						song.Size = 0L;
-						needRefreshUrl = true;
-					}
-					else
-					{
-						Debug.WriteLine("[MainForm] ✓ 音质一致性检查通过: " + song.Name + ", 音质: " + song.Level);
-					}
-				}
-				if (needRefreshUrl)
-				{
-					QualityUrlInfo cachedQuality = song.GetQualityUrl(selectedQualityLevel);
-					if (cachedQuality != null && !string.IsNullOrEmpty(cachedQuality.Url) && cachedQuality.IsTrial)
-					{
-						Debug.WriteLine("[MainForm] ⚠\ufe0f 命中试听版缓存，播放前尝试解封: " + song.Name + ", 音质: " + selectedQualityLevel);
-						if (await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(continueOnCapturedContext: false))
-						{
-							goto IL_17c9;
-						}
-						Debug.WriteLine("[MainForm] 试听版缓存未解封成功，丢弃缓存并重新拉取官方链接");
-						cachedQuality = null;
-					}
-					if (cachedQuality != null && !string.IsNullOrEmpty(cachedQuality?.Url))
-					{
-						Debug.WriteLine($"[MainForm] ✓ 命中多音质缓存: {song.Name}, 音质: {selectedQualityLevel}, 试听: {cachedQuality.IsTrial}");
-						song.Url = cachedQuality.Url;
-						song.Level = cachedQuality.Level;
-						song.Size = cachedQuality.Size;
-						song.IsTrial = cachedQuality.IsTrial;
-						song.TrialStart = cachedQuality.TrialStart;
-						song.TrialEnd = cachedQuality.TrialEnd;
-					}
-					else
-					{
-						Debug.WriteLine("[MainForm] 无URL缓存，重新获取: " + song.Name + ", 目标音质: " + defaultQualityName);
-						if (cancellationToken.IsCancellationRequested)
-						{
-							UpdateLoadingState(isLoading: false, "播放已取消", playRequestVersion);
-							loadingStateActive = false;
-							return;
-						}
-						if (!song.IsAvailable.HasValue && !(await EnsureSongAvailabilityAsync(song, selectedQuality, cancellationToken).ConfigureAwait(continueOnCapturedContext: false)))
-						{
-							Debug.WriteLine("[MainForm] 单曲可用性检查判定为不可用: " + song.Name);
-							if (!(await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(continueOnCapturedContext: false)))
-							{
-								UpdateLoadingState(isLoading: false, "歌曲不存在，已跳过", playRequestVersion);
-								loadingStateActive = false;
-								HandleSongResourceNotFoundDuringPlayback(song, isAutoPlayback);
-								return;
-							}
-						}
-						else
-						{
-							Dictionary<string, SongUrlInfo> urlResult;
-							try
-							{
-								urlResult = await GetSongUrlWithRetryAsync(new string[1] { song.Id }, selectedQuality, cancellationToken, 3).ConfigureAwait(continueOnCapturedContext: false);
-							}
-							catch (SongResourceNotFoundException ex)
-							{
-								Debug.WriteLine("[MainForm] 获取播放链接时检测到歌曲缺失: " + ex.Message);
-								song.IsAvailable = false;
-								if (await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(continueOnCapturedContext: false))
-								{
-									goto IL_17c9;
-								}
-								UpdateLoadingState(isLoading: false, "歌曲不存在，已跳过", playRequestVersion);
-								loadingStateActive = false;
-								HandleSongResourceNotFoundDuringPlayback(song, isAutoPlayback);
-								return;
-							}
-							catch (PaidAlbumNotPurchasedException ex2)
-							{
-								Debug.WriteLine("[MainForm] 歌曲属于付费专辑且未购买: " + ex2.Message);
-								UpdateLoadingState(isLoading: false, "此歌曲属于付费数字专辑，需购买后才能播放。", playRequestVersion);
-								loadingStateActive = false;
-								if (!(_accountState?.IsLoggedIn ?? false) || string.IsNullOrWhiteSpace(song.Id))
-								{
-									SafeInvoke(delegate
-									{
-										MessageBox.Show(this, "该歌曲属于付费数字专辑，你需要登录/注册网易云音乐官方客户端购买后，登录本应用重试。", "需要购买", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
-									});
-									UpdateStatusBar("无法播放：未购买付费专辑");
-								}
-								else if (await ShowPurchaseLinkDialogAsync(song, cancellationToken).ConfigureAwait(continueOnCapturedContext: false))
-								{
-									UpdateStatusBar("已打开官方购买页面，请完成购买后重新播放。");
-								}
-								else
-								{
-									UpdateStatusBar("购买已取消");
-								}
-								return;
-							}
-							catch (OperationCanceledException)
-							{
-								Debug.WriteLine("[MainForm] 播放链接获取被取消");
-								UpdateLoadingState(isLoading: false, "播放已取消", playRequestVersion);
-								loadingStateActive = false;
-								return;
-							}
-							catch (Exception ex4)
-							{
-								Debug.WriteLine("[MainForm] 获取播放链接失败: " + ex4.Message);
-								if (await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(continueOnCapturedContext: false))
-								{
-									goto IL_17c9;
-								}
-								UpdateLoadingState(isLoading: false, "获取播放链接失败", playRequestVersion);
-								loadingStateActive = false;
-								SafeInvoke(delegate
-								{
-									MessageBox.Show(this, "无法获取播放链接，请尝试播放其他歌曲", "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
-								});
-								UpdateStatusBar("获取播放链接失败");
-								return;
-							}
-							if (cancellationToken.IsCancellationRequested)
-							{
-								UpdateLoadingState(isLoading: false, "播放已取消", playRequestVersion);
-								loadingStateActive = false;
-								return;
-							}
-							if (!urlResult.TryGetValue(song.Id, out songUrl) || string.IsNullOrEmpty(songUrl?.Url))
-							{
-								Debug.WriteLine("[MainForm] 官方返回 URL 为空，尝试解封: " + song.Name);
-								if (!(await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(continueOnCapturedContext: false)))
-								{
-									UpdateLoadingState(isLoading: false, "获取播放链接失败", playRequestVersion);
-									loadingStateActive = false;
-									MessageBox.Show("无法获取播放链接，请尝试播放其他歌曲", "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
-									UpdateStatusBar("获取播放链接失败");
-									return;
-								}
-							}
-							else
-							{
-								resolvedSize = songUrl.Size;
-								if (resolvedSize <= 0)
-								{
-									long contentLength = (await HttpRangeHelper.CheckRangeSupportAsync(songUrl.Url, null, cancellationToken, song.CustomHeaders).ConfigureAwait(continueOnCapturedContext: false)).Item2;
-									if (contentLength > 0)
-									{
-										resolvedSize = contentLength;
-									}
-								}
-								if (resolvedSize <= 0)
-								{
-									resolvedSize = StreamSizeEstimator.EstimateSizeFromBitrate(songUrl.Br, song.Duration);
-								}
-								isTrial = songUrl.FreeTrialInfo != null;
-								trialStart = songUrl.FreeTrialInfo?.Start ?? 0;
-								trialEnd = songUrl.FreeTrialInfo?.End ?? 0;
-								if (!isTrial)
-								{
-									goto IL_1612;
-								}
-								Debug.WriteLine($"[MainForm] \ud83c\udfb5 试听版本: {song.Name}, 片段: {trialStart / 1000}s - {trialEnd / 1000}s");
-								if (!(await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(continueOnCapturedContext: false)))
-								{
-									if (trialEnd > trialStart && resolvedSize > 0)
-									{
-										goto IL_1612;
-									}
-									Debug.WriteLine($"[MainForm] ⚠\ufe0f 试听片段无效（start={trialStart}, end={trialEnd}, size={resolvedSize}），视为资源不可用");
-									song.IsAvailable = false;
-									if (!(await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(continueOnCapturedContext: false)))
-									{
-										UpdateLoadingState(isLoading: false, "歌曲不存在，已跳过", playRequestVersion);
-										loadingStateActive = false;
-										HandleSongResourceNotFoundDuringPlayback(song, isAutoPlayback);
-										return;
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-			goto IL_17c9;
-			IL_1612:
-			string actualLevel = songUrl.Level?.ToLower() ?? selectedQualityLevel;
-			song.SetQualityUrl(actualLevel, songUrl.Url, resolvedSize, isAvailable: true, isTrial, trialStart, trialEnd);
-			Debug.WriteLine($"[MainForm] ✓ 已缓存音质URL: {song.Name}, 音质: {actualLevel}, 大小: {resolvedSize}, 试听: {isTrial}");
-			song.Url = songUrl.Url;
-			song.Level = songUrl.Level;
-			song.Size = resolvedSize;
-			song.IsTrial = isTrial;
-			song.TrialStart = trialStart;
-			song.TrialEnd = trialEnd;
-			OptimizedHttpClientFactory.PreWarmConnection(song.Url);
-			goto IL_17c9;
-			IL_17c9:
 			if (cancellationToken.IsCancellationRequested)
 			{
 				UpdateLoadingState(isLoading: false, "播放已取消", playRequestVersion);
@@ -21446,6 +21957,7 @@ private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlay
 			UpdateUIForPlaybackState(e.NewState);
 			bool isPlaying = e.NewState == PlaybackState.Playing || e.NewState == PlaybackState.Buffering || e.NewState == PlaybackState.Loading;
 			DownloadBandwidthCoordinator.Instance.NotifyPlaybackStateChanged(isPlaying);
+			UpdatePlaybackPowerRequests(isPlaying);
 		});
 	}
 
@@ -21551,6 +22063,142 @@ private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlay
 			break;
 		}
 		UpdateTrayPlayPauseMenuTextForState(state);
+	}
+
+	private static bool IsPlaybackActiveState(PlaybackState state)
+	{
+		return state == PlaybackState.Playing
+			|| state == PlaybackState.Buffering
+			|| state == PlaybackState.Loading;
+	}
+
+	private void UpdatePlaybackPowerRequests(bool isPlaying)
+	{
+		bool shouldPreventSleep = isPlaying && _preventSleepDuringPlayback;
+
+		if (!shouldPreventSleep)
+		{
+			ClearPlaybackPowerRequests();
+			return;
+		}
+
+		if (!EnsurePlaybackPowerRequestHandle())
+		{
+			return;
+		}
+
+		UpdatePowerRequest(PowerRequestType.PowerRequestExecutionRequired, shouldPreventSleep, ref _powerRequestSleepActive);
+
+		if (!_powerRequestSleepActive)
+		{
+			ClearPlaybackPowerRequests();
+		}
+	}
+
+	private bool EnsurePlaybackPowerRequestHandle()
+	{
+		if (_powerRequestInitFailed)
+		{
+			return false;
+		}
+		if (_powerRequestHandle != IntPtr.Zero)
+		{
+			return true;
+		}
+
+		const string reason = "正在播放音频，保持播放不中断";
+		_powerRequestReasonBuffer = Marshal.StringToHGlobalUni(reason);
+		ReasonContext context = new ReasonContext
+		{
+			Version = POWER_REQUEST_CONTEXT_VERSION,
+			Flags = POWER_REQUEST_CONTEXT_SIMPLE_STRING,
+			ReasonString = _powerRequestReasonBuffer
+		};
+		_powerRequestHandle = PowerCreateRequest(ref context);
+		if (_powerRequestHandle == IntPtr.Zero || _powerRequestHandle == new IntPtr(-1))
+		{
+			int error = Marshal.GetLastWin32Error();
+			Debug.WriteLine($"[PowerRequest] 创建电源请求失败: {error}");
+			_powerRequestHandle = IntPtr.Zero;
+			_powerRequestInitFailed = true;
+			ReleasePowerRequestReasonBuffer();
+			return false;
+		}
+		return true;
+	}
+
+	private void UpdatePowerRequest(PowerRequestType requestType, bool enable, ref bool activeFlag)
+	{
+		if (_powerRequestHandle == IntPtr.Zero)
+		{
+			return;
+		}
+		if (enable)
+		{
+			if (activeFlag)
+			{
+				return;
+			}
+			if (PowerSetRequest(_powerRequestHandle, requestType))
+			{
+				activeFlag = true;
+				Debug.WriteLine($"[PowerRequest] 已启用 {requestType}");
+			}
+			else
+			{
+				int error = Marshal.GetLastWin32Error();
+				Debug.WriteLine($"[PowerRequest] 启用 {requestType} 失败: {error}");
+			}
+		}
+		else if (activeFlag)
+		{
+			if (PowerClearRequest(_powerRequestHandle, requestType))
+			{
+				activeFlag = false;
+				Debug.WriteLine($"[PowerRequest] 已关闭 {requestType}");
+			}
+			else
+			{
+				int error = Marshal.GetLastWin32Error();
+				Debug.WriteLine($"[PowerRequest] 关闭 {requestType} 失败: {error}");
+			}
+		}
+	}
+
+	private void ClearPlaybackPowerRequests()
+	{
+		if (_powerRequestHandle == IntPtr.Zero)
+		{
+			_powerRequestSleepActive = false;
+			return;
+		}
+		try
+		{
+			if (_powerRequestSleepActive)
+			{
+				PowerClearRequest(_powerRequestHandle, PowerRequestType.PowerRequestExecutionRequired);
+				_powerRequestSleepActive = false;
+			}
+		}
+		catch (Exception ex)
+		{
+			Debug.WriteLine("[PowerRequest] 清理失败: " + ex.Message);
+		}
+		finally
+		{
+			CloseHandle(_powerRequestHandle);
+			_powerRequestHandle = IntPtr.Zero;
+			ReleasePowerRequestReasonBuffer();
+		}
+	}
+
+	private void ReleasePowerRequestReasonBuffer()
+	{
+		if (_powerRequestReasonBuffer != IntPtr.Zero)
+		{
+			Marshal.FreeHGlobal(_powerRequestReasonBuffer);
+			_powerRequestReasonBuffer = IntPtr.Zero;
+		}
 	}
 
 	private void SafeInvoke(Action action)
@@ -25828,6 +26476,7 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
 		this.nextMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.jumpToPositionMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.autoReadLyricsMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+		this.preventSleepMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.hideSequenceMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.hideControlBarMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.themeMenuItem = new System.Windows.Forms.ToolStripMenuItem();
@@ -25996,7 +26645,7 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
 		this.exitMenuItem.Size = new System.Drawing.Size(178, 26);
 		this.exitMenuItem.Text = "退出";
 		this.exitMenuItem.Click += new System.EventHandler(exitMenuItem_Click);
-		this.playControlMenuItem.DropDownItems.AddRange(this.playPauseMenuItem, this.toolStripSeparator1, this.playbackMenuItem, this.qualityMenuItem, this.outputDeviceMenuItem, this.prevMenuItem, this.nextMenuItem, this.jumpToPositionMenuItem, this.autoReadLyricsMenuItem, this.hideSequenceMenuItem, this.hideControlBarMenuItem, this.themeMenuItem);
+		this.playControlMenuItem.DropDownItems.AddRange(this.playPauseMenuItem, this.toolStripSeparator1, this.playbackMenuItem, this.qualityMenuItem, this.outputDeviceMenuItem, this.prevMenuItem, this.nextMenuItem, this.jumpToPositionMenuItem, this.autoReadLyricsMenuItem, this.preventSleepMenuItem, this.hideSequenceMenuItem, this.hideControlBarMenuItem, this.themeMenuItem);
 		this.playControlMenuItem.Name = "playControlMenuItem";
 		this.playControlMenuItem.Size = new System.Drawing.Size(98, 24);
 		this.playControlMenuItem.Text = "播放/控制(&M)";
@@ -26094,6 +26743,11 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
           this.autoReadLyricsMenuItem.Text = "打开歌词朗读\tF11";
           this.autoReadLyricsMenuItem.CheckOnClick = true;
           this.autoReadLyricsMenuItem.Click += new System.EventHandler(autoReadLyricsMenuItem_Click);
+		this.preventSleepMenuItem.Name = "preventSleepMenuItem";
+          this.preventSleepMenuItem.Size = new System.Drawing.Size(180, 26);
+          this.preventSleepMenuItem.Text = "播放时禁止睡眠";
+          this.preventSleepMenuItem.CheckOnClick = true;
+          this.preventSleepMenuItem.Click += new System.EventHandler(preventSleepMenuItem_Click);
           this.hideSequenceMenuItem.Name = "hideSequenceMenuItem";
           this.hideSequenceMenuItem.ShortcutKeys = System.Windows.Forms.Keys.F8;
           this.hideSequenceMenuItem.Size = new System.Drawing.Size(180, 26);
@@ -26253,12 +26907,15 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
 		this.resultListView.Enter += new System.EventHandler(resultListView_Enter);
 		this.resultListView.GotFocus += new System.EventHandler(resultListView_GotFocus);
 		this.resultListView.MouseUp += new System.Windows.Forms.MouseEventHandler(resultListView_MouseUp);
+		this.resultListView.MouseDown += new System.Windows.Forms.MouseEventHandler(resultListView_MouseDown);
+		this.resultListView.MouseMove += new System.Windows.Forms.MouseEventHandler(resultListView_MouseMove);
 		this.resultListView.KeyDown += new System.Windows.Forms.KeyEventHandler(resultListView_KeyDown);
 		this.resultListView.HandleCreated += new System.EventHandler(resultListView_HandleCreated);
 		this.resultListView.CacheVirtualItems += new System.Windows.Forms.CacheVirtualItemsEventHandler(resultListView_CacheVirtualItems);
 		this.resultListView.RetrieveVirtualItem += new System.Windows.Forms.RetrieveVirtualItemEventHandler(resultListView_RetrieveVirtualItem);
 		this.resultListView.VirtualItemsSelectionRangeChanged += new System.Windows.Forms.ListViewVirtualItemsSelectionRangeChangedEventHandler(resultListView_VirtualItemsSelectionRangeChanged);
 		this.resultListView.SelectedIndexChanged += new System.EventHandler(resultListView_SelectedIndexChanged);
+		this.resultListView.ColumnWidthChanged += new System.Windows.Forms.ColumnWidthChangedEventHandler(resultListView_ColumnWidthChanged);
 		this.resultListView.SizeChanged += new System.EventHandler(resultListView_SizeChanged);
 		this.columnHeader0.Text = string.Empty;
 		this.columnHeader0.Width = 0;
@@ -27309,4 +27966,13 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
 	}
 }
 }
+
+
+
+
+
+
+
+
+
 

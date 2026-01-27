@@ -289,7 +289,8 @@ namespace YTPlayer.Utils
             {
                 listView.BackColor = palette.SurfaceBackground;
                 listView.ForeColor = palette.TextPrimary;
-                listView.BorderStyle = BorderStyle.FixedSingle;
+                bool isSafeListView = string.Equals(listView.GetType().Name, "SafeListView", StringComparison.Ordinal);
+                listView.BorderStyle = isSafeListView ? BorderStyle.None : BorderStyle.FixedSingle;
                 TryApplyRounded(listView, DefaultCornerRadius);
             }
             else if (control is TreeView treeView)

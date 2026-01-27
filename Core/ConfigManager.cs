@@ -312,7 +312,7 @@ namespace YTPlayer.Core
 
                 // Note: Account-related fields (Cookies, MusicU, CsrfToken, MusicA, etc.) are now managed by AccountState
                 // Note: Device fingerprint fields are now managed by AccountState
-                // Note: Window configuration fields have been removed (hardcoded defaults)
+                // Note: Window configuration fields are optional and populated on demand
 
                 // UI 和交互
                 FollowCursor = true,
@@ -555,7 +555,7 @@ namespace YTPlayer.Core
                 changed = true;
             }
 
-            // Note: Window configuration fields have been removed (hardcoded defaults)
+            // Note: Window configuration fields are optional; keep defaults when absent
 
             // 验证歌词字体大小
             if (config.LyricsFontSize < 8 || config.LyricsFontSize > 32)
@@ -564,7 +564,87 @@ namespace YTPlayer.Core
                 changed = true;
             }
 
+            // 验证窗口布局
+            if (config.WindowWidth.HasValue && config.WindowWidth.Value <= 0)
+            {
+                config.WindowWidth = null;
+                changed = true;
+            }
+            if (config.WindowHeight.HasValue && config.WindowHeight.Value <= 0)
+            {
+                config.WindowHeight = null;
+                changed = true;
+            }
+            if (config.WindowX.HasValue && !config.WindowWidth.HasValue)
+            {
+                config.WindowX = null;
+                changed = true;
+            }
+            if (config.WindowY.HasValue && !config.WindowHeight.HasValue)
+            {
+                config.WindowY = null;
+                changed = true;
+            }
+
+            if (!string.IsNullOrWhiteSpace(config.WindowState))
+            {
+                string state = config.WindowState.Trim();
+                if (!string.Equals(state, "Normal", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(state, "Maximized", StringComparison.OrdinalIgnoreCase))
+                {
+                    config.WindowState = null;
+                    changed = true;
+                }
+                else if (!string.Equals(state, config.WindowState, StringComparison.Ordinal))
+                {
+                    config.WindowState = state;
+                    changed = true;
+                }
+            }
+
+            // 验证列表列宽与行高
+            config.ListViewColumnWidthIndex = NormalizeColumnWidth(config.ListViewColumnWidthIndex, ref changed);
+            config.ListViewColumnWidthName = NormalizeColumnWidth(config.ListViewColumnWidthName, ref changed);
+            config.ListViewColumnWidthCreator = NormalizeColumnWidth(config.ListViewColumnWidthCreator, ref changed);
+            config.ListViewColumnWidthExtra = NormalizeColumnWidth(config.ListViewColumnWidthExtra, ref changed);
+            config.ListViewColumnWidthDescription = NormalizeColumnWidth(config.ListViewColumnWidthDescription, ref changed);
+            if (config.ListViewRowHeight.HasValue)
+            {
+                int height = config.ListViewRowHeight.Value;
+                if (height < 20)
+                {
+                    config.ListViewRowHeight = null;
+                    changed = true;
+                }
+                else if (height > 512)
+                {
+                    config.ListViewRowHeight = 512;
+                    changed = true;
+                }
+            }
+
             return changed;
+        }
+
+        private static int? NormalizeColumnWidth(int? width, ref bool changed)
+        {
+            if (!width.HasValue)
+            {
+                return null;
+            }
+
+            int value = width.Value;
+            if (value < 0)
+            {
+                changed = true;
+                return null;
+            }
+            if (value > 5000)
+            {
+                changed = true;
+                return 5000;
+            }
+            return value;
         }
 
         /// <summary>
