@@ -490,6 +490,7 @@ public partial class MainForm : Form
 	private BassAudioEngine _audioEngine = null;
 
 	private SeekManager _seekManager = null;
+	private PositionCoordinator _positionCoordinator = null;
 
 	protected ConfigManager _configManager = null;
 
@@ -1483,9 +1484,14 @@ public partial class MainForm : Form
 							Exception ex3 = ex2;
 							Debug.WriteLine("[StateCache] 获取状态异常: " + ex3.Message);
 						}
+						double effectivePosition = position;
+						if (_positionCoordinator != null)
+						{
+							effectivePosition = _positionCoordinator.GetEffectivePosition(position, duration, state == PlaybackState.Playing);
+						}
 						lock (_stateCacheLock)
 						{
-							_cachedPosition = position;
+							_cachedPosition = effectivePosition;
 							_cachedDuration = duration;
 							_cachedPlaybackState = state;
 						}
@@ -3089,8 +3095,11 @@ public partial class MainForm : Form
 			_lyricsDisplayManager.LyricUpdated += OnLyricUpdated;
 			_audioEngine.PositionChanged += OnAudioPositionChanged;
 			_nextSongPreloader = new NextSongPreloader(_apiClient, (song, quality, token) => ResolveSongPlaybackAsync(song, quality, token, suppressStatusUpdates: true));
+			_positionCoordinator = new PositionCoordinator();
 			_seekManager = new SeekManager(_audioEngine);
 			_seekManager.SeekCompleted += OnSeekCompleted;
+			_seekManager.SeekRequested += OnSeekRequested;
+			_seekManager.SeekExecuted += OnSeekExecuted;
 			_updateTimer = new System.Windows.Forms.Timer();
 			_updateTimer.Interval = 100;
 			_updateTimer.Tick += UpdateTimer_Tick;
@@ -13777,10 +13786,22 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 		if (_audioEngine != null)
 		{
 			TryCancelPendingLongSeek();
-			double cachedPosition = GetCachedPosition();
+			double enginePosition = _audioEngine.GetPosition();
+			double engineDuration = _audioEngine.GetDuration();
 			double cachedDuration = GetCachedDuration();
-			double num = ((direction > 0.0) ? Math.Min(cachedDuration, cachedPosition + Math.Abs(direction)) : Math.Max(0.0, cachedPosition + direction));
-			Debug.WriteLine($"[MainForm] 请求 Seek: {cachedPosition:F1}s → {num:F1}s (方向: {direction:+0;-0})");
+			double duration = (engineDuration > 0.0) ? engineDuration : cachedDuration;
+			bool preferSeekTarget = _seekManager != null && (_seekManager.IsSeekingLong || _seekManager.HasPendingDeferredSeek);
+			double basePosition = enginePosition;
+			if (_positionCoordinator != null)
+			{
+				basePosition = _positionCoordinator.GetSeekBasePosition(enginePosition, duration, _audioEngine.IsPlaying, preferSeekTarget);
+			}
+			else if (enginePosition <= 0.0)
+			{
+				basePosition = GetCachedPosition();
+			}
+			double num = ((direction > 0.0) ? Math.Min(duration, basePosition + Math.Abs(direction)) : Math.Max(0.0, basePosition + direction));
+			Debug.WriteLine($"[MainForm] 请求 Seek: {basePosition:F1}s → {num:F1}s (方向: {direction:+0;-0})");
 			RequestSeekAndResetLyrics(num, enableScrubbing);
 		}
 	}
@@ -13805,6 +13826,16 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 		{
 			UpdateProgressTrackBarAccessibleName();
 		}
+	}
+
+	private void OnSeekRequested(object? sender, SeekManager.SeekRequestEventArgs e)
+	{
+		_positionCoordinator?.OnSeekRequested(e.TargetSeconds, e.IsPreview, e.Version);
+	}
+
+	private void OnSeekExecuted(object? sender, SeekManager.SeekExecutionEventArgs e)
+	{
+		_positionCoordinator?.OnSeekExecuted(e.TargetSeconds, e.Success, e.IsPreview, e.Version);
 	}
 
 	private void OnBufferingStateChanged(object sender, BufferingState state)
@@ -20964,6 +20995,7 @@ private Task PlaySongByIndex(int index)
 			Debug.WriteLine("[MainForm ERROR] song is null");
 			return;
 		}
+		_positionCoordinator?.ResetForTrack(song.Id);
 		PreparePlaybackReportingForNextSong(song);
 		string currentSongId = song.Id;
 		string nextSongId = PredictNextSong()?.Id;

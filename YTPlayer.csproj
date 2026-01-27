@@ -163,6 +163,7 @@
     <Compile Include="Core\Playback\PlaybackOrchestrator.cs" />
     <Compile Include="Core\Playback\NextSongPreloader.cs" />
     <Compile Include="Core\Playback\SongResolveResult.cs" />
+    <Compile Include="Core\Playback\PositionCoordinator.cs" />
     <Compile Include="Core\Playback\Cache\CacheHealthInfo.cs" />
     <Compile Include="Core\Playback\Cache\ChunkDownloadManager.cs" />
     <Compile Include="Core\Playback\Cache\DownloadStrategy.cs" />

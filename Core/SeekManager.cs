@@ -37,6 +37,9 @@ namespace YTPlayer.Core
         private long _pendingSeekVersion = 0;
         private PendingSeekContext? _pendingSeekContext = null;
         private bool _hasPendingSeekContext = false;
+        private long _seekRequestVersion = 0;
+        private long _latestSeekVersion = 0;
+        private long _currentExecutingVersion = 0;
 
         // 快速定时器（50ms）
         private Timer? _seekTimer;
@@ -67,7 +70,43 @@ namespace YTPlayer.Core
         /// </summary>
         public event EventHandler<bool>? SeekCompleted; // bool = 是否成功
 
+        public event EventHandler<SeekRequestEventArgs>? SeekRequested;
+
+        public event EventHandler<SeekExecutionEventArgs>? SeekExecuted;
+
         #endregion
+
+        public sealed class SeekRequestEventArgs : EventArgs
+        {
+            public double TargetSeconds { get; }
+            public double OriginSeconds { get; }
+            public bool IsPreview { get; }
+            public long Version { get; }
+
+            public SeekRequestEventArgs(double targetSeconds, double originSeconds, bool isPreview, long version)
+            {
+                TargetSeconds = targetSeconds;
+                OriginSeconds = originSeconds;
+                IsPreview = isPreview;
+                Version = version;
+            }
+        }
+
+        public sealed class SeekExecutionEventArgs : EventArgs
+        {
+            public double TargetSeconds { get; }
+            public bool Success { get; }
+            public bool IsPreview { get; }
+            public long Version { get; }
+
+            public SeekExecutionEventArgs(double targetSeconds, bool success, bool isPreview, long version)
+            {
+                TargetSeconds = targetSeconds;
+                Success = success;
+                IsPreview = isPreview;
+                Version = version;
+            }
+        }
 
         private readonly struct PendingSeekContext
         {
@@ -192,6 +231,8 @@ namespace YTPlayer.Core
                 targetSeconds = Math.Min(targetSeconds, maxTarget);
             }
 
+            double originSeconds;
+            long requestVersion;
             lock (_seekLock)
             {
                 // 保存最新的目标位置（丢弃旧的）
@@ -199,6 +240,10 @@ namespace YTPlayer.Core
                 _latestSeekOriginPosition = _audioEngine?.GetPosition() ?? -1;
                 _latestSeekIsPreview = isPreview;
                 _hasNewSeekRequest = true;
+                _seekRequestVersion++;
+                _latestSeekVersion = _seekRequestVersion;
+                requestVersion = _latestSeekVersion;
+                originSeconds = _latestSeekOriginPosition;
 
                 // 如果定时器未启动，启动它
                 if (_seekTimer != null)
@@ -207,6 +252,15 @@ namespace YTPlayer.Core
                 }
 
                 Debug.WriteLine($"[SeekManager] Seek 请求: {targetSeconds:F1}s（50ms 后执行，新命令覆盖旧命令）");
+            }
+
+            try
+            {
+                SeekRequested?.Invoke(this, new SeekRequestEventArgs(targetSeconds, originSeconds, isPreview, requestVersion));
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[SeekManager] SeekRequested 处理异常: {ex.Message}");
             }
         }
 
@@ -439,6 +493,7 @@ namespace YTPlayer.Core
             bool isUsingCache;
             SmartCacheManager? cacheManager;
             CancellationTokenSource? seekCts;
+            long seekVersion;
 
             // 获取状态（线程安全）
             lock (_seekLock)
@@ -465,6 +520,7 @@ namespace YTPlayer.Core
                 isPreview = _latestSeekIsPreview;
                 isUsingCache = _isUsingCacheStream;
                 cacheManager = _cacheManager;
+                seekVersion = _latestSeekVersion;
 
                 // 创建新的取消令牌
                 _currentSeekCts = new CancellationTokenSource();
@@ -474,6 +530,7 @@ namespace YTPlayer.Core
                 _isExecutingSeek = true;
                 _executingIsPreview = isPreview;
                 _currentExecutingTarget = targetPosition;
+                _currentExecutingVersion = seekVersion;
                 _hasNewSeekRequest = false;
             }
 
@@ -483,7 +540,7 @@ namespace YTPlayer.Core
                 bool seekSuccess = false;
                 try
                 {
-                    seekSuccess = await ExecuteSeekAsync(targetPosition, originPosition, isPreview, isUsingCache, cacheManager, seekCts.Token).ConfigureAwait(false);
+                    seekSuccess = await ExecuteSeekAsync(targetPosition, originPosition, isPreview, isUsingCache, cacheManager, seekCts.Token, seekVersion).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -492,6 +549,7 @@ namespace YTPlayer.Core
                         _isExecutingSeek = false;
                         _executingIsPreview = false;
                         _currentExecutingTarget = -1;
+                        _currentExecutingVersion = 0;
 
                         // 如果有新的请求，继续启动定时器
                         if (_hasNewSeekRequest)
@@ -513,7 +571,8 @@ namespace YTPlayer.Core
             bool isPreview,
             bool isUsingCache,
             SmartCacheManager? cacheManager,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            long seekVersion)
         {
             CancellationTokenSource? linkedCts = null;
             Task? progressMonitor = null;
@@ -656,7 +715,18 @@ namespace YTPlayer.Core
                 ClearPendingSeekContext(pendingVersion);
             }
 
-            return success && !cancelledByNaturalProgress;
+            bool effectiveSuccess = success && !cancelledByNaturalProgress;
+
+            try
+            {
+                SeekExecuted?.Invoke(this, new SeekExecutionEventArgs(targetSeconds, effectiveSuccess, isPreview, seekVersion));
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[SeekManager] SeekExecuted 处理异常: {ex.Message}");
+            }
+
+            return effectiveSuccess;
         }
 
         private async Task<bool> ExecuteDeferredSeekAsync(double targetSeconds, SmartCacheManager cacheManager, CancellationToken token)
