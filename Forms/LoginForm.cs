@@ -977,6 +977,7 @@ namespace YTPlayer.Forms
                 string cookieString = BuildCookieString(cookieList);
                 System.Diagnostics.Debug.WriteLine($"[WebLogin] 捕获到 MUSIC_U，来源={hint}，长度={musicUCookie.Value.Length}");
 
+                _apiClient.PrepareForLogin();
                 _apiClient.SetCookieString(cookieString);
                 UpdateWebStatus("已获取登录 Cookie，正在验证...", Color.DarkSlateBlue);
 

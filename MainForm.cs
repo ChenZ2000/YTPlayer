@@ -782,6 +782,13 @@ public partial class MainForm : Form
         private FormWindowState _lastWindowState = FormWindowState.Normal;
         private bool _isApplyingWindowLayout;
         private System.Windows.Forms.Timer? _windowLayoutPersistTimer;
+        private System.Windows.Forms.Timer? _playlistOrderAutoSaveTimer;
+        private System.Windows.Forms.Timer? _songOrderAutoSaveTimer;
+        private bool _playlistOrderSaving;
+        private bool _songOrderSaving;
+        private List<string>? _pendingPlaylistOrderIds;
+        private List<string>? _pendingSongOrderIds;
+        private string? _pendingSongOrderPlaylistId;
 
 	private DateTime _lastNarratorCheckAt = DateTime.MinValue;
 
@@ -3109,6 +3116,7 @@ public partial class MainForm : Form
 			_scrubKeyTimer = new System.Windows.Forms.Timer();
 			_scrubKeyTimer.Interval = 50;
 			_scrubKeyTimer.Tick += ScrubKeyTimer_Tick;
+			InitializeOrderAutoSaveTimers();
 			StartStateUpdateLoop();
 			InitializeCommandQueueSystem();
 			if (searchTypeComboBox.Items.Count > 0)
@@ -3149,6 +3157,29 @@ public partial class MainForm : Form
 			MessageBox.Show("初始化失败: " + ex.Message + "\n\n音频功能可能不可用，但登录功能仍可使用。", "警告", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
 			UpdateStatusBar("初始化失败（部分功能可用）");
 		}
+	}
+
+	private void InitializeOrderAutoSaveTimers()
+	{
+		_playlistOrderAutoSaveTimer = new System.Windows.Forms.Timer();
+		_playlistOrderAutoSaveTimer.Interval = 1000;
+		_playlistOrderAutoSaveTimer.Tick += PlaylistOrderAutoSaveTimer_Tick;
+
+		_songOrderAutoSaveTimer = new System.Windows.Forms.Timer();
+		_songOrderAutoSaveTimer.Interval = 1000;
+		_songOrderAutoSaveTimer.Tick += SongOrderAutoSaveTimer_Tick;
+	}
+
+	private async void PlaylistOrderAutoSaveTimer_Tick(object? sender, EventArgs e)
+	{
+		_playlistOrderAutoSaveTimer?.Stop();
+		await TryAutoSavePlaylistOrderAsync();
+	}
+
+	private async void SongOrderAutoSaveTimer_Tick(object? sender, EventArgs e)
+	{
+		_songOrderAutoSaveTimer?.Stop();
+		await TryAutoSaveSongOrderAsync();
 	}
 
 	private void SetupEventHandlers()
@@ -3908,6 +3939,10 @@ public partial class MainForm : Form
 				Debug.WriteLine("[Login] 远端退出登录失败（继续清理本地）: " + ex.Message);
 			}
 		}
+		else
+		{
+			_apiClient?.ResetToAnonymousSession(clearAccountState: false);
+		}
 		InvalidateLibraryCaches();
 		if (persist)
 		{
@@ -4155,6 +4190,20 @@ public partial class MainForm : Form
 
 	protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
 	{
+		if (keyData == (Keys.Control | Keys.Alt | Keys.Up))
+		{
+			if (TryHandleReorderShortcut(moveUp: true))
+			{
+				return true;
+			}
+		}
+		if (keyData == (Keys.Control | Keys.Alt | Keys.Down))
+		{
+			if (TryHandleReorderShortcut(moveUp: false))
+			{
+				return true;
+			}
+		}
 		if (keyData == (Keys.Control | Keys.Return))
 		{
 			if (TryHandleDownloadShortcut())
@@ -7317,8 +7366,9 @@ private void ActivateMixedSearchTypeOption()
 				var (playlists, _) = await _apiClient.GetUserPlaylistsAsync(userInfo.UserId).ConfigureAwait(continueOnCapturedContext: false);
 				token.ThrowIfCancellationRequested();
 				List<PlaylistInfo> filtered = (playlists ?? new List<PlaylistInfo>()).Where((PlaylistInfo p) => !IsLikedMusicPlaylist(p, userInfo.UserId)).ToList();
-				string status = ((filtered.Count == 0) ? "暂无歌单" : $"加载完成，共 {filtered.Count} 个歌单");
-				return (filtered, status);
+				List<PlaylistInfo> normalized = NormalizeUserPlaylists(filtered);
+				string status = ((normalized.Count == 0) ? "暂无歌单" : $"加载完成，共 {normalized.Count} 个歌单");
+				return (normalized, status);
 			}, "加载创建和收藏的歌单已取消").ConfigureAwait(continueOnCapturedContext: true);
 			if (!loadResult.IsCanceled)
 			{
@@ -15338,6 +15388,7 @@ private void searchTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
 		{
 			try
 			{
+				_apiClient.PrepareForLogin();
 				_apiClient.SetCookieString(args.Cookie);
 				Debug.WriteLine("[LoginMenuItem] 已从事件Cookie刷新API客户端状态");
 			}
@@ -19575,13 +19626,21 @@ private static void SetMenuItemCheckedState(ToolStripMenuItem? menuItem, bool is
 		try
 		{
 			UpdateStatusBar("正在生成歌曲直链...");
-			if (!(await EnsureSongAvailabilityAsync(song)))
+			var (resolve, url) = await ResolveShareUrlAsync(song, GetCurrentQuality(), CancellationToken.None);
+			Debug.WriteLine($"[ShareDirect] song={song.Name}, id={song.Id}, usedUnblock={resolve.UsedUnblock}, level={song.Level}, url={(string.IsNullOrWhiteSpace(url) ? "<null>" : url)}");
+			if (resolve.Status == SongResolveStatus.NotAvailable)
 			{
 				MessageBox.Show("该歌曲资源不可用，无法分享直链。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
 				UpdateStatusBar("歌曲资源不可用");
 				return;
 			}
-			if (!(await FetchSongUrlsInBatchesAsync(new string[1] { song.Id })).TryGetValue(song.Id, out var urlInfo) || string.IsNullOrWhiteSpace(urlInfo.Url))
+			if (resolve.Status == SongResolveStatus.PaidAlbumNotPurchased)
+			{
+				MessageBox.Show("该歌曲属于付费数字专辑，未购买无法分享直链。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+				UpdateStatusBar("付费专辑不可用");
+				return;
+			}
+			if (string.IsNullOrWhiteSpace(url))
 			{
 				MessageBox.Show("未能获取歌曲直链，可能需要登录或切换音质。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
 				UpdateStatusBar("获取直链失败");
@@ -19589,7 +19648,7 @@ private static void SetMenuItemCheckedState(ToolStripMenuItem? menuItem, bool is
 			}
 			try
 			{
-				Clipboard.SetText(urlInfo.Url);
+				Clipboard.SetText(url);
 			}
 			catch (ExternalException ex)
 			{
@@ -19908,20 +19967,26 @@ private static void SetMenuItemCheckedState(ToolStripMenuItem? menuItem, bool is
 		try
 		{
 			UpdateStatusBar("正在生成节目直链...");
-			SongUrlInfo urlInfo;
-			if (!(await EnsureSongAvailabilityAsync(song)))
+			var (resolve, url) = await ResolveShareUrlAsync(song, GetCurrentQuality(), CancellationToken.None);
+			Debug.WriteLine($"[ShareDirect] episode={episode.Name}, id={song.Id}, usedUnblock={resolve.UsedUnblock}, level={song.Level}, url={(string.IsNullOrWhiteSpace(url) ? "<null>" : url)}");
+			if (resolve.Status == SongResolveStatus.NotAvailable)
 			{
 				MessageBox.Show("该节目资源不可用，无法分享直链。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
 				UpdateStatusBar("节目资源不可用");
 			}
-			else if (!(await FetchSongUrlsInBatchesAsync(new string[1] { song.Id })).TryGetValue(song.Id, out urlInfo) || string.IsNullOrWhiteSpace(urlInfo.Url))
+			else if (resolve.Status == SongResolveStatus.PaidAlbumNotPurchased)
+			{
+				MessageBox.Show("该节目属于付费数字专辑，未购买无法分享直链。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+				UpdateStatusBar("付费专辑不可用");
+			}
+			else if (string.IsNullOrWhiteSpace(url))
 			{
 				MessageBox.Show("未能获取节目直链，可能需要登录或稍后重试。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
 				UpdateStatusBar("获取直链失败");
 			}
 			else
 			{
-				Clipboard.SetText(urlInfo.Url);
+				Clipboard.SetText(url);
 				UpdateStatusBar("节目直链已复制到剪贴板");
 			}
 		}
@@ -20312,6 +20377,369 @@ private static void SetMenuItemCheckedState(ToolStripMenuItem? menuItem, bool is
 		return currentUserId > 0 && IsLikedMusicPlaylist(_currentPlaylist, currentUserId);
 	}
 
+	private bool CanReorderPlaylistListView()
+	{
+		return string.Equals(_currentViewSource, "user_playlists", StringComparison.OrdinalIgnoreCase);
+	}
+
+	private bool CanReorderPlaylistSongsView()
+	{
+		if (IsCurrentLikedSongsView())
+		{
+			return false;
+		}
+		if (_currentViewSource == null || !_currentViewSource.StartsWith("playlist:", StringComparison.OrdinalIgnoreCase))
+		{
+			return false;
+		}
+		return IsCurrentPlaylistOwnedByUser();
+	}
+
+	private static bool AreIdListsEqual(IReadOnlyList<string>? left, IReadOnlyList<string>? right)
+	{
+		if (ReferenceEquals(left, right))
+		{
+			return true;
+		}
+		if (left == null || right == null || left.Count != right.Count)
+		{
+			return false;
+		}
+		for (int i = 0; i < left.Count; i++)
+		{
+			if (!string.Equals(left[i], right[i], StringComparison.Ordinal))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	private List<PlaylistInfo> NormalizeUserPlaylists(List<PlaylistInfo> playlists)
+	{
+		if (playlists == null || playlists.Count == 0)
+		{
+			return playlists ?? new List<PlaylistInfo>();
+		}
+		long userId = GetCurrentUserId();
+		if (userId <= 0)
+		{
+			return new List<PlaylistInfo>(playlists);
+		}
+		List<PlaylistInfo> owned = new List<PlaylistInfo>();
+		List<PlaylistInfo> subscribed = new List<PlaylistInfo>();
+		foreach (PlaylistInfo playlist in playlists)
+		{
+			if (IsPlaylistOwnedByUser(playlist, userId))
+			{
+				owned.Add(playlist);
+			}
+			else
+			{
+				subscribed.Add(playlist);
+			}
+		}
+		owned.AddRange(subscribed);
+		return owned;
+	}
+
+	private bool TryEnsureUserPlaylistGrouping()
+	{
+		if (!CanReorderPlaylistListView() || _currentPlaylists == null || _currentPlaylists.Count == 0)
+		{
+			return false;
+		}
+		long userId = GetCurrentUserId();
+		if (userId <= 0)
+		{
+			return false;
+		}
+		bool seenNonOwned = false;
+		bool mixed = false;
+		foreach (PlaylistInfo playlist in _currentPlaylists)
+		{
+			bool owned = IsPlaylistOwnedByUser(playlist, userId);
+			if (!owned)
+			{
+				seenNonOwned = true;
+			}
+			else if (seenNonOwned)
+			{
+				mixed = true;
+				break;
+			}
+		}
+		if (!mixed)
+		{
+			return false;
+		}
+
+		List<PlaylistInfo> normalized = NormalizeUserPlaylists(_currentPlaylists);
+		string? selectedId = null;
+		if (resultListView != null && resultListView.SelectedIndices.Count > 0)
+		{
+			int selectedIndex = resultListView.SelectedIndices[0];
+			if (selectedIndex >= 0 && selectedIndex < _currentPlaylists.Count)
+			{
+				selectedId = _currentPlaylists[selectedIndex]?.Id;
+			}
+		}
+		DisplayPlaylists(normalized, preserveSelection: false, _currentViewSource, "创建和收藏的歌单", announceHeader: false, suppressFocus: true);
+		if (!string.IsNullOrWhiteSpace(selectedId))
+		{
+			int newIndex = _currentPlaylists.FindIndex((PlaylistInfo p) => string.Equals(p?.Id, selectedId, StringComparison.OrdinalIgnoreCase));
+			if (newIndex >= 0)
+			{
+				EnsureListSelectionWithoutFocus(newIndex);
+			}
+		}
+		return true;
+	}
+
+	private static bool TryMoveItem<T>(List<T> list, int oldIndex, int newIndex)
+	{
+		if (list == null || oldIndex < 0 || oldIndex >= list.Count || newIndex < 0 || newIndex >= list.Count)
+		{
+			return false;
+		}
+		if (oldIndex == newIndex)
+		{
+			return false;
+		}
+		T item = list[oldIndex];
+		list.RemoveAt(oldIndex);
+		list.Insert(newIndex, item);
+		return true;
+	}
+
+	private void MoveSelectedPlaylist(int delta)
+	{
+		if (!CanReorderPlaylistListView() || _currentPlaylists == null || _currentPlaylists.Count == 0)
+		{
+			return;
+		}
+		if (TryEnsureUserPlaylistGrouping())
+		{
+			return;
+		}
+		if (resultListView == null || resultListView.SelectedIndices.Count == 0)
+		{
+			return;
+		}
+		int oldIndex = resultListView.SelectedIndices[0];
+		if (oldIndex < 0 || oldIndex >= _currentPlaylists.Count)
+		{
+			return;
+		}
+		long userId = GetCurrentUserId();
+		if (userId <= 0)
+		{
+			return;
+		}
+		PlaylistInfo selected = _currentPlaylists[oldIndex];
+		bool isOwned = IsPlaylistOwnedByUser(selected, userId);
+		int boundary = _currentPlaylists.Count;
+		for (int i = 0; i < _currentPlaylists.Count; i++)
+		{
+			if (!IsPlaylistOwnedByUser(_currentPlaylists[i], userId))
+			{
+				boundary = i;
+				break;
+			}
+		}
+		int groupStart = isOwned ? 0 : boundary;
+		int groupEnd = isOwned ? Math.Max(boundary - 1, 0) : _currentPlaylists.Count - 1;
+		int newIndex = oldIndex + delta;
+		if (newIndex < groupStart)
+		{
+			UpdateStatusBar("已经到顶了");
+			return;
+		}
+		if (newIndex > groupEnd)
+		{
+			UpdateStatusBar("已经到底了");
+			return;
+		}
+		if (!TryMoveItem(_currentPlaylists, oldIndex, newIndex))
+		{
+			return;
+		}
+		DisplayPlaylists(_currentPlaylists, preserveSelection: false, _currentViewSource, "创建和收藏的歌单", announceHeader: false, suppressFocus: true);
+		EnsureListSelectionWithoutFocus(newIndex);
+		UpdateStatusBar("歌单顺序已调整（自动保存中）");
+		SchedulePlaylistOrderAutoSave();
+	}
+
+	private void MoveSelectedSongInPlaylist(int delta)
+	{
+		if (!CanReorderPlaylistSongsView() || _currentSongs == null || _currentSongs.Count == 0)
+		{
+			return;
+		}
+		if (resultListView == null || resultListView.SelectedIndices.Count == 0)
+		{
+			return;
+		}
+		int oldIndex = resultListView.SelectedIndices[0];
+		if (oldIndex < 0 || oldIndex >= _currentSongs.Count)
+		{
+			return;
+		}
+		int newIndex = Math.Max(0, Math.Min(_currentSongs.Count - 1, oldIndex + delta));
+		if (!TryMoveItem(_currentSongs, oldIndex, newIndex))
+		{
+			return;
+		}
+		DisplaySongs(_currentSongs, showPagination: false, hasNextPage: false, 1, preserveSelection: false, _currentViewSource, _currentPlaylist?.Name ?? "歌单", skipAvailabilityCheck: true, announceHeader: false, suppressFocus: true);
+		EnsureListSelectionWithoutFocus(newIndex);
+		UpdateStatusBar("歌曲顺序已调整（自动保存中）");
+		ScheduleSongOrderAutoSave();
+	}
+
+	private void SchedulePlaylistOrderAutoSave()
+	{
+		if (!CanReorderPlaylistListView() || _currentPlaylists == null || _currentPlaylists.Count == 0)
+		{
+			return;
+		}
+		_pendingPlaylistOrderIds = _currentPlaylists.Select((PlaylistInfo p) => p.Id).ToList();
+		if (_playlistOrderAutoSaveTimer == null)
+		{
+			return;
+		}
+		_playlistOrderAutoSaveTimer.Stop();
+		_playlistOrderAutoSaveTimer.Start();
+	}
+
+	private void ScheduleSongOrderAutoSave()
+	{
+		if (!CanReorderPlaylistSongsView() || _currentSongs == null || _currentSongs.Count == 0)
+		{
+			return;
+		}
+		if (_currentPlaylist == null || string.IsNullOrWhiteSpace(_currentPlaylist.Id))
+		{
+			return;
+		}
+		_pendingSongOrderPlaylistId = _currentPlaylist.Id;
+		_pendingSongOrderIds = _currentSongs.Select((SongInfo s) => s.Id).ToList();
+		if (_songOrderAutoSaveTimer == null)
+		{
+			return;
+		}
+		_songOrderAutoSaveTimer.Stop();
+		_songOrderAutoSaveTimer.Start();
+	}
+
+	private async Task TryAutoSavePlaylistOrderAsync()
+	{
+		if (_playlistOrderSaving)
+		{
+			_playlistOrderAutoSaveTimer?.Stop();
+			_playlistOrderAutoSaveTimer?.Start();
+			return;
+		}
+		if (!IsUserLoggedIn())
+		{
+			MessageBox.Show("请先登录后再保存歌单顺序。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+			UpdateStatusBar("保存歌单顺序失败");
+			return;
+		}
+		if (_pendingPlaylistOrderIds == null || _pendingPlaylistOrderIds.Count == 0)
+		{
+			return;
+		}
+
+		var idsSnapshot = new List<string>(_pendingPlaylistOrderIds);
+		_playlistOrderSaving = true;
+		UpdateStatusBar("正在保存歌单顺序...");
+		bool ok = await _apiClient.UpdatePlaylistOrderAsync(idsSnapshot).ConfigureAwait(true);
+		_playlistOrderSaving = false;
+
+		if (!ok)
+		{
+			MessageBox.Show("保存歌单顺序失败，请稍后再试。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+			UpdateStatusBar("保存歌单顺序失败");
+			return;
+		}
+
+		if (!AreIdListsEqual(_pendingPlaylistOrderIds, idsSnapshot))
+		{
+			_playlistOrderAutoSaveTimer?.Stop();
+			_playlistOrderAutoSaveTimer?.Start();
+			return;
+		}
+
+		_pendingPlaylistOrderIds = null;
+		UpdateStatusBar("歌单顺序已自动保存");
+	}
+
+	private async Task TryAutoSaveSongOrderAsync()
+	{
+		if (_songOrderSaving)
+		{
+			_songOrderAutoSaveTimer?.Stop();
+			_songOrderAutoSaveTimer?.Start();
+			return;
+		}
+		if (!IsUserLoggedIn())
+		{
+			MessageBox.Show("请先登录后再保存歌曲顺序。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+			UpdateStatusBar("保存歌曲顺序失败");
+			return;
+		}
+		if (string.IsNullOrWhiteSpace(_pendingSongOrderPlaylistId) || _pendingSongOrderIds == null || _pendingSongOrderIds.Count == 0)
+		{
+			return;
+		}
+
+		string playlistIdSnapshot = _pendingSongOrderPlaylistId;
+		var idsSnapshot = new List<string>(_pendingSongOrderIds);
+		_songOrderSaving = true;
+		UpdateStatusBar("正在保存歌曲顺序...");
+		bool ok = await _apiClient.UpdatePlaylistTrackOrderAsync(playlistIdSnapshot, idsSnapshot).ConfigureAwait(true);
+		_songOrderSaving = false;
+
+		if (!ok)
+		{
+			MessageBox.Show("保存歌曲顺序失败，请稍后再试。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+			UpdateStatusBar("保存歌曲顺序失败");
+			return;
+		}
+
+		if (!string.Equals(_pendingSongOrderPlaylistId, playlistIdSnapshot, StringComparison.Ordinal) ||
+		    !AreIdListsEqual(_pendingSongOrderIds, idsSnapshot))
+		{
+			_songOrderAutoSaveTimer?.Stop();
+			_songOrderAutoSaveTimer?.Start();
+			return;
+		}
+
+		_pendingSongOrderIds = null;
+		_pendingSongOrderPlaylistId = null;
+		UpdateStatusBar("歌曲顺序已自动保存");
+	}
+
+	private bool TryHandleReorderShortcut(bool moveUp)
+	{
+		if (resultListView == null || !resultListView.ContainsFocus)
+		{
+			return false;
+		}
+		int delta = moveUp ? -1 : 1;
+		if (CanReorderPlaylistListView())
+		{
+			MoveSelectedPlaylist(delta);
+			return true;
+		}
+		if (CanReorderPlaylistSongsView())
+		{
+			MoveSelectedSongInPlaylist(delta);
+			return true;
+		}
+		return false;
+	}
+
 	protected override void OnFormClosing(FormClosingEventArgs e)
 	{
 		_isFormClosing = true;
@@ -20343,6 +20771,18 @@ private static void SetMenuItemCheckedState(ToolStripMenuItem? menuItem, bool is
 				_scrubKeyTimer.Stop();
 				_scrubKeyTimer.Dispose();
 				_scrubKeyTimer = null;
+			}
+			if (_playlistOrderAutoSaveTimer != null)
+			{
+				_playlistOrderAutoSaveTimer.Stop();
+				_playlistOrderAutoSaveTimer.Dispose();
+				_playlistOrderAutoSaveTimer = null;
+			}
+			if (_songOrderAutoSaveTimer != null)
+			{
+				_songOrderAutoSaveTimer.Stop();
+				_songOrderAutoSaveTimer.Dispose();
+				_songOrderAutoSaveTimer = null;
 			}
 			StopStateUpdateLoop();
 			_updateTimer?.Stop();
@@ -20824,6 +21264,21 @@ private static void SetMenuItemCheckedState(ToolStripMenuItem? menuItem, bool is
 
 		ApplyOfficialUrl(songUrl, resolvedSize, isTrial, trialStart, trialEnd);
 		return SongResolveResult.Success();
+	}
+
+	private async Task<(SongResolveResult Result, string? Url)> ResolveShareUrlAsync(SongInfo song, QualityLevel quality, CancellationToken cancellationToken)
+	{
+		if (song == null || string.IsNullOrWhiteSpace(song.Id))
+		{
+			return (SongResolveResult.Failed(), null);
+		}
+		SongResolveResult resolve = await ResolveSongPlaybackAsync(song, quality, cancellationToken, suppressStatusUpdates: true).ConfigureAwait(continueOnCapturedContext: false);
+		if (resolve.Status != SongResolveStatus.Success)
+		{
+			return (resolve, null);
+		}
+		string url = (!string.IsNullOrWhiteSpace(song.Url) ? song.Url : null);
+		return (resolve, url);
 	}
 
 	private async Task PlaySong(SongInfo song)

@@ -691,6 +691,43 @@ namespace YTPlayer.Core
         }
 
         /// <summary>
+        /// 退出登录或需要重建访客态时，重新构建匿名会话 Cookie。
+        /// </summary>
+        public void ResetToAnonymousSession(bool clearAccountState = false)
+        {
+            System.Diagnostics.Debug.WriteLine("[Cookie] 🔄 开始重建匿名会话 Cookie...");
+
+            ClearCookies();
+
+            if (clearAccountState)
+            {
+                _authContext?.ClearLoginProfile();
+            }
+
+            UpdateCookies();
+
+            try
+            {
+                var cookies = _cookieContainer.GetCookies(MUSIC_URI);
+                _authContext?.SyncFromCookies(cookies);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[Cookie] ⚠️ 匿名会话同步失败: {ex.Message}");
+            }
+
+            System.Diagnostics.Debug.WriteLine("[Cookie] ✅ 匿名会话 Cookie 已重建");
+        }
+
+        /// <summary>
+        /// 登录前清理当前 Cookie，避免旧会话残留。
+        /// </summary>
+        public void PrepareForLogin()
+        {
+            ClearCookies();
+        }
+
+        /// <summary>
         /// 登录成功后标准化 Cookie 并同步内部状态
         /// </summary>
         private string FinalizeLoginCookies(string rawCookieString)
@@ -3378,13 +3415,10 @@ namespace YTPlayer.Core
             }
             finally
             {
-                // 2. 清理本地所有数据
-                ClearCookies();
+                // 2. 清理本地登录状态并重建匿名会话
+                ResetToAnonymousSession(clearAccountState: true);
 
-                // 3. 清理账户状态
-                _authContext?.ClearLoginProfile();
-
-                System.Diagnostics.Debug.WriteLine("[Logout] ✅✅✅ 退出登录完成，所有数据已清理");
+                System.Diagnostics.Debug.WriteLine("[Logout] ✅✅✅ 退出登录完成，已切换到匿名会话");
             }
         }
 
@@ -5810,6 +5844,38 @@ namespace YTPlayer.Core
             }
         }
 
+        private static bool TryBuildIdArrayPayload(IEnumerable<string> ids, out string payload)
+        {
+            payload = "[]";
+            if (ids == null)
+            {
+                return false;
+            }
+
+            var list = new List<string>();
+            foreach (var raw in ids)
+            {
+                var text = raw?.Trim();
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    return false;
+                }
+                if (!long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) || value <= 0)
+                {
+                    return false;
+                }
+                list.Add(value.ToString(CultureInfo.InvariantCulture));
+            }
+
+            if (list.Count == 0)
+            {
+                return false;
+            }
+
+            payload = $"[{string.Join(",", list)}]";
+            return true;
+        }
+
         /// <summary>
         /// 从歌单中移除歌曲
         /// API: POST /api/playlist/manipulate/tracks
@@ -5834,6 +5900,73 @@ namespace YTPlayer.Core
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[API] 从歌单中移除歌曲失败: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 调整用户创建/收藏歌单列表顺序
+        /// API: POST /api/playlist/order/update
+        /// 参考: api-enhanced/module/playlist_order_update.js
+        /// </summary>
+        public async Task<bool> UpdatePlaylistOrderAsync(IEnumerable<string> playlistIds)
+        {
+            try
+            {
+                if (!TryBuildIdArrayPayload(playlistIds, out var idsPayload))
+                {
+                    System.Diagnostics.Debug.WriteLine("[API] 更新歌单顺序失败: ids 无效");
+                    return false;
+                }
+
+                var payload = new Dictionary<string, object>
+                {
+                    { "ids", idsPayload }
+                };
+                var response = await PostWeApiAsync<JObject>("/playlist/order/update", payload);
+                int code = response["code"]?.Value<int>() ?? -1;
+                return code == 200;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[API] 更新歌单顺序失败: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 调整歌单内歌曲顺序
+        /// API: POST /api/playlist/manipulate/tracks (op=update)
+        /// 参考: api-enhanced/module/song_order_update.js
+        /// </summary>
+        public async Task<bool> UpdatePlaylistTrackOrderAsync(string playlistId, IEnumerable<string> songIds)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(playlistId))
+                {
+                    System.Diagnostics.Debug.WriteLine("[API] 更新歌单歌曲顺序失败: playlistId 为空");
+                    return false;
+                }
+                if (!TryBuildIdArrayPayload(songIds, out var idsPayload))
+                {
+                    System.Diagnostics.Debug.WriteLine("[API] 更新歌单歌曲顺序失败: ids 无效");
+                    return false;
+                }
+
+                var payload = new Dictionary<string, object>
+                {
+                    { "pid", playlistId },
+                    { "trackIds", idsPayload },
+                    { "op", "update" }
+                };
+                var response = await PostWeApiAsync<JObject>("/playlist/manipulate/tracks", payload);
+                int code = response["code"]?.Value<int>() ?? -1;
+                return code == 200;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[API] 更新歌单歌曲顺序失败: {ex.Message}");
                 return false;
             }
         }
