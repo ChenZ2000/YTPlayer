@@ -789,6 +789,16 @@ public partial class MainForm : Form
         private List<string>? _pendingPlaylistOrderIds;
         private List<string>? _pendingSongOrderIds;
         private string? _pendingSongOrderPlaylistId;
+        private enum ReorderDragMode
+        {
+                None,
+                PlaylistList,
+                PlaylistSongs
+        }
+
+        private ReorderDragMode _reorderDragMode = ReorderDragMode.None;
+        private int _reorderDragStartIndex = -1;
+        private string? _reorderDragPlaylistId;
 
 	private DateTime _lastNarratorCheckAt = DateTime.MinValue;
 
@@ -20496,6 +20506,79 @@ private static void SetMenuItemCheckedState(ToolStripMenuItem? menuItem, bool is
 		return true;
 	}
 
+	private bool TryGetDragDropIndex(Point clientPoint, out int index)
+	{
+		index = -1;
+		if (resultListView == null)
+		{
+			return false;
+		}
+		ListViewItem item = resultListView.GetItemAt(clientPoint.X, clientPoint.Y);
+		if (item != null)
+		{
+			index = item.Index;
+			return true;
+		}
+		if (resultListView.Items.Count == 0)
+		{
+			return false;
+		}
+		Rectangle first = resultListView.Items[0].Bounds;
+		Rectangle last = resultListView.Items[resultListView.Items.Count - 1].Bounds;
+		if (clientPoint.Y < first.Top)
+		{
+			index = 0;
+			return true;
+		}
+		if (clientPoint.Y > last.Bottom)
+		{
+			index = resultListView.Items.Count - 1;
+			return true;
+		}
+		return false;
+	}
+
+	private bool IsPlaylistReorderTargetValid(int oldIndex, int newIndex, out string? boundaryStatus)
+	{
+		boundaryStatus = null;
+		if (_currentPlaylists == null || _currentPlaylists.Count == 0)
+		{
+			return false;
+		}
+		long userId = GetCurrentUserId();
+		if (userId <= 0)
+		{
+			return false;
+		}
+		if (oldIndex < 0 || oldIndex >= _currentPlaylists.Count)
+		{
+			return false;
+		}
+		bool isOwned = IsPlaylistOwnedByUser(_currentPlaylists[oldIndex], userId);
+		int boundary = _currentPlaylists.Count;
+		for (int i = 0; i < _currentPlaylists.Count; i++)
+		{
+			if (!IsPlaylistOwnedByUser(_currentPlaylists[i], userId))
+			{
+				boundary = i;
+				break;
+			}
+		}
+		int groupStart = isOwned ? 0 : boundary;
+		int groupEnd = isOwned ? Math.Max(boundary - 1, 0) : _currentPlaylists.Count - 1;
+		if (newIndex < groupStart)
+		{
+			boundaryStatus = "已经到顶了";
+			return false;
+		}
+		if (newIndex > groupEnd)
+		{
+			boundaryStatus = "已经到底了";
+			return false;
+		}
+		return true;
+	}
+
 	private static bool TryMoveItem<T>(List<T> list, int oldIndex, int newIndex)
 	{
 		if (list == null || oldIndex < 0 || oldIndex >= list.Count || newIndex < 0 || newIndex >= list.Count)
@@ -20738,6 +20821,153 @@ private static void SetMenuItemCheckedState(ToolStripMenuItem? menuItem, bool is
 			return true;
 		}
 		return false;
+	}
+
+	private void resultListView_ItemDrag(object sender, ItemDragEventArgs e)
+	{
+		if (resultListView == null || resultListView.VirtualMode || resultListView.SelectedIndices.Count == 0)
+		{
+			return;
+		}
+		if (CanReorderPlaylistListView())
+		{
+			if (TryEnsureUserPlaylistGrouping())
+			{
+				return;
+			}
+			_reorderDragMode = ReorderDragMode.PlaylistList;
+			_reorderDragPlaylistId = null;
+		}
+		else if (CanReorderPlaylistSongsView())
+		{
+			_reorderDragMode = ReorderDragMode.PlaylistSongs;
+			_reorderDragPlaylistId = _currentPlaylist?.Id;
+		}
+		else
+		{
+			return;
+		}
+		_reorderDragStartIndex = resultListView.SelectedIndices[0];
+		if (_reorderDragStartIndex < 0)
+		{
+			return;
+		}
+		DoDragDrop(resultListView.SelectedItems[0], DragDropEffects.Move);
+	}
+
+	private void resultListView_DragEnter(object sender, DragEventArgs e)
+	{
+		if (_reorderDragMode == ReorderDragMode.None)
+		{
+			e.Effect = DragDropEffects.None;
+			return;
+		}
+		e.Effect = DragDropEffects.Move;
+	}
+
+	private void resultListView_DragOver(object sender, DragEventArgs e)
+	{
+		if (resultListView == null || _reorderDragMode == ReorderDragMode.None)
+		{
+			e.Effect = DragDropEffects.None;
+			return;
+		}
+		if (_reorderDragMode == ReorderDragMode.PlaylistList && !CanReorderPlaylistListView())
+		{
+			e.Effect = DragDropEffects.None;
+			return;
+		}
+		if (_reorderDragMode == ReorderDragMode.PlaylistSongs)
+		{
+			if (!CanReorderPlaylistSongsView() || !string.Equals(_reorderDragPlaylistId, _currentPlaylist?.Id, StringComparison.OrdinalIgnoreCase))
+			{
+				e.Effect = DragDropEffects.None;
+				return;
+			}
+		}
+		Point clientPoint = resultListView.PointToClient(new Point(e.X, e.Y));
+		if (!TryGetDragDropIndex(clientPoint, out int targetIndex))
+		{
+			e.Effect = DragDropEffects.None;
+			return;
+		}
+		if (_reorderDragMode == ReorderDragMode.PlaylistList)
+		{
+			if (!IsPlaylistReorderTargetValid(_reorderDragStartIndex, targetIndex, out _))
+			{
+				e.Effect = DragDropEffects.None;
+				return;
+			}
+		}
+		e.Effect = DragDropEffects.Move;
+		if (targetIndex >= 0 && targetIndex < resultListView.Items.Count)
+		{
+			resultListView.Items[targetIndex].Selected = true;
+			resultListView.EnsureVisible(targetIndex);
+		}
+	}
+
+	private void resultListView_DragLeave(object sender, EventArgs e)
+	{
+		_reorderDragMode = ReorderDragMode.None;
+		_reorderDragStartIndex = -1;
+		_reorderDragPlaylistId = null;
+	}
+
+	private void resultListView_DragDrop(object sender, DragEventArgs e)
+	{
+		if (resultListView == null || _reorderDragMode == ReorderDragMode.None)
+		{
+			return;
+		}
+		Point clientPoint = resultListView.PointToClient(new Point(e.X, e.Y));
+		if (!TryGetDragDropIndex(clientPoint, out int targetIndex))
+		{
+			resultListView_DragLeave(sender, e);
+			return;
+		}
+		int oldIndex = _reorderDragStartIndex;
+		_reorderDragMode = ReorderDragMode.None;
+		_reorderDragStartIndex = -1;
+		_reorderDragPlaylistId = null;
+
+		if (oldIndex < 0 || targetIndex < 0 || oldIndex == targetIndex)
+		{
+			return;
+		}
+
+		if (CanReorderPlaylistListView())
+		{
+			if (!IsPlaylistReorderTargetValid(oldIndex, targetIndex, out string? boundaryStatus))
+			{
+				if (!string.IsNullOrWhiteSpace(boundaryStatus))
+				{
+					UpdateStatusBar(boundaryStatus);
+				}
+				return;
+			}
+			if (!TryMoveItem(_currentPlaylists, oldIndex, targetIndex))
+			{
+				return;
+			}
+			DisplayPlaylists(_currentPlaylists, preserveSelection: false, _currentViewSource, "创建和收藏的歌单", announceHeader: false, suppressFocus: true);
+			EnsureListSelectionWithoutFocus(targetIndex);
+			UpdateStatusBar("歌单顺序已调整（自动保存中）");
+			SchedulePlaylistOrderAutoSave();
+			return;
+		}
+
+		if (CanReorderPlaylistSongsView())
+		{
+			if (!TryMoveItem(_currentSongs, oldIndex, targetIndex))
+			{
+				return;
+			}
+			DisplaySongs(_currentSongs, showPagination: false, hasNextPage: false, 1, preserveSelection: false, _currentViewSource, _currentPlaylist?.Name ?? "歌单", skipAvailabilityCheck: true, announceHeader: false, suppressFocus: true);
+			EnsureListSelectionWithoutFocus(targetIndex);
+			UpdateStatusBar("歌曲顺序已调整（自动保存中）");
+			ScheduleSongOrderAutoSave();
+		}
 	}
 
 	protected override void OnFormClosing(FormClosingEventArgs e)
@@ -27449,6 +27679,7 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
 		this.resultListView.Location = new System.Drawing.Point(0, 112);
         this.resultListView.MultiSelect = false;
         this.resultListView.Name = "resultListView";
+		this.resultListView.AllowDrop = true;
         this.resultListView.Size = new System.Drawing.Size(1200, 368);
         this.resultListView.Font = new System.Drawing.Font("Microsoft YaHei UI", 11.5f);
         this.resultListView.TabIndex = 1;
@@ -27461,6 +27692,11 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
 		this.resultListView.MouseUp += new System.Windows.Forms.MouseEventHandler(resultListView_MouseUp);
 		this.resultListView.MouseDown += new System.Windows.Forms.MouseEventHandler(resultListView_MouseDown);
 		this.resultListView.MouseMove += new System.Windows.Forms.MouseEventHandler(resultListView_MouseMove);
+		this.resultListView.ItemDrag += new System.Windows.Forms.ItemDragEventHandler(resultListView_ItemDrag);
+		this.resultListView.DragEnter += new System.Windows.Forms.DragEventHandler(resultListView_DragEnter);
+		this.resultListView.DragOver += new System.Windows.Forms.DragEventHandler(resultListView_DragOver);
+		this.resultListView.DragDrop += new System.Windows.Forms.DragEventHandler(resultListView_DragDrop);
+		this.resultListView.DragLeave += new System.EventHandler(resultListView_DragLeave);
 		this.resultListView.KeyDown += new System.Windows.Forms.KeyEventHandler(resultListView_KeyDown);
 		this.resultListView.HandleCreated += new System.EventHandler(resultListView_HandleCreated);
 		this.resultListView.CacheVirtualItems += new System.Windows.Forms.CacheVirtualItemsEventHandler(resultListView_CacheVirtualItems);
