@@ -61,11 +61,17 @@
     <Compile Include="..\Utils\ThemedProgressBar.cs">
       <Link>Utils\ThemedProgressBar.cs</Link>
     </Compile>
+    <Compile Include="..\Utils\DependencyInstaller.cs">
+      <Link>Utils\DependencyInstaller.cs</Link>
+    </Compile>
     <Compile Include="..\Utils\MessageBox.cs">
       <Link>Utils\MessageBox.cs</Link>
     </Compile>
     <Compile Include="..\Forms\ThemedMessageBoxForm.cs">
       <Link>Forms\ThemedMessageBoxForm.cs</Link>
+    </Compile>
+    <Compile Include="..\Forms\DependencyInstallDialog.cs">
+      <Link>Forms\DependencyInstallDialog.cs</Link>
     </Compile>
   </ItemGroup>
 

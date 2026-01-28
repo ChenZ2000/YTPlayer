@@ -35,10 +35,12 @@ namespace YTPlayer.Forms
         private bool _webReloadedAfterFailure;
         private bool _webAutoLoginClicked;
         private bool _webAutoLoginRequested;
+        private bool _webRuntimeInstallAttempted;
         private string? _webUserDataFolder;
         private CoreWebView2Environment? _webEnvironment;
         private const string WebLoginUrl = "https://music.163.com";
         private const string WebPreheatUrl = "https://music.163.com/favicon.ico";
+        private const string WebView2DownloadUrl = "https://developer.microsoft.com/microsoft-edge/webview2/";
         private readonly string[] _webCookieDomains =
         {
             "https://music.163.com",
@@ -685,18 +687,94 @@ namespace YTPlayer.Forms
             }
             catch (WebView2RuntimeNotFoundException)
             {
+                if (_webRuntimeInstallAttempted)
+                {
+                    UpdateWebStatus("未检测到 WebView2 运行时，请安装后再试。", Color.Red);
+                    MessageBox.Show(
+                        "未检测到 Microsoft Edge WebView2 运行时，请先安装后再使用网页登录。",
+                        "缺少组件",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Error);
+                    return;
+                }
+
+                _webRuntimeInstallAttempted = true;
+                UpdateWebStatus("未检测到 WebView2 运行时，正在尝试自动安装...", Color.OrangeRed);
+
+                bool installed = await TryInstallWebView2RuntimeAsync();
+                if (installed)
+                {
+                    UpdateWebStatus("WebView2 已安装，正在重新加载登录页...", Color.Gray);
+                    _webLoginInitialized = false;
+                    await InitializeWebLoginAsync(forceNavigate);
+                    return;
+                }
+
                 UpdateWebStatus("未检测到 WebView2 运行时，请安装后再试。", Color.Red);
-                MessageBox.Show(
-                    "未检测到 Microsoft Edge WebView2 运行时，请先安装后再使用网页登录。",
-                    "缺少组件",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Error);
             }
             catch (Exception ex)
             {
                 UpdateWebStatus($"启动网页登录失败：{ex.Message}", Color.Red);
                 System.Diagnostics.Debug.WriteLine($"[WebLogin] 初始化失败: {ex.Message}");
             }
+        }
+
+        private async Task<bool> TryInstallWebView2RuntimeAsync()
+        {
+            DependencyInstallResult? result = null;
+            using (var dialog = new DependencyInstallDialog("正在准备网页登录组件", "正在下载并安装 WebView2 运行时，请稍候..."))
+            {
+                dialog.Shown += async (_, __) =>
+                {
+                    try
+                    {
+                        var progress = new Progress<DependencyInstallProgress>(dialog.UpdateProgress);
+                        string downloadDir = Path.Combine(Path.GetTempPath(), "YTPlayer", "Installers");
+                        result = await DependencyInstaller.InstallWebView2RuntimeAsync(downloadDir, progress, CancellationToken.None);
+                    }
+                    catch (Exception ex)
+                    {
+                        result = new DependencyInstallResult(false, ex.Message ?? "安装失败。");
+                    }
+                    finally
+                    {
+                        dialog.AllowClose();
+                        dialog.Close();
+                    }
+                };
+
+                dialog.ShowDialog(this);
+            }
+
+            if (result != null && result.Success)
+            {
+                return true;
+            }
+
+            string errorMessage = result?.ErrorMessage ?? "WebView2 运行时安装失败。";
+            var prompt = MessageBox.Show(
+                $"未能自动安装 WebView2 运行时。\n\n{errorMessage}\n\n是否打开官方下载页面？",
+                "缺少组件",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Error);
+
+            if (prompt == DialogResult.Yes)
+            {
+                try
+                {
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = WebView2DownloadUrl,
+                        UseShellExecute = true
+                    });
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[WebLogin] 打开 WebView2 下载页面失败: {ex.Message}");
+                }
+            }
+
+            return false;
         }
 
         private void ConfigureWebViewForLogin(CoreWebView2? core)

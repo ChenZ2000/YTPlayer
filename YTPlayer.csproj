@@ -209,6 +209,7 @@
     <Compile Include="Utils\TaskExtensions.cs" />
     <Compile Include="Utils\TtsHelper.cs" />
     <Compile Include="Utils\AccessibilityPropertyService.cs" />
+    <Compile Include="Utils\DependencyInstaller.cs" />
     <Compile Include="Utils\ThemeManager.cs" />
     <Compile Include="Utils\ThemedProgressBar.cs" />
     <Compile Include="Utils\MessageBox.cs" />
@@ -264,6 +265,7 @@
       <DependentUpon>AddToPlaylistDialog.cs</DependentUpon>
     </Compile>
     <Compile Include="Forms\ThemedMessageBoxForm.cs" />
+    <Compile Include="Forms\DependencyInstallDialog.cs" />
     <Compile Include="Forms\NewPlaylistDialog.cs">
       <SubType>Form</SubType>
     </Compile>

@@ -687,6 +687,8 @@ public partial class MainForm : Form
 	private IntPtr _powerRequestReasonBuffer = IntPtr.Zero;
 
 	private bool _powerRequestSleepActive = false;
+	private bool _powerRequestDisplayActive = false;
+	private bool _powerRequestSystemActive = false;
 
 	private bool _powerRequestInitFailed = false;
 
@@ -1230,7 +1232,7 @@ public partial class MainForm : Form
 
 	private ToolStripMenuItem autoReadLyricsMenuItem;
 
-	private ToolStripMenuItem preventSleepMenuItem;
+	private ToolStripMenuItem preventSleepDuringPlaybackMenuItem;
 
 	private ToolStripMenuItem hideSequenceMenuItem;
 
@@ -3244,7 +3246,7 @@ public partial class MainForm : Form
 		{
             SetMenuItemCheckedState(autoReadLyricsMenuItem, _autoReadLyrics);
             autoReadLyricsMenuItem.Text = (_autoReadLyrics ? "关闭歌词朗读\tF11" : "打开歌词朗读\tF11");
-			SetMenuItemCheckedState(preventSleepMenuItem, _preventSleepDuringPlayback);
+			UpdatePreventSleepDuringPlaybackMenuItemText();
 			UpdateHideSequenceMenuItemText();
 			UpdateHideControlBarMenuItemText();
 			if (_hideSequenceNumbers)
@@ -14746,6 +14748,13 @@ private static extern bool SetForegroundWindow(nint hWnd);
 	[DllImport("kernel32.dll", SetLastError = true)]
 	private static extern bool CloseHandle(IntPtr handle);
 
+	[DllImport("kernel32.dll", SetLastError = true)]
+	private static extern uint SetThreadExecutionState(uint esFlags);
+
+	private const uint ES_CONTINUOUS = 0x80000000;
+	private const uint ES_SYSTEM_REQUIRED = 0x00000001;
+	private const uint ES_DISPLAY_REQUIRED = 0x00000002;
+
 private void searchTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
 {
         if (_suppressSearchTypeComboEvents)
@@ -16223,14 +16232,9 @@ private void searchTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
 		ToggleAutoReadLyrics();
 	}
 
-	private void preventSleepMenuItem_Click(object sender, EventArgs e)
+	private void preventSleepDuringPlaybackMenuItem_Click(object sender, EventArgs e)
 	{
-		_preventSleepDuringPlayback = preventSleepMenuItem.Checked;
-		UpdatePlaybackPowerRequests(IsPlaybackActiveState(GetCachedPlaybackState()));
-		string message = _preventSleepDuringPlayback ? "已开启播放时禁止睡眠" : "已关闭播放时禁止睡眠";
-		UpdateStatusBar(message);
-		AnnounceUiMessage(message, interrupt: true);
-		SaveConfig();
+		TogglePreventSleepDuringPlayback();
 	}
 
 	private async void hideSequenceMenuItem_Click(object sender, EventArgs e)
@@ -16304,6 +16308,29 @@ private void ToggleAutoReadLyrics()
 		Debug.WriteLine("[TTS] 歌词朗读: " + (_autoReadLyrics ? "开启" : "关闭"));
 		SaveConfig();
 	}
+
+private void TogglePreventSleepDuringPlayback()
+{
+	_preventSleepDuringPlayback = !_preventSleepDuringPlayback;
+	UpdatePreventSleepDuringPlaybackMenuItemText();
+	UpdatePlaybackPowerRequests(IsPlaybackActiveState(GetCachedPlaybackState()));
+	string message = (_preventSleepDuringPlayback ? "已开启播放时禁止睡眠/息屏" : "已关闭播放时禁止睡眠/息屏");
+	AnnounceUiMessage(message, interrupt: true);
+	UpdateStatusBar(message);
+	Debug.WriteLine("[Power] 播放时禁止睡眠/息屏: " + (_preventSleepDuringPlayback ? "开启" : "关闭"));
+	SaveConfig();
+}
+
+private void UpdatePreventSleepDuringPlaybackMenuItemText()
+{
+	try
+	{
+		SetMenuItemCheckedState(preventSleepDuringPlaybackMenuItem, _preventSleepDuringPlayback);
+	}
+	catch
+	{
+	}
+}
 
 private void UpdateHideSequenceMenuItemText()
 {
@@ -22114,12 +22141,16 @@ private Task PlaySongByIndex(int index)
 			return;
 		}
 
+		UpdateThreadExecutionState(shouldPreventSleep);
+
 		if (!EnsurePlaybackPowerRequestHandle())
 		{
 			return;
 		}
 
 		UpdatePowerRequest(PowerRequestType.PowerRequestExecutionRequired, shouldPreventSleep, ref _powerRequestSleepActive);
+		UpdatePowerRequest(PowerRequestType.PowerRequestDisplayRequired, shouldPreventSleep, ref _powerRequestDisplayActive);
+		UpdatePowerRequest(PowerRequestType.PowerRequestSystemRequired, shouldPreventSleep, ref _powerRequestSystemActive);
 
 		if (!_powerRequestSleepActive)
 		{
@@ -22202,6 +22233,9 @@ private Task PlaySongByIndex(int index)
 		if (_powerRequestHandle == IntPtr.Zero)
 		{
 			_powerRequestSleepActive = false;
+			_powerRequestDisplayActive = false;
+			_powerRequestSystemActive = false;
+			UpdateThreadExecutionState(isPlaying: false);
 			return;
 		}
 		try
@@ -22211,6 +22245,16 @@ private Task PlaySongByIndex(int index)
 				PowerClearRequest(_powerRequestHandle, PowerRequestType.PowerRequestExecutionRequired);
 				_powerRequestSleepActive = false;
 			}
+			if (_powerRequestDisplayActive)
+			{
+				PowerClearRequest(_powerRequestHandle, PowerRequestType.PowerRequestDisplayRequired);
+				_powerRequestDisplayActive = false;
+			}
+			if (_powerRequestSystemActive)
+			{
+				PowerClearRequest(_powerRequestHandle, PowerRequestType.PowerRequestSystemRequired);
+				_powerRequestSystemActive = false;
+			}
 		}
 		catch (Exception ex)
 		{
@@ -22218,9 +22262,30 @@ private Task PlaySongByIndex(int index)
 		}
 		finally
 		{
+			UpdateThreadExecutionState(isPlaying: false);
 			CloseHandle(_powerRequestHandle);
 			_powerRequestHandle = IntPtr.Zero;
 			ReleasePowerRequestReasonBuffer();
+		}
+	}
+
+	private void UpdateThreadExecutionState(bool isPlaying)
+	{
+		try
+		{
+			uint flags = isPlaying
+				? (ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED)
+				: ES_CONTINUOUS;
+			uint result = SetThreadExecutionState(flags);
+			if (result == 0)
+			{
+				int error = Marshal.GetLastWin32Error();
+				Debug.WriteLine($"[ExecutionState] 设置失败: {error}");
+			}
+		}
+		catch (Exception ex)
+		{
+			Debug.WriteLine("[ExecutionState] 设置异常: " + ex.Message);
 		}
 	}
 
@@ -26508,7 +26573,7 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
 		this.nextMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.jumpToPositionMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.autoReadLyricsMenuItem = new System.Windows.Forms.ToolStripMenuItem();
-		this.preventSleepMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+		this.preventSleepDuringPlaybackMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.hideSequenceMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.hideControlBarMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.themeMenuItem = new System.Windows.Forms.ToolStripMenuItem();
@@ -26677,7 +26742,7 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
 		this.exitMenuItem.Size = new System.Drawing.Size(178, 26);
 		this.exitMenuItem.Text = "退出";
 		this.exitMenuItem.Click += new System.EventHandler(exitMenuItem_Click);
-		this.playControlMenuItem.DropDownItems.AddRange(this.playPauseMenuItem, this.toolStripSeparator1, this.playbackMenuItem, this.qualityMenuItem, this.outputDeviceMenuItem, this.prevMenuItem, this.nextMenuItem, this.jumpToPositionMenuItem, this.autoReadLyricsMenuItem, this.preventSleepMenuItem, this.hideSequenceMenuItem, this.hideControlBarMenuItem, this.themeMenuItem);
+		this.playControlMenuItem.DropDownItems.AddRange(this.playPauseMenuItem, this.toolStripSeparator1, this.playbackMenuItem, this.qualityMenuItem, this.outputDeviceMenuItem, this.prevMenuItem, this.nextMenuItem, this.jumpToPositionMenuItem, this.autoReadLyricsMenuItem, this.preventSleepDuringPlaybackMenuItem, this.hideSequenceMenuItem, this.hideControlBarMenuItem, this.themeMenuItem);
 		this.playControlMenuItem.Name = "playControlMenuItem";
 		this.playControlMenuItem.Size = new System.Drawing.Size(98, 24);
 		this.playControlMenuItem.Text = "播放/控制(&M)";
@@ -26775,11 +26840,11 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
           this.autoReadLyricsMenuItem.Text = "打开歌词朗读\tF11";
           this.autoReadLyricsMenuItem.CheckOnClick = true;
           this.autoReadLyricsMenuItem.Click += new System.EventHandler(autoReadLyricsMenuItem_Click);
-		this.preventSleepMenuItem.Name = "preventSleepMenuItem";
-          this.preventSleepMenuItem.Size = new System.Drawing.Size(180, 26);
-          this.preventSleepMenuItem.Text = "播放时禁止睡眠";
-          this.preventSleepMenuItem.CheckOnClick = true;
-          this.preventSleepMenuItem.Click += new System.EventHandler(preventSleepMenuItem_Click);
+		this.preventSleepDuringPlaybackMenuItem.Name = "preventSleepDuringPlaybackMenuItem";
+		this.preventSleepDuringPlaybackMenuItem.Size = new System.Drawing.Size(180, 26);
+		this.preventSleepDuringPlaybackMenuItem.Text = "禁止播放时睡眠/息屏";
+		this.preventSleepDuringPlaybackMenuItem.CheckOnClick = true;
+		this.preventSleepDuringPlaybackMenuItem.Click += new System.EventHandler(preventSleepDuringPlaybackMenuItem_Click);
           this.hideSequenceMenuItem.Name = "hideSequenceMenuItem";
           this.hideSequenceMenuItem.ShortcutKeys = System.Windows.Forms.Keys.F8;
           this.hideSequenceMenuItem.Size = new System.Drawing.Size(180, 26);
