@@ -765,9 +765,13 @@ public partial class MainForm : Form
         private const int ListViewMaxRowHeight = 512;
         private const int ListViewMultiLineMaxLines = 3;
         private int _listViewShortInfoColumnIndex = 4;
+        private const int ListViewContentLengthCap = 48;
+        private const double ListViewContentWeightMinFactor = 0.6;
+        private const double ListViewContentWeightMaxFactor = 1.6;
         private const int ListViewRowResizeGripHeight = 4;
         private const int ListViewRowResizeMinHeight = 20;
         private bool _isListViewRowResizing;
+        private int[]? _listViewColumnWidthSnapshot;
         private int _listViewRowResizeStartY;
         private int _listViewRowResizeStartHeight;
         private Cursor? _listViewRowResizeOriginalCursor;
@@ -2029,21 +2033,25 @@ public partial class MainForm : Form
                 }
 
                 bool hideSequence = _hideSequenceNumbers || IsAlwaysSequenceHiddenView();
-                int[] ratioWeights = new int[5] { hideSequence ? 0 : 5, 40, 40, 5, 10 };
+                ColumnContentStats[]? contentStats = GetResultListViewContentStats();
+                bool hideIndexColumn = hideSequence || (contentStats != null && !_customListViewIndexWidth.HasValue && !contentStats[0].HasContent);
+                bool hideNameColumn = contentStats != null && !_customListViewNameWidth.HasValue && !contentStats[1].HasContent;
+                bool hideCreatorColumn = contentStats != null && !_customListViewCreatorWidth.HasValue && !contentStats[2].HasContent;
+                int[] ratioWeights = GetResultListViewRatioWeights(hideIndexColumn, contentStats);
                 int[] baseWidths = AllocatePercentWidths(availableWidth, ratioWeights);
 
                 (int shortColumnIndex, int extraColumnIndex, bool hasShortContent, bool hasExtraContent) = ResolveShortInfoColumns();
                 _listViewShortInfoColumnIndex = shortColumnIndex;
                 UpdateResultListViewLineSettings(shortColumnIndex);
 
-                int seqMinWidth = hideSequence ? 0 : CalculateSequenceColumnWidth();
+                int seqMinWidth = hideIndexColumn ? 0 : CalculateSequenceColumnWidth();
                 int shortMinWidth = hasShortContent ? CalculateShortInfoColumnWidth(shortColumnIndex) : 0;
                 int threeCharMinWidth = CalculateThreeCharColumnWidth();
-                int nameMinWidth = threeCharMinWidth;
-                int artistMinWidth = threeCharMinWidth;
+                int nameMinWidth = hideNameColumn ? 0 : threeCharMinWidth;
+                int artistMinWidth = hideCreatorColumn ? 0 : threeCharMinWidth;
                 int extraMinWidth = hasExtraContent ? threeCharMinWidth : 0;
 
-                int seqWidth = hideSequence ? 0 : Math.Max(baseWidths[0], seqMinWidth);
+                int seqWidth = hideIndexColumn ? 0 : Math.Max(baseWidths[0], seqMinWidth);
                 int nameWidth = Math.Max(baseWidths[1], nameMinWidth);
                 int artistWidth = Math.Max(baseWidths[2], artistMinWidth);
                 int shortWidth = hasShortContent ? Math.Max(baseWidths[3], shortMinWidth) : 0;
@@ -2074,12 +2082,12 @@ public partial class MainForm : Form
                 else if (total < availableWidth)
                 {
                         int slack = availableWidth - total;
-                        DistributeSlack(ref nameWidth, ref artistWidth, ref extraWidth, slack, hasExtraContent);
+                        DistributeSlack(ref nameWidth, ref artistWidth, ref extraWidth, slack, hasExtraContent, !hideNameColumn, !hideCreatorColumn);
                 }
 
                 int column4AutoWidth = (shortColumnIndex == 4) ? shortWidth : extraWidth;
                 int column5AutoWidth = (shortColumnIndex == 5) ? shortWidth : extraWidth;
-                int finalSeqWidth = hideSequence ? 0 : (_customListViewIndexWidth ?? seqWidth);
+                int finalSeqWidth = hideIndexColumn ? 0 : (_customListViewIndexWidth ?? seqWidth);
                 int finalNameWidth = _customListViewNameWidth ?? nameWidth;
                 int finalCreatorWidth = _customListViewCreatorWidth ?? artistWidth;
                 int finalExtraWidth = _customListViewExtraWidth ?? column4AutoWidth;
@@ -2091,6 +2099,158 @@ public partial class MainForm : Form
                 columnHeader3.Width = Math.Max(0, finalCreatorWidth);
                 columnHeader4.Width = Math.Max(0, finalExtraWidth);
                 columnHeader5.Width = Math.Max(0, finalDescriptionWidth);
+        }
+
+        private int[] GetResultListViewRatioWeights(bool hideIndexColumn, ColumnContentStats[]? contentStats)
+        {
+                int[] baseWeights = IsHomePageView()
+                        ? new int[5] { hideIndexColumn ? 0 : 5, 42, 18, 15, 20 }
+                        : new int[5] { hideIndexColumn ? 0 : 5, 40, 40, 5, 10 };
+
+                if (contentStats == null || contentStats.Length != 5)
+                {
+                        return baseWeights;
+                }
+
+                bool[] hasCustom = new bool[5]
+                {
+                        _customListViewIndexWidth.HasValue,
+                        _customListViewNameWidth.HasValue,
+                        _customListViewCreatorWidth.HasValue,
+                        _customListViewExtraWidth.HasValue,
+                        _customListViewDescriptionWidth.HasValue
+                };
+
+                bool useContentWeights = true;
+                for (int i = 0; i < contentStats.Length; i++)
+                {
+                        if (!hasCustom[i] && contentStats[i].HasContent && contentStats[i].MaxLength > ListViewContentLengthCap)
+                        {
+                                useContentWeights = false;
+                                break;
+                        }
+                }
+
+                return useContentWeights
+                        ? BuildContentWeights(baseWeights, contentStats, hasCustom, hideIndexColumn)
+                        : BuildBaseWeights(baseWeights, contentStats, hasCustom, hideIndexColumn);
+        }
+
+        private ColumnContentStats[]? GetResultListViewContentStats()
+        {
+                if (GetResultListViewItemCount() <= 0)
+                {
+                        return null;
+                }
+
+                ColumnContentStats[] stats = new ColumnContentStats[5]
+                {
+                        new ColumnContentStats(),
+                        new ColumnContentStats(),
+                        new ColumnContentStats(),
+                        new ColumnContentStats(),
+                        new ColumnContentStats()
+                };
+
+                foreach (ListViewRowSnapshot row in EnumerateResultListViewRows())
+                {
+                        stats[0].Add(row.IndexText);
+                        stats[1].Add(row.Column2);
+                        stats[2].Add(row.Column3);
+                        stats[3].Add(row.Column4);
+                        stats[4].Add(row.Column5);
+                }
+
+                return stats;
+        }
+
+        private static int[] BuildBaseWeights(int[] baseWeights, ColumnContentStats[] stats, bool[] hasCustom, bool hideIndexColumn)
+        {
+                int[] weights = new int[5];
+                int total = 0;
+                for (int i = 0; i < weights.Length; i++)
+                {
+                        if (hideIndexColumn && i == 0)
+                        {
+                                weights[i] = 0;
+                                continue;
+                        }
+                        if (!hasCustom[i] && !stats[i].HasContent)
+                        {
+                                weights[i] = 0;
+                                continue;
+                        }
+                        weights[i] = baseWeights[i];
+                        total += weights[i];
+                }
+
+                if (total <= 0)
+                {
+                        return baseWeights;
+                }
+                return weights;
+        }
+
+        private static int[] BuildContentWeights(int[] baseWeights, ColumnContentStats[] stats, bool[] hasCustom, bool hideIndexColumn)
+        {
+                double totalScore = 0.0;
+                int visibleCount = 0;
+                double[] scores = new double[5];
+                for (int i = 0; i < scores.Length; i++)
+                {
+                        if (hideIndexColumn && i == 0)
+                        {
+                                scores[i] = 0;
+                                continue;
+                        }
+                        if (!hasCustom[i] && !stats[i].HasContent)
+                        {
+                                scores[i] = 0;
+                                continue;
+                        }
+                        double score = stats[i].HasContent ? stats[i].AverageLength : 1.0;
+                        score = Math.Max(1.0, Math.Min(score, ListViewContentLengthCap));
+                        scores[i] = score;
+                        totalScore += score;
+                        visibleCount++;
+                }
+
+                if (visibleCount == 0 || totalScore <= 0.0)
+                {
+                        return BuildBaseWeights(baseWeights, stats, hasCustom, hideIndexColumn);
+                }
+
+                double avgScore = totalScore / visibleCount;
+                int[] weights = new int[5];
+                int total = 0;
+                for (int i = 0; i < weights.Length; i++)
+                {
+                        if (scores[i] <= 0 || baseWeights[i] <= 0)
+                        {
+                                weights[i] = 0;
+                                continue;
+                        }
+                        double factor = scores[i] / avgScore;
+                        factor = Math.Max(ListViewContentWeightMinFactor, Math.Min(ListViewContentWeightMaxFactor, factor));
+                        int weight = (int)Math.Round(baseWeights[i] * factor);
+                        if (weight <= 0)
+                        {
+                                weight = 1;
+                        }
+                        weights[i] = weight;
+                        total += weight;
+                }
+
+                if (total <= 0)
+                {
+                        return BuildBaseWeights(baseWeights, stats, hasCustom, hideIndexColumn);
+                }
+                return weights;
+        }
+
+        private bool IsHomePageView()
+        {
+                return _isHomePage || string.Equals(_currentViewSource, "homepage", StringComparison.OrdinalIgnoreCase);
         }
 
         private void UpdateResultListViewLineSettings(int shortColumnIndex)
@@ -2396,7 +2556,7 @@ public partial class MainForm : Form
                 return Math.Max(0, remaining);
         }
 
-        private static void DistributeSlack(ref int widthA, ref int widthB, ref int widthC, int slack, bool allowExtra)
+        private static void DistributeSlack(ref int widthA, ref int widthB, ref int widthC, int slack, bool allowExtra, bool allowA, bool allowB)
         {
                 if (slack <= 0)
                 {
@@ -2404,17 +2564,34 @@ public partial class MainForm : Form
                 }
                 if (!allowExtra)
                 {
-                        int addLeft = slack / 2;
-                        int addRight = slack - addLeft;
-                        widthA += addLeft;
-                        widthB += addRight;
+                        if (allowA && allowB)
+                        {
+                                int addLeft = slack / 2;
+                                int addRight = slack - addLeft;
+                                widthA += addLeft;
+                                widthB += addRight;
+                                return;
+                        }
+                        if (allowA)
+                        {
+                                widthA += slack;
+                                return;
+                        }
+                        if (allowB)
+                        {
+                                widthB += slack;
+                        }
                         return;
                 }
 
                 int totalWeight = 90;
-                int addLeftWeighted = (int)Math.Floor((double)slack * 40 / totalWeight);
-                int addRightWeighted = (int)Math.Floor((double)slack * 40 / totalWeight);
+                int addLeftWeighted = allowA ? (int)Math.Floor((double)slack * 40 / totalWeight) : 0;
+                int addRightWeighted = allowB ? (int)Math.Floor((double)slack * 40 / totalWeight) : 0;
                 int addExtraWeighted = slack - addLeftWeighted - addRightWeighted;
+                if (!allowA && !allowB)
+                {
+                        addExtraWeighted = slack;
+                }
                 widthA += addLeftWeighted;
                 widthB += addRightWeighted;
                 widthC += addExtraWeighted;
@@ -2481,6 +2658,38 @@ public partial class MainForm : Form
                         }
                         NonEmptyCount++;
                         TotalLength += value.Length;
+                }
+        }
+
+        private sealed class ColumnContentStats
+        {
+                public int TotalCount { get; private set; }
+                public int NonEmptyCount { get; private set; }
+                public int MaxLength { get; private set; }
+                public int TotalLength { get; private set; }
+
+                public bool HasContent => NonEmptyCount > 0;
+
+                public double AverageLength => HasContent ? (double)TotalLength / NonEmptyCount : 0.0;
+
+                public void Add(string? text)
+                {
+                        TotalCount++;
+                        if (string.IsNullOrWhiteSpace(text))
+                        {
+                                return;
+                        }
+                        string value = text.Trim();
+                        if (value.Length == 0)
+                        {
+                                return;
+                        }
+                        NonEmptyCount++;
+                        TotalLength += value.Length;
+                        if (value.Length > MaxLength)
+                        {
+                                MaxLength = value.Length;
+                        }
                 }
         }
 
@@ -12368,6 +12577,7 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 
                 if (!TryGetListViewRowResizeTarget(new Point(e.X, e.Y)))
                 {
+                        BeginListViewColumnResizeTracking();
                         return;
                 }
 
@@ -12434,6 +12644,79 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
                 {
                         safeListView.SetRowHeight(targetHeight);
                         resultListView.Invalidate();
+                }
+        }
+
+        private int[]? CaptureResultListViewColumnWidths()
+        {
+                if (resultListView == null || resultListView.Columns.Count < ListViewTotalColumnCount)
+                {
+                        return null;
+                }
+                return new int[5]
+                {
+                        columnHeader1.Width,
+                        columnHeader2.Width,
+                        columnHeader3.Width,
+                        columnHeader4.Width,
+                        columnHeader5.Width
+                };
+        }
+
+        private void BeginListViewColumnResizeTracking()
+        {
+                if (!_listViewLayoutInitialized || _isApplyingListViewLayout || resultListView == null)
+                {
+                        return;
+                }
+                _listViewColumnWidthSnapshot = CaptureResultListViewColumnWidths();
+        }
+
+        private void EndListViewColumnResizeTracking()
+        {
+                if (_listViewColumnWidthSnapshot == null || !_listViewLayoutInitialized || _isApplyingListViewLayout || resultListView == null)
+                {
+                        _listViewColumnWidthSnapshot = null;
+                        return;
+                }
+                int[]? current = CaptureResultListViewColumnWidths();
+                if (current == null || current.Length != _listViewColumnWidthSnapshot.Length)
+                {
+                        _listViewColumnWidthSnapshot = null;
+                        return;
+                }
+
+                bool changed = false;
+                if (current[0] != _listViewColumnWidthSnapshot[0])
+                {
+                        _customListViewIndexWidth = current[0];
+                        changed = true;
+                }
+                if (current[1] != _listViewColumnWidthSnapshot[1])
+                {
+                        _customListViewNameWidth = current[1];
+                        changed = true;
+                }
+                if (current[2] != _listViewColumnWidthSnapshot[2])
+                {
+                        _customListViewCreatorWidth = current[2];
+                        changed = true;
+                }
+                if (current[3] != _listViewColumnWidthSnapshot[3])
+                {
+                        _customListViewExtraWidth = current[3];
+                        changed = true;
+                }
+                if (current[4] != _listViewColumnWidthSnapshot[4])
+                {
+                        _customListViewDescriptionWidth = current[4];
+                        changed = true;
+                }
+
+                _listViewColumnWidthSnapshot = null;
+                if (changed)
+                {
+                        ScheduleListViewLayoutPersist();
                 }
         }
 
@@ -16845,9 +17128,8 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 			}
 			finally
 			{
-				resultListView.EndUpdate();
+				EndListViewUpdateAndRefreshAccessibility();
 			}
-			ApplyResultListViewLayout();
 			if (selectedListViewIndex >= 0 && selectedListViewIndex < resultListView.Items.Count && !HasListViewSelection())
 			{
 				try

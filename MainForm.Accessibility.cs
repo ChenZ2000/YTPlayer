@@ -1195,10 +1195,7 @@ namespace YTPlayer
 			return;
 		}
                 bool isNvda = IsNvdaRunningCached();
-                if (!isNvda)
-                {
-                        UpdateListViewItemAccessibilityProperties(selectedListViewItemSafe, false);
-                }
+                UpdateListViewItemAccessibilityProperties(selectedListViewItemSafe, isNvda);
 		if (resultListView.ContainsFocus && ShouldUseCustomListViewSpeech())
 		{
 			SpeakListViewSelectionIfNeeded(selectedListViewItemSafe);
@@ -1269,6 +1266,10 @@ namespace YTPlayer
 		{
 			return;
 		}
+                if (e.Button == MouseButtons.Left)
+                {
+                        EndListViewColumnResizeTracking();
+                }
 		if (e.Button == MouseButtons.Left || e.Button == MouseButtons.Right)
 		{
 			QueueListViewFocusSpeech();
