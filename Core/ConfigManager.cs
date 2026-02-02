@@ -602,49 +602,7 @@ namespace YTPlayer.Core
                 }
             }
 
-            // 验证列表列宽与行高
-            config.ListViewColumnWidthIndex = NormalizeColumnWidth(config.ListViewColumnWidthIndex, ref changed);
-            config.ListViewColumnWidthName = NormalizeColumnWidth(config.ListViewColumnWidthName, ref changed);
-            config.ListViewColumnWidthCreator = NormalizeColumnWidth(config.ListViewColumnWidthCreator, ref changed);
-            config.ListViewColumnWidthExtra = NormalizeColumnWidth(config.ListViewColumnWidthExtra, ref changed);
-            config.ListViewColumnWidthDescription = NormalizeColumnWidth(config.ListViewColumnWidthDescription, ref changed);
-            if (config.ListViewRowHeight.HasValue)
-            {
-                int height = config.ListViewRowHeight.Value;
-                if (height < 20)
-                {
-                    config.ListViewRowHeight = null;
-                    changed = true;
-                }
-                else if (height > 512)
-                {
-                    config.ListViewRowHeight = 512;
-                    changed = true;
-                }
-            }
-
             return changed;
-        }
-
-        private static int? NormalizeColumnWidth(int? width, ref bool changed)
-        {
-            if (!width.HasValue)
-            {
-                return null;
-            }
-
-            int value = width.Value;
-            if (value < 0)
-            {
-                changed = true;
-                return null;
-            }
-            if (value > 5000)
-            {
-                changed = true;
-                return 5000;
-            }
-            return value;
         }
 
         /// <summary>

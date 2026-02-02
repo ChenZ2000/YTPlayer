@@ -180,36 +180,6 @@ namespace YTPlayer.Models
         public string? WindowState { get; set; }
 
         /// <summary>
-        /// 列表序号列宽度。
-        /// </summary>
-        public int? ListViewColumnWidthIndex { get; set; }
-
-        /// <summary>
-        /// 列表标题列宽度。
-        /// </summary>
-        public int? ListViewColumnWidthName { get; set; }
-
-        /// <summary>
-        /// 列表作者列宽度。
-        /// </summary>
-        public int? ListViewColumnWidthCreator { get; set; }
-
-        /// <summary>
-        /// 列表额外信息列宽度。
-        /// </summary>
-        public int? ListViewColumnWidthExtra { get; set; }
-
-        /// <summary>
-        /// 列表描述列宽度。
-        /// </summary>
-        public int? ListViewColumnWidthDescription { get; set; }
-
-        /// <summary>
-        /// 列表行高（像素）。
-        /// </summary>
-        public int? ListViewRowHeight { get; set; }
-
-        /// <summary>
         /// 是否启用播放数据上报，保持“最近播放/听歌排行”与官方账号同步
         /// </summary>
         public bool PlaybackReportingEnabled { get; set; } = true;

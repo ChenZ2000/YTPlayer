@@ -757,17 +757,18 @@ public partial class MainForm : Form
         private CancellationTokenSource? _listViewHeaderFocusCts;
 
         private const int ListViewFocusSpeakDelayMs = 120;
+        private const int ListViewLayoutDebounceDelayMs = 500;
 
         private const int ListViewRepeatCooldownMs = 200;
 
         private bool _isApplyingListViewLayout;
 
         private const int ListViewMaxRowHeight = 512;
-        private const int ListViewMultiLineMaxLines = 3;
+        private const int ListViewMultiLineMaxLines = 2;
         private int _listViewShortInfoColumnIndex = 4;
-        private const int ListViewContentLengthCap = 48;
-        private const double ListViewContentWeightMinFactor = 0.6;
-        private const double ListViewContentWeightMaxFactor = 1.6;
+        private const int ListViewTextHorizontalPadding = 12;
+        private const int ListViewAutoWidthSampleLimit = 240;
+        private const double ListViewCountSummaryShortInfoThreshold = 0.5;
         private const int ListViewRowResizeGripHeight = 4;
         private const int ListViewRowResizeMinHeight = 20;
         private bool _isListViewRowResizing;
@@ -781,13 +782,35 @@ public partial class MainForm : Form
         private int? _customListViewCreatorWidth;
         private int? _customListViewExtraWidth;
         private int? _customListViewDescriptionWidth;
+        private bool _isUserResizingListViewColumns;
+        private enum ListViewColumnRole
+        {
+                Sequence,
+                Title,
+                Creator,
+                ShortInfo,
+                Description,
+                Hidden
+        }
+
+        private enum ListViewDataMode
+        {
+                Unknown,
+                Songs,
+                Playlists,
+                Albums,
+                Podcasts,
+                PodcastEpisodes,
+                Artists,
+                ListItems
+        }
         private bool _listViewLayoutInitialized;
-        private System.Windows.Forms.Timer? _listViewLayoutPersistTimer;
         private FormWindowState _lastWindowState = FormWindowState.Normal;
         private bool _isApplyingWindowLayout;
         private System.Windows.Forms.Timer? _windowLayoutPersistTimer;
         private System.Windows.Forms.Timer? _playlistOrderAutoSaveTimer;
         private System.Windows.Forms.Timer? _songOrderAutoSaveTimer;
+        private System.Windows.Forms.Timer? _listViewLayoutDebounceTimer;
         private bool _playlistOrderSaving;
         private bool _songOrderSaving;
         private List<string>? _pendingPlaylistOrderIds;
@@ -1964,14 +1987,20 @@ public partial class MainForm : Form
                 {
                         return;
                 }
+                ApplyResultListViewLayoutCore();
+        }
+
+        private void ApplyResultListViewLayoutCore()
+        {
                 try
                 {
                         _isApplyingListViewLayout = true;
                         try
                         {
-                                ApplyResultListViewColumnAlignment();
                                 UpdateResultListViewColumnWidths();
+                                ApplyResultListViewColumnAlignment();
                                 UpdateResultListViewRowHeight();
+                                _listViewLayoutInitialized = true;
                         }
                         catch (InvalidOperationException ex)
                         {
@@ -1982,6 +2011,41 @@ public partial class MainForm : Form
                 {
                         _isApplyingListViewLayout = false;
                 }
+        }
+
+        private void ScheduleResultListViewLayoutUpdate()
+        {
+                if (resultListView == null)
+                {
+                        return;
+                }
+
+                if (_listViewLayoutDebounceTimer == null)
+                {
+                        _listViewLayoutDebounceTimer = new System.Windows.Forms.Timer();
+                        _listViewLayoutDebounceTimer.Interval = ListViewLayoutDebounceDelayMs;
+                        _listViewLayoutDebounceTimer.Tick += (_, _) =>
+                        {
+                                _listViewLayoutDebounceTimer.Stop();
+                                if (resultListView == null)
+                                {
+                                        return;
+                                }
+                                if (_isApplyingListViewLayout)
+                                {
+                                        _listViewLayoutDebounceTimer.Start();
+                                        return;
+                                }
+                                if (!IsResultListViewLayoutReady())
+                                {
+                                        return;
+                                }
+                                ApplyResultListViewLayoutCore();
+                        };
+                }
+
+                _listViewLayoutDebounceTimer.Stop();
+                _listViewLayoutDebounceTimer.Start();
         }
 
         private bool IsResultListViewLayoutReady()
@@ -2011,12 +2075,45 @@ public partial class MainForm : Form
                 {
                         return;
                 }
+                ListViewColumnRole[] roles = ResolveResultListViewColumnRoles();
+                int shortInfoColumnIndex = _listViewShortInfoColumnIndex;
+                if (shortInfoColumnIndex <= 0)
+                {
+                        shortInfoColumnIndex = Array.IndexOf(roles, ListViewColumnRole.ShortInfo) + 1;
+                }
+                if (shortInfoColumnIndex > 0)
+                {
+                        NormalizeShortInfoRole(roles, shortInfoColumnIndex);
+                }
                 columnHeader0.TextAlign = HorizontalAlignment.Left;
-                columnHeader1.TextAlign = HorizontalAlignment.Center;
-                columnHeader2.TextAlign = HorizontalAlignment.Center;
-                columnHeader3.TextAlign = HorizontalAlignment.Center;
-                columnHeader4.TextAlign = HorizontalAlignment.Center;
-                columnHeader5.TextAlign = HorizontalAlignment.Center;
+                columnHeader1.TextAlign = ResolveColumnAlignment(1, roles[0]);
+                columnHeader2.TextAlign = ResolveColumnAlignment(2, roles[1]);
+                columnHeader3.TextAlign = ResolveColumnAlignment(3, roles[2]);
+                columnHeader4.TextAlign = ResolveColumnAlignment(4, roles[3]);
+                columnHeader5.TextAlign = ResolveColumnAlignment(5, roles[4]);
+#if DEBUG
+                DebugLogger.Log(DebugLogger.LogLevel.Info, "ListViewAlign",
+                        $"Apply alignment: viewSource={_currentViewSource ?? ""} " +
+                        $"[0]={columnHeader0.TextAlign},[1]={columnHeader1.TextAlign},[2]={columnHeader2.TextAlign}," +
+                        $"[3]={columnHeader3.TextAlign},[4]={columnHeader4.TextAlign},[5]={columnHeader5.TextAlign}");
+#endif
+        }
+
+        private static HorizontalAlignment ResolveColumnAlignment(int columnIndex, ListViewColumnRole role)
+        {
+                if (columnIndex == 1 || role == ListViewColumnRole.Sequence)
+                {
+                        return HorizontalAlignment.Right;
+                }
+
+                return role switch
+                {
+                        ListViewColumnRole.ShortInfo => HorizontalAlignment.Right,
+                        ListViewColumnRole.Title => HorizontalAlignment.Left,
+                        ListViewColumnRole.Creator => HorizontalAlignment.Left,
+                        ListViewColumnRole.Description => HorizontalAlignment.Left,
+                        _ => HorizontalAlignment.Left
+                };
         }
 
         private void UpdateResultListViewColumnWidths()
@@ -2029,88 +2126,49 @@ public partial class MainForm : Form
                 int availableWidth = GetResultListViewAvailableWidth();
                 if (availableWidth <= 0)
                 {
+                        DebugListViewLayout("Skip: availableWidth <= 0");
                         return;
                 }
 
                 bool hideSequence = _hideSequenceNumbers || IsAlwaysSequenceHiddenView();
-                ColumnContentStats[]? contentStats = GetResultListViewContentStats();
-                bool hideIndexColumn = hideSequence || (contentStats != null && !_customListViewIndexWidth.HasValue && !contentStats[0].HasContent);
-                bool hideNameColumn = contentStats != null && !_customListViewNameWidth.HasValue && !contentStats[1].HasContent;
-                bool hideCreatorColumn = contentStats != null && !_customListViewCreatorWidth.HasValue && !contentStats[2].HasContent;
-                int[] ratioWeights = GetResultListViewRatioWeights(hideIndexColumn, contentStats);
-                int[] baseWidths = AllocatePercentWidths(availableWidth, ratioWeights);
+                List<ListViewRowSnapshot> rows = EnumerateResultListViewRows().ToList();
+                DebugListViewLayout($"Start: viewSource={_currentViewSource ?? ""}, mode={GetCurrentListViewDataMode()}, rows={rows.Count}, availableWidth={availableWidth}, hideSequence={hideSequence}");
+                ListViewColumnRole[] roles = ResolveResultListViewColumnRoles();
 
-                (int shortColumnIndex, int extraColumnIndex, bool hasShortContent, bool hasExtraContent) = ResolveShortInfoColumns();
-                _listViewShortInfoColumnIndex = shortColumnIndex;
-                UpdateResultListViewLineSettings(shortColumnIndex);
-
-                int seqMinWidth = hideIndexColumn ? 0 : CalculateSequenceColumnWidth();
-                int shortMinWidth = hasShortContent ? CalculateShortInfoColumnWidth(shortColumnIndex) : 0;
-                int threeCharMinWidth = CalculateThreeCharColumnWidth();
-                int nameMinWidth = hideNameColumn ? 0 : threeCharMinWidth;
-                int artistMinWidth = hideCreatorColumn ? 0 : threeCharMinWidth;
-                int extraMinWidth = hasExtraContent ? threeCharMinWidth : 0;
-
-                int seqWidth = hideIndexColumn ? 0 : Math.Max(baseWidths[0], seqMinWidth);
-                int nameWidth = Math.Max(baseWidths[1], nameMinWidth);
-                int artistWidth = Math.Max(baseWidths[2], artistMinWidth);
-                int shortWidth = hasShortContent ? Math.Max(baseWidths[3], shortMinWidth) : 0;
-                int extraWidth = hasExtraContent ? Math.Max(baseWidths[4], extraMinWidth) : 0;
-
-                int total = seqWidth + nameWidth + artistWidth + shortWidth + extraWidth;
-                if (total > availableWidth)
+                bool[] hasContent = new bool[5];
+                foreach (ListViewRowSnapshot row in rows)
                 {
-                        int overflow = total - availableWidth;
-                        overflow = ReduceWidthToMin(ref extraWidth, extraMinWidth, overflow);
-                        overflow = ReduceWidthPairToMin(ref nameWidth, nameMinWidth, ref artistWidth, artistMinWidth, overflow);
-                        if (overflow > 0)
+                        if (!hasContent[0] && !string.IsNullOrWhiteSpace(row.IndexText))
                         {
-                                overflow = ReduceWidth(ref extraWidth, overflow);
-                                overflow = ReduceWidthProportionally(ref nameWidth, ref artistWidth, overflow);
+                                hasContent[0] = true;
                         }
-                        if (overflow > 0)
+                        if (!hasContent[1] && !string.IsNullOrWhiteSpace(row.Column2))
                         {
-                                overflow = ReduceWidth(ref shortWidth, overflow);
-                                overflow = ReduceWidth(ref seqWidth, overflow);
+                                hasContent[1] = true;
                         }
-                        if (overflow > 0)
+                        if (!hasContent[2] && !string.IsNullOrWhiteSpace(row.Column3))
                         {
-                                overflow = ReduceWidth(ref extraWidth, overflow);
-                                overflow = ReduceWidthProportionally(ref nameWidth, ref artistWidth, overflow);
+                                hasContent[2] = true;
+                        }
+                        if (!hasContent[3] && !string.IsNullOrWhiteSpace(row.Column4))
+                        {
+                                hasContent[3] = true;
+                        }
+                        if (!hasContent[4] && !string.IsNullOrWhiteSpace(row.Column5))
+                        {
+                                hasContent[4] = true;
                         }
                 }
-                else if (total < availableWidth)
-                {
-                        int slack = availableWidth - total;
-                        DistributeSlack(ref nameWidth, ref artistWidth, ref extraWidth, slack, hasExtraContent, !hideNameColumn, !hideCreatorColumn);
-                }
 
-                int column4AutoWidth = (shortColumnIndex == 4) ? shortWidth : extraWidth;
-                int column5AutoWidth = (shortColumnIndex == 5) ? shortWidth : extraWidth;
-                int finalSeqWidth = hideIndexColumn ? 0 : (_customListViewIndexWidth ?? seqWidth);
-                int finalNameWidth = _customListViewNameWidth ?? nameWidth;
-                int finalCreatorWidth = _customListViewCreatorWidth ?? artistWidth;
-                int finalExtraWidth = _customListViewExtraWidth ?? column4AutoWidth;
-                int finalDescriptionWidth = _customListViewDescriptionWidth ?? column5AutoWidth;
-
-                columnHeader0.Width = 0;
-                columnHeader1.Width = Math.Max(0, finalSeqWidth);
-                columnHeader2.Width = Math.Max(0, finalNameWidth);
-                columnHeader3.Width = Math.Max(0, finalCreatorWidth);
-                columnHeader4.Width = Math.Max(0, finalExtraWidth);
-                columnHeader5.Width = Math.Max(0, finalDescriptionWidth);
-        }
-
-        private int[] GetResultListViewRatioWeights(bool hideIndexColumn, ColumnContentStats[]? contentStats)
-        {
-                int[] baseWeights = IsHomePageView()
-                        ? new int[5] { hideIndexColumn ? 0 : 5, 42, 18, 15, 20 }
-                        : new int[5] { hideIndexColumn ? 0 : 5, 40, 40, 5, 10 };
-
-                if (contentStats == null || contentStats.Length != 5)
-                {
-                        return baseWeights;
-                }
+                int minFlexWidth = CalculateThreeCharColumnWidth();
+                ColumnAutoSizeStats[] autoStats = BuildColumnAutoSizeStats(rows, ListViewAutoWidthSampleLimit);
+                int[] maxSingleLineWidths = BuildMaxSingleLineWidths(autoStats, minFlexWidth);
+                int[] maxCountSummaryWidths = BuildMaxCountSummaryWidths(autoStats, minFlexWidth);
+                int shortInfoColumnIndex = ResolveShortInfoColumnIndex(roles, autoStats, maxCountSummaryWidths);
+                NormalizeShortInfoRole(roles, shortInfoColumnIndex);
+                _listViewShortInfoColumnIndex = shortInfoColumnIndex;
+                UpdateResultListViewLineSettings(shortInfoColumnIndex);
+                DebugListViewLayout($"Roles: [{string.Join(",", roles.Select(r => r.ToString()))}], shortInfo={shortInfoColumnIndex}");
 
                 bool[] hasCustom = new bool[5]
                 {
@@ -2121,131 +2179,712 @@ public partial class MainForm : Form
                         _customListViewDescriptionWidth.HasValue
                 };
 
-                bool useContentWeights = true;
-                for (int i = 0; i < contentStats.Length; i++)
+                bool[] hide = new bool[5];
+                bool allowAutoHide = rows.Count > 0;
+                for (int i = 0; i < hide.Length; i++)
                 {
-                        if (!hasCustom[i] && contentStats[i].HasContent && contentStats[i].MaxLength > ListViewContentLengthCap)
+                        bool roleHidden = roles[i] == ListViewColumnRole.Hidden;
+                        bool emptyColumn = allowAutoHide && !hasContent[i];
+                        if (i == 0)
                         {
-                                useContentWeights = false;
+                                hide[i] = hideSequence || emptyColumn || (!hasCustom[i] && roleHidden);
+                        }
+                        else
+                        {
+                                hide[i] = emptyColumn || (!hasCustom[i] && roleHidden);
+                        }
+                }
+                DebugListViewLayout($"hasContent=[{string.Join(",", hasContent.Select(v => v ? "1" : "0"))}], hasCustom=[{string.Join(",", hasCustom.Select(v => v ? "1" : "0"))}], hide=[{string.Join(",", hide.Select(v => v ? "1" : "0"))}]");
+                bool allHidden = true;
+                for (int i = 0; i < hide.Length; i++)
+                {
+                        if (!hide[i])
+                        {
+                                allHidden = false;
                                 break;
                         }
                 }
-
-                return useContentWeights
-                        ? BuildContentWeights(baseWeights, contentStats, hasCustom, hideIndexColumn)
-                        : BuildBaseWeights(baseWeights, contentStats, hasCustom, hideIndexColumn);
-        }
-
-        private ColumnContentStats[]? GetResultListViewContentStats()
-        {
-                if (GetResultListViewItemCount() <= 0)
+                if (allHidden)
                 {
-                        return null;
+                        hide[1] = false;
                 }
 
-                ColumnContentStats[] stats = new ColumnContentStats[5]
+                int[] widths = new int[5];
+                int[] minFixedWidths = new int[5];
+                bool[] isFixed = new bool[5];
+                int totalFixed = 0;
+                List<int> flexColumns = new List<int>();
+
+                for (int i = 0; i < widths.Length; i++)
                 {
-                        new ColumnContentStats(),
-                        new ColumnContentStats(),
-                        new ColumnContentStats(),
-                        new ColumnContentStats(),
-                        new ColumnContentStats()
+                        int columnIndex = i + 1;
+                        if (hide[i])
+                        {
+                                widths[i] = 0;
+                                continue;
+                        }
+
+                        int? customWidth = GetCustomListViewColumnWidth(columnIndex);
+                        if (columnIndex == 1)
+                        {
+                                int seqWidth = hideSequence ? 0 : CalculateSequenceColumnWidth();
+                                if (customWidth.HasValue)
+                                {
+                                        seqWidth = Math.Max(seqWidth, customWidth.Value);
+                                }
+                                widths[i] = seqWidth;
+                                isFixed[i] = true;
+                                minFixedWidths[i] = seqWidth;
+                                totalFixed += widths[i];
+                                continue;
+                        }
+
+                        if (columnIndex == shortInfoColumnIndex || roles[i] == ListViewColumnRole.ShortInfo)
+                        {
+                                int shortInfoWidth = maxCountSummaryWidths[i] > 0 ? maxCountSummaryWidths[i] : maxSingleLineWidths[i];
+                                int targetWidth = Math.Max(minFlexWidth, shortInfoWidth);
+                                if (customWidth.HasValue)
+                                {
+                                        targetWidth = Math.Max(targetWidth, customWidth.Value);
+                                }
+                                widths[i] = targetWidth;
+                                isFixed[i] = true;
+                                minFixedWidths[i] = targetWidth;
+                                totalFixed += widths[i];
+                                continue;
+                        }
+
+                        if (customWidth.HasValue)
+                        {
+                                widths[i] = Math.Max(0, customWidth.Value);
+                                isFixed[i] = true;
+                                minFixedWidths[i] = Math.Min(widths[i], minFlexWidth);
+                                totalFixed += widths[i];
+                                continue;
+                        }
+
+                        if (roles[i] == ListViewColumnRole.Hidden)
+                        {
+                                widths[i] = 0;
+                                continue;
+                        }
+
+                        flexColumns.Add(columnIndex);
+                }
+                DebugListViewLayout($"FixedWidths=[{string.Join(",", widths)}], totalFixed={totalFixed}, flexColumns=[{string.Join(",", flexColumns)}]");
+
+                int minFlexSum = flexColumns.Count * minFlexWidth;
+                int maxFixedTotal = Math.Max(0, availableWidth - minFlexSum);
+                if (totalFixed > maxFixedTotal)
+                {
+                        int over = totalFixed - maxFixedTotal;
+                        int totalExtra = 0;
+                        int[] extras = new int[5];
+                        for (int i = 0; i < widths.Length; i++)
+                        {
+                                if (!isFixed[i])
+                                {
+                                        continue;
+                                }
+                                int extra = widths[i] - minFixedWidths[i];
+                                if (extra > 0)
+                                {
+                                        extras[i] = extra;
+                                        totalExtra += extra;
+                                }
+                        }
+
+                        if (totalExtra > 0)
+                        {
+                                int remaining = over;
+                                for (int i = 0; i < widths.Length; i++)
+                                {
+                                        if (extras[i] <= 0)
+                                        {
+                                                continue;
+                                        }
+                                        int reduce = (int)Math.Floor((double)over * extras[i] / totalExtra);
+                                        if (reduce <= 0)
+                                        {
+                                                continue;
+                                        }
+                                        int current = widths[i];
+                                        int next = Math.Max(minFixedWidths[i], current - reduce);
+                                        int actualReduce = current - next;
+                                        if (actualReduce <= 0)
+                                        {
+                                                continue;
+                                        }
+                                        widths[i] = next;
+                                        remaining -= actualReduce;
+                                }
+
+                                if (remaining > 0)
+                                {
+                                        int guard = remaining + widths.Length;
+                                        while (remaining > 0 && guard-- > 0)
+                                        {
+                                                bool reduced = false;
+                                                for (int i = 0; i < widths.Length && remaining > 0; i++)
+                                                {
+                                                        if (extras[i] > 0 && widths[i] > minFixedWidths[i])
+                                                        {
+                                                                widths[i]--;
+                                                                remaining--;
+                                                                reduced = true;
+                                                        }
+                                                }
+                                                if (!reduced)
+                                                {
+                                                        break;
+                                                }
+                                        }
+                                }
+
+                                totalFixed = 0;
+                                for (int i = 0; i < widths.Length; i++)
+                                {
+                                        if (isFixed[i])
+                                        {
+                                                totalFixed += widths[i];
+                                        }
+                                }
+                                DebugListViewLayout($"Fixed: clamped over={over}, maxFixed={maxFixedTotal}, totalFixed={totalFixed}");
+                        }
+                        else
+                        {
+                                DebugListViewLayout($"Fixed: cannot clamp over={over}, maxFixed={maxFixedTotal}");
+                        }
+                }
+
+                if (flexColumns.Count > 0)
+                {
+                        int flexWidth = availableWidth - totalFixed;
+                        minFlexSum = flexColumns.Count * minFlexWidth;
+                        DebugListViewLayout($"Flex: flexWidth={flexWidth}, minFlexWidth={minFlexWidth}, minFlexSum={minFlexSum}");
+                        if (flexWidth <= 0 || flexWidth < minFlexSum)
+                        {
+                                foreach (int columnIndex in flexColumns)
+                                {
+                                        widths[columnIndex - 1] = minFlexWidth;
+                                }
+                                DebugListViewLayout("Flex: fallback to min width for all flex columns");
+                        }
+                        else
+                        {
+                                int[] required = new int[5];
+                                int requiredSum = 0;
+                                foreach (int columnIndex in flexColumns)
+                                {
+                                        int requiredWidth = Math.Max(minFlexWidth, maxSingleLineWidths[columnIndex - 1]);
+                                        required[columnIndex - 1] = requiredWidth;
+                                        requiredSum += requiredWidth;
+                                }
+
+                                if (requiredSum <= flexWidth)
+                                {
+                                        foreach (int columnIndex in flexColumns)
+                                        {
+                                                widths[columnIndex - 1] = required[columnIndex - 1];
+                                        }
+                                        int slack = flexWidth - requiredSum;
+                                        if (slack > 0)
+                                        {
+                                                DistributeSlack(widths, flexColumns, roles, slack);
+                                        }
+                                        DebugListViewLayout("Flex: used single-line widths");
+                                }
+                                else
+                                {
+                                        int extra = Math.Max(0, flexWidth - minFlexSum);
+                                        double weightSum = 0.0;
+                                        double[] weights = new double[flexColumns.Count];
+                                        for (int i = 0; i < flexColumns.Count; i++)
+                                        {
+                                                int columnIndex = flexColumns[i];
+                                                double roleWeight = GetRoleWeight(roles[columnIndex - 1]);
+                                                double widthWeight = Math.Max(1.0, required[columnIndex - 1]);
+                                                weights[i] = roleWeight * widthWeight;
+                                                weightSum += weights[i];
+                                        }
+
+                                        int assigned = 0;
+                                        for (int i = 0; i < flexColumns.Count; i++)
+                                        {
+                                                int columnIndex = flexColumns[i];
+                                                int add = (int)Math.Floor(extra * weights[i] / Math.Max(1.0, weightSum));
+                                                widths[columnIndex - 1] = minFlexWidth + add;
+                                                assigned += add;
+                                        }
+                                        int remainder = extra - assigned;
+                                        int index = 0;
+                                        while (remainder > 0 && flexColumns.Count > 0)
+                                        {
+                                                int columnIndex = flexColumns[index % flexColumns.Count];
+                                                widths[columnIndex - 1]++;
+                                                remainder--;
+                                                index++;
+                                        }
+                                        DebugListViewLayout("Flex: used weighted widths");
+                                }
+                        }
+                }
+
+                if (!widths.Any(width => width > 0))
+                {
+                        widths = BuildFallbackColumnWidths(availableWidth, hideSequence);
+                        DebugListViewLayout($"Fallback widths: [{string.Join(",", widths)}]");
+                }
+
+                ApplyResultListViewColumnWidths(widths);
+                DebugListViewLayout($"Final widths: [{string.Join(",", widths)}]");
+        }
+
+        private sealed class ColumnAutoSizeStats
+        {
+                public int NonEmptyCount { get; set; }
+                public int CountSummaryHits { get; set; }
+                public int MaxTextLength { get; set; }
+                public string MaxTextSample { get; set; } = string.Empty;
+                public int MaxCountSummaryLength { get; set; }
+                public string MaxCountSummarySample { get; set; } = string.Empty;
+                public bool HasContent => NonEmptyCount > 0;
+                public double CountSummaryRatio => NonEmptyCount == 0 ? 0.0 : (double)CountSummaryHits / NonEmptyCount;
+        }
+
+        private ColumnAutoSizeStats[] BuildColumnAutoSizeStats(IReadOnlyList<ListViewRowSnapshot> rows, int maxSamples)
+        {
+                ColumnAutoSizeStats[] stats = new ColumnAutoSizeStats[5]
+                {
+                        new ColumnAutoSizeStats(),
+                        new ColumnAutoSizeStats(),
+                        new ColumnAutoSizeStats(),
+                        new ColumnAutoSizeStats(),
+                        new ColumnAutoSizeStats()
                 };
 
-                foreach (ListViewRowSnapshot row in EnumerateResultListViewRows())
+                if (rows == null || rows.Count == 0)
                 {
-                        stats[0].Add(row.IndexText);
-                        stats[1].Add(row.Column2);
-                        stats[2].Add(row.Column3);
-                        stats[3].Add(row.Column4);
-                        stats[4].Add(row.Column5);
+                        return stats;
+                }
+
+                int total = rows.Count;
+                int sampleTarget = Math.Min(total, Math.Max(1, maxSamples));
+                int step = Math.Max(1, total / sampleTarget);
+                for (int i = 0; i < total; i += step)
+                {
+                        ListViewRowSnapshot row = rows[i];
+                        UpdateAutoSizeStats(stats[0], row.IndexText);
+                        UpdateAutoSizeStats(stats[1], row.Column2);
+                        UpdateAutoSizeStats(stats[2], row.Column3);
+                        UpdateAutoSizeStats(stats[3], row.Column4);
+                        UpdateAutoSizeStats(stats[4], row.Column5);
+                }
+                int lastIndex = total - 1;
+                if (lastIndex >= 0 && lastIndex % step != 0)
+                {
+                        ListViewRowSnapshot row = rows[lastIndex];
+                        UpdateAutoSizeStats(stats[0], row.IndexText);
+                        UpdateAutoSizeStats(stats[1], row.Column2);
+                        UpdateAutoSizeStats(stats[2], row.Column3);
+                        UpdateAutoSizeStats(stats[3], row.Column4);
+                        UpdateAutoSizeStats(stats[4], row.Column5);
                 }
 
                 return stats;
         }
 
-        private static int[] BuildBaseWeights(int[] baseWeights, ColumnContentStats[] stats, bool[] hasCustom, bool hideIndexColumn)
+        private static void UpdateAutoSizeStats(ColumnAutoSizeStats stats, string text)
         {
-                int[] weights = new int[5];
-                int total = 0;
-                for (int i = 0; i < weights.Length; i++)
+                if (stats == null || string.IsNullOrWhiteSpace(text))
                 {
-                        if (hideIndexColumn && i == 0)
-                        {
-                                weights[i] = 0;
-                                continue;
-                        }
-                        if (!hasCustom[i] && !stats[i].HasContent)
-                        {
-                                weights[i] = 0;
-                                continue;
-                        }
-                        weights[i] = baseWeights[i];
-                        total += weights[i];
+                        return;
                 }
-
-                if (total <= 0)
+                string value = text.Trim();
+                if (value.Length == 0)
                 {
-                        return baseWeights;
+                        return;
                 }
-                return weights;
+                stats.NonEmptyCount++;
+                int length = value.Length;
+                if (length > stats.MaxTextLength)
+                {
+                        stats.MaxTextLength = length;
+                        stats.MaxTextSample = value;
+                }
+                if (LooksLikeCountSummary(value))
+                {
+                        stats.CountSummaryHits++;
+                        if (length > stats.MaxCountSummaryLength)
+                        {
+                                stats.MaxCountSummaryLength = length;
+                                stats.MaxCountSummarySample = value;
+                        }
+                }
         }
 
-        private static int[] BuildContentWeights(int[] baseWeights, ColumnContentStats[] stats, bool[] hasCustom, bool hideIndexColumn)
+        private int[] BuildMaxSingleLineWidths(ColumnAutoSizeStats[] stats, int minWidth)
         {
-                double totalScore = 0.0;
-                int visibleCount = 0;
-                double[] scores = new double[5];
-                for (int i = 0; i < scores.Length; i++)
+                int[] widths = new int[5];
+                for (int i = 0; i < widths.Length; i++)
                 {
-                        if (hideIndexColumn && i == 0)
+                        string sample = stats[i].MaxTextSample;
+                        if (string.IsNullOrWhiteSpace(sample))
                         {
-                                scores[i] = 0;
+                                widths[i] = minWidth;
                                 continue;
                         }
-                        if (!hasCustom[i] && !stats[i].HasContent)
+                        int measured = MeasureSingleLineWidth(sample) + ListViewTextHorizontalPadding;
+                        widths[i] = Math.Max(minWidth, measured);
+                }
+                return widths;
+        }
+
+        private int[] BuildMaxCountSummaryWidths(ColumnAutoSizeStats[] stats, int minWidth)
+        {
+                int[] widths = new int[5];
+                for (int i = 0; i < widths.Length; i++)
+                {
+                        string sample = stats[i].MaxCountSummarySample;
+                        if (string.IsNullOrWhiteSpace(sample))
                         {
-                                scores[i] = 0;
+                                widths[i] = 0;
                                 continue;
                         }
-                        double score = stats[i].HasContent ? stats[i].AverageLength : 1.0;
-                        score = Math.Max(1.0, Math.Min(score, ListViewContentLengthCap));
-                        scores[i] = score;
-                        totalScore += score;
-                        visibleCount++;
+                        int measured = MeasureSingleLineWidth(sample) + ListViewTextHorizontalPadding;
+                        widths[i] = Math.Max(minWidth, measured);
                 }
+                return widths;
+        }
 
-                if (visibleCount == 0 || totalScore <= 0.0)
+        private int ResolveShortInfoColumnIndex(ListViewColumnRole[] roles, ColumnAutoSizeStats[] stats, int[] maxCountSummaryWidths)
+        {
+                int roleIndex = 0;
+                for (int i = 0; i < roles.Length; i++)
                 {
-                        return BuildBaseWeights(baseWeights, stats, hasCustom, hideIndexColumn);
+                        if (roles[i] == ListViewColumnRole.ShortInfo)
+                        {
+                                roleIndex = i + 1;
+                                break;
+                        }
                 }
 
-                double avgScore = totalScore / visibleCount;
-                int[] weights = new int[5];
-                int total = 0;
+                int bestIndex = 0;
+                double bestRatio = 0.0;
+                int bestWidth = 0;
+                for (int i = 0; i < stats.Length; i++)
+                {
+                        if (!stats[i].HasContent)
+                        {
+                                continue;
+                        }
+                        double ratio = stats[i].CountSummaryRatio;
+                        if (ratio <= 0)
+                        {
+                                continue;
+                        }
+                        int width = maxCountSummaryWidths[i];
+                        if (ratio > bestRatio || (Math.Abs(ratio - bestRatio) < 0.001 && width > bestWidth))
+                        {
+                                bestRatio = ratio;
+                                bestIndex = i + 1;
+                                bestWidth = width;
+                        }
+                }
+
+                if (bestIndex > 0 && bestRatio >= ListViewCountSummaryShortInfoThreshold)
+                {
+                        return bestIndex;
+                }
+
+                return roleIndex;
+        }
+
+        private static void NormalizeShortInfoRole(ListViewColumnRole[] roles, int shortInfoColumnIndex)
+        {
+                if (roles == null || shortInfoColumnIndex <= 0 || shortInfoColumnIndex > roles.Length)
+                {
+                        return;
+                }
+                for (int i = 0; i < roles.Length; i++)
+                {
+                        if (roles[i] == ListViewColumnRole.ShortInfo && i + 1 != shortInfoColumnIndex)
+                        {
+                                roles[i] = ListViewColumnRole.Description;
+                        }
+                }
+                roles[shortInfoColumnIndex - 1] = ListViewColumnRole.ShortInfo;
+        }
+
+        private static int GetRoleWeight(ListViewColumnRole role)
+        {
+                return role switch
+                {
+                        ListViewColumnRole.Description => 3,
+                        ListViewColumnRole.Title => 2,
+                        ListViewColumnRole.Creator => 1,
+                        _ => 1
+                };
+        }
+
+        private void DistributeSlack(int[] widths, IReadOnlyList<int> flexColumns, ListViewColumnRole[] roles, int slack)
+        {
+                if (slack <= 0 || flexColumns == null || flexColumns.Count == 0)
+                {
+                        return;
+                }
+                int weightSum = 0;
+                int[] weights = new int[flexColumns.Count];
+                for (int i = 0; i < flexColumns.Count; i++)
+                {
+                        int columnIndex = flexColumns[i];
+                        int weight = GetRoleWeight(roles[columnIndex - 1]);
+                        weights[i] = weight;
+                        weightSum += weight;
+                }
+                int assigned = 0;
+                for (int i = 0; i < flexColumns.Count; i++)
+                {
+                        int columnIndex = flexColumns[i];
+                        int add = (int)Math.Floor((double)slack * weights[i] / Math.Max(1, weightSum));
+                        widths[columnIndex - 1] += add;
+                        assigned += add;
+                }
+                int remainder = slack - assigned;
+                int index = 0;
+                while (remainder > 0)
+                {
+                        int columnIndex = flexColumns[index % flexColumns.Count];
+                        widths[columnIndex - 1]++;
+                        remainder--;
+                        index++;
+                }
+        }
+
+
+        [System.Diagnostics.Conditional("DEBUG")]
+        private void DebugListViewLayout(string message)
+        {
+                DebugLogger.Log(DebugLogger.LogLevel.Info, "ListViewLayout", message);
+        }
+
+
+        private int[] BuildFallbackColumnWidths(int availableWidth, bool hideSequence)
+        {
+                int[] widths = new int[5];
+                if (availableWidth <= 0)
+                {
+                        return widths;
+                }
+
+                int minWidth = CalculateThreeCharColumnWidth();
+                int seqWidth = hideSequence ? 0 : CalculateSequenceColumnWidth();
+                int remaining = Math.Max(0, availableWidth - seqWidth);
+                int[] weights = new int[4] { 40, 20, 20, 20 };
+                int weightSum = weights.Sum();
+                int assigned = 0;
+                int[] flex = new int[4];
                 for (int i = 0; i < weights.Length; i++)
                 {
-                        if (scores[i] <= 0 || baseWeights[i] <= 0)
-                        {
-                                weights[i] = 0;
-                                continue;
-                        }
-                        double factor = scores[i] / avgScore;
-                        factor = Math.Max(ListViewContentWeightMinFactor, Math.Min(ListViewContentWeightMaxFactor, factor));
-                        int weight = (int)Math.Round(baseWeights[i] * factor);
-                        if (weight <= 0)
-                        {
-                                weight = 1;
-                        }
-                        weights[i] = weight;
-                        total += weight;
+                        flex[i] = (int)Math.Floor((double)remaining * weights[i] / Math.Max(1, weightSum));
+                        assigned += flex[i];
+                }
+                int remainder = remaining - assigned;
+                int index = 0;
+                while (remainder > 0)
+                {
+                        flex[index % flex.Length]++;
+                        remainder--;
+                        index++;
+                }
+                for (int i = 0; i < flex.Length; i++)
+                {
+                        flex[i] = Math.Max(minWidth, flex[i]);
+                }
+                widths[0] = seqWidth;
+                widths[1] = flex[0];
+                widths[2] = flex[1];
+                widths[3] = flex[2];
+                widths[4] = flex[3];
+                return widths;
+        }
+
+        private void ApplyResultListViewColumnWidths(int[] widths)
+        {
+                if (widths == null || widths.Length < 5)
+                {
+                        return;
                 }
 
-                if (total <= 0)
+                columnHeader0.Width = 0;
+                columnHeader1.Width = Math.Max(0, widths[0]);
+                columnHeader2.Width = Math.Max(0, widths[1]);
+                columnHeader3.Width = Math.Max(0, widths[2]);
+                columnHeader4.Width = Math.Max(0, widths[3]);
+                columnHeader5.Width = Math.Max(0, widths[4]);
+        }
+
+        private int? GetCustomListViewColumnWidth(int columnIndex)
+        {
+                return columnIndex switch
                 {
-                        return BuildBaseWeights(baseWeights, stats, hasCustom, hideIndexColumn);
+                        1 => _customListViewIndexWidth,
+                        2 => _customListViewNameWidth,
+                        3 => _customListViewCreatorWidth,
+                        4 => _customListViewExtraWidth,
+                        5 => _customListViewDescriptionWidth,
+                        _ => null
+                };
+        }
+
+        private ListViewColumnRole[] ResolveResultListViewColumnRoles()
+        {
+                ListViewDataMode mode = GetCurrentListViewDataMode();
+                return BuildRolesForMode(mode);
+        }
+
+        private ListViewColumnRole[] BuildRolesForMode(ListViewDataMode mode)
+        {
+                return mode switch
+                {
+                        ListViewDataMode.Songs => new ListViewColumnRole[5]
+                        {
+                                ListViewColumnRole.Sequence,
+                                ListViewColumnRole.Title,
+                                ListViewColumnRole.Creator,
+                                ListViewColumnRole.Description,
+                                ListViewColumnRole.ShortInfo
+                        },
+                        ListViewDataMode.Playlists => new ListViewColumnRole[5]
+                        {
+                                ListViewColumnRole.Sequence,
+                                ListViewColumnRole.Title,
+                                ListViewColumnRole.Creator,
+                                ListViewColumnRole.ShortInfo,
+                                ListViewColumnRole.Description
+                        },
+                        ListViewDataMode.Albums => new ListViewColumnRole[5]
+                        {
+                                ListViewColumnRole.Sequence,
+                                ListViewColumnRole.Title,
+                                ListViewColumnRole.Creator,
+                                ListViewColumnRole.ShortInfo,
+                                ListViewColumnRole.Description
+                        },
+                        ListViewDataMode.Podcasts => new ListViewColumnRole[5]
+                        {
+                                ListViewColumnRole.Sequence,
+                                ListViewColumnRole.Title,
+                                ListViewColumnRole.Creator,
+                                ListViewColumnRole.ShortInfo,
+                                ListViewColumnRole.Description
+                        },
+                        ListViewDataMode.PodcastEpisodes => new ListViewColumnRole[5]
+                        {
+                                ListViewColumnRole.Sequence,
+                                ListViewColumnRole.Title,
+                                ListViewColumnRole.Creator,
+                                ListViewColumnRole.ShortInfo,
+                                ListViewColumnRole.Description
+                        },
+                        ListViewDataMode.Artists => new ListViewColumnRole[5]
+                        {
+                                ListViewColumnRole.Sequence,
+                                ListViewColumnRole.Title,
+                                ListViewColumnRole.ShortInfo,
+                                ListViewColumnRole.Description,
+                                ListViewColumnRole.Hidden
+                        },
+                        ListViewDataMode.ListItems => new ListViewColumnRole[5]
+                        {
+                                ListViewColumnRole.Sequence,
+                                ListViewColumnRole.Title,
+                                ListViewColumnRole.Creator,
+                                ListViewColumnRole.ShortInfo,
+                                ListViewColumnRole.Description
+                        },
+                        _ => new ListViewColumnRole[5]
+                        {
+                                ListViewColumnRole.Sequence,
+                                ListViewColumnRole.Title,
+                                ListViewColumnRole.Creator,
+                                ListViewColumnRole.Description,
+                                ListViewColumnRole.Description
+                        }
+                };
+        }
+
+        private ListViewDataMode GetCurrentListViewDataMode()
+        {
+                if (_currentPodcastSounds != null && _currentPodcastSounds.Count > 0)
+                {
+                        return ListViewDataMode.PodcastEpisodes;
                 }
-                return weights;
+                if (_currentSongs != null && _currentSongs.Count > 0)
+                {
+                        return ListViewDataMode.Songs;
+                }
+                if (_currentPlaylists != null && _currentPlaylists.Count > 0)
+                {
+                        return ListViewDataMode.Playlists;
+                }
+                if (_currentAlbums != null && _currentAlbums.Count > 0)
+                {
+                        return ListViewDataMode.Albums;
+                }
+                if (_currentArtists != null && _currentArtists.Count > 0)
+                {
+                        return ListViewDataMode.Artists;
+                }
+                if (_currentPodcasts != null && _currentPodcasts.Count > 0)
+                {
+                        return ListViewDataMode.Podcasts;
+                }
+                if (_currentListItems != null && _currentListItems.Count > 0)
+                {
+                        return ListViewDataMode.ListItems;
+                }
+
+                return ResolveDataModeFromViewSource(_currentViewSource);
+        }
+
+        private ListViewDataMode ResolveDataModeFromViewSource(string? viewSource)
+        {
+                if (string.IsNullOrWhiteSpace(viewSource))
+                {
+                        return ListViewDataMode.Unknown;
+                }
+
+                string source = viewSource.Trim();
+                if (source.Equals("homepage", StringComparison.OrdinalIgnoreCase))
+                {
+                        return ListViewDataMode.ListItems;
+                }
+                if (source.StartsWith("playlist:", StringComparison.OrdinalIgnoreCase) || source.IndexOf("playlist", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                        return ListViewDataMode.Playlists;
+                }
+                if (source.StartsWith("album:", StringComparison.OrdinalIgnoreCase) || source.IndexOf("album", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                        return ListViewDataMode.Albums;
+                }
+                if (source.StartsWith("artist:", StringComparison.OrdinalIgnoreCase) || source.StartsWith("artist_category_list:", StringComparison.OrdinalIgnoreCase) || source.IndexOf("artist", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                        return ListViewDataMode.Artists;
+                }
+                if (source.IndexOf("podcast_episode", StringComparison.OrdinalIgnoreCase) >= 0 || source.IndexOf("program", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                        return ListViewDataMode.PodcastEpisodes;
+                }
+                if (source.StartsWith("podcast", StringComparison.OrdinalIgnoreCase) || source.IndexOf("podcast", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                        return ListViewDataMode.Podcasts;
+                }
+                if (source.StartsWith("search:", StringComparison.OrdinalIgnoreCase) || source.StartsWith("song:", StringComparison.OrdinalIgnoreCase))
+                {
+                        return ListViewDataMode.Songs;
+                }
+                return ListViewDataMode.Unknown;
         }
 
         private bool IsHomePageView()
@@ -2258,55 +2897,8 @@ public partial class MainForm : Form
                 if (resultListView is SafeListView safeListView)
                 {
                         safeListView.MultiLineMaxLines = Math.Max(1, ListViewMultiLineMaxLines);
-                        safeListView.ShortInfoColumnIndex = shortColumnIndex;
+                        safeListView.ShortInfoColumnIndex = Math.Max(0, shortColumnIndex);
                 }
-        }
-
-        private (int shortColumnIndex, int extraColumnIndex, bool hasShortContent, bool hasExtraContent) ResolveShortInfoColumns()
-        {
-                ColumnLengthStats column4 = new ColumnLengthStats();
-                ColumnLengthStats column5 = new ColumnLengthStats();
-                int column4ShortInfoHits = 0;
-                int column5ShortInfoHits = 0;
-                foreach (ListViewRowSnapshot row in EnumerateResultListViewRows())
-                {
-                        column4.Add(row.Column4);
-                        column5.Add(row.Column5);
-                        if (LooksLikeShortInfo(row.Column4))
-                        {
-                                column4ShortInfoHits++;
-                        }
-                        if (LooksLikeShortInfo(row.Column5))
-                        {
-                                column5ShortInfoHits++;
-                        }
-                }
-
-                bool col4Has = column4.HasContent;
-                bool col5Has = column5.HasContent;
-                if (!col4Has && !col5Has)
-                {
-                        return (4, 5, false, false);
-                }
-                if (col4Has && !col5Has)
-                {
-                        return (4, 5, true, false);
-                }
-                if (!col4Has && col5Has)
-                {
-                        return (5, 4, true, false);
-                }
-
-                if (column4ShortInfoHits != column5ShortInfoHits)
-                {
-                        return (column4ShortInfoHits > column5ShortInfoHits) ? (4, 5, true, true) : (5, 4, true, true);
-                }
-
-                if (column4.AverageLength <= column5.AverageLength)
-                {
-                        return (4, 5, true, true);
-                }
-                return (5, 4, true, true);
         }
 
         private static bool LooksLikeShortInfo(string text)
@@ -2322,12 +2914,69 @@ public partial class MainForm : Form
                         return true;
                 }
 
+                if (LooksLikeCountSummary(value))
+                {
+                        return true;
+                }
+
                 if (value.Length <= 20 && ContainsDigit(value) && ContainsUnit(value))
                 {
                         return true;
                 }
 
                 return false;
+        }
+
+        private static bool LooksLikeCountSummary(string value)
+        {
+                if (string.IsNullOrWhiteSpace(value))
+                {
+                        return false;
+                }
+                if (!ContainsDigit(value) || !ContainsUnit(value))
+                {
+                        return false;
+                }
+
+                int unitHits = 0;
+                unitHits += CountSubstring(value, "首");
+                unitHits += CountSubstring(value, "个");
+                unitHits += CountSubstring(value, "张");
+                unitHits += CountSubstring(value, "类");
+                unitHits += CountSubstring(value, "位");
+                unitHits += CountSubstring(value, "节目");
+                unitHits += CountSubstring(value, "集");
+                unitHits += CountSubstring(value, "期");
+                unitHits += CountSubstring(value, "条");
+                unitHits += CountSubstring(value, "人");
+
+                if (unitHits >= 2)
+                {
+                        return true;
+                }
+
+                return value.Contains("|", StringComparison.Ordinal) || value.Contains("/", StringComparison.Ordinal);
+        }
+
+        private static int CountSubstring(string source, string value)
+        {
+                if (string.IsNullOrEmpty(source) || string.IsNullOrEmpty(value))
+                {
+                        return 0;
+                }
+                int count = 0;
+                int index = 0;
+                while (true)
+                {
+                        index = source.IndexOf(value, index, StringComparison.Ordinal);
+                        if (index < 0)
+                        {
+                                break;
+                        }
+                        count++;
+                        index += value.Length;
+                }
+                return count;
         }
 
         private static bool LooksLikeTime(string value)
@@ -2404,24 +3053,6 @@ public partial class MainForm : Form
                        value.Contains("人", StringComparison.Ordinal);
         }
 
-        private int CalculateShortInfoColumnWidth(int columnIndex)
-        {
-                int maxWidth = 0;
-                foreach (ListViewRowSnapshot row in EnumerateResultListViewRows())
-                {
-                        string text = columnIndex == 4 ? row.Column4 : row.Column5;
-                        if (!string.IsNullOrWhiteSpace(text))
-                        {
-                                maxWidth = Math.Max(maxWidth, MeasureSingleLineWidth(text));
-                        }
-                }
-                if (maxWidth <= 0)
-                {
-                        maxWidth = MeasureSingleLineWidth("00:00");
-                }
-                return Math.Max(36, maxWidth + 12);
-        }
-
         private int CalculateThreeCharColumnWidth()
         {
                 int maxWidth = 0;
@@ -2431,267 +3062,9 @@ public partial class MainForm : Form
                 {
                         maxWidth = MeasureSingleLineWidth("AAA");
                 }
-                return Math.Max(36, maxWidth + 12);
+                return Math.Max(36, maxWidth + ListViewTextHorizontalPadding);
         }
 
-        private static int ReduceWidthToMin(ref int width, int minWidth, int overflow)
-        {
-                if (overflow <= 0)
-                {
-                        return overflow;
-                }
-                minWidth = Math.Max(0, minWidth);
-                if (width <= minWidth)
-                {
-                        return overflow;
-                }
-                int reducible = width - minWidth;
-                if (reducible <= 0)
-                {
-                        return overflow;
-                }
-                int delta = Math.Min(reducible, overflow);
-                width -= delta;
-                return overflow - delta;
-        }
-
-        private static int ReduceWidthPairToMin(ref int widthA, int minA, ref int widthB, int minB, int overflow)
-        {
-                if (overflow <= 0)
-                {
-                        return overflow;
-                }
-                minA = Math.Max(0, minA);
-                minB = Math.Max(0, minB);
-                int reducibleA = widthA - minA;
-                int reducibleB = widthB - minB;
-                if (reducibleA <= 0 && reducibleB <= 0)
-                {
-                        return overflow;
-                }
-
-                int totalReducible = Math.Max(0, reducibleA) + Math.Max(0, reducibleB);
-                if (overflow >= totalReducible)
-                {
-                        if (reducibleA > 0)
-                        {
-                                widthA -= reducibleA;
-                        }
-                        if (reducibleB > 0)
-                        {
-                                widthB -= reducibleB;
-                        }
-                        return overflow - totalReducible;
-                }
-
-                int total = widthA + widthB;
-                if (total <= 0)
-                {
-                        return overflow;
-                }
-
-                int reduceA = (int)Math.Floor((double)overflow * widthA / total);
-                int reduceB = overflow - reduceA;
-                if (reduceA > reducibleA)
-                {
-                        reduceA = Math.Max(0, reducibleA);
-                        reduceB = overflow - reduceA;
-                }
-                if (reduceB > reducibleB)
-                {
-                        reduceB = Math.Max(0, reducibleB);
-                        reduceA = overflow - reduceB;
-                        if (reduceA > reducibleA)
-                        {
-                                reduceA = Math.Max(0, reducibleA);
-                        }
-                }
-                widthA -= reduceA;
-                widthB -= reduceB;
-                return overflow - (reduceA + reduceB);
-        }
-
-        private static int ReduceWidth(ref int width, int overflow)
-        {
-                if (overflow <= 0 || width <= 0)
-                {
-                        return overflow;
-                }
-                int delta = Math.Min(width, overflow);
-                width -= delta;
-                return overflow - delta;
-        }
-
-        private static int ReduceWidthProportionally(ref int widthA, ref int widthB, int overflow)
-        {
-                if (overflow <= 0)
-                {
-                        return overflow;
-                }
-                int total = widthA + widthB;
-                if (total <= 0)
-                {
-                        return overflow;
-                }
-                int reduceA = (int)Math.Floor((double)overflow * widthA / total);
-                int reduceB = overflow - reduceA;
-                int actualReduceA = Math.Min(widthA, reduceA);
-                widthA -= actualReduceA;
-                int remaining = overflow - actualReduceA;
-                int actualReduceB = Math.Min(widthB, reduceB);
-                widthB -= actualReduceB;
-                remaining -= actualReduceB;
-                if (remaining > 0 && widthA > 0)
-                {
-                        int extraA = Math.Min(widthA, remaining);
-                        widthA -= extraA;
-                        remaining -= extraA;
-                }
-                if (remaining > 0 && widthB > 0)
-                {
-                        int extraB = Math.Min(widthB, remaining);
-                        widthB -= extraB;
-                        remaining -= extraB;
-                }
-                return Math.Max(0, remaining);
-        }
-
-        private static void DistributeSlack(ref int widthA, ref int widthB, ref int widthC, int slack, bool allowExtra, bool allowA, bool allowB)
-        {
-                if (slack <= 0)
-                {
-                        return;
-                }
-                if (!allowExtra)
-                {
-                        if (allowA && allowB)
-                        {
-                                int addLeft = slack / 2;
-                                int addRight = slack - addLeft;
-                                widthA += addLeft;
-                                widthB += addRight;
-                                return;
-                        }
-                        if (allowA)
-                        {
-                                widthA += slack;
-                                return;
-                        }
-                        if (allowB)
-                        {
-                                widthB += slack;
-                        }
-                        return;
-                }
-
-                int totalWeight = 90;
-                int addLeftWeighted = allowA ? (int)Math.Floor((double)slack * 40 / totalWeight) : 0;
-                int addRightWeighted = allowB ? (int)Math.Floor((double)slack * 40 / totalWeight) : 0;
-                int addExtraWeighted = slack - addLeftWeighted - addRightWeighted;
-                if (!allowA && !allowB)
-                {
-                        addExtraWeighted = slack;
-                }
-                widthA += addLeftWeighted;
-                widthB += addRightWeighted;
-                widthC += addExtraWeighted;
-        }
-
-        private static int[] AllocatePercentWidths(int totalWidth, int[] weights)
-        {
-                int count = weights.Length;
-                int[] widths = new int[count];
-                int weightSum = 0;
-                for (int i = 0; i < count; i++)
-                {
-                        weightSum += Math.Max(0, weights[i]);
-                }
-                if (weightSum <= 0 || totalWidth <= 0)
-                {
-                        return widths;
-                }
-
-                int assigned = 0;
-                for (int i = 0; i < count; i++)
-                {
-                        int weight = Math.Max(0, weights[i]);
-                        if (weight == 0)
-                        {
-                                widths[i] = 0;
-                                continue;
-                        }
-                        widths[i] = (int)Math.Floor((double)totalWidth * weight / weightSum);
-                        assigned += widths[i];
-                }
-
-                int remainder = totalWidth - assigned;
-                int index = 0;
-                while (remainder > 0)
-                {
-                        if (weights[index] > 0)
-                        {
-                                widths[index]++;
-                                remainder--;
-                        }
-                        index = (index + 1) % count;
-                }
-
-                return widths;
-        }
-
-        private sealed class ColumnLengthStats
-        {
-                public int TotalLength { get; private set; }
-
-                public int NonEmptyCount { get; private set; }
-
-                public bool HasContent => NonEmptyCount > 0;
-
-                public double AverageLength => NonEmptyCount == 0 ? 0 : (double)TotalLength / NonEmptyCount;
-
-                public void Add(string text)
-                {
-                        string value = text?.Trim() ?? string.Empty;
-                        if (value.Length == 0)
-                        {
-                                return;
-                        }
-                        NonEmptyCount++;
-                        TotalLength += value.Length;
-                }
-        }
-
-        private sealed class ColumnContentStats
-        {
-                public int TotalCount { get; private set; }
-                public int NonEmptyCount { get; private set; }
-                public int MaxLength { get; private set; }
-                public int TotalLength { get; private set; }
-
-                public bool HasContent => NonEmptyCount > 0;
-
-                public double AverageLength => HasContent ? (double)TotalLength / NonEmptyCount : 0.0;
-
-                public void Add(string? text)
-                {
-                        TotalCount++;
-                        if (string.IsNullOrWhiteSpace(text))
-                        {
-                                return;
-                        }
-                        string value = text.Trim();
-                        if (value.Length == 0)
-                        {
-                                return;
-                        }
-                        NonEmptyCount++;
-                        TotalLength += value.Length;
-                        if (value.Length > MaxLength)
-                        {
-                                MaxLength = value.Length;
-                        }
-                }
-        }
 
         private int GetResultListViewAvailableWidth()
         {
@@ -2765,17 +3138,31 @@ public partial class MainForm : Form
                 }
 
                 int maxWidth = 0;
+                int padding = ListViewTextHorizontalPadding;
+                Func<string, int> measure = MeasureSingleLineWidth;
+                int digitCount = 1;
+                SafeListView? safeListView = resultListView as SafeListView;
+                if (safeListView != null)
+                {
+                        measure = safeListView.MeasureSequenceTextWidth;
+                        padding = safeListView.GetSequenceTextPaddingTotal(digitCount);
+                }
                 if (!hideSequence)
                 {
                         int maxIndex = Math.Max(1, _currentSequenceStartIndex + Math.Max(0, GetResultListViewItemCount() - 1));
-                        string digits = new string('8', maxIndex.ToString().Length);
-                        maxWidth = Math.Max(maxWidth, MeasureSingleLineWidth(digits));
+                        digitCount = maxIndex.ToString().Length;
+                        string digits = new string('8', digitCount);
+                        if (safeListView != null)
+                        {
+                                padding = safeListView.GetSequenceTextPaddingTotal(digitCount);
+                        }
+                        maxWidth = Math.Max(maxWidth, measure(digits));
                 }
 
-                maxWidth = Math.Max(maxWidth, MeasureSingleLineWidth("上一页"));
-                maxWidth = Math.Max(maxWidth, MeasureSingleLineWidth("下一页"));
-                maxWidth = Math.Max(maxWidth, MeasureSingleLineWidth("跳转"));
-                return Math.Max(36, maxWidth + 12);
+                maxWidth = Math.Max(maxWidth, measure("上一页"));
+                maxWidth = Math.Max(maxWidth, measure("下一页"));
+                maxWidth = Math.Max(maxWidth, measure("跳转"));
+                return Math.Max(36, maxWidth + padding);
         }
 
         private bool HasListViewIndexText()
@@ -2798,42 +3185,6 @@ public partial class MainForm : Form
                         }
                 }
                 return false;
-        }
-
-        private int[] GetResultListViewContentWeights()
-        {
-                int[] maxLengths = new int[4];
-                foreach (ListViewRowSnapshot row in EnumerateResultListViewRows())
-                {
-                        UpdateMaxLength(maxLengths, 0, row.Column2);
-                        UpdateMaxLength(maxLengths, 1, row.Column3);
-                        UpdateMaxLength(maxLengths, 2, row.Column4);
-                        UpdateMaxLength(maxLengths, 3, row.Column5);
-                }
-
-                int[] weights = new int[4];
-                int nameWeight = Math.Max(1, Math.Min(60, maxLengths[0])) * 3;
-                int artistWeight = Math.Max(1, Math.Min(45, maxLengths[1])) * 2;
-                int albumWeight = Math.Max(1, Math.Min(45, maxLengths[2])) * 2;
-                int extraWeight = Math.Max(1, Math.Min(35, maxLengths[3]));
-                weights[0] = nameWeight;
-                weights[1] = artistWeight;
-                weights[2] = albumWeight;
-                weights[3] = extraWeight;
-                return weights;
-        }
-
-        private static void UpdateMaxLength(int[] maxLengths, int index, string text)
-        {
-                if (maxLengths == null || index < 0 || index >= maxLengths.Length)
-                {
-                        return;
-                }
-                int length = string.IsNullOrWhiteSpace(text) ? 0 : text.Trim().Length;
-                if (length > maxLengths[index])
-                {
-                        maxLengths[index] = length;
-                }
         }
 
         private int[] GetResultListViewMinimumColumnWidths()
@@ -2951,7 +3302,7 @@ public partial class MainForm : Form
                 {
                         return 0;
                 }
-                Size size = TextRenderer.MeasureText(text, resultListView.Font, new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
+                Size size = TextRenderer.MeasureText(text, resultListView.Font, new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.TextBoxControl);
                 return size.Width;
         }
 
@@ -3020,7 +3371,7 @@ public partial class MainForm : Form
                 {
                         return 1;
                 }
-                if (columnIndex == _listViewShortInfoColumnIndex)
+                if (_listViewShortInfoColumnIndex > 1 && columnIndex == _listViewShortInfoColumnIndex)
                 {
                         return 1;
                 }
@@ -3033,7 +3384,7 @@ public partial class MainForm : Form
                 {
                         return 0;
                 }
-                int availableWidth = Math.Max(1, columnWidth - 12);
+                int availableWidth = Math.Max(1, columnWidth - ListViewTextHorizontalPadding);
                 int boundedHeight = Math.Max(1, maxAllowedHeight);
                 if (maxLines <= 1)
                 {
@@ -3491,7 +3842,6 @@ public partial class MainForm : Form
 		_hideControlBar = configModel.ControlBarHidden;
 		_preventSleepDuringPlayback = configModel.PreventSleepDuringPlayback;
 		ApplyWindowLayoutFromConfig(configModel);
-		ApplyListViewLayoutFromConfig(configModel);
 		try
 		{
             SetMenuItemCheckedState(autoReadLyricsMenuItem, _autoReadLyrics);
@@ -3594,46 +3944,6 @@ public partial class MainForm : Form
         return new Rectangle(x, y, width, height);
     }
 
-    private void ApplyListViewLayoutFromConfig(ConfigModel configModel)
-    {
-        if (configModel == null)
-        {
-            return;
-        }
-
-        _customListViewIndexWidth = configModel.ListViewColumnWidthIndex;
-        _customListViewNameWidth = configModel.ListViewColumnWidthName;
-        _customListViewCreatorWidth = configModel.ListViewColumnWidthCreator;
-        _customListViewExtraWidth = configModel.ListViewColumnWidthExtra;
-        _customListViewDescriptionWidth = configModel.ListViewColumnWidthDescription;
-        _customListViewRowHeight = configModel.ListViewRowHeight;
-
-        if (_customListViewRowHeight.HasValue && resultListView is SafeListView safeListView)
-        {
-            int minHeight = Math.Max(ListViewRowResizeMinHeight, resultListView.Font?.Height ?? ListViewRowResizeMinHeight);
-            int target = Math.Max(minHeight, Math.Min(ListViewMaxRowHeight, _customListViewRowHeight.Value));
-            safeListView.SetRowHeight(target);
-        }
-
-        ApplyResultListViewLayout();
-        _listViewLayoutInitialized = true;
-    }
-
-    private void UpdateListViewLayoutConfig(ConfigModel configModel)
-    {
-        if (configModel == null)
-        {
-            return;
-        }
-
-        configModel.ListViewColumnWidthIndex = _customListViewIndexWidth;
-        configModel.ListViewColumnWidthName = _customListViewNameWidth;
-        configModel.ListViewColumnWidthCreator = _customListViewCreatorWidth;
-        configModel.ListViewColumnWidthExtra = _customListViewExtraWidth;
-        configModel.ListViewColumnWidthDescription = _customListViewDescriptionWidth;
-        configModel.ListViewRowHeight = _customListViewRowHeight;
-    }
-
     private void UpdateWindowLayoutConfig(ConfigModel configModel)
     {
         if (configModel == null || WindowState == FormWindowState.Minimized)
@@ -3647,41 +3957,6 @@ public partial class MainForm : Form
         configModel.WindowWidth = bounds.Width;
         configModel.WindowHeight = bounds.Height;
         configModel.WindowState = (WindowState == FormWindowState.Maximized) ? "Maximized" : "Normal";
-    }
-
-    private void ScheduleListViewLayoutPersist()
-    {
-        if (_listViewLayoutPersistTimer == null)
-        {
-            _listViewLayoutPersistTimer = new System.Windows.Forms.Timer();
-            _listViewLayoutPersistTimer.Interval = 400;
-            _listViewLayoutPersistTimer.Tick += (_, _) =>
-            {
-                _listViewLayoutPersistTimer.Stop();
-                PersistListViewLayoutConfig();
-            };
-        }
-
-        _listViewLayoutPersistTimer.Stop();
-        _listViewLayoutPersistTimer.Start();
-    }
-
-    private void PersistListViewLayoutConfig()
-    {
-        try
-        {
-            ConfigModel configModel = EnsureConfigInitialized();
-            if (configModel == null || _configManager == null)
-            {
-                return;
-            }
-            UpdateListViewLayoutConfig(configModel);
-            _configManager.Save(configModel);
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine("[Config] 保存列表布局失败: " + ex.Message);
-        }
     }
 
     private void ScheduleWindowLayoutPersist()
@@ -4264,7 +4539,6 @@ public partial class MainForm : Form
 			configModel.ControlBarHidden = _hideControlBar;
 			configModel.PreventSleepDuringPlayback = _preventSleepDuringPlayback;
 			UpdateWindowLayoutConfig(configModel);
-			UpdateListViewLayoutConfig(configModel);
 			PersistPlaybackState(includeQueue: true, persistToDisk: false);
 			_configManager.Save(configModel);
 		}
@@ -9847,6 +10121,12 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
                         _lastAnnouncedViewSource = null;
                         _lastAnnouncedHeader = null;
                         CancelPendingPlaceholderPlayback("view changed");
+#if DEBUG
+                        if (resultListView is SafeListView safeListView)
+                        {
+                                safeListView.ResetAlignmentLog("ViewSourceChanged", viewSource);
+                        }
+#endif
                 }
 			_currentViewSource = viewSource;
 			_isHomePage = string.Equals(viewSource, "homepage", StringComparison.OrdinalIgnoreCase);
@@ -10860,7 +11140,7 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 				{
 					ListViewItem item = resultListView.Items[index];
 					FillListViewItemFromListItemInfo(item, clone, checked(index + 1), preserveDisplayIndex: true);
-					ApplyResultListViewLayout();
+					ScheduleResultListViewLayoutUpdate();
 					if (GetFocusedListViewIndex() == index)
 					{
 						QueueFocusedListViewItemRefreshAnnouncement(index);
@@ -12542,6 +12822,10 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
                 {
                         return;
                 }
+                if (!_isUserResizingListViewColumns && _listViewColumnWidthSnapshot == null)
+                {
+                        return;
+                }
                 if (e.ColumnIndex <= 0 || e.ColumnIndex >= resultListView.Columns.Count)
                 {
                         return;
@@ -12565,7 +12849,6 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
                         _customListViewDescriptionWidth = width;
                         break;
                 }
-                ScheduleListViewLayoutPersist();
         }
 
         private void resultListView_MouseDown(object sender, MouseEventArgs e)
@@ -12577,7 +12860,6 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 
                 if (!TryGetListViewRowResizeTarget(new Point(e.X, e.Y)))
                 {
-                        BeginListViewColumnResizeTracking();
                         return;
                 }
 
@@ -12592,6 +12874,22 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
                         }
                         resultListView.Cursor = Cursors.SizeNS;
                         resultListView.Capture = true;
+                }
+        }
+
+        private void resultListView_ColumnWidthChanging(object sender, ColumnWidthChangingEventArgs e)
+        {
+                if (!_listViewLayoutInitialized || _isApplyingListViewLayout || resultListView == null)
+                {
+                        return;
+                }
+                if (e.ColumnIndex <= 0 || e.ColumnIndex >= resultListView.Columns.Count)
+                {
+                        return;
+                }
+                if (!_isUserResizingListViewColumns)
+                {
+                        BeginListViewColumnResizeTracking();
                 }
         }
 
@@ -12625,7 +12923,6 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
                         resultListView.Cursor = _listViewRowResizeOriginalCursor;
                 }
                 _listViewRowResizeOriginalCursor = null;
-                ScheduleListViewLayoutPersist();
                 return true;
         }
 
@@ -12669,6 +12966,7 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
                 {
                         return;
                 }
+                _isUserResizingListViewColumns = true;
                 _listViewColumnWidthSnapshot = CaptureResultListViewColumnWidths();
         }
 
@@ -12677,47 +12975,40 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
                 if (_listViewColumnWidthSnapshot == null || !_listViewLayoutInitialized || _isApplyingListViewLayout || resultListView == null)
                 {
                         _listViewColumnWidthSnapshot = null;
+                        _isUserResizingListViewColumns = false;
                         return;
                 }
                 int[]? current = CaptureResultListViewColumnWidths();
                 if (current == null || current.Length != _listViewColumnWidthSnapshot.Length)
                 {
                         _listViewColumnWidthSnapshot = null;
+                        _isUserResizingListViewColumns = false;
                         return;
                 }
 
-                bool changed = false;
                 if (current[0] != _listViewColumnWidthSnapshot[0])
                 {
                         _customListViewIndexWidth = current[0];
-                        changed = true;
                 }
                 if (current[1] != _listViewColumnWidthSnapshot[1])
                 {
                         _customListViewNameWidth = current[1];
-                        changed = true;
                 }
                 if (current[2] != _listViewColumnWidthSnapshot[2])
                 {
                         _customListViewCreatorWidth = current[2];
-                        changed = true;
                 }
                 if (current[3] != _listViewColumnWidthSnapshot[3])
                 {
                         _customListViewExtraWidth = current[3];
-                        changed = true;
                 }
                 if (current[4] != _listViewColumnWidthSnapshot[4])
                 {
                         _customListViewDescriptionWidth = current[4];
-                        changed = true;
                 }
 
                 _listViewColumnWidthSnapshot = null;
-                if (changed)
-                {
-                        ScheduleListViewLayoutPersist();
-                }
+                _isUserResizingListViewColumns = false;
         }
 
         private void UpdateListViewRowResizeCursor(Point location)
@@ -21296,6 +21587,12 @@ private static void SetMenuItemCheckedState(ToolStripMenuItem? menuItem, bool is
 				_songOrderAutoSaveTimer.Dispose();
 				_songOrderAutoSaveTimer = null;
 			}
+			if (_listViewLayoutDebounceTimer != null)
+			{
+				_listViewLayoutDebounceTimer.Stop();
+				_listViewLayoutDebounceTimer.Dispose();
+				_listViewLayoutDebounceTimer = null;
+			}
 			StopStateUpdateLoop();
 			_updateTimer?.Stop();
 			_nextSongPreloader?.Dispose();
@@ -26130,6 +26427,7 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
                 {
                         int focusedListViewIndex = GetFocusedListViewIndex();
                         bool shouldAnnounce = false;
+                        bool layoutDirty = false;
                         foreach (ListViewItem item in resultListView.Items)
                         {
                                 if (item.Tag is ArtistInfo artistInfo && artistInfo.Id == artistId)
@@ -26145,6 +26443,7 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
                                                 {
                                                         shouldAnnounce = true;
                                                 }
+                                                layoutDirty = true;
                                         }
                                         break;
                                 }
@@ -26152,6 +26451,10 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
                         if (shouldAnnounce)
                         {
                                 QueueFocusedListViewItemRefreshAnnouncement(focusedListViewIndex);
+                        }
+                        if (layoutDirty)
+                        {
+                                ScheduleResultListViewLayoutUpdate();
                         }
                 });
         }
@@ -27985,6 +28288,7 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
 		this.resultListView.RetrieveVirtualItem += new System.Windows.Forms.RetrieveVirtualItemEventHandler(resultListView_RetrieveVirtualItem);
 		this.resultListView.VirtualItemsSelectionRangeChanged += new System.Windows.Forms.ListViewVirtualItemsSelectionRangeChangedEventHandler(resultListView_VirtualItemsSelectionRangeChanged);
 		this.resultListView.SelectedIndexChanged += new System.EventHandler(resultListView_SelectedIndexChanged);
+		this.resultListView.ColumnWidthChanging += new System.Windows.Forms.ColumnWidthChangingEventHandler(resultListView_ColumnWidthChanging);
 		this.resultListView.ColumnWidthChanged += new System.Windows.Forms.ColumnWidthChangedEventHandler(resultListView_ColumnWidthChanged);
 		this.resultListView.SizeChanged += new System.EventHandler(resultListView_SizeChanged);
 		this.columnHeader0.Text = string.Empty;

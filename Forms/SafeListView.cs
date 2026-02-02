@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Windows.Forms;
@@ -9,13 +10,28 @@ namespace YTPlayer
     internal sealed class SafeListView : ListView
     {
         private const int TextPadding = 6;
+        private const int SequenceTextPadding = 3;
+        private const int ShortInfoRightPadding = 4;
         private const int MaxRowHeight = 512;
         private const int SequenceColumnIndex = 1;
-        private const int GridLineAlpha = 150;
+        private const int GridLineAlpha = 110;
+#if DEBUG
+        private const int AlignmentLogMaxSamples = 12;
+        private const int SequenceAlignmentLogMaxSamples = 10;
+        private int _alignmentLogCount;
+        private int _sequenceAlignmentLogRemaining = SequenceAlignmentLogMaxSamples;
+        private readonly HashSet<int> _alignmentLoggedColumns = new HashSet<int>();
+#endif
+        private Font? _sequenceFont;
+        private bool _sequenceFontOwned;
+        private ToolTip? _subItemToolTip;
+        private ListViewItem? _toolTipItem;
+        private ListViewItem.ListViewSubItem? _toolTipSubItem;
+        private string? _toolTipText;
 
         [System.ComponentModel.Browsable(false)]
         [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
-        internal int MultiLineMaxLines { get; set; } = 3;
+        internal int MultiLineMaxLines { get; set; } = 2;
 
         [System.ComponentModel.Browsable(false)]
         [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
@@ -35,6 +51,37 @@ namespace YTPlayer
                     ColorDepth = ColorDepth.Depth8Bit
                 };
             }
+        }
+
+        protected override void OnFontChanged(EventArgs e)
+        {
+            ResetSequenceFont();
+            base.OnFontChanged(e);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                ResetSequenceFont();
+                if (_subItemToolTip != null)
+                {
+                    _subItemToolTip.Dispose();
+                    _subItemToolTip = null;
+                }
+            }
+            base.Dispose(disposing);
+        }
+
+        internal void ResetAlignmentLog(string reason, string? viewSource)
+        {
+#if DEBUG
+            _alignmentLogCount = 0;
+            _alignmentLoggedColumns.Clear();
+            _sequenceAlignmentLogRemaining = SequenceAlignmentLogMaxSamples;
+            DebugLogger.Log(DebugLogger.LogLevel.Info, "ListViewAlign",
+                $"Reset alignment logs: reason={reason} viewSource={viewSource ?? ""}");
+#endif
         }
 
         internal int GetRowHeight()
@@ -167,20 +214,55 @@ namespace YTPlayer
             int columnIndex = e.ColumnIndex;
             int maxLines = GetColumnMaxLines(columnIndex);
             bool allowWrap = maxLines > 1;
-            TextFormatFlags flags = BuildTextFlags(e.Header?.TextAlign ?? HorizontalAlignment.Left, allowWrap, useEllipsis: true);
+            HorizontalAlignment alignment = e.Header?.TextAlign ?? HorizontalAlignment.Left;
             string text = e.SubItem.Text ?? string.Empty;
+            Font drawFont = Font;
+            GetColumnTextPadding(columnIndex, text, out int leftPadding, out int rightPadding);
+            if (columnIndex == SequenceColumnIndex)
+            {
+                alignment = HorizontalAlignment.Right;
+                drawFont = ResolveSequenceFontForText(text);
+            }
+            TextFormatFlags flags = BuildTextFlags(alignment, allowWrap, useEllipsis: true);
             if (allowWrap)
             {
-                text = TrimTextToMaxLines(e.Graphics, text, Font, e.Bounds, maxLines);
+                text = TrimTextToMaxLines(e.Graphics, text, drawFont, e.Bounds, maxLines, leftPadding, rightPadding);
             }
-            Rectangle textBounds = AlignTextBounds(e.Graphics, e.Bounds, text, Font, flags);
-            TextRenderer.DrawText(e.Graphics, text, Font, textBounds, textColor, flags);
+            if (allowWrap && alignment != HorizontalAlignment.Left)
+            {
+                TextFormatFlags leftFlags = BuildTextFlags(HorizontalAlignment.Left, allowWrap, useEllipsis: true);
+                Rectangle textBounds = AlignWrappedTextBounds(e.Graphics, e.Bounds, text, drawFont, leftFlags, alignment, leftPadding, rightPadding);
+#if DEBUG
+                TryLogSubItemAlignment(e, alignment, allowWrap, maxLines, flags, leftFlags, text, textBounds);
+#endif
+                TextRenderer.DrawText(e.Graphics, text, drawFont, textBounds, textColor, leftFlags);
+            }
+            else
+            {
+                Rectangle textBounds = AlignTextBounds(e.Graphics, e.Bounds, text, drawFont, flags, leftPadding, rightPadding);
+#if DEBUG
+                TryLogSubItemAlignment(e, alignment, allowWrap, maxLines, flags, null, text, textBounds);
+#endif
+                TextRenderer.DrawText(e.Graphics, text, drawFont, textBounds, textColor, flags);
+            }
         }
 
         protected override void OnPaint(PaintEventArgs e)
         {
             base.OnPaint(e);
             DrawListBorder(e.Graphics);
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            UpdateSubItemToolTip(e.Location);
+        }
+
+        protected override void OnMouseLeave(EventArgs e)
+        {
+            base.OnMouseLeave(e);
+            HideSubItemToolTip();
         }
 
         private void DrawSubItemBackground(DrawListViewSubItemEventArgs e)
@@ -313,12 +395,32 @@ namespace YTPlayer
 
         private static Rectangle InflateTextBounds(Rectangle bounds)
         {
-            return Rectangle.FromLTRB(bounds.Left + TextPadding, bounds.Top, bounds.Right - TextPadding, bounds.Bottom);
+            return InflateTextBounds(bounds, TextPadding);
+        }
+
+        private static Rectangle InflateTextBounds(Rectangle bounds, int padding)
+        {
+            return Rectangle.FromLTRB(bounds.Left + padding, bounds.Top, bounds.Right - padding, bounds.Bottom);
+        }
+
+        private static Rectangle InflateTextBounds(Rectangle bounds, int leftPadding, int rightPadding)
+        {
+            return Rectangle.FromLTRB(bounds.Left + leftPadding, bounds.Top, bounds.Right - rightPadding, bounds.Bottom);
         }
 
         private static Rectangle AlignTextBounds(Graphics graphics, Rectangle bounds, string text, Font font, TextFormatFlags flags)
         {
-            Rectangle textBounds = InflateTextBounds(bounds);
+            return AlignTextBounds(graphics, bounds, text, font, flags, TextPadding);
+        }
+
+        private static Rectangle AlignTextBounds(Graphics graphics, Rectangle bounds, string text, Font font, TextFormatFlags flags, int padding)
+        {
+            return AlignTextBounds(graphics, bounds, text, font, flags, padding, padding);
+        }
+
+        private static Rectangle AlignTextBounds(Graphics graphics, Rectangle bounds, string text, Font font, TextFormatFlags flags, int leftPadding, int rightPadding)
+        {
+            Rectangle textBounds = InflateTextBounds(bounds, leftPadding, rightPadding);
             if (string.IsNullOrEmpty(text))
             {
                 return textBounds;
@@ -345,6 +447,57 @@ namespace YTPlayer
             return textBounds;
         }
 
+        private static Rectangle AlignWrappedTextBounds(Graphics graphics, Rectangle bounds, string text, Font font, TextFormatFlags leftFlags, HorizontalAlignment alignment)
+        {
+            return AlignWrappedTextBounds(graphics, bounds, text, font, leftFlags, alignment, TextPadding);
+        }
+
+        private static Rectangle AlignWrappedTextBounds(Graphics graphics, Rectangle bounds, string text, Font font, TextFormatFlags leftFlags, HorizontalAlignment alignment, int padding)
+        {
+            Rectangle textBounds = AlignTextBounds(graphics, bounds, text, font, leftFlags, padding, padding);
+            if (string.IsNullOrEmpty(text) || alignment == HorizontalAlignment.Left)
+            {
+                return textBounds;
+            }
+
+            Rectangle measureBounds = InflateTextBounds(bounds, padding, padding);
+            if (measureBounds.Width <= 0 || measureBounds.Height <= 0)
+            {
+                return textBounds;
+            }
+
+            TextFormatFlags measureFlags = leftFlags & ~TextFormatFlags.VerticalCenter;
+            Size measured = TextRenderer.MeasureText(graphics, text, font, new Size(measureBounds.Width, int.MaxValue), measureFlags);
+            int blockWidth = Math.Min(measureBounds.Width, Math.Max(1, measured.Width));
+            int left = alignment == HorizontalAlignment.Center
+                ? measureBounds.Left + Math.Max(0, (measureBounds.Width - blockWidth) / 2)
+                : measureBounds.Right - blockWidth;
+            return new Rectangle(left, textBounds.Top, blockWidth, textBounds.Height);
+        }
+
+        private static Rectangle AlignWrappedTextBounds(Graphics graphics, Rectangle bounds, string text, Font font, TextFormatFlags leftFlags, HorizontalAlignment alignment, int leftPadding, int rightPadding)
+        {
+            Rectangle textBounds = AlignTextBounds(graphics, bounds, text, font, leftFlags, leftPadding, rightPadding);
+            if (string.IsNullOrEmpty(text) || alignment == HorizontalAlignment.Left)
+            {
+                return textBounds;
+            }
+
+            Rectangle measureBounds = InflateTextBounds(bounds, leftPadding, rightPadding);
+            if (measureBounds.Width <= 0 || measureBounds.Height <= 0)
+            {
+                return textBounds;
+            }
+
+            TextFormatFlags measureFlags = leftFlags & ~TextFormatFlags.VerticalCenter;
+            Size measured = TextRenderer.MeasureText(graphics, text, font, new Size(measureBounds.Width, int.MaxValue), measureFlags);
+            int blockWidth = Math.Min(measureBounds.Width, Math.Max(1, measured.Width));
+            int left = alignment == HorizontalAlignment.Center
+                ? measureBounds.Left + Math.Max(0, (measureBounds.Width - blockWidth) / 2)
+                : measureBounds.Right - blockWidth;
+            return new Rectangle(left, textBounds.Top, blockWidth, textBounds.Height);
+        }
+
         private int GetColumnMaxLines(int columnIndex)
         {
             if (columnIndex <= SequenceColumnIndex)
@@ -360,12 +513,22 @@ namespace YTPlayer
 
         private static string TrimTextToMaxLines(Graphics graphics, string text, Font font, Rectangle bounds, int maxLines)
         {
+            return TrimTextToMaxLines(graphics, text, font, bounds, maxLines, TextPadding);
+        }
+
+        private static string TrimTextToMaxLines(Graphics graphics, string text, Font font, Rectangle bounds, int maxLines, int padding)
+        {
+            return TrimTextToMaxLines(graphics, text, font, bounds, maxLines, padding, padding);
+        }
+
+        private static string TrimTextToMaxLines(Graphics graphics, string text, Font font, Rectangle bounds, int maxLines, int leftPadding, int rightPadding)
+        {
             if (string.IsNullOrWhiteSpace(text) || maxLines <= 0)
             {
                 return string.Empty;
             }
 
-            Rectangle textBounds = InflateTextBounds(bounds);
+            Rectangle textBounds = InflateTextBounds(bounds, leftPadding, rightPadding);
             if (textBounds.Width <= 0 || textBounds.Height <= 0)
             {
                 return text;
@@ -408,6 +571,64 @@ namespace YTPlayer
             return text.Substring(0, best).TrimEnd() + ellipsis;
         }
 
+#if DEBUG
+        private void TryLogSubItemAlignment(
+            DrawListViewSubItemEventArgs e,
+            HorizontalAlignment alignment,
+            bool allowWrap,
+            int maxLines,
+            TextFormatFlags layoutFlags,
+            TextFormatFlags? drawFlags,
+            string text,
+            Rectangle textBounds)
+        {
+            int columnIndex = e.ColumnIndex;
+            bool isSequenceColumn = columnIndex == SequenceColumnIndex;
+            if (isSequenceColumn)
+            {
+                if (_sequenceAlignmentLogRemaining <= 0)
+                {
+                    return;
+                }
+                _sequenceAlignmentLogRemaining--;
+            }
+            else
+            {
+                if (_alignmentLogCount >= AlignmentLogMaxSamples)
+                {
+                    return;
+                }
+                if (_alignmentLoggedColumns.Contains(columnIndex))
+                {
+                    return;
+                }
+                _alignmentLoggedColumns.Add(columnIndex);
+                _alignmentLogCount++;
+            }
+
+            string headerText = e.Header?.Text ?? string.Empty;
+            string preview = TruncateTextForLog(text, 40);
+            string flagsText = drawFlags.HasValue ? drawFlags.Value.ToString() : layoutFlags.ToString();
+
+            DebugLogger.Log(DebugLogger.LogLevel.Info, "ListViewAlign",
+                $"col={columnIndex} header=\"{headerText}\" align={alignment} allowWrap={allowWrap} maxLines={maxLines} " +
+                $"bounds={e.Bounds.X},{e.Bounds.Y},{e.Bounds.Width},{e.Bounds.Height} " +
+                $"textBounds={textBounds.X},{textBounds.Y},{textBounds.Width},{textBounds.Height} " +
+                $"flags={layoutFlags} drawFlags={flagsText} padding={TextPadding} " +
+                $"seqSample={(isSequenceColumn ? "Y" : "N")} text=\"{preview}\" len={text.Length}");
+        }
+
+        private static string TruncateTextForLog(string text, int maxLength)
+        {
+            if (string.IsNullOrEmpty(text) || text.Length <= maxLength)
+            {
+                return text ?? string.Empty;
+            }
+
+            return text.Substring(0, maxLength) + "...";
+        }
+#endif
+
         private static Color BlendColor(Color baseColor, Color overlay, float amount)
         {
             amount = Math.Max(0f, Math.Min(1f, amount));
@@ -439,6 +660,239 @@ namespace YTPlayer
                 color = palette.TextPrimary;
             }
             return color;
+        }
+
+        private int GetColumnTextPadding(int columnIndex)
+        {
+            if (columnIndex == SequenceColumnIndex)
+            {
+                return SequenceTextPadding;
+            }
+            return TextPadding;
+        }
+
+        private void GetColumnTextPadding(int columnIndex, string text, out int leftPadding, out int rightPadding)
+        {
+            if (columnIndex == SequenceColumnIndex)
+            {
+                leftPadding = SequenceTextPadding;
+                rightPadding = SequenceTextPadding + (IsWideSequence(text) ? 1 : 0);
+                return;
+            }
+
+            if (columnIndex == ShortInfoColumnIndex)
+            {
+                leftPadding = TextPadding;
+                rightPadding = Math.Max(2, Math.Min(TextPadding, ShortInfoRightPadding));
+                return;
+            }
+
+            leftPadding = TextPadding;
+            rightPadding = TextPadding;
+        }
+
+        private static bool IsWideSequence(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+            {
+                return false;
+            }
+
+            int digits = 0;
+            for (int i = 0; i < text.Length; i++)
+            {
+                if (!char.IsDigit(text[i]))
+                {
+                    return false;
+                }
+                digits++;
+            }
+            return digits >= 4;
+        }
+
+        private Font GetSequenceFont()
+        {
+            if (_sequenceFont != null)
+            {
+                return _sequenceFont;
+            }
+
+            Font baseFont = Font ?? DefaultFont;
+            string[] candidates = new[] { "Cascadia Mono", "Consolas", "Lucida Console", "Courier New" };
+            foreach (string name in candidates)
+            {
+                try
+                {
+                    var family = new FontFamily(name);
+                    if (!family.IsStyleAvailable(baseFont.Style))
+                    {
+                        continue;
+                    }
+                    _sequenceFont = new Font(family, baseFont.Size, baseFont.Style, baseFont.Unit);
+                    _sequenceFontOwned = true;
+                    return _sequenceFont;
+                }
+                catch
+                {
+                }
+            }
+
+            _sequenceFont = baseFont;
+            _sequenceFontOwned = false;
+            return _sequenceFont;
+        }
+
+        private Font ResolveSequenceFontForText(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+            {
+                return Font ?? DefaultFont;
+            }
+
+            for (int i = 0; i < text.Length; i++)
+            {
+                if (!char.IsDigit(text[i]))
+                {
+                    return Font ?? DefaultFont;
+                }
+            }
+
+            return GetSequenceFont();
+        }
+
+        internal int MeasureSequenceTextWidth(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+            {
+                return 0;
+            }
+
+            Font font = ResolveSequenceFontForText(text);
+            Size size = TextRenderer.MeasureText(text, font, new Size(int.MaxValue, int.MaxValue),
+                TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.TextBoxControl);
+            return size.Width;
+        }
+
+        internal int GetSequenceTextPadding()
+        {
+            return SequenceTextPadding;
+        }
+
+        internal int GetSequenceTextPaddingTotal(int digitCount)
+        {
+            int extra = digitCount >= 4 ? 1 : 0;
+            return SequenceTextPadding * 2 + extra;
+        }
+
+        private void EnsureSubItemToolTip()
+        {
+            if (_subItemToolTip != null)
+            {
+                return;
+            }
+
+            _subItemToolTip = new ToolTip
+            {
+                AutoPopDelay = 12000,
+                InitialDelay = 450,
+                ReshowDelay = 150,
+                ShowAlways = false
+            };
+        }
+
+        private void UpdateSubItemToolTip(Point location)
+        {
+            if (View != View.Details)
+            {
+                HideSubItemToolTip();
+                return;
+            }
+
+            ListViewHitTestInfo hit = HitTest(location);
+            if (hit.Item == null || hit.SubItem == null)
+            {
+                HideSubItemToolTip();
+                return;
+            }
+
+            int columnIndex = hit.Item.SubItems.IndexOf(hit.SubItem);
+            if (columnIndex <= 0)
+            {
+                HideSubItemToolTip();
+                return;
+            }
+
+            string text = hit.SubItem.Text ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                HideSubItemToolTip();
+                return;
+            }
+
+            Font font = columnIndex == SequenceColumnIndex ? ResolveSequenceFontForText(text) : (Font ?? DefaultFont);
+            GetColumnTextPadding(columnIndex, text, out int leftPadding, out int rightPadding);
+            Rectangle bounds = hit.SubItem.Bounds;
+            int availableWidth = Math.Max(1, bounds.Width - leftPadding - rightPadding);
+
+            bool allowWrap = GetColumnMaxLines(columnIndex) > 1;
+            bool truncated;
+            if (allowWrap)
+            {
+                int lineHeight = TextRenderer.MeasureText("A", font, new Size(availableWidth, int.MaxValue),
+                    TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix).Height;
+                int maxHeight = Math.Max(1, lineHeight * GetColumnMaxLines(columnIndex));
+                Size measured = TextRenderer.MeasureText(text, font, new Size(availableWidth, int.MaxValue),
+                    TextFormatFlags.WordBreak | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.TextBoxControl);
+                truncated = measured.Height > maxHeight;
+            }
+            else
+            {
+                Size measured = TextRenderer.MeasureText(text, font, new Size(int.MaxValue, int.MaxValue),
+                    TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.TextBoxControl);
+                truncated = measured.Width > availableWidth;
+            }
+
+            if (!truncated)
+            {
+                HideSubItemToolTip();
+                return;
+            }
+
+            if (ReferenceEquals(_toolTipItem, hit.Item) &&
+                ReferenceEquals(_toolTipSubItem, hit.SubItem) &&
+                string.Equals(_toolTipText, text, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            EnsureSubItemToolTip();
+            _toolTipItem = hit.Item;
+            _toolTipSubItem = hit.SubItem;
+            _toolTipText = text;
+            _subItemToolTip!.Show(text, this, location.X + 12, location.Y + 18, 12000);
+        }
+
+        private void HideSubItemToolTip()
+        {
+            if (_subItemToolTip == null)
+            {
+                return;
+            }
+
+            _subItemToolTip.Hide(this);
+            _toolTipItem = null;
+            _toolTipSubItem = null;
+            _toolTipText = null;
+        }
+
+        private void ResetSequenceFont()
+        {
+            if (_sequenceFontOwned && _sequenceFont != null)
+            {
+                _sequenceFont.Dispose();
+            }
+            _sequenceFont = null;
+            _sequenceFontOwned = false;
         }
 
         private void SafeClearSelectionIfEmpty()

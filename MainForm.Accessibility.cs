@@ -366,7 +366,7 @@ namespace YTPlayer
 		{
 			resultListView.EndUpdate();
 		}
-		ApplyResultListViewLayout();
+		ScheduleResultListViewLayoutUpdate();
 		if (selectedListViewItemSafe != null)
 		{
 			UpdateListViewItemAccessibilityProperties(selectedListViewItemSafe, setRole);
@@ -1264,6 +1264,7 @@ namespace YTPlayer
 	{
 		if (HandleListViewRowResizeMouseUp(e))
 		{
+                        _isUserResizingListViewColumns = false;
 			return;
 		}
                 if (e.Button == MouseButtons.Left)
