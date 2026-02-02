@@ -769,6 +769,9 @@ public partial class MainForm : Form
         private const int ListViewTextHorizontalPadding = 12;
         private const int ListViewAutoWidthSampleLimit = 240;
         private const double ListViewCountSummaryShortInfoThreshold = 0.5;
+        private const int ListViewAutoShrinkPadding = 24;
+        private const int ListViewAutoShrinkThreshold = 120;
+        private const int ListViewAutoShrinkMinDelta = 6;
         private const int ListViewRowResizeGripHeight = 4;
         private const int ListViewRowResizeMinHeight = 20;
         private bool _isListViewRowResizing;
@@ -783,6 +786,8 @@ public partial class MainForm : Form
         private int? _customListViewExtraWidth;
         private int? _customListViewDescriptionWidth;
         private bool _isUserResizingListViewColumns;
+        private bool _isListViewAutoShrinkActive;
+        private int _lastListViewAutoWidth = -1;
         private enum ListViewColumnRole
         {
                 Sequence,
@@ -1330,6 +1335,7 @@ public partial class MainForm : Form
 
 	private ToolStripSeparator searchHistorySeparator;
 
+        private System.Windows.Forms.Panel resultListPanel;
         private SafeListView resultListView;
 
 	private ColumnHeader columnHeader0;
@@ -1969,6 +1975,10 @@ public partial class MainForm : Form
                 }
 
                 ThemePalette palette = ThemeManager.Current;
+                if (resultListPanel != null)
+                {
+                        resultListPanel.BackColor = palette.SurfaceBackground;
+                }
                 resultListView.BackColor = palette.SurfaceBackground;
                 resultListView.ForeColor = palette.TextPrimary;
                 resultListView.BorderStyle = BorderStyle.None;
@@ -2101,19 +2111,7 @@ public partial class MainForm : Form
 
         private static HorizontalAlignment ResolveColumnAlignment(int columnIndex, ListViewColumnRole role)
         {
-                if (columnIndex == 1 || role == ListViewColumnRole.Sequence)
-                {
-                        return HorizontalAlignment.Right;
-                }
-
-                return role switch
-                {
-                        ListViewColumnRole.ShortInfo => HorizontalAlignment.Right,
-                        ListViewColumnRole.Title => HorizontalAlignment.Left,
-                        ListViewColumnRole.Creator => HorizontalAlignment.Left,
-                        ListViewColumnRole.Description => HorizontalAlignment.Left,
-                        _ => HorizontalAlignment.Left
-                };
+                return HorizontalAlignment.Left;
         }
 
         private void UpdateResultListViewColumnWidths()
@@ -2123,7 +2121,8 @@ public partial class MainForm : Form
                         return;
                 }
 
-                int availableWidth = GetResultListViewAvailableWidth();
+                int hostWidth = GetResultListViewHostWidth();
+                int availableWidth = GetResultListViewAvailableWidth(hostWidth);
                 if (availableWidth <= 0)
                 {
                         DebugListViewLayout("Skip: availableWidth <= 0");
@@ -2132,7 +2131,7 @@ public partial class MainForm : Form
 
                 bool hideSequence = _hideSequenceNumbers || IsAlwaysSequenceHiddenView();
                 List<ListViewRowSnapshot> rows = EnumerateResultListViewRows().ToList();
-                DebugListViewLayout($"Start: viewSource={_currentViewSource ?? ""}, mode={GetCurrentListViewDataMode()}, rows={rows.Count}, availableWidth={availableWidth}, hideSequence={hideSequence}");
+                DebugListViewLayout($"Start: viewSource={_currentViewSource ?? ""}, mode={GetCurrentListViewDataMode()}, rows={rows.Count}, hostWidth={hostWidth}, availableWidth={availableWidth}, hideSequence={hideSequence}");
                 ListViewColumnRole[] roles = ResolveResultListViewColumnRoles();
 
                 bool[] hasContent = new bool[5];
@@ -2178,6 +2177,7 @@ public partial class MainForm : Form
                         _customListViewExtraWidth.HasValue,
                         _customListViewDescriptionWidth.HasValue
                 };
+                bool hasCustomAny = hasCustom.Any(v => v);
 
                 bool[] hide = new bool[5];
                 bool allowAutoHide = rows.Count > 0;
@@ -2208,6 +2208,16 @@ public partial class MainForm : Form
                 {
                         hide[1] = false;
                 }
+
+                int desiredContentWidth = CalculateDesiredListViewContentWidth(hideSequence, hide, roles, shortInfoColumnIndex, minFlexWidth, maxSingleLineWidths, maxCountSummaryWidths);
+                bool allowAutoShrink = rows.Count > 0 && !hasCustomAny && !_isUserResizingListViewColumns;
+                int layoutAvailableWidth = ApplyResultListViewAutoShrinkLayout(availableWidth, desiredContentWidth, allowAutoShrink);
+                if (layoutAvailableWidth <= 0)
+                {
+                        DebugListViewLayout("Skip: layoutAvailableWidth <= 0");
+                        return;
+                }
+                availableWidth = layoutAvailableWidth;
 
                 int[] widths = new int[5];
                 int[] minFixedWidths = new int[5];
@@ -2668,6 +2678,126 @@ public partial class MainForm : Form
                 DebugLogger.Log(DebugLogger.LogLevel.Info, "ListViewLayout", message);
         }
 
+        private int CalculateDesiredListViewContentWidth(bool hideSequence, bool[] hide, ListViewColumnRole[] roles, int shortInfoColumnIndex, int minFlexWidth, int[] maxSingleLineWidths, int[] maxCountSummaryWidths)
+        {
+                if (hide == null || roles == null || maxSingleLineWidths == null || maxCountSummaryWidths == null)
+                {
+                        return 0;
+                }
+
+                int total = 0;
+                for (int i = 0; i < hide.Length; i++)
+                {
+                        if (hide[i])
+                        {
+                                continue;
+                        }
+
+                        int columnIndex = i + 1;
+                        if (columnIndex == 1)
+                        {
+                                if (!hideSequence)
+                                {
+                                        total += CalculateSequenceColumnWidth();
+                                }
+                                continue;
+                        }
+
+                        if (columnIndex == shortInfoColumnIndex || roles[i] == ListViewColumnRole.ShortInfo)
+                        {
+                                int shortInfoWidth = maxCountSummaryWidths[i] > 0 ? maxCountSummaryWidths[i] : maxSingleLineWidths[i];
+                                total += Math.Max(minFlexWidth, shortInfoWidth);
+                                continue;
+                        }
+
+                        if (roles[i] == ListViewColumnRole.Hidden)
+                        {
+                                continue;
+                        }
+
+                        int desired = Math.Max(minFlexWidth, maxSingleLineWidths[i]);
+                        total += desired;
+                }
+
+                return total;
+        }
+
+        private int ApplyResultListViewAutoShrinkLayout(int hostAvailableWidth, int desiredContentWidth, bool allowAutoShrink)
+        {
+                if (resultListView == null)
+                {
+                        return hostAvailableWidth;
+                }
+
+                int scrollBarWidth = ShouldReserveListViewScrollBarSpace() ? SystemInformation.VerticalScrollBarWidth : 0;
+                int hostTotalWidth = Math.Max(0, hostAvailableWidth + scrollBarWidth);
+                int targetAvailableWidth = hostAvailableWidth;
+                bool active = false;
+
+                if (allowAutoShrink && desiredContentWidth > 0)
+                {
+                        int paddedDesired = desiredContentWidth + ListViewAutoShrinkPadding;
+                        if (paddedDesired < hostAvailableWidth && hostAvailableWidth - paddedDesired >= ListViewAutoShrinkThreshold)
+                        {
+                                targetAvailableWidth = Math.Max(0, paddedDesired);
+                                active = true;
+                        }
+                }
+
+                int targetTotalWidth = Math.Max(0, targetAvailableWidth + scrollBarWidth);
+                if (targetTotalWidth <= 0)
+                {
+                        return targetAvailableWidth;
+                }
+
+                if (Math.Abs(resultListView.Width - targetTotalWidth) >= ListViewAutoShrinkMinDelta)
+                {
+                        resultListView.Width = targetTotalWidth;
+                }
+                int targetLeft = 0;
+                if (active)
+                {
+                        targetLeft = Math.Max(0, (hostTotalWidth - targetTotalWidth) / 2);
+                }
+                if (resultListView.Left != targetLeft)
+                {
+                        resultListView.Left = targetLeft;
+                }
+
+                _isListViewAutoShrinkActive = active;
+                _lastListViewAutoWidth = targetTotalWidth;
+                DebugListViewLayout($"AutoShrink: host={hostAvailableWidth}, desired={desiredContentWidth}, target={targetAvailableWidth}, active={active}");
+                return targetAvailableWidth;
+        }
+
+        private int GetResultListViewHostWidth()
+        {
+                if (resultListPanel != null)
+                {
+                        return resultListPanel.ClientSize.Width;
+                }
+                if (resultListView == null)
+                {
+                        return 0;
+                }
+                return resultListView.ClientSize.Width;
+        }
+
+        private int GetResultListViewAvailableWidth(int totalWidth)
+        {
+                int width = totalWidth;
+                if (width <= 0)
+                {
+                        return width;
+                }
+
+                if (ShouldReserveListViewScrollBarSpace())
+                {
+                        width -= SystemInformation.VerticalScrollBarWidth;
+                }
+
+                return Math.Max(0, width);
+        }
 
         private int[] BuildFallbackColumnWidths(int availableWidth, bool hideSequence)
         {
@@ -3073,18 +3203,7 @@ public partial class MainForm : Form
                         return 0;
                 }
 
-                int width = resultListView.ClientSize.Width;
-                if (width <= 0)
-                {
-                        return width;
-                }
-
-                if (ShouldReserveListViewScrollBarSpace())
-                {
-                        width -= SystemInformation.VerticalScrollBarWidth;
-                }
-
-                return Math.Max(0, width);
+                return GetResultListViewAvailableWidth(resultListView.ClientSize.Width);
         }
 
         private bool ShouldReserveListViewScrollBarSpace()
@@ -27867,8 +27986,9 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
 		this.searchCutMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.searchPasteMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.searchHistorySeparator = new System.Windows.Forms.ToolStripSeparator();
-		this.searchClearHistoryMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+                this.searchClearHistoryMenuItem = new System.Windows.Forms.ToolStripMenuItem();
                 this.searchLabel = new System.Windows.Forms.Label();
+                this.resultListPanel = new System.Windows.Forms.Panel();
                 this.resultListView = new YTPlayer.SafeListView();
 		this.columnHeader0 = new System.Windows.Forms.ColumnHeader();
 		this.columnHeader1 = new System.Windows.Forms.ColumnHeader();
@@ -27952,6 +28072,7 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
 		this.menuStrip1.SuspendLayout();
 		this.searchPanel.SuspendLayout();
 		this.searchTextContextMenu.SuspendLayout();
+		this.resultListPanel.SuspendLayout();
 		this.controlPanel.SuspendLayout();
 		((System.ComponentModel.ISupportInitialize)this.volumeTrackBar).BeginInit();
 		((System.ComponentModel.ISupportInitialize)this.progressTrackBar).BeginInit();
@@ -28256,12 +28377,22 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
                 this.searchLabel.Size = new System.Drawing.Size(111, 27);
                 this.searchLabel.TabIndex = 0;
                 this.searchLabel.Text = "搜索";
+                this.resultListPanel.Dock = System.Windows.Forms.DockStyle.Fill;
+                this.resultListPanel.Location = new System.Drawing.Point(0, 112);
+                this.resultListPanel.Margin = new System.Windows.Forms.Padding(0);
+                this.resultListPanel.Name = "resultListPanel";
+                this.resultListPanel.Padding = new System.Windows.Forms.Padding(0);
+                this.resultListPanel.Size = new System.Drawing.Size(1200, 368);
+                this.resultListPanel.TabIndex = 1;
+                this.resultListPanel.TabStop = false;
+                this.resultListPanel.Controls.Add(this.resultListView);
                 this.resultListView.Columns.AddRange(this.columnHeader0, this.columnHeader1, this.columnHeader2, this.columnHeader3, this.columnHeader4, this.columnHeader5);
-		this.resultListView.Dock = System.Windows.Forms.DockStyle.Fill;
+		this.resultListView.Dock = System.Windows.Forms.DockStyle.None;
+		this.resultListView.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Bottom;
 		this.resultListView.FullRowSelect = true;
 		this.resultListView.GridLines = false;
 		this.resultListView.HideSelection = false;
-		this.resultListView.Location = new System.Drawing.Point(0, 112);
+		this.resultListView.Location = new System.Drawing.Point(0, 0);
         this.resultListView.MultiSelect = false;
         this.resultListView.Name = "resultListView";
 		this.resultListView.AllowDrop = true;
@@ -28681,7 +28812,7 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
 		base.AutoScaleDimensions = new System.Drawing.SizeF(120f, 120f);
 		base.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Dpi;
 		base.ClientSize = new System.Drawing.Size(1200, 676);
-        base.Controls.Add(this.resultListView);
+        base.Controls.Add(this.resultListPanel);
 		base.Controls.Add(this.searchPanel);
 		base.Controls.Add(this.controlPanel);
 		base.Controls.Add(this.statusStrip1);
@@ -28697,6 +28828,7 @@ private async Task LoadArtistsByCategoryAsync(int typeCode, int areaCode, int of
 		this.searchPanel.ResumeLayout(false);
 		this.searchPanel.PerformLayout();
 		this.searchTextContextMenu.ResumeLayout(false);
+		this.resultListPanel.ResumeLayout(false);
 		this.controlPanel.ResumeLayout(false);
 		this.controlPanel.PerformLayout();
 		((System.ComponentModel.ISupportInitialize)this.volumeTrackBar).EndInit();

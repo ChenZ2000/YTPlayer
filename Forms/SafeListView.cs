@@ -11,7 +11,6 @@ namespace YTPlayer
     {
         private const int TextPadding = 6;
         private const int SequenceTextPadding = 3;
-        private const int ShortInfoRightPadding = 4;
         private const int MaxRowHeight = 512;
         private const int SequenceColumnIndex = 1;
         private const int GridLineAlpha = 110;
@@ -220,7 +219,6 @@ namespace YTPlayer
             GetColumnTextPadding(columnIndex, text, out int leftPadding, out int rightPadding);
             if (columnIndex == SequenceColumnIndex)
             {
-                alignment = HorizontalAlignment.Right;
                 drawFont = ResolveSequenceFontForText(text);
             }
             TextFormatFlags flags = BuildTextFlags(alignment, allowWrap, useEllipsis: true);
@@ -677,13 +675,6 @@ namespace YTPlayer
             {
                 leftPadding = SequenceTextPadding;
                 rightPadding = SequenceTextPadding + (IsWideSequence(text) ? 1 : 0);
-                return;
-            }
-
-            if (columnIndex == ShortInfoColumnIndex)
-            {
-                leftPadding = TextPadding;
-                rightPadding = Math.Max(2, Math.Min(TextPadding, ShortInfoRightPadding));
                 return;
             }
 
