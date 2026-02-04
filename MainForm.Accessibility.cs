@@ -200,6 +200,14 @@ namespace YTPlayer
             {
                 return;
             }
+            if (IsSearchViewSource(_currentViewSource) && resultListView.Items.Count == 1)
+            {
+                ListViewItem item = resultListView.Items[0];
+                if (IsListViewRetryPlaceholderItem(item))
+                {
+                    return;
+                }
+            }
 
             bool viewMatched = _pendingSongFocusSatisfied
                 && !string.IsNullOrWhiteSpace(_pendingSongFocusSatisfiedViewSource)
@@ -214,6 +222,68 @@ namespace YTPlayer
                 ? pendingFocusIndex
                 : ((resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : 0);
             RestoreListViewFocus(targetIndex);
+        }
+
+        private bool IsListViewLoadingPlaceholderItem(ListViewItem item)
+        {
+                if (item == null)
+                {
+                        return false;
+                }
+                string primaryText = item.Text?.Trim() ?? string.Empty;
+                if (string.Equals(primaryText, ListLoadingPlaceholderText, StringComparison.Ordinal))
+                {
+                        return true;
+                }
+                if (item.SubItems.Count > 2)
+                {
+                        string text = item.SubItems[2]?.Text?.Trim() ?? string.Empty;
+                        return string.Equals(text, ListLoadingPlaceholderText, StringComparison.Ordinal);
+                }
+                return false;
+        }
+
+        private bool IsListViewRetryPlaceholderItem(ListViewItem item)
+        {
+                if (item == null)
+                {
+                        return false;
+                }
+                string primaryText = item.Text?.Trim() ?? string.Empty;
+                if (string.Equals(primaryText, ListRetryPlaceholderText, StringComparison.Ordinal))
+                {
+                        return true;
+                }
+                if (item.SubItems.Count > 2)
+                {
+                        string text = item.SubItems[2]?.Text?.Trim() ?? string.Empty;
+                        return string.Equals(text, ListRetryPlaceholderText, StringComparison.Ordinal);
+                }
+                return false;
+        }
+
+        private void TryAnnounceLoadingPlaceholderReplacement()
+        {
+                if (!_listLoadingPlaceholderActive || resultListView == null || resultListView.Items.Count == 0)
+                {
+                        return;
+                }
+                int focusedIndex = GetFocusedListViewIndex();
+                if (focusedIndex < 0 || focusedIndex >= resultListView.Items.Count)
+                {
+                        _listLoadingPlaceholderActive = false;
+                        return;
+                }
+                ListViewItem item = resultListView.Items[focusedIndex];
+                if (IsListViewLoadingPlaceholderItem(item))
+                {
+                        return;
+                }
+                _listLoadingPlaceholderActive = false;
+                if (resultListView.ContainsFocus)
+                {
+                        QueueFocusedListViewItemRefreshAnnouncement(focusedIndex);
+                }
         }
 
         private Task EnsureListFocusedAfterUrlParseAsync(int fallbackIndex = 0)
@@ -1302,6 +1372,52 @@ namespace YTPlayer
 		});
 	}
 
+	private void resultListView_KeyPress(object sender, KeyPressEventArgs e)
+	{
+		if (resultListView == null || !resultListView.ContainsFocus)
+		{
+			return;
+		}
+		if (char.IsControl(e.KeyChar) || char.IsWhiteSpace(e.KeyChar))
+		{
+			return;
+		}
+		if ((ModifierKeys & (Keys.Control | Keys.Alt)) != 0)
+		{
+			return;
+		}
+		int total = GetResultListViewItemCount();
+		if (total <= 0)
+		{
+			return;
+		}
+		DateTime now = DateTime.UtcNow;
+		if (_listViewTypeSearchLastInputUtc == DateTime.MinValue || (now - _listViewTypeSearchLastInputUtc).TotalMilliseconds > ListViewTypeSearchTimeoutMs)
+		{
+			_listViewTypeSearchBuffer = string.Empty;
+		}
+		_listViewTypeSearchLastInputUtc = now;
+		_listViewTypeSearchBuffer += e.KeyChar;
+		string search = _listViewTypeSearchBuffer;
+		int startIndex = GetSelectedListViewIndex();
+		if (startIndex < 0)
+		{
+			startIndex = 0;
+		}
+		int targetIndex = FindListViewItemIndexByPrimaryText(search, startIndex, forward: true);
+		if (targetIndex < 0 && search.Length > 1)
+		{
+			_listViewTypeSearchBuffer = e.KeyChar.ToString();
+			search = _listViewTypeSearchBuffer;
+			targetIndex = FindListViewItemIndexByPrimaryText(search, startIndex, forward: true);
+		}
+		if (targetIndex >= 0)
+		{
+			EnsureListSelectionWithoutFocus(targetIndex);
+		}
+		e.Handled = true;
+	}
+
 	private void resultListView_HandleCreated(object sender, EventArgs e)
 	{
 		ApplyResultListViewLayout();
@@ -1361,6 +1477,23 @@ namespace YTPlayer
 				}
 			}
 		}
+	}
+
+	private void resultListView_SearchForVirtualItem(object sender, SearchForVirtualItemEventArgs e)
+	{
+		if (resultListView == null || !_isVirtualSongListActive || !resultListView.VirtualMode)
+		{
+			e.Index = -1;
+			return;
+		}
+		string search = e.Text ?? string.Empty;
+		if (string.IsNullOrWhiteSpace(search))
+		{
+			e.Index = -1;
+			return;
+		}
+		bool forward = e.Direction != SearchDirectionHint.Up;
+		e.Index = FindVirtualItemIndexByPrimaryText(search, e.StartIndex, forward);
 	}
 
 	private void ApplyVirtualItemAccessibility(ListViewItem item, int itemIndex)
@@ -1590,6 +1723,16 @@ namespace YTPlayer
 
         private string BuildListViewItemAccessibleName(ListViewItem item)
         {
+                return BuildListViewItemAccessibleName(item, consumeHeader: true);
+        }
+
+        private string BuildListViewItemSearchText(ListViewItem item)
+        {
+                return BuildListViewItemAccessibleName(item, consumeHeader: false);
+        }
+
+        private string BuildListViewItemAccessibleName(ListViewItem item, bool consumeHeader)
+        {
                 if (item == null)
                 {
                         return string.Empty;
@@ -1616,7 +1759,7 @@ namespace YTPlayer
                         baseSpeech = BuildListViewItemSpeech(item);
                 }
 
-                if (!IsNvdaRunningCached() && TryConsumeListHeaderPrefix(item, out string header))
+                if (consumeHeader && !IsNvdaRunningCached() && TryConsumeListHeaderPrefix(item, out string header))
                 {
                         if (string.IsNullOrWhiteSpace(baseSpeech))
                         {
