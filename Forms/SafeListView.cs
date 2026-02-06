@@ -14,12 +14,23 @@ namespace YTPlayer
         private const int MaxRowHeight = 512;
         private const int SequenceColumnIndex = 1;
         private const int GridLineAlpha = 110;
+        private bool _deferMultiLineLayout;
 #if DEBUG
         private const int AlignmentLogMaxSamples = 12;
         private const int SequenceAlignmentLogMaxSamples = 10;
         private int _alignmentLogCount;
         private int _sequenceAlignmentLogRemaining = SequenceAlignmentLogMaxSamples;
         private readonly HashSet<int> _alignmentLoggedColumns = new HashSet<int>();
+        private const int DrawPerfLogIntervalMs = 1000;
+        private long _drawPerfWindowStartTicks = Stopwatch.GetTimestamp();
+        private int _drawSubItemCount;
+        private long _drawSubItemTicks;
+        private long _drawSubItemMaxTicks;
+        private int _drawSubItemMaxTextLen;
+        private int _trimCount;
+        private long _trimTicks;
+        private long _trimMaxTicks;
+        private int _trimMaxTextLen;
 #endif
         private Font? _sequenceFont;
         private bool _sequenceFontOwned;
@@ -35,6 +46,29 @@ namespace YTPlayer
         [System.ComponentModel.Browsable(false)]
         [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
         internal int ShortInfoColumnIndex { get; set; } = 4;
+
+        [System.ComponentModel.Browsable(false)]
+        [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+        internal bool DeferMultiLineLayout
+        {
+            get => _deferMultiLineLayout;
+            set
+            {
+                if (_deferMultiLineLayout == value)
+                {
+                    return;
+                }
+                _deferMultiLineLayout = value;
+#if DEBUG
+                DebugLogger.Log(DebugLogger.LogLevel.Info, "ListViewLayout",
+                    $"DeferMultiLineLayout={(value ? "ON" : "OFF")}");
+#endif
+                if (!value)
+                {
+                    Invalidate();
+                }
+            }
+        }
 
         public SafeListView()
         {
@@ -213,8 +247,14 @@ namespace YTPlayer
             int columnIndex = e.ColumnIndex;
             int maxLines = GetColumnMaxLines(columnIndex);
             bool allowWrap = maxLines > 1;
+            if (_deferMultiLineLayout && allowWrap)
+            {
+                allowWrap = false;
+                maxLines = 1;
+            }
             HorizontalAlignment alignment = e.Header?.TextAlign ?? HorizontalAlignment.Left;
             string text = e.SubItem.Text ?? string.Empty;
+            int originalTextLen = text.Length;
             Font drawFont = Font;
             GetColumnTextPadding(columnIndex, text, out int leftPadding, out int rightPadding);
             if (columnIndex == SequenceColumnIndex)
@@ -222,9 +262,19 @@ namespace YTPlayer
                 drawFont = ResolveSequenceFontForText(text);
             }
             TextFormatFlags flags = BuildTextFlags(alignment, allowWrap, useEllipsis: true);
+#if DEBUG
+            long drawStartTicks = Stopwatch.GetTimestamp();
+            long trimTicks = 0;
+#endif
             if (allowWrap)
             {
+#if DEBUG
+                long trimStartTicks = Stopwatch.GetTimestamp();
+#endif
                 text = TrimTextToMaxLines(e.Graphics, text, drawFont, e.Bounds, maxLines, leftPadding, rightPadding);
+#if DEBUG
+                trimTicks = Stopwatch.GetTimestamp() - trimStartTicks;
+#endif
             }
             if (allowWrap && alignment != HorizontalAlignment.Left)
             {
@@ -243,6 +293,10 @@ namespace YTPlayer
 #endif
                 TextRenderer.DrawText(e.Graphics, text, drawFont, textBounds, textColor, flags);
             }
+#if DEBUG
+            long drawTicks = Stopwatch.GetTimestamp() - drawStartTicks;
+            RecordDrawPerf(drawTicks, originalTextLen, trimTicks);
+#endif
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -624,6 +678,61 @@ namespace YTPlayer
             }
 
             return text.Substring(0, maxLength) + "...";
+        }
+
+        private void RecordDrawPerf(long drawTicks, int textLen, long trimTicks)
+        {
+            _drawSubItemCount++;
+            _drawSubItemTicks += drawTicks;
+            if (drawTicks > _drawSubItemMaxTicks)
+            {
+                _drawSubItemMaxTicks = drawTicks;
+            }
+            if (textLen > _drawSubItemMaxTextLen)
+            {
+                _drawSubItemMaxTextLen = textLen;
+            }
+            if (trimTicks > 0)
+            {
+                _trimCount++;
+                _trimTicks += trimTicks;
+                if (trimTicks > _trimMaxTicks)
+                {
+                    _trimMaxTicks = trimTicks;
+                }
+                if (textLen > _trimMaxTextLen)
+                {
+                    _trimMaxTextLen = textLen;
+                }
+            }
+
+            long nowTicks = Stopwatch.GetTimestamp();
+            double windowMs = (nowTicks - _drawPerfWindowStartTicks) * 1000.0 / Stopwatch.Frequency;
+            if (windowMs < DrawPerfLogIntervalMs)
+            {
+                return;
+            }
+
+            double totalMs = _drawSubItemTicks * 1000.0 / Stopwatch.Frequency;
+            double avgMs = totalMs / Math.Max(1, _drawSubItemCount);
+            double maxMs = _drawSubItemMaxTicks * 1000.0 / Stopwatch.Frequency;
+            double trimTotalMs = _trimTicks * 1000.0 / Stopwatch.Frequency;
+            double trimAvgMs = _trimCount > 0 ? trimTotalMs / _trimCount : 0.0;
+            double trimMaxMs = _trimMaxTicks * 1000.0 / Stopwatch.Frequency;
+
+            DebugLogger.Log(DebugLogger.LogLevel.Performance, "ListViewDraw",
+                $"DrawSubItem count={_drawSubItemCount} avgMs={avgMs:F3} maxMs={maxMs:F3} maxLen={_drawSubItemMaxTextLen} " +
+                $"trimCount={_trimCount} trimAvgMs={trimAvgMs:F3} trimMaxMs={trimMaxMs:F3} trimMaxLen={_trimMaxTextLen}");
+
+            _drawPerfWindowStartTicks = nowTicks;
+            _drawSubItemCount = 0;
+            _drawSubItemTicks = 0;
+            _drawSubItemMaxTicks = 0;
+            _drawSubItemMaxTextLen = 0;
+            _trimCount = 0;
+            _trimTicks = 0;
+            _trimMaxTicks = 0;
+            _trimMaxTextLen = 0;
         }
 #endif
 

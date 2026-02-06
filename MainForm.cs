@@ -764,11 +764,74 @@ public partial class MainForm : Form
 
         private const int ListViewFocusSpeakDelayMs = 120;
         private const int ListViewLayoutDebounceDelayMs = 500;
+        private const int ListViewFocusStableDelayMs = 500;
+        private const int ListViewSelectionStableDelayMs = 90;
+        private const int ListViewAccessibilityPartialRefreshThreshold = 160;
+        private const int ListViewAccessibilityNameSyncItemLimit = 120;
+        private const int ListViewLayoutFastPathItemThreshold = 300;
+        private const int ListViewRowHeightFastPathItemThreshold = 1200;
+        private const int ListViewSelectionBurstThresholdMs = 150;
+        private const int ListViewSelectionNvdaBurstUpdateMinIntervalMs = 260;
+        private const int ListViewBurstNavigationFlushIntervalMs = 45;
+        private const int ListViewBurstNavigationFlushMaxPerPass = 96;
+        private const int ListViewBurstPropertySyncMaxUpdates = 8;
+        private const int ListViewNvdaNavigationKeyMinIntervalMs = 150;
 
         private const int ListViewRepeatCooldownMs = 200;
         private const int ListViewTypeSearchTimeoutMs = 900;
 
         private bool _isApplyingListViewLayout;
+        private long _listViewLayoutDataVersion;
+        private ListViewLayoutSignature? _lastListViewLayoutSignature;
+        private DateTime _lastListViewFocusChangeUtc = DateTime.MinValue;
+        private DateTime _lastListViewLayoutRequestUtc = DateTime.MinValue;
+        private DateTime _lastNvdaListViewNavigationUtc = DateTime.MinValue;
+        private bool _listViewLayoutPending;
+        private bool _listViewRedrawDeferred;
+#if DEBUG
+        private const int UiThreadWatchdogIntervalMs = 250;
+        private const int UiThreadWatchdogBlockThresholdMs = 2000;
+        private const int AccessibilityDiagPulseIntervalMs = 1000;
+        private const int AccessibilityBurstNotifyThrottleMs = 90;
+        private const int AccessibilityBurstUpdateMinIntervalMs = 180;
+        private const int DiagnosticsDumpCooldownSeconds = 120;
+        private const int DiagnosticsHandleDumpThreshold = 26000;
+        private const int DiagnosticsUserObjectDumpThreshold = 9000;
+        private const int DiagnosticsGdiObjectDumpThreshold = 9000;
+        private const int NvdaResourceProbeFailureBackoffSeconds = 30;
+        private System.Threading.Timer? _uiThreadWatchdogTimer;
+        private System.Threading.Timer? _accessibilityDiagnosticsTimer;
+        private bool _uiThreadWatchdogInStall;
+        private string? _uiThreadWatchdogLastMarker;
+        private DateTime _uiThreadWatchdogLastMarkerUtc = DateTime.MinValue;
+        private DateTime _uiThreadWatchdogLastHeartbeatUtc = DateTime.MinValue;
+        private DateTime _lastDiagnosticsDumpUtc = DateTime.MinValue;
+        private DateTime _lastBurstListViewNotifyUtc = DateTime.MinValue;
+        private long _accessNotifyClientCallCount;
+        private long _accessNotifyWinEventCallCount;
+        private long _accessSetPropertyCallCount;
+        private long _accessSelectionChangedCount;
+        private long _accessSelectionApplyCount;
+        private long _accessBurstSuppressedNotifyCount;
+        private long _accessBurstNavFlushRemovedCount;
+        private long _accessNvdaNavKeySuppressedCount;
+        private long _accessNvdaNavAppliedStepCount;
+        private long _diagLastNotifyClientCallCount;
+        private long _diagLastNotifyWinEventCallCount;
+        private long _diagLastSetPropertyCallCount;
+        private long _diagLastSelectionChangedCount;
+        private long _diagLastSelectionApplyCount;
+        private long _diagLastBurstSuppressedNotifyCount;
+        private long _diagLastBurstNavFlushRemovedCount;
+        private long _diagLastNvdaNavKeySuppressedCount;
+        private long _diagLastNvdaNavAppliedStepCount;
+        private int _nvdaResourceProbeConsecutiveFailures;
+        private DateTime _nvdaResourceProbeBlockedUntilUtc = DateTime.MinValue;
+#endif
+
+        private System.Windows.Forms.Timer? _listViewAccessibilityDebounceTimer;
+        private bool _listViewAccessibilityPending;
+        private DateTime _lastListViewAccessibilityRequestUtc = DateTime.MinValue;
 
         private const int ListViewMaxRowHeight = 512;
         private const int ListViewMultiLineMaxLines = 2;
@@ -795,6 +858,118 @@ public partial class MainForm : Form
         private bool _isUserResizingListViewColumns;
         private bool _isListViewAutoShrinkActive;
         private int _lastListViewAutoWidth = -1;
+        private readonly struct ListViewLayoutSignature : IEquatable<ListViewLayoutSignature>
+        {
+                public readonly long DataVersion;
+                public readonly string ViewSource;
+                public readonly ListViewDataMode DataMode;
+                public readonly int HostWidth;
+                public readonly int AvailableWidth;
+                public readonly bool HideSequence;
+                public readonly int ItemCount;
+                public readonly bool VirtualMode;
+                public readonly int VirtualListSize;
+                public readonly int RowHeight;
+                public readonly int FontHeight;
+                public readonly int? CustomIndexWidth;
+                public readonly int? CustomNameWidth;
+                public readonly int? CustomCreatorWidth;
+                public readonly int? CustomExtraWidth;
+                public readonly int? CustomDescriptionWidth;
+                public readonly int? CustomRowHeight;
+                public readonly bool IsUserResizingColumns;
+
+                public ListViewLayoutSignature(
+                        long dataVersion,
+                        string viewSource,
+                        ListViewDataMode dataMode,
+                        int hostWidth,
+                        int availableWidth,
+                        bool hideSequence,
+                        int itemCount,
+                        bool virtualMode,
+                        int virtualListSize,
+                        int rowHeight,
+                        int fontHeight,
+                        int? customIndexWidth,
+                        int? customNameWidth,
+                        int? customCreatorWidth,
+                        int? customExtraWidth,
+                        int? customDescriptionWidth,
+                        int? customRowHeight,
+                        bool isUserResizingColumns)
+                {
+                        DataVersion = dataVersion;
+                        ViewSource = viewSource ?? string.Empty;
+                        DataMode = dataMode;
+                        HostWidth = hostWidth;
+                        AvailableWidth = availableWidth;
+                        HideSequence = hideSequence;
+                        ItemCount = itemCount;
+                        VirtualMode = virtualMode;
+                        VirtualListSize = virtualListSize;
+                        RowHeight = rowHeight;
+                        FontHeight = fontHeight;
+                        CustomIndexWidth = customIndexWidth;
+                        CustomNameWidth = customNameWidth;
+                        CustomCreatorWidth = customCreatorWidth;
+                        CustomExtraWidth = customExtraWidth;
+                        CustomDescriptionWidth = customDescriptionWidth;
+                        CustomRowHeight = customRowHeight;
+                        IsUserResizingColumns = isUserResizingColumns;
+                }
+
+                public bool Equals(ListViewLayoutSignature other)
+                {
+                        return DataVersion == other.DataVersion &&
+                               DataMode == other.DataMode &&
+                               HostWidth == other.HostWidth &&
+                               AvailableWidth == other.AvailableWidth &&
+                               HideSequence == other.HideSequence &&
+                               ItemCount == other.ItemCount &&
+                               VirtualMode == other.VirtualMode &&
+                               VirtualListSize == other.VirtualListSize &&
+                               RowHeight == other.RowHeight &&
+                               FontHeight == other.FontHeight &&
+                               CustomIndexWidth == other.CustomIndexWidth &&
+                               CustomNameWidth == other.CustomNameWidth &&
+                               CustomCreatorWidth == other.CustomCreatorWidth &&
+                               CustomExtraWidth == other.CustomExtraWidth &&
+                               CustomDescriptionWidth == other.CustomDescriptionWidth &&
+                               CustomRowHeight == other.CustomRowHeight &&
+                               IsUserResizingColumns == other.IsUserResizingColumns &&
+                               string.Equals(ViewSource, other.ViewSource, StringComparison.OrdinalIgnoreCase);
+                }
+
+                public override bool Equals(object? obj)
+                {
+                        return obj is ListViewLayoutSignature other && Equals(other);
+                }
+
+                public override int GetHashCode()
+                {
+                        var hash = new HashCode();
+                        hash.Add(DataVersion);
+                        hash.Add(ViewSource, StringComparer.OrdinalIgnoreCase);
+                        hash.Add(DataMode);
+                        hash.Add(HostWidth);
+                        hash.Add(AvailableWidth);
+                        hash.Add(HideSequence);
+                        hash.Add(ItemCount);
+                        hash.Add(VirtualMode);
+                        hash.Add(VirtualListSize);
+                        hash.Add(RowHeight);
+                        hash.Add(FontHeight);
+                        hash.Add(CustomIndexWidth);
+                        hash.Add(CustomNameWidth);
+                        hash.Add(CustomCreatorWidth);
+                        hash.Add(CustomExtraWidth);
+                        hash.Add(CustomDescriptionWidth);
+                        hash.Add(CustomRowHeight);
+                        hash.Add(IsUserResizingColumns);
+                        return hash.ToHashCode();
+                }
+        }
         private enum ListViewColumnRole
         {
                 Sequence,
@@ -1295,6 +1470,10 @@ public partial class MainForm : Form
 	private string? _lastAnnouncementText;
 
 	private DateTime _lastAnnouncementAt = DateTime.MinValue;
+
+	private bool _focusedRefreshAnnouncementQueued = false;
+
+	private int _pendingFocusedRefreshAnnouncementIndex = -1;
 
 	private static readonly TimeSpan AnnouncementRepeatCooldown = TimeSpan.FromMilliseconds(350.0);
 
@@ -1858,9 +2037,12 @@ public partial class MainForm : Form
 		_trayIcon.DoubleClick += TrayIcon_DoubleClick;
 		_contextMenuHost = new ContextMenuHost();
 		trayContextMenu.Opening += TrayContextMenu_Opening;
-		trayContextMenu.Opened += TrayContextMenu_Opened;
+                trayContextMenu.Opened += TrayContextMenu_Opened;
                 trayContextMenu.Closed += TrayContextMenu_Closed;
                 SyncPlayPauseButtonText();
+#if DEBUG
+                InitializeUiThreadWatchdog();
+#endif
                 base.Load += MainForm_Load;
         }
 
@@ -2029,7 +2211,52 @@ public partial class MainForm : Form
                 resultListView.BorderStyle = BorderStyle.None;
                 resultListView.GridLines = false;
                 RegisterRoundedControl(resultListView, DefaultControlCornerRadius);
-                ApplyResultListViewLayout();
+                ScheduleResultListViewLayoutUpdate();
+        }
+
+        private void MarkListViewLayoutDataChanged()
+        {
+                _listViewLayoutDataVersion++;
+                _lastListViewLayoutSignature = null;
+        }
+
+        private bool TryGetListViewLayoutSignature(out ListViewLayoutSignature signature)
+        {
+                signature = default;
+                if (resultListView == null)
+                {
+                        return false;
+                }
+
+                int hostWidth = GetResultListViewHostWidth();
+                int availableWidth = GetResultListViewAvailableWidth(hostWidth);
+                bool hideSequence = _hideSequenceNumbers || IsAlwaysSequenceHiddenView();
+                int itemCount = GetResultListViewItemCount();
+                int rowHeight = GetListViewCurrentRowHeight();
+                int fontHeight = resultListView.Font?.Height ?? 0;
+                bool virtualMode = resultListView.VirtualMode;
+                int virtualListSize = virtualMode ? resultListView.VirtualListSize : 0;
+
+                signature = new ListViewLayoutSignature(
+                        _listViewLayoutDataVersion,
+                        _currentViewSource ?? string.Empty,
+                        GetCurrentListViewDataMode(),
+                        hostWidth,
+                        availableWidth,
+                        hideSequence,
+                        itemCount,
+                        virtualMode,
+                        virtualListSize,
+                        rowHeight,
+                        fontHeight,
+                        _customListViewIndexWidth,
+                        _customListViewNameWidth,
+                        _customListViewCreatorWidth,
+                        _customListViewExtraWidth,
+                        _customListViewDescriptionWidth,
+                        _customListViewRowHeight,
+                        _isUserResizingListViewColumns);
+                return true;
         }
 
         private void ApplyResultListViewLayout()
@@ -2042,11 +2269,21 @@ public partial class MainForm : Form
                 {
                         return;
                 }
+                if (TryGetListViewLayoutSignature(out var signature) &&
+                        _lastListViewLayoutSignature.HasValue &&
+                        signature.Equals(_lastListViewLayoutSignature.Value))
+                {
+                        return;
+                }
+#if DEBUG
+                TouchUiThreadMarker("ApplyListViewLayout");
+#endif
                 ApplyResultListViewLayoutCore();
         }
 
         private void ApplyResultListViewLayoutCore()
         {
+                bool success = false;
                 try
                 {
                         _isApplyingListViewLayout = true;
@@ -2056,6 +2293,7 @@ public partial class MainForm : Form
                                 ApplyResultListViewColumnAlignment();
                                 UpdateResultListViewRowHeight();
                                 _listViewLayoutInitialized = true;
+                                success = true;
                         }
                         catch (InvalidOperationException ex)
                         {
@@ -2066,6 +2304,655 @@ public partial class MainForm : Form
                 {
                         _isApplyingListViewLayout = false;
                 }
+
+                if (success && TryGetListViewLayoutSignature(out var signature))
+                {
+                        _lastListViewLayoutSignature = signature;
+                }
+        }
+
+        private void SetListViewVisualAdjustDeferred(bool deferred)
+        {
+                if (resultListView == null)
+                {
+                        return;
+                }
+                if (resultListView.DeferMultiLineLayout == deferred)
+                {
+                        return;
+                }
+                resultListView.DeferMultiLineLayout = deferred;
+        }
+
+        private void SetListViewRedrawDeferred(bool deferred)
+        {
+                if (resultListView == null)
+                {
+                        _listViewRedrawDeferred = false;
+                        return;
+                }
+                if (_listViewRedrawDeferred == deferred)
+                {
+                        return;
+                }
+                _listViewRedrawDeferred = deferred;
+#if DEBUG
+                DebugLogger.Log(DebugLogger.LogLevel.Info, "ListViewLayout",
+                        $"DeferRedraw={(deferred ? "ON" : "OFF")}");
+#endif
+                if (deferred)
+                {
+                        resultListView.BeginUpdate();
+                        return;
+                }
+                try
+                {
+                        resultListView.EndUpdate();
+                }
+                catch
+                {
+                }
+                resultListView.Invalidate();
+        }
+
+        private bool IsListViewVisualAdjustPending()
+        {
+                if (resultListView == null || !resultListView.DeferMultiLineLayout)
+                {
+                        return false;
+                }
+                DateTime baseUtc = _lastListViewFocusChangeUtc;
+                if (baseUtc == DateTime.MinValue)
+                {
+                        baseUtc = DateTime.UtcNow;
+                }
+                DateTime dueUtc = baseUtc.AddMilliseconds(ListViewFocusStableDelayMs);
+                if (DateTime.UtcNow < dueUtc)
+                {
+                        return true;
+                }
+                SetListViewVisualAdjustDeferred(false);
+                return false;
+        }
+
+        private void NotifyListViewFocusChanged()
+        {
+                _lastListViewFocusChangeUtc = DateTime.UtcNow;
+                SetListViewVisualAdjustDeferred(true);
+                if (_listViewLayoutDebounceTimer == null)
+                {
+                        _listViewLayoutDebounceTimer = new System.Windows.Forms.Timer();
+                        _listViewLayoutDebounceTimer.Tick += (_, _) => HandleListViewLayoutTimerTick();
+                }
+                ScheduleListViewLayoutTimer();
+        }
+
+#if DEBUG
+        private void InitializeUiThreadWatchdog()
+        {
+                if (_uiThreadWatchdogTimer != null)
+                {
+                        return;
+                }
+                _uiThreadWatchdogLastMarkerUtc = DateTime.UtcNow;
+                _uiThreadWatchdogLastHeartbeatUtc = _uiThreadWatchdogLastMarkerUtc;
+                _uiThreadWatchdogTimer = new System.Threading.Timer(_ =>
+                {
+                        if (IsDisposed)
+                        {
+                                return;
+                        }
+                        DateTime nowUtc = DateTime.UtcNow;
+                        if (_uiThreadWatchdogLastHeartbeatUtc != DateTime.MinValue)
+                        {
+                                double sinceHeartbeatMs = (nowUtc - _uiThreadWatchdogLastHeartbeatUtc).TotalMilliseconds;
+                                if (sinceHeartbeatMs >= UiThreadWatchdogBlockThresholdMs && !_uiThreadWatchdogInStall)
+                                {
+                                        _uiThreadWatchdogInStall = true;
+                                        string marker = _uiThreadWatchdogLastMarker ?? "unknown";
+                                        DateTime markerUtc = _uiThreadWatchdogLastMarkerUtc;
+                                        DebugLogger.LogUIThreadBlock("UIWatchdog",
+                                                $"UI heartbeat stalled {sinceHeartbeatMs:F0}ms lastMarker={marker} at {markerUtc:HH:mm:ss.fff}", (long)sinceHeartbeatMs);
+                                        TryCaptureDiagnosticsDump("UIWatchdogHeartbeat", $"marker={marker}", (long)sinceHeartbeatMs, includeNvda: true);
+                                }
+                        }
+                        long scheduledTicks = Stopwatch.GetTimestamp();
+                        try
+                        {
+                                BeginInvoke(new Action<long>(HandleUiThreadWatchdogTick), scheduledTicks);
+                        }
+                        catch
+                        {
+                        }
+                }, null, UiThreadWatchdogIntervalMs, UiThreadWatchdogIntervalMs);
+
+                if (_accessibilityDiagnosticsTimer == null)
+                {
+                        _accessibilityDiagnosticsTimer = new System.Threading.Timer(_ =>
+                        {
+                                if (IsDisposed)
+                                {
+                                        return;
+                                }
+                                try
+                                {
+                                        CollectAccessibilityDiagnosticsPulse();
+                                }
+                                catch (Exception ex)
+                                {
+                                        DebugLogger.LogException("AccessibilityDiag", ex, "CollectPulse");
+                                }
+                        }, null, AccessibilityDiagPulseIntervalMs, AccessibilityDiagPulseIntervalMs);
+                }
+        }
+
+        private void HandleUiThreadWatchdogTick(long scheduledTicks)
+        {
+                _uiThreadWatchdogLastHeartbeatUtc = DateTime.UtcNow;
+                long nowTicks = Stopwatch.GetTimestamp();
+                double delayMs = (nowTicks - scheduledTicks) * 1000.0 / Stopwatch.Frequency;
+                if (delayMs >= UiThreadWatchdogBlockThresholdMs)
+                {
+                        if (!_uiThreadWatchdogInStall)
+                        {
+                                _uiThreadWatchdogInStall = true;
+                                string marker = _uiThreadWatchdogLastMarker ?? "unknown";
+                                DateTime markerUtc = _uiThreadWatchdogLastMarkerUtc;
+                                DebugLogger.LogUIThreadBlock("UIWatchdog",
+                                        $"UI stall {delayMs:F0}ms lastMarker={marker} at {markerUtc:HH:mm:ss.fff}", (long)delayMs);
+                                TryCaptureDiagnosticsDump("UIWatchdogDelay", $"marker={marker}", (long)delayMs, includeNvda: true);
+                        }
+                        return;
+                }
+                _uiThreadWatchdogInStall = false;
+        }
+
+        private void TouchUiThreadMarker(string marker)
+        {
+                _uiThreadWatchdogLastMarker = marker;
+                _uiThreadWatchdogLastMarkerUtc = DateTime.UtcNow;
+        }
+
+        private readonly struct ProcessResourceSample
+        {
+                public readonly bool IsValid;
+                public readonly string Name;
+                public readonly int ProcessId;
+                public readonly int HandleCount;
+                public readonly int ThreadCount;
+                public readonly int UserObjects;
+                public readonly int GdiObjects;
+                public readonly long PrivateMemoryMb;
+                public readonly long WorkingSetMb;
+
+                public ProcessResourceSample(bool isValid, string name, int processId, int handleCount, int threadCount, int userObjects, int gdiObjects, long privateMemoryMb, long workingSetMb)
+                {
+                        IsValid = isValid;
+                        Name = name ?? string.Empty;
+                        ProcessId = processId;
+                        HandleCount = handleCount;
+                        ThreadCount = threadCount;
+                        UserObjects = userObjects;
+                        GdiObjects = gdiObjects;
+                        PrivateMemoryMb = privateMemoryMb;
+                        WorkingSetMb = workingSetMb;
+                }
+
+                public override string ToString()
+                {
+                        if (!IsValid)
+                        {
+                                return "n/a";
+                        }
+                        return $"{Name}(pid={ProcessId}) handle={HandleCount} threads={ThreadCount} user={UserObjects} gdi={GdiObjects} privMB={PrivateMemoryMb} wsMB={WorkingSetMb}";
+                }
+        }
+
+        [Flags]
+        private enum MiniDumpType : uint
+        {
+                Normal = 0x00000000,
+                WithDataSegs = 0x00000001,
+                WithHandleData = 0x00000004,
+                WithUnloadedModules = 0x00000020,
+                WithProcessThreadData = 0x00000100,
+                WithThreadInfo = 0x00001000,
+                IgnoreInaccessibleMemory = 0x00020000
+        }
+
+        private static class DiagnosticsNativeMethods
+        {
+                [DllImport("user32.dll")]
+                public static extern int GetGuiResources(IntPtr hProcess, int uiFlags);
+
+                [DllImport("Dbghelp.dll", SetLastError = true)]
+                public static extern bool MiniDumpWriteDump(
+                        IntPtr hProcess,
+                        int processId,
+                        IntPtr hFile,
+                        uint dumpType,
+                        IntPtr exceptionParam,
+                        IntPtr userStreamParam,
+                        IntPtr callbackParam);
+        }
+
+        private void CollectAccessibilityDiagnosticsPulse()
+        {
+                long notifyCalls = Interlocked.Read(ref _accessNotifyClientCallCount);
+                long notifyWinEventCalls = Interlocked.Read(ref _accessNotifyWinEventCallCount);
+                long setPropertyCalls = Interlocked.Read(ref _accessSetPropertyCallCount);
+                long selectionChangedCalls = Interlocked.Read(ref _accessSelectionChangedCount);
+                long selectionApplyCalls = Interlocked.Read(ref _accessSelectionApplyCount);
+                long suppressedNotifyCalls = Interlocked.Read(ref _accessBurstSuppressedNotifyCount);
+                long burstNavFlushRemovedCount = Interlocked.Read(ref _accessBurstNavFlushRemovedCount);
+                long nvdaNavSuppressedCalls = Interlocked.Read(ref _accessNvdaNavKeySuppressedCount);
+                long nvdaNavAppliedSteps = Interlocked.Read(ref _accessNvdaNavAppliedStepCount);
+
+                long deltaNotifyCalls = notifyCalls - _diagLastNotifyClientCallCount;
+                long deltaNotifyWinEventCalls = notifyWinEventCalls - _diagLastNotifyWinEventCallCount;
+                long deltaSetPropertyCalls = setPropertyCalls - _diagLastSetPropertyCallCount;
+                long deltaSelectionChangedCalls = selectionChangedCalls - _diagLastSelectionChangedCount;
+                long deltaSelectionApplyCalls = selectionApplyCalls - _diagLastSelectionApplyCount;
+                long deltaSuppressedNotifyCalls = suppressedNotifyCalls - _diagLastBurstSuppressedNotifyCount;
+                long deltaBurstNavFlushRemovedCount = burstNavFlushRemovedCount - _diagLastBurstNavFlushRemovedCount;
+                long deltaNvdaNavSuppressedCalls = nvdaNavSuppressedCalls - _diagLastNvdaNavKeySuppressedCount;
+                long deltaNvdaNavAppliedSteps = nvdaNavAppliedSteps - _diagLastNvdaNavAppliedStepCount;
+
+                _diagLastNotifyClientCallCount = notifyCalls;
+                _diagLastNotifyWinEventCallCount = notifyWinEventCalls;
+                _diagLastSetPropertyCallCount = setPropertyCalls;
+                _diagLastSelectionChangedCount = selectionChangedCalls;
+                _diagLastSelectionApplyCount = selectionApplyCalls;
+                _diagLastBurstSuppressedNotifyCount = suppressedNotifyCalls;
+                _diagLastBurstNavFlushRemovedCount = burstNavFlushRemovedCount;
+                _diagLastNvdaNavKeySuppressedCount = nvdaNavSuppressedCalls;
+                _diagLastNvdaNavAppliedStepCount = nvdaNavAppliedSteps;
+
+                bool interesting = _listViewSelectionBurstActive || _uiThreadWatchdogInStall ||
+                        deltaNotifyCalls >= 60 || deltaNotifyWinEventCalls >= 120 || deltaSetPropertyCalls >= 50 ||
+                        deltaSelectionChangedCalls >= 80 || deltaSelectionApplyCalls >= 20 ||
+                        deltaSuppressedNotifyCalls > 0 || deltaBurstNavFlushRemovedCount > 0 ||
+                        deltaNvdaNavSuppressedCalls > 0 || deltaNvdaNavAppliedSteps > 0;
+                if (!interesting)
+                {
+                        return;
+                }
+
+                bool captureResourceSnapshot = _uiThreadWatchdogInStall || !_listViewSelectionBurstActive;
+                ProcessResourceSample self = captureResourceSnapshot ? CaptureCurrentProcessResourceSample() : default;
+                ProcessResourceSample nvda = default;
+                bool nvdaProbeError = false;
+                bool shouldProbeNvda = captureResourceSnapshot && _isNvdaRunningCached &&
+                        (_nvdaResourceProbeBlockedUntilUtc == DateTime.MinValue || DateTime.UtcNow >= _nvdaResourceProbeBlockedUntilUtc);
+                if (shouldProbeNvda)
+                {
+                        nvda = CaptureFirstProcessResourceSample("nvda", out nvdaProbeError);
+                        if (nvdaProbeError)
+                        {
+                                _nvdaResourceProbeConsecutiveFailures++;
+                                if (_nvdaResourceProbeConsecutiveFailures >= 3)
+                                {
+                                        _nvdaResourceProbeBlockedUntilUtc = DateTime.UtcNow.AddSeconds(NvdaResourceProbeFailureBackoffSeconds);
+                                }
+                        }
+                        else
+                        {
+                                _nvdaResourceProbeConsecutiveFailures = 0;
+                                _nvdaResourceProbeBlockedUntilUtc = DateTime.MinValue;
+                        }
+                }
+
+                string marker = _uiThreadWatchdogLastMarker ?? "unknown";
+                string nvdaProbeState = shouldProbeNvda
+                        ? (nvdaProbeError ? "error" : "on")
+                        : (captureResourceSnapshot
+                                ? ((_nvdaResourceProbeBlockedUntilUtc != DateTime.MinValue && DateTime.UtcNow < _nvdaResourceProbeBlockedUntilUtc) ? "backoff" : "skip")
+                                : "off");
+                DebugLogger.Log(DebugLogger.LogLevel.Info, "AccessibilityDiag",
+                        $"Pulse burst={_listViewSelectionBurstActive} stall={_uiThreadWatchdogInStall} marker={marker} " +
+                        $"delta[notify={deltaNotifyCalls}, winEvent={deltaNotifyWinEventCalls}, setProp={deltaSetPropertyCalls}, selChanged={deltaSelectionChangedCalls}, selApply={deltaSelectionApplyCalls}, suppressed={deltaSuppressedNotifyCalls}, flushNav={deltaBurstNavFlushRemovedCount}, nvdaDrop={deltaNvdaNavSuppressedCalls}, nvdaStep={deltaNvdaNavAppliedSteps}] " +
+                        $"probeNvda={nvdaProbeState} self={self} nvda={nvda}");
+
+                if (self.IsValid &&
+                        (self.HandleCount >= DiagnosticsHandleDumpThreshold ||
+                         self.UserObjects >= DiagnosticsUserObjectDumpThreshold ||
+                         self.GdiObjects >= DiagnosticsGdiObjectDumpThreshold))
+                {
+                        TryCaptureDiagnosticsDump("ResourceThreshold", self.ToString(), 0L, includeNvda: true);
+                }
+                if (nvda.IsValid &&
+                        (nvda.HandleCount >= DiagnosticsHandleDumpThreshold ||
+                         nvda.UserObjects >= DiagnosticsUserObjectDumpThreshold ||
+                         nvda.GdiObjects >= DiagnosticsGdiObjectDumpThreshold))
+                {
+                        TryCaptureDiagnosticsDump("NvdaResourceThreshold", nvda.ToString(), 0L, includeNvda: true);
+                }
+        }
+
+        private ProcessResourceSample CaptureCurrentProcessResourceSample()
+        {
+                using (Process current = Process.GetCurrentProcess())
+                {
+                        return CaptureProcessResourceSample(current, "YTPlayer");
+                }
+        }
+
+        private ProcessResourceSample CaptureFirstProcessResourceSample(string processName, out bool hadError)
+        {
+                hadError = false;
+                if (string.IsNullOrWhiteSpace(processName))
+                {
+                        return default;
+                }
+
+                Process[] processes;
+                try
+                {
+                        processes = Process.GetProcessesByName(processName);
+                }
+                catch
+                {
+                        hadError = true;
+                        return default;
+                }
+
+                if (processes == null || processes.Length == 0)
+                {
+                        return default;
+                }
+
+                bool encounteredError = false;
+                ProcessResourceSample sample = default;
+                foreach (Process process in processes)
+                {
+                        try
+                        {
+                                sample = CaptureProcessResourceSample(process, processName);
+                                if (sample.IsValid)
+                                {
+                                        break;
+                                }
+                        }
+                        catch
+                        {
+                                encounteredError = true;
+                        }
+                        finally
+                        {
+                                process.Dispose();
+                        }
+                }
+                hadError = !sample.IsValid && encounteredError;
+                return sample;
+        }
+
+        private static ProcessResourceSample CaptureProcessResourceSample(Process process, string fallbackName)
+        {
+                if (process == null)
+                {
+                        return default;
+                }
+
+                try
+                {
+                        process.Refresh();
+                        IntPtr handle = process.Handle;
+                        if (handle == IntPtr.Zero)
+                        {
+                                return default;
+                        }
+
+                        int gdiCount = DiagnosticsNativeMethods.GetGuiResources(handle, 0);
+                        int userCount = DiagnosticsNativeMethods.GetGuiResources(handle, 1);
+                        string name = string.IsNullOrWhiteSpace(process.ProcessName) ? (fallbackName ?? string.Empty) : process.ProcessName;
+                        int threadCount = 0;
+                        try
+                        {
+                                threadCount = process.Threads?.Count ?? 0;
+                        }
+                        catch
+                        {
+                                threadCount = 0;
+                        }
+
+                        long privateMb = process.PrivateMemorySize64 / (1024L * 1024L);
+                        long workingMb = process.WorkingSet64 / (1024L * 1024L);
+                        return new ProcessResourceSample(true, name, process.Id, process.HandleCount, threadCount, userCount, gdiCount, privateMb, workingMb);
+                }
+                catch
+                {
+                        return default;
+                }
+        }
+
+        private void TryCaptureDiagnosticsDump(string reason, string detail, long metricMs, bool includeNvda)
+        {
+                DateTime nowUtc = DateTime.UtcNow;
+                if (_lastDiagnosticsDumpUtc != DateTime.MinValue &&
+                        (nowUtc - _lastDiagnosticsDumpUtc).TotalSeconds < DiagnosticsDumpCooldownSeconds)
+                {
+                        return;
+                }
+
+                _lastDiagnosticsDumpUtc = nowUtc;
+                string marker = _uiThreadWatchdogLastMarker ?? "unknown";
+                DebugLogger.Log(DebugLogger.LogLevel.Warning, "DiagnosticsDump",
+                        $"Capture requested reason={reason}, metric={metricMs}ms, marker={marker}, detail={detail}");
+
+                try
+                {
+                        string dumpDirectory = Path.Combine(PathHelper.ApplicationRootDirectory, "Logs", "Dumps");
+                        Directory.CreateDirectory(dumpDirectory);
+                        string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
+
+                        using (Process current = Process.GetCurrentProcess())
+                        {
+                                string selfDumpPath = Path.Combine(dumpDirectory, $"YTPlayer_{reason}_{timestamp}_{current.Id}.dmp");
+                                if (TryWriteMiniDump(current, selfDumpPath, out int selfError))
+                                {
+                                        DebugLogger.Log(DebugLogger.LogLevel.Warning, "DiagnosticsDump", $"Self dump created: {selfDumpPath}");
+                                }
+                                else
+                                {
+                                        DebugLogger.Log(DebugLogger.LogLevel.Error, "DiagnosticsDump", $"Self dump failed: error={selfError}");
+                                }
+                        }
+
+                        if (!includeNvda)
+                        {
+                                return;
+                        }
+
+                        Process[] nvdaProcesses = Process.GetProcessesByName("nvda");
+                        foreach (Process process in nvdaProcesses)
+                        {
+                                try
+                                {
+                                        string nvdaDumpPath = Path.Combine(dumpDirectory, $"NVDA_{reason}_{timestamp}_{process.Id}.dmp");
+                                        if (TryWriteMiniDump(process, nvdaDumpPath, out int nvdaError))
+                                        {
+                                                DebugLogger.Log(DebugLogger.LogLevel.Warning, "DiagnosticsDump", $"NVDA dump created: {nvdaDumpPath}");
+                                        }
+                                        else
+                                        {
+                                                DebugLogger.Log(DebugLogger.LogLevel.Warning, "DiagnosticsDump", $"NVDA dump failed(pid={process.Id}): error={nvdaError}");
+                                        }
+                                }
+                                catch (Exception ex)
+                                {
+                                        DebugLogger.LogException("DiagnosticsDump", ex, $"NVDA dump exception pid={process.Id}");
+                                }
+                                finally
+                                {
+                                        process.Dispose();
+                                }
+                        }
+                }
+                catch (Exception ex)
+                {
+                        DebugLogger.LogException("DiagnosticsDump", ex, $"reason={reason}, detail={detail}");
+                }
+        }
+
+        private static bool TryWriteMiniDump(Process process, string dumpPath, out int errorCode)
+        {
+                errorCode = 0;
+                if (process == null || string.IsNullOrWhiteSpace(dumpPath))
+                {
+                        return false;
+                }
+
+                try
+                {
+                        using (FileStream stream = new FileStream(dumpPath, FileMode.Create, FileAccess.Write, FileShare.None))
+                        {
+                                MiniDumpType dumpType = MiniDumpType.WithHandleData |
+                                        MiniDumpType.WithUnloadedModules |
+                                        MiniDumpType.WithProcessThreadData |
+                                        MiniDumpType.WithThreadInfo |
+                                        MiniDumpType.IgnoreInaccessibleMemory;
+                                bool success = DiagnosticsNativeMethods.MiniDumpWriteDump(
+                                        process.Handle,
+                                        process.Id,
+                                        stream.SafeFileHandle.DangerousGetHandle(),
+                                        (uint)dumpType,
+                                        IntPtr.Zero,
+                                        IntPtr.Zero,
+                                        IntPtr.Zero);
+                                if (!success)
+                                {
+                                        errorCode = Marshal.GetLastWin32Error();
+                                }
+                                return success;
+                        }
+                }
+                catch
+                {
+                        errorCode = Marshal.GetLastWin32Error();
+                        return false;
+                }
+        }
+#endif
+
+        private void RecordAccessibilityNotifyCall(bool suppressed = false)
+        {
+#if DEBUG
+                Interlocked.Increment(ref _accessNotifyClientCallCount);
+                if (suppressed)
+                {
+                        Interlocked.Increment(ref _accessBurstSuppressedNotifyCount);
+                }
+#endif
+        }
+
+        private void RecordAccessibilityWinEventCall(int count = 1)
+        {
+#if DEBUG
+                if (count <= 0)
+                {
+                        return;
+                }
+                Interlocked.Add(ref _accessNotifyWinEventCallCount, count);
+#endif
+        }
+
+        private void RecordAccessibilitySetPropertyCall()
+        {
+#if DEBUG
+                Interlocked.Increment(ref _accessSetPropertyCallCount);
+#endif
+        }
+
+        private void RecordAccessibilitySelectionChangedCall()
+        {
+#if DEBUG
+                Interlocked.Increment(ref _accessSelectionChangedCount);
+#endif
+        }
+
+        private void RecordAccessibilitySelectionApplyCall()
+        {
+#if DEBUG
+                Interlocked.Increment(ref _accessSelectionApplyCount);
+#endif
+        }
+
+        private void RecordAccessibilityNavigationFlushCall(int removedCount)
+        {
+#if DEBUG
+                if (removedCount <= 0)
+                {
+                        return;
+                }
+                Interlocked.Add(ref _accessBurstNavFlushRemovedCount, removedCount);
+#endif
+        }
+
+        private void RecordAccessibilityNvdaNavSuppressedCall()
+        {
+#if DEBUG
+                Interlocked.Increment(ref _accessNvdaNavKeySuppressedCount);
+#endif
+        }
+
+        private void RecordAccessibilityNvdaNavAppliedStepCall(int stepCount)
+        {
+#if DEBUG
+                if (stepCount <= 0)
+                {
+                        return;
+                }
+                Interlocked.Add(ref _accessNvdaNavAppliedStepCount, stepCount);
+#endif
+        }
+
+        private bool ShouldThrottleBurstListViewAccessibilityEvent(Control control, AccessibleEvents accEvent)
+        {
+#if DEBUG
+                if (!_listViewSelectionBurstActive || control == null || !ReferenceEquals(control, resultListView))
+                {
+                        return false;
+                }
+                if (accEvent != AccessibleEvents.Focus && accEvent != AccessibleEvents.Selection &&
+                        accEvent != AccessibleEvents.SelectionAdd && accEvent != AccessibleEvents.NameChange)
+                {
+                        return false;
+                }
+                DateTime nowUtc = DateTime.UtcNow;
+                if (_lastBurstListViewNotifyUtc != DateTime.MinValue &&
+                        (nowUtc - _lastBurstListViewNotifyUtc).TotalMilliseconds < AccessibilityBurstNotifyThrottleMs)
+                {
+                        return true;
+                }
+                _lastBurstListViewNotifyUtc = nowUtc;
+#endif
+                return false;
+        }
+
+        private void TryCaptureDiagnosticsDumpOnAccessibilityError(string operation, Exception ex)
+        {
+#if DEBUG
+                if (ex == null)
+                {
+                        return;
+                }
+                Exception current = ex;
+                while (current != null)
+                {
+                        if (current is Win32Exception win32Exception && win32Exception.NativeErrorCode == 1816)
+                        {
+                                TryCaptureDiagnosticsDump("Win32Quota", operation, 0L, includeNvda: true);
+                                return;
+                        }
+                        if (current.HResult == unchecked((int)0x80070718) ||
+                                (current.Message?.IndexOf("Not enough quota", StringComparison.OrdinalIgnoreCase) ?? -1) >= 0)
+                        {
+                                TryCaptureDiagnosticsDump("QuotaMessage", operation, 0L, includeNvda: true);
+                                return;
+                        }
+                        current = current.InnerException;
+                }
+#endif
         }
 
         private void ScheduleResultListViewLayoutUpdate()
@@ -2075,32 +2962,96 @@ public partial class MainForm : Form
                         return;
                 }
 
+                _listViewLayoutPending = true;
+                _lastListViewLayoutRequestUtc = DateTime.UtcNow;
+
                 if (_listViewLayoutDebounceTimer == null)
                 {
                         _listViewLayoutDebounceTimer = new System.Windows.Forms.Timer();
-                        _listViewLayoutDebounceTimer.Interval = ListViewLayoutDebounceDelayMs;
-                        _listViewLayoutDebounceTimer.Tick += (_, _) =>
-                        {
-                                _listViewLayoutDebounceTimer.Stop();
-                                if (resultListView == null)
-                                {
-                                        return;
-                                }
-                                if (_isApplyingListViewLayout)
-                                {
-                                        _listViewLayoutDebounceTimer.Start();
-                                        return;
-                                }
-                                if (!IsResultListViewLayoutReady())
-                                {
-                                        return;
-                                }
-                                ApplyResultListViewLayoutCore();
-                        };
+                        _listViewLayoutDebounceTimer.Tick += (_, _) => HandleListViewLayoutTimerTick();
                 }
 
+                ScheduleListViewLayoutTimer();
+        }
+
+        private void HandleListViewLayoutTimerTick()
+        {
+                if (_listViewLayoutDebounceTimer != null)
+                {
+                        _listViewLayoutDebounceTimer.Stop();
+                }
+#if DEBUG
+                TouchUiThreadMarker("ListViewLayoutTimerTick");
+#endif
+
+                bool visualPending = IsListViewVisualAdjustPending();
+                if (!_listViewLayoutPending)
+                {
+                        if (visualPending)
+                        {
+                                ScheduleListViewLayoutTimer();
+                        }
+                        return;
+                }
+
+                if (_isApplyingListViewLayout || !IsResultListViewLayoutReady())
+                {
+                        ScheduleListViewLayoutTimer(ListViewFocusStableDelayMs);
+                        return;
+                }
+
+                DateTime dueUtc = GetListViewLayoutDueUtc();
+                if (DateTime.UtcNow < dueUtc)
+                {
+                        ScheduleListViewLayoutTimer();
+                        return;
+                }
+
+                _listViewLayoutPending = false;
+                ApplyResultListViewLayout();
+                visualPending = IsListViewVisualAdjustPending();
+
+                if (_listViewLayoutPending || visualPending)
+                {
+                        ScheduleListViewLayoutTimer();
+                }
+        }
+
+        private void ScheduleListViewLayoutTimer(int? overrideDelayMs = null)
+        {
+                if (_listViewLayoutDebounceTimer == null)
+                {
+                        return;
+                }
+
+                int delayMs;
+                if (overrideDelayMs.HasValue)
+                {
+                        delayMs = overrideDelayMs.Value;
+                }
+                else
+                {
+                        DateTime dueUtc = GetListViewLayoutDueUtc();
+                        delayMs = (int)Math.Max(0, (dueUtc - DateTime.UtcNow).TotalMilliseconds);
+                }
+                delayMs = Math.Max(1, delayMs);
+                _listViewLayoutDebounceTimer.Interval = delayMs;
                 _listViewLayoutDebounceTimer.Stop();
                 _listViewLayoutDebounceTimer.Start();
+        }
+
+        private DateTime GetListViewLayoutDueUtc()
+        {
+                DateTime baseUtc = _lastListViewLayoutRequestUtc;
+                if (_lastListViewFocusChangeUtc > baseUtc)
+                {
+                        baseUtc = _lastListViewFocusChangeUtc;
+                }
+                if (baseUtc == DateTime.MinValue)
+                {
+                        baseUtc = DateTime.UtcNow;
+                }
+                return baseUtc.AddMilliseconds(ListViewFocusStableDelayMs);
         }
 
         private bool IsResultListViewLayoutReady()
@@ -2174,8 +3125,39 @@ public partial class MainForm : Form
                         return;
                 }
 
+#if DEBUG
+                Stopwatch layoutSw = Stopwatch.StartNew();
+                int layoutRowCount = -1;
+#endif
                 bool hideSequence = _hideSequenceNumbers || IsAlwaysSequenceHiddenView();
+                int totalItemCount = GetResultListViewItemCount();
+                if (ShouldUseResultListViewLayoutFastPath(totalItemCount))
+                {
+                        int[] fastWidths = BuildFallbackColumnWidths(availableWidth, hideSequence);
+                        ApplyResultListViewColumnWidths(fastWidths);
+                        DebugListViewLayout($"FastPath: rows={totalItemCount}, availableWidth={availableWidth}, hideSequence={hideSequence}, widths=[{string.Join(",", fastWidths)}]");
+#if DEBUG
+                        layoutRowCount = totalItemCount;
+                        TouchUiThreadMarker($"UpdateColumnWidthsFastPath rows={layoutRowCount}");
+                        if (layoutSw != null)
+                        {
+                                layoutSw.Stop();
+                                long layoutMs = layoutSw.ElapsedMilliseconds;
+                                if (layoutRowCount >= 0 && layoutMs >= 200)
+                                {
+                                        DebugLogger.LogUIThreadBlock("ListViewLayout",
+                                                $"UpdateColumnWidthsFastPath rows={layoutRowCount} availableWidth={availableWidth}", layoutMs);
+                                }
+                        }
+#endif
+                        return;
+                }
+
                 List<ListViewRowSnapshot> rows = EnumerateResultListViewRows().ToList();
+#if DEBUG
+                layoutRowCount = rows.Count;
+                TouchUiThreadMarker($"UpdateColumnWidths rows={layoutRowCount}");
+#endif
                 DebugListViewLayout($"Start: viewSource={_currentViewSource ?? ""}, mode={GetCurrentListViewDataMode()}, rows={rows.Count}, hostWidth={hostWidth}, availableWidth={availableWidth}, hideSequence={hideSequence}");
                 ListViewColumnRole[] roles = ResolveResultListViewColumnRoles();
 
@@ -2493,6 +3475,19 @@ public partial class MainForm : Form
 
                 ApplyResultListViewColumnWidths(widths);
                 DebugListViewLayout($"Final widths: [{string.Join(",", widths)}]");
+
+#if DEBUG
+                if (layoutSw != null)
+                {
+                        layoutSw.Stop();
+                        long layoutMs = layoutSw.ElapsedMilliseconds;
+                        if (layoutRowCount >= 0 && layoutMs >= 200)
+                        {
+                                DebugLogger.LogUIThreadBlock("ListViewLayout",
+                                        $"UpdateColumnWidths rows={layoutRowCount} availableWidth={availableWidth}", layoutMs);
+                        }
+                }
+#endif
         }
 
         private sealed class ColumnAutoSizeStats
@@ -2842,6 +3837,25 @@ public partial class MainForm : Form
                 }
 
                 return Math.Max(0, width);
+        }
+
+        private bool ShouldUseResultListViewLayoutFastPath(int itemCount)
+        {
+                if (itemCount < ListViewLayoutFastPathItemThreshold)
+                {
+                        return false;
+                }
+
+                if (_isUserResizingListViewColumns)
+                {
+                        return false;
+                }
+
+                return !_customListViewIndexWidth.HasValue &&
+                        !_customListViewNameWidth.HasValue &&
+                        !_customListViewCreatorWidth.HasValue &&
+                        !_customListViewExtraWidth.HasValue &&
+                        !_customListViewDescriptionWidth.HasValue;
         }
 
         private int[] BuildFallbackColumnWidths(int availableWidth, bool hideSequence)
@@ -3477,6 +4491,10 @@ public partial class MainForm : Form
                         return;
                 }
 
+#if DEBUG
+                Stopwatch rowHeightSw = Stopwatch.StartNew();
+                int rowHeightCount = 0;
+#endif
                 if (_customListViewRowHeight.HasValue)
                 {
                         int minHeight = Math.Max(ListViewRowResizeMinHeight, resultListView.Font?.Height ?? ListViewRowResizeMinHeight);
@@ -3500,9 +4518,30 @@ public partial class MainForm : Form
                         columnHeader4.Width,
                         columnHeader5.Width
                 };
+#if DEBUG
+                TouchUiThreadMarker("UpdateRowHeight");
+#endif
+
+                int totalItemCount = GetResultListViewItemCount();
+                if (totalItemCount >= ListViewRowHeightFastPathItemThreshold)
+                {
+                        int estimated = Math.Min(maxAllowedHeight, Math.Max(defaultHeight, lineHeight * ListViewMultiLineMaxLines + 4));
+                        if (resultListView is SafeListView largeSafeListView)
+                        {
+                                largeSafeListView.SetRowHeight(estimated);
+                        }
+#if DEBUG
+                        rowHeightCount = totalItemCount;
+                        DebugListViewLayout($"RowHeightFastPath: rows={totalItemCount}, target={estimated}");
+#endif
+                        return;
+                }
 
                 foreach (ListViewRowSnapshot row in EnumerateResultListViewRows())
                 {
+#if DEBUG
+                        rowHeightCount++;
+#endif
                         int rowHeight = MeasureRowHeight(row, columnWidths, lineHeight, maxAllowedHeight);
                         if (rowHeight > maxHeight)
                         {
@@ -3516,6 +4555,18 @@ public partial class MainForm : Form
                 {
                         safeListView.SetRowHeight(targetHeight);
                 }
+#if DEBUG
+                if (rowHeightSw != null)
+                {
+                        rowHeightSw.Stop();
+                        long rowHeightMs = rowHeightSw.ElapsedMilliseconds;
+                        if (rowHeightMs >= 200)
+                        {
+                                DebugLogger.LogUIThreadBlock("ListViewLayout",
+                                        $"UpdateRowHeight rows={rowHeightCount} target={targetHeight}", rowHeightMs);
+                        }
+                }
+#endif
         }
 
         private int MeasureRowHeight(ListViewRowSnapshot row, int[] columnWidths, int lineHeight, int maxAllowedHeight)
@@ -10069,6 +11120,7 @@ private void ActivateMixedSearchTypeOption()
 
 	private void DisableVirtualSongList()
 	{
+		MarkListViewLayoutDataChanged();
 		_isVirtualSongListActive = false;
 		_virtualSongs.Clear();
 		_virtualStartIndex = 1;
@@ -10089,6 +11141,7 @@ private void ActivateMixedSearchTypeOption()
 
 	private void ConfigureVirtualSongList(List<SongInfo> songs, int startIndex, bool showPagination, bool hasPreviousPage, bool hasNextPage)
 	{
+		MarkListViewLayoutDataChanged();
 		_isVirtualSongListActive = true;
 		_virtualSongs = songs ?? new List<SongInfo>();
 		_virtualStartIndex = Math.Max(1, startIndex);
@@ -10109,7 +11162,7 @@ private void ActivateMixedSearchTypeOption()
 			}
 			resultListView.VirtualListSize = virtualSongListSize;
 			resultListView.Invalidate();
-			ApplyResultListViewLayout();
+			ScheduleResultListViewLayoutUpdate();
 		}
 	}
 
@@ -10292,13 +11345,58 @@ private void ActivateMixedSearchTypeOption()
 
 	private string GetVirtualItemPrimaryText(int index)
 	{
+		bool useSequenceCandidate = !(_hideSequenceNumbers || IsAlwaysSequenceHiddenView());
+		return GetVirtualItemPrimaryText(index, useSequenceCandidate);
+	}
+
+	private string GetVirtualItemPrimaryText(int index, bool useSequenceCandidate)
+	{
 		if (index < 0)
 		{
 			return string.Empty;
 		}
-		ListViewItem item = BuildVirtualItemByIndex(index);
-		return BuildListViewItemSearchText(item);
+		int songCount = _virtualSongs?.Count ?? 0;
+		if (index < songCount)
+		{
+			if (useSequenceCandidate)
+			{
+				return FormatIndex(checked(_virtualStartIndex + index));
+			}
+			SongInfo song = (_virtualSongs != null && index >= 0 && index < _virtualSongs.Count) ? _virtualSongs[index] : null;
+			if (song == null)
+			{
+				return string.Empty;
+			}
+			if (string.Equals(song.Name, ListLoadingPlaceholderText, StringComparison.Ordinal))
+			{
+				return string.Empty;
+			}
+			return BuildSongPrimaryText(song);
+		}
+		int cursor = songCount;
+		if (_virtualShowPagination && _virtualHasPreviousPage)
+		{
+			if (index == cursor)
+			{
+				return useSequenceCandidate ? "上一页" : string.Empty;
+			}
+			cursor = checked(cursor + 1);
+		}
+		if (_virtualShowPagination && _virtualHasNextPage)
+		{
+			if (index == cursor)
+			{
+				return useSequenceCandidate ? "下一页" : string.Empty;
+			}
+			cursor = checked(cursor + 1);
+		}
+		if (_virtualShowPagination && (_virtualHasPreviousPage || _virtualHasNextPage) && index == cursor)
+		{
+			return useSequenceCandidate ? "跳转" : string.Empty;
+		}
+		return string.Empty;
 	}
+
 
 	private int FindVirtualItemIndexByPrimaryText(string search, int startIndex, bool forward)
 	{
@@ -10307,22 +11405,23 @@ private void ActivateMixedSearchTypeOption()
 		{
 			return -1;
 		}
+		bool useSequenceCandidate = !(_hideSequenceNumbers || IsAlwaysSequenceHiddenView());
 		int start = Math.Max(0, Math.Min(startIndex, total - 1));
-		StringComparison comparison = StringComparison.CurrentCultureIgnoreCase;
+		StringComparison comparison = StringComparison.OrdinalIgnoreCase;
 		if (forward)
 		{
 			for (int i = start; i < total; i++)
 			{
-				string text = GetVirtualItemPrimaryText(i);
-				if (!string.IsNullOrWhiteSpace(text) && text.StartsWith(search, comparison))
+				string text = GetVirtualItemPrimaryText(i, useSequenceCandidate);
+				if (!string.IsNullOrEmpty(text) && text.StartsWith(search, comparison))
 				{
 					return i;
 				}
 			}
 			for (int i = 0; i < start; i++)
 			{
-				string text = GetVirtualItemPrimaryText(i);
-				if (!string.IsNullOrWhiteSpace(text) && text.StartsWith(search, comparison))
+				string text = GetVirtualItemPrimaryText(i, useSequenceCandidate);
+				if (!string.IsNullOrEmpty(text) && text.StartsWith(search, comparison))
 				{
 					return i;
 				}
@@ -10331,16 +11430,16 @@ private void ActivateMixedSearchTypeOption()
 		}
 		for (int i = start; i >= 0; i--)
 		{
-			string text = GetVirtualItemPrimaryText(i);
-			if (!string.IsNullOrWhiteSpace(text) && text.StartsWith(search, comparison))
+			string text = GetVirtualItemPrimaryText(i, useSequenceCandidate);
+			if (!string.IsNullOrEmpty(text) && text.StartsWith(search, comparison))
 			{
 				return i;
 			}
 		}
 		for (int i = total - 1; i > start; i--)
 		{
-			string text = GetVirtualItemPrimaryText(i);
-			if (!string.IsNullOrWhiteSpace(text) && text.StartsWith(search, comparison))
+			string text = GetVirtualItemPrimaryText(i, useSequenceCandidate);
+			if (!string.IsNullOrEmpty(text) && text.StartsWith(search, comparison))
 			{
 				return i;
 			}
@@ -10348,7 +11447,43 @@ private void ActivateMixedSearchTypeOption()
 		return -1;
 	}
 
+
+
+	private static string ResolveListViewPrimaryText(ListViewItem? item, bool useSequenceCandidate)
+	{
+		if (item == null)
+		{
+			return string.Empty;
+		}
+		if (useSequenceCandidate)
+		{
+			string sequence = (item.SubItems.Count > 1 ? item.SubItems[1].Text : item.Text) ?? string.Empty;
+			return sequence.Trim();
+		}
+
+		string leftMostText = (item.SubItems.Count > 2 ? item.SubItems[2].Text : string.Empty) ?? string.Empty;
+		string leftMostTrimmed = leftMostText.Trim();
+		if (string.Equals(leftMostTrimmed, ListLoadingPlaceholderText, StringComparison.Ordinal))
+		{
+			return string.Empty;
+		}
+		if (!string.IsNullOrEmpty(leftMostTrimmed))
+		{
+			return leftMostTrimmed;
+		}
+
+		string fallback = (item.SubItems.Count > 1 ? item.SubItems[1].Text : item.Text) ?? string.Empty;
+		return fallback.Trim();
+	}
+
+
 	private string GetListViewItemPrimaryText(int index)
+	{
+		bool useSequenceCandidate = !(_hideSequenceNumbers || IsAlwaysSequenceHiddenView());
+		return GetListViewItemPrimaryText(index, useSequenceCandidate);
+	}
+
+	private string GetListViewItemPrimaryText(int index, bool useSequenceCandidate)
 	{
 		if (index < 0)
 		{
@@ -10356,15 +11491,29 @@ private void ActivateMixedSearchTypeOption()
 		}
 		if (_isVirtualSongListActive && resultListView != null && resultListView.VirtualMode)
 		{
-			return GetVirtualItemPrimaryText(index);
+			return GetVirtualItemPrimaryText(index, useSequenceCandidate);
 		}
 		if (resultListView != null && index < resultListView.Items.Count)
 		{
-			return BuildListViewItemSearchText(resultListView.Items[index]);
+			ListViewItem item = resultListView.Items[index];
+			return ResolveListViewPrimaryText(item, useSequenceCandidate);
 		}
 		if (_currentSongs.Count > 0)
 		{
-			return (index >= 0 && index < _currentSongs.Count) ? BuildSongPrimaryText(_currentSongs[index]) : string.Empty;
+			if (index < 0 || index >= _currentSongs.Count)
+			{
+				return string.Empty;
+			}
+			if (useSequenceCandidate)
+			{
+				return FormatIndex(checked(Math.Max(1, _currentSequenceStartIndex) + index));
+			}
+			SongInfo song = _currentSongs[index];
+			if (song != null && string.Equals(song.Name, ListLoadingPlaceholderText, StringComparison.Ordinal))
+			{
+				return string.Empty;
+			}
+			return BuildSongPrimaryText(song);
 		}
 		if (_currentPlaylists.Count > 0)
 		{
@@ -10393,6 +11542,8 @@ private void ActivateMixedSearchTypeOption()
 		return string.Empty;
 	}
 
+
+
 	private int FindListViewItemIndexByPrimaryText(string search, int startIndex, bool forward)
 	{
 		if (string.IsNullOrWhiteSpace(search))
@@ -10404,22 +11555,23 @@ private void ActivateMixedSearchTypeOption()
 		{
 			return -1;
 		}
+		bool useSequenceCandidate = !(_hideSequenceNumbers || IsAlwaysSequenceHiddenView());
 		int start = Math.Max(0, Math.Min(startIndex, total - 1));
-		StringComparison comparison = StringComparison.CurrentCultureIgnoreCase;
+		StringComparison comparison = StringComparison.OrdinalIgnoreCase;
 		if (forward)
 		{
 			for (int i = start; i < total; i++)
 			{
-				string text = GetListViewItemPrimaryText(i);
-				if (!string.IsNullOrWhiteSpace(text) && text.StartsWith(search, comparison))
+				string text = GetListViewItemPrimaryText(i, useSequenceCandidate);
+				if (!string.IsNullOrEmpty(text) && text.StartsWith(search, comparison))
 				{
 					return i;
 				}
 			}
 			for (int i = 0; i < start; i++)
 			{
-				string text = GetListViewItemPrimaryText(i);
-				if (!string.IsNullOrWhiteSpace(text) && text.StartsWith(search, comparison))
+				string text = GetListViewItemPrimaryText(i, useSequenceCandidate);
+				if (!string.IsNullOrEmpty(text) && text.StartsWith(search, comparison))
 				{
 					return i;
 				}
@@ -10428,22 +11580,24 @@ private void ActivateMixedSearchTypeOption()
 		}
 		for (int i = start; i >= 0; i--)
 		{
-			string text = GetListViewItemPrimaryText(i);
-			if (!string.IsNullOrWhiteSpace(text) && text.StartsWith(search, comparison))
+			string text = GetListViewItemPrimaryText(i, useSequenceCandidate);
+			if (!string.IsNullOrEmpty(text) && text.StartsWith(search, comparison))
 			{
 				return i;
 			}
 		}
 		for (int i = total - 1; i > start; i--)
 		{
-			string text = GetListViewItemPrimaryText(i);
-			if (!string.IsNullOrWhiteSpace(text) && text.StartsWith(search, comparison))
+			string text = GetListViewItemPrimaryText(i, useSequenceCandidate);
+			if (!string.IsNullOrEmpty(text) && text.StartsWith(search, comparison))
 			{
 				return i;
 			}
 		}
 		return -1;
 	}
+
+
 
 	private void ResetListViewTypeSearchBuffer()
 	{
@@ -10453,6 +11607,7 @@ private void ActivateMixedSearchTypeOption()
 
 	private void DisplaySongs(List<SongInfo> songs, bool showPagination = false, bool hasNextPage = false, int startIndex = 1, bool preserveSelection = false, string? viewSource = null, string? accessibleName = null, bool skipAvailabilityCheck = false, bool announceHeader = true, bool suppressFocus = false, bool allowSelection = true)
 	{
+		MarkListViewLayoutDataChanged();
 		_listLoadingPlaceholderActive = false;
 		ConfigureListViewDefault();
 		UpdateSequenceStartIndex(startIndex);
@@ -10490,7 +11645,6 @@ private void ActivateMixedSearchTypeOption()
 			resultListView.VirtualListSize = 0;
 		}
 		resultListView.Items.Clear();
-		bool flag4 = false;
 		int num2 = startIndex;
 		int num3 = 0;
 		checked
@@ -10556,8 +11710,8 @@ private void ActivateMixedSearchTypeOption()
 				text = ((!string.IsNullOrEmpty(viewSource) && viewSource.StartsWith("search:", StringComparison.OrdinalIgnoreCase)) ? "搜索结果" : "歌曲列表");
 			}
                         ApplyListViewContext(viewSource, text, announceHeader);
-			bool flag5 = false;
 			int num4 = -1;
+                        bool flag5 = false;
                         if (!string.IsNullOrWhiteSpace(_pendingSongFocusId))
                         {
                                 num4 = _currentSongs.FindIndex((SongInfo s) => s != null && string.Equals(s.Id, _pendingSongFocusId, StringComparison.OrdinalIgnoreCase));
@@ -10668,8 +11822,10 @@ private static void SetListViewItemPrimaryText(ListViewItem item, string? text)
 	{
 		return;
 	}
-	item.Text = string.IsNullOrWhiteSpace(text) ? string.Empty : text;
+	string normalized = string.IsNullOrWhiteSpace(text) ? string.Empty : text.Trim();
+	item.Text = normalized;
 }
+
 
 private int ResolveSongIndexInCurrentSongs(SongInfo song)
 {
@@ -10826,15 +11982,19 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 
 	private void RefreshSequenceDisplayInPlace()
 	{
-		if (resultListView == null || resultListView.Items.Count == 0)
+		if (resultListView == null)
 		{
 			return;
 		}
 		if (_isVirtualSongListActive && resultListView.VirtualMode)
 		{
 			ResetVirtualItemCache();
-			resultListView.Invalidate();
 			ApplyResultListViewLayout();
+			resultListView.Invalidate();
+			return;
+		}
+		if (resultListView.Items.Count == 0)
+		{
 			return;
 		}
 		resultListView.BeginUpdate();
@@ -10854,10 +12014,6 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 						bool flag = (listViewItem.Tag is int num && num == -2) || string.Equals(a, "上一页", StringComparison.Ordinal);
 						bool flag2 = (listViewItem.Tag is int num2 && num2 == -3) || string.Equals(a, "下一页", StringComparison.Ordinal);
 						bool flag3 = (listViewItem.Tag is int num3 && num3 == -4) || string.Equals(a, "跳转", StringComparison.Ordinal);
-						bool flag4 = (listViewItem.Tag is int num4 && num4 == ListRetryPlaceholderTag) || string.Equals(a, ListRetryPlaceholderText, StringComparison.Ordinal);
-						string primaryText = listViewItem.Text ?? string.Empty;
-						string mainText = (listViewItem.SubItems.Count > 2 ? listViewItem.SubItems[2].Text : string.Empty) ?? string.Empty;
-						bool flag5 = string.Equals(primaryText, ListLoadingPlaceholderText, StringComparison.Ordinal) || string.Equals(mainText, ListLoadingPlaceholderText, StringComparison.Ordinal);
 						if (flag)
 						{
 							listViewItem.SubItems[1].Text = "上一页";
@@ -10870,7 +12026,7 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 						{
 							listViewItem.SubItems[1].Text = "跳转";
 						}
-						else if (hideSequence || flag4 || flag5)
+						else if (hideSequence)
 						{
 							listViewItem.SubItems[1].Text = string.Empty;
 						}
@@ -10895,6 +12051,7 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 
 	private void PatchSongs(List<SongInfo> songs, int startIndex, bool skipAvailabilityCheck = false, bool showPagination = false, bool hasPreviousPage = false, bool hasNextPage = false, int pendingFocusIndex = -1, bool allowSelection = true)
 	{
+		MarkListViewLayoutDataChanged();
 		UpdateSequenceStartIndex(startIndex);
 		int num = ((resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : pendingFocusIndex);
 		List<SongInfo> list = (_currentSongs = CloneList(songs));
@@ -11169,6 +12326,7 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 
 	private void DisplayPlaylists(List<PlaylistInfo> playlists, bool preserveSelection = false, string? viewSource = null, string? accessibleName = null, int startIndex = 1, bool showPagination = false, bool hasNextPage = false, bool announceHeader = true, bool suppressFocus = false, bool allowSelection = true)
 	{
+		MarkListViewLayoutDataChanged();
 		_listLoadingPlaceholderActive = false;
 		ConfigureListViewDefault();
 		UpdateSequenceStartIndex(startIndex);
@@ -11305,6 +12463,7 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 
 	private void PatchPlaylists(List<PlaylistInfo> playlists, int startIndex, bool showPagination = false, bool hasPreviousPage = false, bool hasNextPage = false, int pendingFocusIndex = -1, bool allowSelection = true)
 	{
+		MarkListViewLayoutDataChanged();
 		UpdateSequenceStartIndex(startIndex);
 		int num = ((resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : pendingFocusIndex);
 		_currentSongs.Clear();
@@ -11430,6 +12589,7 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 
 	private void DisplayListItems(List<ListItemInfo> items, string? viewSource = null, string? accessibleName = null, bool preserveSelection = false, bool announceHeader = true, bool suppressFocus = false, bool allowSelection = true)
 	{
+		MarkListViewLayoutDataChanged();
 		_listLoadingPlaceholderActive = false;
 		ConfigureListViewDefault();
 		UpdateSequenceStartIndex(1);
@@ -11554,6 +12714,7 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 
 	private void PatchListItems(List<ListItemInfo> items, bool showPagination = false, bool hasPreviousPage = false, bool hasNextPage = false, int pendingFocusIndex = -1, bool incremental = false, bool preserveDisplayIndex = false)
 	{
+		MarkListViewLayoutDataChanged();
 		int num = ((resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : pendingFocusIndex);
 		checked
 		{
@@ -13004,6 +14165,7 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 
 	private void DisplayAlbums(List<AlbumInfo> albums, bool preserveSelection = false, string? viewSource = null, string? accessibleName = null, int startIndex = 1, bool showPagination = false, bool hasNextPage = false, bool announceHeader = true, bool suppressFocus = false, bool allowSelection = true)
 	{
+		MarkListViewLayoutDataChanged();
 		_listLoadingPlaceholderActive = false;
 		ConfigureListViewDefault();
 		UpdateSequenceStartIndex(startIndex);
@@ -13108,6 +14270,7 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 
 	private void PatchAlbums(List<AlbumInfo> albums, int startIndex, bool showPagination = false, bool hasPreviousPage = false, bool hasNextPage = false, int pendingFocusIndex = -1, bool allowSelection = true)
 	{
+		MarkListViewLayoutDataChanged();
 		UpdateSequenceStartIndex(startIndex);
 		int num = ((resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : pendingFocusIndex);
 		_currentSongs.Clear();
@@ -13256,6 +14419,7 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 
 	private void DisplayPodcasts(List<PodcastRadioInfo> podcasts, bool showPagination = false, bool hasNextPage = false, int startIndex = 1, bool preserveSelection = false, string? viewSource = null, string? accessibleName = null, bool announceHeader = true, bool suppressFocus = false, bool allowSelection = true, bool includeNavigationRows = true)
 	{
+		MarkListViewLayoutDataChanged();
 		_listLoadingPlaceholderActive = false;
 		ConfigureListViewForPodcasts();
 		UpdateSequenceStartIndex(startIndex);
@@ -13364,6 +14528,7 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 
 	private void PatchPodcasts(List<PodcastRadioInfo> podcasts, int startIndex, bool showPagination = false, bool hasPreviousPage = false, bool hasNextPage = false, int pendingFocusIndex = -1, bool allowSelection = true, bool includeNavigationRows = true)
 	{
+		MarkListViewLayoutDataChanged();
 		UpdateSequenceStartIndex(startIndex);
 		int num = ((resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : pendingFocusIndex);
 		_currentSongs.Clear();
@@ -13825,7 +14990,7 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 
         private void resultListView_SizeChanged(object sender, EventArgs e)
         {
-                ApplyResultListViewLayout();
+                ScheduleResultListViewLayoutUpdate();
         }
 
         private void MainForm_SizeChanged(object? sender, EventArgs e)
@@ -22937,7 +24102,31 @@ private static void SetMenuItemCheckedState(ToolStripMenuItem? menuItem, bool is
 				_listViewLayoutDebounceTimer.Dispose();
 				_listViewLayoutDebounceTimer = null;
 			}
-			StopStateUpdateLoop();
+                        if (_listViewSelectionDebounceTimer != null)
+                        {
+                                _listViewSelectionDebounceTimer.Stop();
+                                _listViewSelectionDebounceTimer.Dispose();
+                                _listViewSelectionDebounceTimer = null;
+                        }
+                        if (_listViewAccessibilityDebounceTimer != null)
+                        {
+                                _listViewAccessibilityDebounceTimer.Stop();
+                                _listViewAccessibilityDebounceTimer.Dispose();
+                                _listViewAccessibilityDebounceTimer = null;
+                        }
+#if DEBUG
+                        if (_uiThreadWatchdogTimer != null)
+                        {
+                                _uiThreadWatchdogTimer.Dispose();
+                                _uiThreadWatchdogTimer = null;
+                        }
+                        if (_accessibilityDiagnosticsTimer != null)
+                        {
+                                _accessibilityDiagnosticsTimer.Dispose();
+                                _accessibilityDiagnosticsTimer = null;
+                        }
+#endif
+                        StopStateUpdateLoop();
 			_updateTimer?.Stop();
 			_nextSongPreloader?.Dispose();
 			_audioEngine?.Dispose();
@@ -26557,6 +27746,7 @@ private Task PlaySongByIndex(int index)
 
 	private void DisplayArtists(List<ArtistInfo> artists, bool showPagination = false, bool hasNextPage = false, int startIndex = 1, bool preserveSelection = false, string? viewSource = null, string? accessibleName = null, bool announceHeader = true, bool suppressFocus = false, bool allowSelection = true)
 	{
+		MarkListViewLayoutDataChanged();
 		_listLoadingPlaceholderActive = false;
 		CancellationToken currentViewContentToken = GetCurrentViewContentToken();
 		if (ShouldAbortViewRender(currentViewContentToken, "DisplayArtists"))
@@ -26727,6 +27917,7 @@ private Task PlaySongByIndex(int index)
 
 	private void PatchArtists(List<ArtistInfo> artists, int startIndex = 1, bool showPagination = false, bool hasPreviousPage = false, bool hasNextPage = false, int pendingFocusIndex = -1, bool allowSelection = true)
 	{
+		MarkListViewLayoutDataChanged();
 		CancellationToken currentViewContentToken = GetCurrentViewContentToken();
 		if (ShouldAbortViewRender(currentViewContentToken, "PatchArtists"))
 		{
@@ -29315,6 +30506,7 @@ private async Task EnrichArtistCategoryAllResultsAsync(int typeCode, int areaCod
 
 	private void ShowLoadingPlaceholderCore(string? viewSource, string? accessibleName, string loadingText)
 	{
+		MarkListViewLayoutDataChanged();
 		UpdateStatusBar(loadingText);
 		DisableVirtualSongList();
 		_listLoadingPlaceholderActive = true;
@@ -29326,7 +30518,7 @@ private async Task EnrichArtistCategoryAllResultsAsync(int typeCode, int areaCod
 			ListViewItem value = new ListViewItem(new string[6]
 			{
 				string.Empty,
-				string.Empty,
+				FormatIndex(1),
 				ListLoadingPlaceholderText,
 				string.Empty,
 				string.Empty,
@@ -29345,8 +30537,10 @@ private async Task EnrichArtistCategoryAllResultsAsync(int typeCode, int areaCod
         ApplyListViewContext(viewSource, accessibleName, "列表", announceHeader: true);
 	}
 
+
 	private void ShowListErrorRowCore(string? viewSource, string? accessibleName, string message)
 	{
+		MarkListViewLayoutDataChanged();
 		DisableVirtualSongList();
 		_listLoadingPlaceholderActive = false;
 		resultListView.BeginUpdate();
@@ -29379,6 +30573,7 @@ private async Task EnrichArtistCategoryAllResultsAsync(int typeCode, int areaCod
 
 	private void ShowListRetryPlaceholderCore(string? viewSource, string? accessibleName, string fallbackName, bool announceHeader, bool suppressFocus = false)
 	{
+		MarkListViewLayoutDataChanged();
 		DisableVirtualSongList();
 		_listLoadingPlaceholderActive = false;
 		resultListView.BeginUpdate();
@@ -29389,7 +30584,7 @@ private async Task EnrichArtistCategoryAllResultsAsync(int typeCode, int areaCod
 			ListViewItem value = new ListViewItem(new string[6]
 			{
 				string.Empty,
-				string.Empty,
+				FormatIndex(1),
 				ListRetryPlaceholderText,
 				string.Empty,
 				string.Empty,
@@ -29408,6 +30603,7 @@ private async Task EnrichArtistCategoryAllResultsAsync(int typeCode, int areaCod
 		ApplyListViewContext(viewSource, accessibleName, fallbackName, announceHeader);
 		ApplyStandardListViewSelection(0, allowSelection: true, suppressFocus: suppressFocus);
 	}
+
 
 	private void ShowListRetryPlaceholderIfEmpty(string? viewSource, string? accessibleName, string fallbackName, bool announceHeader = true)
 	{
@@ -30149,6 +31345,7 @@ private async Task EnrichArtistCategoryAllResultsAsync(int typeCode, int areaCod
 		this.resultListView.DragDrop += new System.Windows.Forms.DragEventHandler(resultListView_DragDrop);
 		this.resultListView.DragLeave += new System.EventHandler(resultListView_DragLeave);
 		this.resultListView.KeyDown += new System.Windows.Forms.KeyEventHandler(resultListView_KeyDown);
+		this.resultListView.KeyUp += new System.Windows.Forms.KeyEventHandler(resultListView_KeyUp);
 		this.resultListView.KeyPress += new System.Windows.Forms.KeyPressEventHandler(resultListView_KeyPress);
 		this.resultListView.HandleCreated += new System.EventHandler(resultListView_HandleCreated);
 		this.resultListView.CacheVirtualItems += new System.Windows.Forms.CacheVirtualItemsEventHandler(resultListView_CacheVirtualItems);
@@ -31040,7 +32237,11 @@ private async Task EnrichArtistCategoryAllResultsAsync(int typeCode, int areaCod
 			addToPlaylistMenuItem.Tag = (flag ? songInfo : null);
 			string playlistId = (snapshot.ViewSource.StartsWith("playlist:", StringComparison.OrdinalIgnoreCase) ? snapshot.ViewSource.Substring("playlist:".Length) : null);
 			bool flag4 = snapshot.ViewSource.StartsWith("playlist:", StringComparison.OrdinalIgnoreCase) || (_currentPlaylist != null && !string.IsNullOrWhiteSpace(_currentPlaylist.Id));
-			bool flag5 = _currentPlaylistOwnedByUser || IsCurrentPlaylistOwnedByUser(playlistId) || (snapshot.Playlist != null && IsPlaylistCreatedByCurrentUser(snapshot.Playlist));
+			bool flag5 = _currentPlaylistOwnedByUser;
+			if (!flag5 && !string.IsNullOrWhiteSpace(playlistId) && _currentPlaylist != null && string.Equals(_currentPlaylist.Id, playlistId, StringComparison.OrdinalIgnoreCase))
+			{
+				flag5 = IsPlaylistOwnedByUser(_currentPlaylist, GetCurrentUserId());
+			}
 			bool flag6 = flag4 && flag5;
 			if (snapshot.IsCurrentPlayback)
 			{
