@@ -27059,7 +27059,7 @@ private Task PlaySongByIndex(int index)
 						List<PlaylistInfo> playlists = await FetchHighQualityPlaylistsForDownloadAsync();
 						if (playlists == null || playlists.Count == 0)
 						{
-							throw new Exception("????????");
+							throw new Exception("\u83B7\u53D6\u7CBE\u54C1\u6B4C\u5355\u5931\u8D25");
 						}
 						return playlists;
 					}, quality);
@@ -27259,6 +27259,52 @@ private Task PlaySongByIndex(int index)
 			MessageBox.Show("下载分类失败：" + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 		}
 	}
+
+	private async Task<List<PlaylistInfo>> FetchHighQualityPlaylistsForDownloadAsync()
+	{
+		if (_enableHighQualityPlaylistsAll)
+		{
+			List<PlaylistInfo> all = new List<PlaylistInfo>();
+			HashSet<string> seenIds = new HashSet<string>(StringComparer.Ordinal);
+			long before = 0;
+			bool hasMore = true;
+			int safety = 0;
+			while (hasMore && safety < 200)
+			{
+				(List<PlaylistInfo> Items, long LastTime, bool HasMore) result = await _apiClient.GetHighQualityPlaylistsAsync("\u5168\u90E8", HighQualityPlaylistsPageSize, before);
+				List<PlaylistInfo> pageItems = result.Items ?? new List<PlaylistInfo>();
+				if (pageItems.Count == 0)
+				{
+					break;
+				}
+				foreach (PlaylistInfo playlist in pageItems)
+				{
+					if (playlist == null || string.IsNullOrWhiteSpace(playlist.Id))
+					{
+						continue;
+					}
+					if (seenIds.Add(playlist.Id))
+					{
+						all.Add(playlist);
+					}
+				}
+				long nextBefore = result.LastTime;
+				hasMore = result.HasMore;
+				if (pageItems.Count < HighQualityPlaylistsPageSize || nextBefore <= 0 || nextBefore == before)
+				{
+					hasMore = false;
+				}
+				before = nextBefore;
+				safety++;
+			}
+			return all;
+		}
+
+		var (playlists, _, _) = await _apiClient.GetHighQualityPlaylistsAsync("\u5168\u90E8", HighQualityPlaylistsPageSize, 0L);
+		return playlists ?? new List<PlaylistInfo>();
+	}
+
+
 
 	private async Task<int> DownloadSongListCategory(string categoryName, Func<Task<List<SongInfo>>> getSongsFunc, QualityLevel quality, string? parentDirectory = null, bool showDialog = true)
 	{
