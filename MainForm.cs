@@ -27056,10 +27056,10 @@ private Task PlaySongByIndex(int index)
 				case "highquality_playlists":
 					totalTasks = await DownloadPlaylistListCategory(categoryName, async delegate
 					{
-						var (playlists, _, _) = await _apiClient.GetHighQualityPlaylistsAsync("全部", 50, 0L);
+						List<PlaylistInfo> playlists = await FetchHighQualityPlaylistsForDownloadAsync();
 						if (playlists == null || playlists.Count == 0)
 						{
-							throw new Exception("获取精品歌单失败");
+							throw new Exception("????????");
 						}
 						return playlists;
 					}, quality);

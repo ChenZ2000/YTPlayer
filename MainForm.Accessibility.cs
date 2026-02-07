@@ -2018,6 +2018,61 @@ namespace YTPlayer
 
 
 
+	private bool TrySyncFocusedItemWithSelection(int selectedListViewIndex)
+
+	{
+
+		if (resultListView == null || resultListView.VirtualMode || !resultListView.ContainsFocus)
+
+		{
+
+			return false;
+
+		}
+
+		if (selectedListViewIndex < 0 || selectedListViewIndex >= resultListView.Items.Count)
+
+		{
+
+			return false;
+
+		}
+
+		int focusedIndex = (resultListView.FocusedItem != null) ? resultListView.FocusedItem.Index : (-1);
+
+		if (focusedIndex == selectedListViewIndex)
+
+		{
+
+			return false;
+
+		}
+
+		try
+
+		{
+
+			resultListView.Items[selectedListViewIndex].Focused = true;
+
+
+			return true;
+
+		}
+
+		catch (Exception ex)
+
+		{
+
+			Debug.WriteLine($"[MainForm] Focus sync failed: {ex.Message}");
+
+			return false;
+
+		}
+
+	}
+
+
+
         private void InitializeAccessibilityAnnouncementLabel()
 
         {
@@ -3768,6 +3823,8 @@ namespace YTPlayer
 
 		}
 
+		TrySyncFocusedItemWithSelection(selectedListViewIndex);
+
 #if DEBUG
 
                 TouchUiThreadMarker($"SelectionChanged index={selectedListViewIndex}");
@@ -4103,6 +4160,31 @@ namespace YTPlayer
                         }
 
 			NotifyListViewFocusChanged();
+
+		}
+
+		if (resultListView != null && !resultListView.VirtualMode && (e.KeyCode == Keys.Home || e.KeyCode == Keys.End))
+
+		{
+
+			BeginInvoke(delegate
+
+			{
+
+				if (resultListView == null || resultListView.Items.Count == 0)
+
+				{
+
+					return;
+
+				}
+
+				int selectedListViewIndex = GetSelectedListViewIndex();
+
+				TrySyncFocusedItemWithSelection(selectedListViewIndex);
+
+
+			});
 
 		}
 
