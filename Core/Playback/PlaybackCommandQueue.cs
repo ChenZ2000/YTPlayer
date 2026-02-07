@@ -16,6 +16,9 @@ namespace YTPlayer.Core.Playback
         private CancellationTokenSource? _currentCts;
         private bool _disposed;
 
+        private static readonly TimeSpan ExecutionSemaphoreTimeout = TimeSpan.FromSeconds(15);
+        private static readonly TimeSpan DefaultCommandTimeout = TimeSpan.FromSeconds(20);
+
         // 命令执行回调（用于需要 MainForm 上下文的操作）
         public Func<PlaybackCommand, CancellationToken, Task<CommandResult>>? OnExecuteNext { get; set; }
         public Func<PlaybackCommand, CancellationToken, Task<CommandResult>>? OnExecutePrevious { get; set; }
@@ -54,6 +57,8 @@ namespace YTPlayer.Core.Playback
 
                 // 创建新的取消源（链接外部取消令牌）
                 _currentCts = CancellationTokenSource.CreateLinkedTokenSource(command.CancellationToken);
+                TimeSpan commandTimeout = GetCommandTimeout(command.Type);
+                _currentCts.CancelAfter(commandTimeout);
                 var ct = _currentCts.Token;
 
                 // 触发命令开始事件
@@ -69,6 +74,12 @@ namespace YTPlayer.Core.Playback
             }
             catch (OperationCanceledException)
             {
+                if (!command.CancellationToken.IsCancellationRequested)
+                {
+                    OnCommandStateChanged(command, CommandState.Failed, "Command timeout");
+                    return CommandResult.Error("Command timeout");
+                }
+
                 OnCommandStateChanged(command, CommandState.Cancelled);
                 return CommandResult.Cancelled;
             }
@@ -196,15 +207,35 @@ namespace YTPlayer.Core.Playback
                 return false;
             }
 
+            using var timeoutCts = new CancellationTokenSource(ExecutionSemaphoreTimeout);
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
+
             try
             {
-                await _executionSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+                await _executionSemaphore.WaitAsync(linkedCts.Token).ConfigureAwait(false);
                 return true;
+            }
+            catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+            {
+                System.Diagnostics.Debug.WriteLine("[CommandQueue] Wait execution semaphore timeout");
+                return false;
             }
             catch (ObjectDisposedException)
             {
                 return false;
             }
+        }
+
+        private static TimeSpan GetCommandTimeout(CommandType commandType)
+        {
+            return commandType switch
+            {
+                CommandType.Seek => TimeSpan.FromSeconds(25),
+                CommandType.Play => TimeSpan.FromSeconds(30),
+                CommandType.Next => TimeSpan.FromSeconds(15),
+                CommandType.Previous => TimeSpan.FromSeconds(15),
+                _ => DefaultCommandTimeout
+            };
         }
     }
 

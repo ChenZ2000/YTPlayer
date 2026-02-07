@@ -69,11 +69,14 @@ namespace YTPlayer.Core.Streaming
         private const int BaseReadTimeoutMs = 15000;      // 缓存等待基础超时
         private const int NearEofReadTimeoutMs = 5000;    // 接近 EOF 的较短等待
         private const int MaxStallWaitMs = 60000;         // 单次读取最大等待时间
+        private const int MaxConsecutiveStalls = 3;
+        private const int StallBackoffDelayMs = 200;
 
         // 统计信息
         private int _totalReads = 0;
         private int _totalSeeks = 0;
         private long _totalBytesRead = 0;
+        private int _consecutiveStallCount = 0;
 
         private bool _disposed = false;
 
@@ -99,6 +102,8 @@ namespace YTPlayer.Core.Streaming
         /// 缓存管理器
         /// </summary>
         public SmartCacheManager CacheManager => _cacheManager;
+
+        public event EventHandler<StreamReadFailureEventArgs>? ReadFailure;
 
         #endregion
 
@@ -190,7 +195,7 @@ namespace YTPlayer.Core.Streaming
         private long FileLength(IntPtr user)
         {
             // ⭐⭐⭐ 防止在释放后继续调用
-            if (_disposed || _cacheManager == null)
+            if (_disposed || _cacheManager.IsDisposed)
             {
                 Debug.WriteLine($"[BassStreamProvider] FileLength called after disposal, returning 0");
                 return 0;
@@ -208,117 +213,119 @@ namespace YTPlayer.Core.Streaming
         {
             try
             {
-                // ⭐⭐⭐ 防止在释放后继续调用
-                if (_disposed || _cacheManager == null)
+                if (_disposed || _cacheManager.IsDisposed)
                 {
-                    Debug.WriteLine($"[BassStreamProvider] FileRead called after disposal, returning 0");
-                    return 0;
+                    Debug.WriteLine("[BassStreamProvider] FileRead called after disposal, returning -1");
+                    return -1;
                 }
 
                 Interlocked.Increment(ref _totalReads);
 
-                // 分配缓冲区（如果还没有或大小不够）
                 if (_readBuffer == null || _readBuffer.Length < length)
                 {
                     _readBuffer = new byte[Math.Max(length, READ_BUFFER_SIZE)];
                 }
 
-                // 从缓存管理器读取数据（同步等待）
                 long position;
                 lock (_positionLock)
                 {
                     position = _currentPosition;
                 }
 
-                // ?? 关键修复：改为阻塞模式，等待缓存就绪后再返回数据给BASS
-                // waitIfNotReady=true：等待缓存下载完成，避免传递损坏/不完整的数据给BASS
-                // 新策略：缓存未就绪时循环等待，避免误报 EOF
                 int bytesRead = 0;
-                double progressPercent = (double)position / _cacheManager.TotalSize;
                 int totalWaitMs = 0;
 
                 while (true)
                 {
-                    int timeoutMs = progressPercent >= 0.98 ? NearEofReadTimeoutMs : BaseReadTimeoutMs;
+                    if (_disposed || _cacheManager.IsDisposed)
+                    {
+                        return -1;
+                    }
+
+                    long remainingBytes = _cacheManager.TotalSize - position;
+                    if (remainingBytes <= 0)
+                    {
+                        ResetStallTracking();
+                        return 0;
+                    }
+
+                    bool nearEof = remainingBytes <= 512 * 1024;
+                    int timeoutMs = nearEof ? NearEofReadTimeoutMs : BaseReadTimeoutMs;
 
                     using (var timeoutCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(timeoutMs)))
+                    using (var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(timeoutCts.Token, _cacheManager.LifecycleToken))
                     {
                         try
                         {
-                            bytesRead = _cacheManager.ReadAsync(position, _readBuffer, 0, length, timeoutCts.Token, waitIfNotReady: true)
+                            bytesRead = _cacheManager.ReadAsync(position, _readBuffer, 0, length, linkedCts.Token, waitIfNotReady: true)
                                 .GetAwaiter()
                                 .GetResult();
                         }
+                        catch (OperationCanceledException)
+                        {
+                            bytesRead = 0;
+                        }
                         catch (AggregateException aex)
                         {
-                            var innerEx = aex.InnerException ?? aex;
-                            if (innerEx is OperationCanceledException && timeoutCts.IsCancellationRequested)
+                            Exception ex = aex.InnerException ?? aex;
+                            if (ex is OperationCanceledException)
                             {
-                                bytesRead = 0; // 缓存未就绪，继续等待
+                                bytesRead = 0;
                             }
                             else
                             {
-                                Debug.WriteLine($"[BassStreamProvider] ? FileRead exception at position {position}: {innerEx.Message}");
+                                Debug.WriteLine($"[BassStreamProvider] FileRead exception at position {position}: {ex.Message}");
+                                NotifyReadFailure(position, length, ex.Message);
                                 return -1;
                             }
-                        }
-                        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
-                        {
-                            bytesRead = 0; // 缓存未就绪，继续等待
                         }
                     }
 
                     if (bytesRead > 0)
                     {
+                        ResetStallTracking();
                         break;
                     }
 
-                    long distanceToEOF = _cacheManager.TotalSize - position;
-                    if (distanceToEOF <= 256)
-                    {
-                        Debug.WriteLine($"[BassStreamProvider] ? FileRead near EOF (<=256B), returning EOF");
-                        return 0; // 真正 EOF
-                    }
-
-                    totalWaitMs += (progressPercent >= 0.98 ? NearEofReadTimeoutMs : BaseReadTimeoutMs);
+                    totalWaitMs += timeoutMs;
                     if (totalWaitMs >= MaxStallWaitMs)
                     {
-                        Debug.WriteLine($"[BassStreamProvider] ⚠️ FileRead waited {totalWaitMs}ms without data (pos {position}), returning 0 to stall (BLOCK mode)");
-                        return 0; // 返回0并依赖 BLOCK 模式让 BASS 继续等待，而非结束/报错
+                        _consecutiveStallCount++;
+
+                        Debug.WriteLine($"[BassStreamProvider] Stall detected (#{_consecutiveStallCount}) at {position}/{_cacheManager.TotalSize}");
+
+                        if (_consecutiveStallCount >= MaxConsecutiveStalls)
+                        {
+                            string reason = $"Consecutive cache stalls exceeded threshold ({_consecutiveStallCount})";
+                            NotifyReadFailure(position, length, reason);
+                            return -1;
+                        }
+
+                        // In BLOCK mode returning 0 keeps the stream alive but yields control back to BASS.
+                        return 0;
                     }
 
-                    Task.Delay(200).GetAwaiter().GetResult(); // 轻量等待，避免忙等
+                    Task.Delay(StallBackoffDelayMs).GetAwaiter().GetResult();
                 }
-                if (bytesRead > 0)
+
+                if (bytesRead > length)
                 {
-                    // 验证读取的数据大小是否合理
-                    if (bytesRead > length)
-                    {
-                        Debug.WriteLine($"[BassStreamProvider] ❌ Invalid bytesRead={bytesRead} > requested={length}, data corruption detected!");
-                        return -1;  // 返回-1表示错误
-                    }
-
-                    // 复制数据到 BASS 提供的缓冲区
-                    Marshal.Copy(_readBuffer, 0, buffer, bytesRead);
-
-                    // 更新位置
-                    lock (_positionLock)
-                    {
-                        _currentPosition += bytesRead;
-                    }
-
-                    Interlocked.Add(ref _totalBytesRead, bytesRead);
-
-                    // 每100次读取输出一次日志，避免刷屏
-                    if (_totalReads % 100 == 1)
-                    {
-                        Debug.WriteLine($"[BassStreamProvider] ✓ FileRead #{_totalReads}: requested={length}, read={bytesRead}, pos={position}");
-                    }
+                    NotifyReadFailure(position, length, $"Invalid bytesRead={bytesRead} > requested={length}");
+                    return -1;
                 }
-                else if (bytesRead == 0 && position < _cacheManager.TotalSize)
+
+                Marshal.Copy(_readBuffer, 0, buffer, bytesRead);
+
+                lock (_positionLock)
                 {
-                    // 🔧 缓存未就绪或下载失败
-                    Debug.WriteLine($"[BassStreamProvider] ⚠️ FileRead returned 0 at position {position}/{_cacheManager.TotalSize}, cache not ready!");
+                    _currentPosition += bytesRead;
+                }
+
+                Interlocked.Add(ref _totalBytesRead, bytesRead);
+
+                if (_totalReads % 100 == 1)
+                {
+                    Debug.WriteLine($"[BassStreamProvider] FileRead #{_totalReads}: requested={length}, read={bytesRead}, pos={position}");
                 }
 
                 return bytesRead;
@@ -326,19 +333,34 @@ namespace YTPlayer.Core.Streaming
             catch (Exception ex)
             {
                 Debug.WriteLine($"[BassStreamProvider] FileRead error: {ex.Message}");
-                return -1;  // 表示错误
+                NotifyReadFailure(CurrentPosition, length, ex.Message);
+                return -1;
             }
         }
 
-        /// <summary>
-        /// 定位回调
-        /// </summary>
+        private void ResetStallTracking()
+        {
+            _consecutiveStallCount = 0;
+        }
+
+        private void NotifyReadFailure(long position, int length, string reason)
+        {
+            try
+            {
+                ReadFailure?.Invoke(this, new StreamReadFailureEventArgs(position, length, reason));
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[BassStreamProvider] ReadFailure handler error: {ex.Message}");
+            }
+        }
+
         private bool FileSeek(long offset, IntPtr user)
         {
             try
             {
                 // ⭐⭐⭐ 防止在释放后继续调用
-                if (_disposed || _cacheManager == null)
+                if (_disposed || _cacheManager.IsDisposed)
                 {
                     Debug.WriteLine($"[BassStreamProvider] FileSeek called after disposal, returning false");
                     return false;
@@ -358,12 +380,13 @@ namespace YTPlayer.Core.Streaming
                     _currentPosition = offset;
                 }
 
+                ResetStallTracking();
                 Debug.WriteLine($"[BassStreamProvider] FileSeek to {offset}");
 
                 // 通知缓存管理器准备该位置（异步，不阻塞）
                 _ = Task.Run(async () =>
                 {
-                    await _cacheManager.SeekAsync(offset, CancellationToken.None);
+                    await _cacheManager.SeekAsync(offset, _cacheManager.LifecycleToken);
                 });
 
                 return true;
@@ -392,5 +415,21 @@ namespace YTPlayer.Core.Streaming
         }
 
         #endregion
+    }
+
+    public sealed class StreamReadFailureEventArgs : EventArgs
+    {
+        public StreamReadFailureEventArgs(long position, int requestedBytes, string reason)
+        {
+            Position = position;
+            RequestedBytes = requestedBytes;
+            Reason = reason ?? string.Empty;
+        }
+
+        public long Position { get; }
+
+        public int RequestedBytes { get; }
+
+        public string Reason { get; }
     }
 }

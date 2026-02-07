@@ -34,7 +34,9 @@ namespace YTPlayer.Core
 
         private const int BASS_ACTIVE_STOPPED = 0;
         private const int BASS_ACTIVE_PLAYING = 1;
+        private const int BASS_ACTIVE_STALLED = 2;
         private const int BASS_ACTIVE_PAUSED = 3;
+        private const int BASS_ACTIVE_PAUSED_DEVICE = 4;
 
         private const int BASS_SYNC_END = 2;
         private const int BASS_SYNC_POS = 0;
@@ -73,6 +75,9 @@ namespace YTPlayer.Core
 
         [DllImport("bass.dll")]
         private static extern bool BASS_ChannelPause(int handle);
+
+        [DllImport("bass.dll")]
+        private static extern bool BASS_Start();
 
         [DllImport("bass.dll")]
         private static extern bool BASS_ChannelStop(int handle);
@@ -201,6 +206,7 @@ namespace YTPlayer.Core
         private bool _bassFlacLoaded;
         private int _currentDeviceIndex;
         private string _activeOutputDeviceId = AudioOutputDeviceInfo.WindowsDefaultId;
+        private DateTime _lastDeviceResumeAttemptUtc = DateTime.MinValue;
 
         #endregion
 
@@ -236,7 +242,19 @@ namespace YTPlayer.Core
 
         public bool IsPlaying => _currentStream != 0 && BASS_ChannelIsActive(_currentStream) == BASS_ACTIVE_PLAYING;
 
-        public bool IsPaused => _currentStream != 0 && BASS_ChannelIsActive(_currentStream) == BASS_ACTIVE_PAUSED;
+        public bool IsPaused
+        {
+            get
+            {
+                if (_currentStream == 0)
+                {
+                    return false;
+                }
+
+                int activeState = BASS_ChannelIsActive(_currentStream);
+                return activeState == BASS_ACTIVE_PAUSED || activeState == BASS_ACTIVE_PAUSED_DEVICE;
+            }
+        }
 
         public SongInfo? CurrentSong => _currentSong;
 
@@ -373,6 +391,7 @@ namespace YTPlayer.Core
                     // 直接使用预加载的流对象，跳过所有初始化
                     _currentCacheManager = preloadedData.CacheManager;
                     _currentStreamProvider = preloadedData.StreamProvider;
+                    RegisterStreamProviderCallbacks(_currentStreamProvider);
                     _currentStream = preloadedData.StreamHandle;
 
                     AttachCacheManager(_currentCacheManager);
@@ -472,6 +491,7 @@ namespace YTPlayer.Core
                 }
 
                 _currentStreamProvider = new BassStreamProvider(cacheManager);
+                RegisterStreamProviderCallbacks(_currentStreamProvider);
                 EnsureDeviceContext();
                 _currentStream = _currentStreamProvider.CreateStream();
 
@@ -560,6 +580,7 @@ namespace YTPlayer.Core
                     }
                     if (_currentStreamProvider != null)
                     {
+                        UnregisterStreamProviderCallbacks(_currentStreamProvider);
                         _currentStreamProvider.Dispose();
                         _currentStreamProvider = null;
                     }
@@ -595,12 +616,15 @@ namespace YTPlayer.Core
             }
             catch (OperationCanceledException)
             {
+                StopInternal(raiseEvent: false);
+                _stateMachine.TransitionTo(PlaybackState.Idle);
                 return false;
             }
             catch (Exception ex)
             {
-                DebugLogger.LogException("BassAudioEngine", ex, "PlayAsync 异常");
-                OnPlaybackError($"播放异常: {ex.Message}");
+                StopInternal(raiseEvent: false);
+                DebugLogger.LogException("BassAudioEngine", ex, "PlayAsync failure");
+                OnPlaybackError($"Playback error: {ex.Message}");
                 _stateMachine.TransitionTo(PlaybackState.Idle);
                 return false;
             }
@@ -1119,45 +1143,63 @@ namespace YTPlayer.Core
             _positionMonitorCts = new CancellationTokenSource();
             var token = _positionMonitorCts.Token;
 
-            bool endChunksRequested = false;  // ⭐ 标记是否已请求末尾 chunks
+            bool endChunksRequested = false;
 
             _positionMonitorTask = Task.Run(async () =>
             {
-                // ⭐ 移除 25% 预加载触发逻辑（由新的统一预加载机制替代）
                 while (!token.IsCancellationRequested)
                 {
                     if (_currentStream != 0)
                     {
+                        int activeState = BASS_ChannelIsActive(_currentStream);
+
+                        if (activeState == BASS_ACTIVE_STALLED)
+                        {
+                            _stateMachine.TransitionTo(PlaybackState.Buffering);
+                        }
+                        else if (activeState == BASS_ACTIVE_PAUSED_DEVICE)
+                        {
+                            _stateMachine.TransitionTo(PlaybackState.Buffering);
+
+                            if (DateTime.UtcNow - _lastDeviceResumeAttemptUtc > TimeSpan.FromSeconds(2))
+                            {
+                                _lastDeviceResumeAttemptUtc = DateTime.UtcNow;
+                                EnsureDeviceContext();
+                                bool resumed = BASS_Start();
+                                Debug.WriteLine($"[BassAudioEngine] Attempted BASS_Start after device pause: {resumed}");
+                            }
+                        }
+                        else if (activeState == BASS_ACTIVE_PLAYING && _stateMachine.CurrentState == PlaybackState.Buffering)
+                        {
+                            _stateMachine.TransitionTo(PlaybackState.Playing);
+                        }
+
                         long positionBytes = BASS_ChannelGetPosition(_currentStream, BASS_POS_BYTE);
                         long totalBytes = BASS_ChannelGetLength(_currentStream, BASS_POS_BYTE);
                         double seconds = BASS_ChannelBytes2Seconds(_currentStream, positionBytes);
 
                         _currentCacheManager?.UpdatePlaybackPosition(positionBytes);
-                PositionChanged?.Invoke(this, TimeSpan.FromSeconds(seconds));
+                        PositionChanged?.Invoke(this, TimeSpan.FromSeconds(seconds));
 
-                        // ⭐⭐⭐ 关键修复：播放到 90% 时，主动请求下载最后几个 chunks
-                        // 避免播放到末尾时缓存还没准备好，导致 FileRead 超时 5 秒
                         if (!endChunksRequested && totalBytes > 0 && positionBytes > 0)
                         {
                             double progress = (double)positionBytes / totalBytes;
                             if (progress >= 0.90)
                             {
                                 endChunksRequested = true;
-                                Debug.WriteLine($"[BassAudioEngine] ⭐ 播放进度 {progress:P1}，主动请求末尾 chunks");
+                                Debug.WriteLine($"[BassAudioEngine] Playback progress {progress:P1}, proactively requesting tail chunks");
 
-                                // 主动触发末尾位置的缓存更新，确保最后几个 chunks 被下载
                                 _ = Task.Run(() =>
                                 {
                                     try
                                     {
-                                        // 请求文件末尾前 1MB 的位置，触发调度器下载最后的 chunks
                                         long nearEndPosition = Math.Max(0, totalBytes - 1024 * 1024);
                                         _currentCacheManager?.UpdatePlaybackPosition(nearEndPosition);
-                                        Debug.WriteLine($"[BassAudioEngine] ✓ 已请求末尾位置缓存: {nearEndPosition}/{totalBytes}");
+                                        Debug.WriteLine($"[BassAudioEngine] Requested near-end cache position: {nearEndPosition}/{totalBytes}");
                                     }
                                     catch (Exception ex)
                                     {
-                                        Debug.WriteLine($"[BassAudioEngine] 请求末尾缓存失败: {ex.Message}");
+                                        Debug.WriteLine($"[BassAudioEngine] Failed to request near-end cache: {ex.Message}");
                                     }
                                 }, token);
                             }
@@ -1218,6 +1260,10 @@ namespace YTPlayer.Core
 
                 // ⭐ 保存引用，稍后异步释放
                 oldStreamProvider = _currentStreamProvider;
+                if (oldStreamProvider != null)
+                {
+                    UnregisterStreamProviderCallbacks(oldStreamProvider);
+                }
                 _currentStreamProvider = null;
 
                 oldCacheManager = _currentCacheManager;
@@ -1334,6 +1380,10 @@ namespace YTPlayer.Core
             {
                 oldStream = _currentStream;
                 oldStreamProvider = _currentStreamProvider;
+                if (oldStreamProvider != null)
+                {
+                    UnregisterStreamProviderCallbacks(oldStreamProvider);
+                }
                 oldCacheManager = _currentCacheManager;
                 finishedSong = _currentSong;
 
@@ -1435,6 +1485,7 @@ namespace YTPlayer.Core
                 _currentSong = entry.Song;
             }
 
+            RegisterStreamProviderCallbacks(data.StreamProvider);
             nextSong = entry.Song;
 
             AttachCacheManager(data.CacheManager);
@@ -1456,6 +1507,7 @@ namespace YTPlayer.Core
                 lock (_syncRoot)
                 {
                     _currentStream = 0;
+                    UnregisterStreamProviderCallbacks(_currentStreamProvider);
                     _currentStreamProvider = null;
                     _currentCacheManager = null;
                     _currentSong = null;
@@ -1513,7 +1565,11 @@ namespace YTPlayer.Core
                     BASS_StreamFree(entry.Data.StreamHandle);
                 }
 
-                entry.Data.StreamProvider?.Dispose();
+                if (entry.Data.StreamProvider != null)
+                {
+                    UnregisterStreamProviderCallbacks(entry.Data.StreamProvider);
+                    entry.Data.StreamProvider.Dispose();
+                }
                 entry.Data.CacheManager?.Dispose();
             }
             catch (Exception ex)
@@ -1866,6 +1922,46 @@ namespace YTPlayer.Core
             }
 
             return null;
+        }
+
+        private void RegisterStreamProviderCallbacks(BassStreamProvider? streamProvider)
+        {
+            if (streamProvider == null)
+            {
+                return;
+            }
+
+            streamProvider.ReadFailure -= OnStreamProviderReadFailure;
+            streamProvider.ReadFailure += OnStreamProviderReadFailure;
+        }
+
+        private void UnregisterStreamProviderCallbacks(BassStreamProvider? streamProvider)
+        {
+            if (streamProvider == null)
+            {
+                return;
+            }
+
+            streamProvider.ReadFailure -= OnStreamProviderReadFailure;
+        }
+
+        private void OnStreamProviderReadFailure(object? sender, StreamReadFailureEventArgs e)
+        {
+            bool isActiveProvider;
+            lock (_syncRoot)
+            {
+                isActiveProvider = ReferenceEquals(sender, _currentStreamProvider);
+            }
+
+            if (!isActiveProvider)
+            {
+                return;
+            }
+
+            Debug.WriteLine($"[BassAudioEngine] Stream read failure at {e.Position}: {e.Reason}");
+            StopInternal(raiseEvent: false);
+            _stateMachine.TransitionTo(PlaybackState.Idle);
+            OnPlaybackError($"Stream read failure: {e.Reason}");
         }
 
         private void OnPlaybackStarted(SongInfo song)

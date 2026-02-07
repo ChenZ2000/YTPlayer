@@ -696,7 +696,11 @@ public partial class MainForm : Form
 	private bool _powerRequestDisplayActive = false;
 	private bool _powerRequestSystemActive = false;
 
-	private bool _powerRequestInitFailed = false;
+	private int _powerRequestInitFailureCount = 0;
+
+	private DateTime _powerRequestRetryNotBeforeUtc = DateTime.MinValue;
+
+	private DateTime _lastPowerRequestRefreshUtc = DateTime.MinValue;
 
 	private DateTime _appStartTime = DateTime.Now;
 
@@ -1807,11 +1811,26 @@ public partial class MainForm : Form
 						{
 							effectivePosition = _positionCoordinator.GetEffectivePosition(position, duration, state == PlaybackState.Playing);
 						}
+						PlaybackState previousState;
+						bool stateChanged;
 						lock (_stateCacheLock)
 						{
+							previousState = _cachedPlaybackState;
 							_cachedPosition = effectivePosition;
 							_cachedDuration = duration;
 							_cachedPlaybackState = state;
+							stateChanged = previousState != state;
+						}
+
+						if (stateChanged)
+						{
+							OnAudioEngineStateChanged(_audioEngine, state);
+						}
+
+						if (IsPlaybackActiveState(state) && DateTime.UtcNow - _lastPowerRequestRefreshUtc > TimeSpan.FromSeconds(5.0))
+						{
+							_lastPowerRequestRefreshUtc = DateTime.UtcNow;
+							UpdatePlaybackPowerRequests(isPlaying: true);
 						}
 					}
 					await Task.Delay(50);
@@ -2053,13 +2072,46 @@ public partial class MainForm : Form
 
         protected override void WndProc(ref Message m)
         {
-                base.WndProc(ref m);
                 const int WM_EXITSIZEMOVE = 0x0232;
+                const int WM_POWERBROADCAST = 0x0218;
+                const int WM_DEVICECHANGE = 0x0219;
+                const int PBT_APMSUSPEND = 0x0004;
+                const int PBT_APMRESUMESUSPEND = 0x0007;
+                const int PBT_APMRESUMEAUTOMATIC = 0x0012;
+                const int DBT_DEVNODES_CHANGED = 0x0007;
+
                 if (m.Msg == WM_EXITSIZEMOVE)
                 {
                         _windowLayoutPersistTimer?.Stop();
                         PersistWindowLayoutConfig();
                 }
+                else if (m.Msg == WM_POWERBROADCAST)
+                {
+                        int eventCode = unchecked((int)m.WParam.ToInt64());
+                        switch (eventCode)
+                        {
+                                case PBT_APMSUSPEND:
+                                        Debug.WriteLine("[Power] Suspend broadcast received");
+                                        ClearPlaybackPowerRequests();
+                                        break;
+                                case PBT_APMRESUMEAUTOMATIC:
+                                case PBT_APMRESUMESUSPEND:
+                                        Debug.WriteLine("[Power] Resume broadcast received, reapplying playback power request");
+                                        UpdatePlaybackPowerRequests(IsPlaybackActiveState(GetCachedPlaybackState()));
+                                        break;
+                        }
+                }
+                else if (m.Msg == WM_DEVICECHANGE)
+                {
+                        int eventCode = unchecked((int)m.WParam.ToInt64());
+                        if (eventCode == DBT_DEVNODES_CHANGED)
+                        {
+                                Debug.WriteLine("[Power] Device topology changed");
+                                UpdatePlaybackPowerRequests(IsPlaybackActiveState(GetCachedPlaybackState()));
+                        }
+                }
+
+                base.WndProc(ref m);
         }
 
         private void ApplySearchPanelStyle()
@@ -4883,6 +4935,7 @@ public partial class MainForm : Form
 				_configManager?.Save(_config);
 			}
 			_audioEngine.BufferingStateChanged += OnBufferingStateChanged;
+			_audioEngine.StateChanged += OnAudioEngineStateChanged;
 			_lyricsCacheManager = new LyricsCacheManager();
 			_lyricsDisplayManager = new LyricsDisplayManager(_lyricsCacheManager);
 			_lyricsLoader = new LyricsLoader(_apiClient);
@@ -22407,7 +22460,7 @@ private void EnsureSortMenuCheckMargins()
                 if (artistAlbumsSortMenuItem != null)
                 {
                         string text = (_artistAlbumSortState.EqualsOption(ArtistAlbumSortOption.Latest) ? "按最新" : "按最早");
-                        artistAlbumsSortMenuItem.Text = "专辑排序（" + text + "）";
+                        artistAlbumsSortMenuItem.Text = "排序（" + text + "）";
                 }
 		}
 	}
@@ -24129,6 +24182,12 @@ private static void SetMenuItemCheckedState(ToolStripMenuItem? menuItem, bool is
                         StopStateUpdateLoop();
 			_updateTimer?.Stop();
 			_nextSongPreloader?.Dispose();
+			if (_audioEngine != null)
+			{
+				_audioEngine.StateChanged -= OnAudioEngineStateChanged;
+				_audioEngine.BufferingStateChanged -= OnBufferingStateChanged;
+				_audioEngine.PositionChanged -= OnAudioPositionChanged;
+			}
 			_audioEngine?.Dispose();
 			_apiClient?.Dispose();
 			_unblockService?.Dispose();
@@ -25212,41 +25271,41 @@ private Task PlaySongByIndex(int index)
 		{
 			return ManualNavigationAvailability.Failed;
 		}
+
 		SongInfo song = moveResult.Song;
-		string defaultQualityName = _config.DefaultQuality ?? "超清母带";
+		string defaultQualityName = _config.DefaultQuality ?? "????";
 		QualityLevel selectedQuality = NeteaseApiClient.GetQualityLevelFromName(defaultQualityName);
+
+		using CancellationTokenSource resolveCts = new CancellationTokenSource(TimeSpan.FromSeconds(20.0));
 		try
 		{
-			Dictionary<string, SongUrlInfo> urlResult = await GetSongUrlWithRetryAsync(new string[1] { song.Id }, selectedQuality, CancellationToken.None, 3, suppressStatusUpdates: true);
-			if (urlResult != null && urlResult.TryGetValue(song.Id, out var songUrl) && !string.IsNullOrEmpty(songUrl?.Url))
+			SongResolveResult resolveResult = await ResolveSongPlaybackAsync(song, selectedQuality, resolveCts.Token, suppressStatusUpdates: true).ConfigureAwait(continueOnCapturedContext: false);
+			switch (resolveResult.Status)
 			{
-				long resolvedSize = songUrl.Size;
-				if (resolvedSize <= 0)
-				{
-					long contentLength = (await HttpRangeHelper.CheckRangeSupportAsync(songUrl.Url, null, CancellationToken.None, song.CustomHeaders).ConfigureAwait(continueOnCapturedContext: false)).Item2;
-					if (contentLength > 0)
-					{
-						resolvedSize = contentLength;
-					}
-				}
-				if (resolvedSize <= 0)
-				{
-					resolvedSize = StreamSizeEstimator.EstimateSizeFromBitrate(songUrl.Br, song.Duration);
-				}
-				song.Url = songUrl.Url;
-				song.Level = songUrl.Level;
-				song.Size = resolvedSize;
+			case SongResolveStatus.Success:
+				Debug.WriteLine($"[MainForm] Manual navigation resolve success: {song.Id}, unblock={resolveResult.UsedUnblock}");
 				return ManualNavigationAvailability.Success;
+			case SongResolveStatus.NotAvailable:
+				return ManualNavigationAvailability.Missing;
+			case SongResolveStatus.PaidAlbumNotPurchased:
+				Debug.WriteLine("[MainForm] Manual navigation stopped by paid album restriction: " + song.Id);
+				return ManualNavigationAvailability.Failed;
+			case SongResolveStatus.Canceled:
+				Debug.WriteLine("[MainForm] Manual navigation resolve canceled: " + song.Id);
+				return ManualNavigationAvailability.Failed;
+			default:
+				Debug.WriteLine("[MainForm] Manual navigation resolve failed: " + song.Id);
+				return ManualNavigationAvailability.Failed;
 			}
-			return ManualNavigationAvailability.Missing;
 		}
-		catch (SongResourceNotFoundException)
+		catch (OperationCanceledException)
 		{
-			return ManualNavigationAvailability.Missing;
+			Debug.WriteLine("[MainForm] Manual navigation resolve timeout/canceled: " + song.Id);
+			return ManualNavigationAvailability.Failed;
 		}
-		catch (Exception ex2)
+		catch (Exception ex)
 		{
-			Debug.WriteLine("[MainForm] 手动切换检查资源失败: " + ex2.Message);
+			Debug.WriteLine("[MainForm] Manual navigation resolve exception: " + ex.Message);
 			return ManualNavigationAvailability.Failed;
 		}
 	}
@@ -25805,16 +25864,29 @@ private Task PlaySongByIndex(int index)
 		});
 	}
 
-	private void OnPlaybackStateChanged(object sender, StateTransitionEventArgs e)
+	private void OnAudioEngineStateChanged(object sender, PlaybackState newState)
 	{
-		Debug.WriteLine($"[MainForm] 播放状态变更: {e.OldState} → {e.NewState}");
+		PlaybackState oldState;
+		lock (_stateCacheLock)
+		{
+			oldState = _cachedPlaybackState;
+			_cachedPlaybackState = newState;
+		}
+
+		Debug.WriteLine($"[MainForm] Playback state changed: {oldState} -> {newState}");
+
 		SafeInvoke(delegate
 		{
-			UpdateUIForPlaybackState(e.NewState);
-			bool isPlaying = e.NewState == PlaybackState.Playing || e.NewState == PlaybackState.Buffering || e.NewState == PlaybackState.Loading;
+			UpdateUIForPlaybackState(newState);
+			bool isPlaying = IsPlaybackActiveState(newState);
 			DownloadBandwidthCoordinator.Instance.NotifyPlaybackStateChanged(isPlaying);
 			UpdatePlaybackPowerRequests(isPlaying);
 		});
+	}
+
+	private void OnPlaybackStateChanged(object sender, StateTransitionEventArgs e)
+	{
+		OnAudioEngineStateChanged(sender, e.NewState);
 	}
 
 	private void UpdateStatusBarForCommandExecuting(PlaybackCommand command)
@@ -25949,24 +26021,25 @@ private Task PlaySongByIndex(int index)
 		UpdatePowerRequest(PowerRequestType.PowerRequestDisplayRequired, shouldPreventSleep, ref _powerRequestDisplayActive);
 		UpdatePowerRequest(PowerRequestType.PowerRequestSystemRequired, shouldPreventSleep, ref _powerRequestSystemActive);
 
-		if (!_powerRequestSleepActive)
+		if (!_powerRequestSleepActive && !_powerRequestDisplayActive && !_powerRequestSystemActive)
 		{
-			ClearPlaybackPowerRequests();
+			Debug.WriteLine("[PowerRequest] No active request flags after update; keeping thread execution state only");
 		}
 	}
 
 	private bool EnsurePlaybackPowerRequestHandle()
 	{
-		if (_powerRequestInitFailed)
-		{
-			return false;
-		}
 		if (_powerRequestHandle != IntPtr.Zero)
 		{
 			return true;
 		}
 
-		const string reason = "正在播放音频，保持播放不中断";
+		if (_powerRequestRetryNotBeforeUtc > DateTime.UtcNow)
+		{
+			return false;
+		}
+
+		const string reason = "Audio playback in progress";
 		_powerRequestReasonBuffer = Marshal.StringToHGlobalUni(reason);
 		ReasonContext context = new ReasonContext
 		{
@@ -25974,17 +26047,29 @@ private Task PlaySongByIndex(int index)
 			Flags = POWER_REQUEST_CONTEXT_SIMPLE_STRING,
 			ReasonString = _powerRequestReasonBuffer
 		};
+
 		_powerRequestHandle = PowerCreateRequest(ref context);
 		if (_powerRequestHandle == IntPtr.Zero || _powerRequestHandle == new IntPtr(-1))
 		{
 			int error = Marshal.GetLastWin32Error();
-			Debug.WriteLine($"[PowerRequest] 创建电源请求失败: {error}");
 			_powerRequestHandle = IntPtr.Zero;
-			_powerRequestInitFailed = true;
 			ReleasePowerRequestReasonBuffer();
+			_lastPowerRequestRefreshUtc = DateTime.MinValue;
+			RecordPowerRequestInitFailure(error);
 			return false;
 		}
+
+		_powerRequestInitFailureCount = 0;
+		_powerRequestRetryNotBeforeUtc = DateTime.MinValue;
 		return true;
+	}
+
+	private void RecordPowerRequestInitFailure(int error)
+	{
+		_powerRequestInitFailureCount = Math.Min(_powerRequestInitFailureCount + 1, 8);
+		double backoffSeconds = Math.Min(60.0, Math.Pow(2.0, _powerRequestInitFailureCount - 1));
+		_powerRequestRetryNotBeforeUtc = DateTime.UtcNow.AddSeconds(backoffSeconds);
+		Debug.WriteLine($"[PowerRequest] Create request failed: {error}, retry in {backoffSeconds:F0}s (attempt {_powerRequestInitFailureCount})");
 	}
 
 	private void UpdatePowerRequest(PowerRequestType requestType, bool enable, ref bool activeFlag)
@@ -26032,6 +26117,7 @@ private Task PlaySongByIndex(int index)
 			_powerRequestSleepActive = false;
 			_powerRequestDisplayActive = false;
 			_powerRequestSystemActive = false;
+			_lastPowerRequestRefreshUtc = DateTime.MinValue;
 			UpdateThreadExecutionState(isPlaying: false);
 			return;
 		}
@@ -26063,6 +26149,7 @@ private Task PlaySongByIndex(int index)
 			CloseHandle(_powerRequestHandle);
 			_powerRequestHandle = IntPtr.Zero;
 			ReleasePowerRequestReasonBuffer();
+			_lastPowerRequestRefreshUtc = DateTime.MinValue;
 		}
 	}
 
@@ -31674,7 +31761,7 @@ private async Task EnrichArtistCategoryAllResultsAsync(int typeCode, int areaCod
 		this.artistAlbumsSortMenuItem.DropDownItems.AddRange(this.artistAlbumsSortLatestMenuItem, this.artistAlbumsSortOldestMenuItem);
 		this.artistAlbumsSortMenuItem.Name = "artistAlbumsSortMenuItem";
 		this.artistAlbumsSortMenuItem.Size = new System.Drawing.Size(210, 24);
-		this.artistAlbumsSortMenuItem.Text = "专辑排序(&B)";
+		this.artistAlbumsSortMenuItem.Text = "排序(&B)";
 		this.artistAlbumsSortMenuItem.Visible = false;
 		this.artistAlbumsSortLatestMenuItem.Name = "artistAlbumsSortLatestMenuItem";
 		this.artistAlbumsSortLatestMenuItem.Size = new System.Drawing.Size(240, 26);

@@ -736,15 +736,19 @@ namespace YTPlayer.Core
                 return false;
             }
 
+            bool wasPlaying = false;
+            bool pausedBySeek = false;
+
             try
             {
-                Debug.WriteLine($"[SeekManager] ?? 启动后台缓冲等待: {targetSeconds:F1}s");
+                Debug.WriteLine($"[SeekManager] ?? ????????: {targetSeconds:F1}s");
                 long targetBytes = _audioEngine.GetBytesFromSeconds(targetSeconds);
-                bool wasPlaying = _audioEngine.IsPlaying;
+                wasPlaying = _audioEngine.IsPlaying;
 
                 if (wasPlaying)
                 {
                     _audioEngine.Pause();
+                    pausedBySeek = true;
                 }
 
                 _ = cacheManager.PrefetchAroundAsync(targetBytes, aheadChunks: 6, token, allowRangeRescue: true);
@@ -765,7 +769,7 @@ namespace YTPlayer.Core
                     bool ready = await cacheManager.WaitForCacheReadyAsync(targetBytes, true, waitCts.Token).ConfigureAwait(false);
                     if (!ready)
                     {
-                        Debug.WriteLine($"[SeekManager] ?? 缓冲等待超时: {targetSeconds:F1}s");
+                        Debug.WriteLine($"[SeekManager] ?? ??????: {targetSeconds:F1}s");
                         return false;
                     }
                 }
@@ -791,16 +795,11 @@ namespace YTPlayer.Core
                     }
                 }
 
-                Debug.WriteLine($"[SeekManager] ? 缓冲就绪，执行延迟跳转: {targetSeconds:F1}s");
+                Debug.WriteLine($"[SeekManager] ? ???????????: {targetSeconds:F1}s");
                 bool setSuccess = _audioEngine.SetPosition(targetSeconds);
                 if (!setSuccess)
                 {
                     return false;
-                }
-
-                if (wasPlaying && !token.IsCancellationRequested)
-                {
-                    _audioEngine.Resume();
                 }
 
                 return true;
@@ -811,8 +810,25 @@ namespace YTPlayer.Core
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[SeekManager] ?? 延迟Seek异常: {ex.Message}");
+                Debug.WriteLine($"[SeekManager] ? ??Seek??: {ex.Message}");
                 return false;
+            }
+            finally
+            {
+                if (pausedBySeek && wasPlaying && !token.IsCancellationRequested)
+                {
+                    try
+                    {
+                        if (!_audioEngine.IsPlaying)
+                        {
+                            _audioEngine.Resume();
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"[SeekManager] ??????: {ex.Message}");
+                    }
+                }
             }
         }
 

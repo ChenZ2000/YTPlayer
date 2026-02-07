@@ -22,6 +22,8 @@ namespace YTPlayer.Core.Playback.Cache
         private const int MinReadyChunks = 3;
         private const int MaxPreloadConcurrency = 8; // ⭐ 提高并发度以加速 SequentialFull 下载
         private const int HealthPollDelayMs = 50; // 加快缓存就绪轮询以匹配更高的按键频率
+        private const int WaitForCacheReadyHardTimeoutMs = 15000;
+        private const int ReadAsyncHardTimeoutMs = 20000;
 
         // ⭐ Strategy detection cache per domain (reduces redundant HEAD requests)
         private static readonly ConcurrentDictionary<string, DownloadStrategy> _strategyCache
@@ -41,6 +43,7 @@ namespace YTPlayer.Core.Playback.Cache
         private CancellationTokenSource? _preloadCts;
         private Task? _preloadTask;
         private TaskCompletionSource<bool>? _initialBufferTcs;
+        private readonly CancellationTokenSource _lifecycleCts = new CancellationTokenSource();
 
         // ⭐ 阶段3：智能预缓存和带宽管理
         private SmartPreCacheManager? _smartPreCache;
@@ -185,6 +188,8 @@ namespace YTPlayer.Core.Playback.Cache
             }
         }
         public bool IsFullyCached => _isFullyCached;
+        public bool IsDisposed => _disposed;
+        internal CancellationToken LifecycleToken => _lifecycleCts.Token;
         public double CacheFillFraction => _totalSize == 0 ? 0 : Math.Min(1.0, TotalCachedBytes / (double)_totalSize);
         public bool CanSpareBandwidthForPreload
         {
@@ -362,7 +367,7 @@ namespace YTPlayer.Core.Playback.Cache
             bool forPlayback = true)
         {
             var timeoutCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(timeoutMilliseconds));
-            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token, timeoutCts.Token);
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token, timeoutCts.Token, _lifecycleCts.Token);
 
             try
             {
@@ -902,6 +907,15 @@ namespace YTPlayer.Core.Playback.Cache
             _scheduler?.Dispose();
             _cache.Clear();
             _rangePreloaderStarted = false;
+
+            try
+            {
+                _lifecycleCts.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+            _lifecycleCts.Dispose();
 
             // ⭐ 阶段3：清理智能预缓存
             _smartPreCache?.Dispose();
@@ -1499,22 +1513,39 @@ namespace YTPlayer.Core.Playback.Cache
         {
             SetBufferingState(BufferingState.Buffering);
 
-            // ⭐⭐⭐ 关键修复：限制required不超过实际总块数
-            // 对于小文件（如试听版），总块数可能小于MinReadyChunks，必须适配
             int targetChunk = GetChunkIndex(position);
             int requiredBase = forPlayback ? MinReadyChunks : 1;
             int required = Math.Min(requiredBase, Math.Max(1, _totalChunks - targetChunk));
 
-            while (!token.IsCancellationRequested)
-            {
-                var health = CheckCacheHealth(position, forPlayback);
-                if (health.ReadyChunks >= required)
-                {
-                    SetBufferingState(forPlayback ? BufferingState.Ready : BufferingState.Buffering);
-                    return true;
-                }
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(WaitForCacheReadyHardTimeoutMs));
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token, timeoutCts.Token, _lifecycleCts.Token);
 
-                await Task.Delay(HealthPollDelayMs, token).ConfigureAwait(false);
+            try
+            {
+                while (true)
+                {
+                    linkedCts.Token.ThrowIfCancellationRequested();
+
+                    var health = CheckCacheHealth(position, forPlayback);
+                    if (health.ReadyChunks >= required)
+                    {
+                        SetBufferingState(forPlayback ? BufferingState.Ready : BufferingState.Buffering);
+                        return true;
+                    }
+
+                    await Task.Delay(HealthPollDelayMs, linkedCts.Token).ConfigureAwait(false);
+                }
+            }
+            catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+            {
+                DebugLogger.Log(
+                    DebugLogger.LogLevel.Warning,
+                    "SmartCache",
+                    $"WaitForCacheReadyAsync timeout at position {position:N0} after {WaitForCacheReadyHardTimeoutMs}ms");
+            }
+            catch (OperationCanceledException)
+            {
+                // Cancellation requested by caller or disposal; fall through to final health check.
             }
 
             return CheckCacheHealth(position, forPlayback).ReadyChunks >= required;
@@ -1528,7 +1559,7 @@ namespace YTPlayer.Core.Playback.Cache
             CancellationToken token,
             bool waitIfNotReady = true)
         {
-            // ⭐⭐⭐ 关键修复：在读取前检查预缓存并合并到主缓存
+            // Merge any staged pre-cache blocks before reading from primary cache.
             CheckAndMergePreCache(position);
 
             int bytesRead = Read(position, buffer, offset, count);
@@ -1537,18 +1568,35 @@ namespace YTPlayer.Core.Playback.Cache
                 return bytesRead;
             }
 
-            while (waitIfNotReady && !token.IsCancellationRequested)
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(ReadAsyncHardTimeoutMs));
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token, timeoutCts.Token, _lifecycleCts.Token);
+
+            try
             {
-                await Task.Delay(HealthPollDelayMs, token).ConfigureAwait(false);
-
-                // ⭐ 每次重试前都检查预缓存
-                CheckAndMergePreCache(position);
-
-                bytesRead = Read(position, buffer, offset, count);
-                if (bytesRead > 0)
+                while (!linkedCts.Token.IsCancellationRequested)
                 {
-                    return bytesRead;
+                    await Task.Delay(HealthPollDelayMs, linkedCts.Token).ConfigureAwait(false);
+
+                    // Retry after each poll and merge newly prepared pre-cache chunks.
+                    CheckAndMergePreCache(position);
+
+                    bytesRead = Read(position, buffer, offset, count);
+                    if (bytesRead > 0)
+                    {
+                        return bytesRead;
+                    }
                 }
+            }
+            catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+            {
+                DebugLogger.Log(
+                    DebugLogger.LogLevel.Warning,
+                    "SmartCache",
+                    $"ReadAsync timeout at position {position:N0} after {ReadAsyncHardTimeoutMs}ms");
+            }
+            catch (OperationCanceledException)
+            {
+                // Caller cancellation or disposal.
             }
 
             return bytesRead;
