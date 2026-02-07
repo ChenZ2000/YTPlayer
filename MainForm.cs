@@ -11991,6 +11991,82 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
                 }
         }
 
+	private void RefreshAvailabilityIndicatorsInCurrentView(string? songId = null, SongInfo? sourceSong = null)
+	{
+		SafeInvoke(delegate
+		{
+			if (base.IsDisposed || resultListView == null || resultListView.IsDisposed)
+			{
+				return;
+			}
+			string targetSongId = !string.IsNullOrWhiteSpace(songId) ? songId : sourceSong?.Id;
+			if (sourceSong != null && !string.IsNullOrWhiteSpace(targetSongId) && _currentSongs != null)
+			{
+				for (int i = 0; i < _currentSongs.Count; i++)
+				{
+					SongInfo rowSong = _currentSongs[i];
+					if (rowSong == null || ReferenceEquals(rowSong, sourceSong) || !string.Equals(rowSong.Id, targetSongId, StringComparison.Ordinal))
+					{
+						continue;
+					}
+					rowSong.IsAvailable = sourceSong.IsAvailable;
+					rowSong.IsTrial = sourceSong.IsTrial;
+					rowSong.TrialStart = sourceSong.TrialStart;
+					rowSong.TrialEnd = sourceSong.TrialEnd;
+					rowSong.IsUnblocked = sourceSong.IsUnblocked;
+					rowSong.UnblockSource = sourceSong.UnblockSource;
+					if (!string.IsNullOrWhiteSpace(sourceSong.Url))
+					{
+						rowSong.Url = sourceSong.Url;
+					}
+					if (!string.IsNullOrWhiteSpace(sourceSong.Level))
+					{
+						rowSong.Level = sourceSong.Level;
+					}
+					if (sourceSong.Size > 0)
+					{
+						rowSong.Size = sourceSong.Size;
+					}
+				}
+			}
+			MarkListViewLayoutDataChanged();
+			if (_isVirtualSongListActive && resultListView.VirtualMode)
+			{
+				ResetVirtualItemCache();
+				resultListView.Invalidate();
+				return;
+			}
+			if (_currentSongs == null || _currentSongs.Count == 0 || resultListView.Items.Count == 0)
+			{
+				resultListView.Invalidate();
+				return;
+			}
+			int baseIndex = Math.Max(1, _currentSequenceStartIndex);
+			resultListView.BeginUpdate();
+			try
+			{
+				for (int i = 0; i < resultListView.Items.Count; i++)
+				{
+					ListViewItem listViewItem = resultListView.Items[i];
+					if (!(listViewItem?.Tag is int dataIndex) || dataIndex < 0 || dataIndex >= _currentSongs.Count)
+					{
+						continue;
+					}
+					SongInfo rowSong = _currentSongs[dataIndex];
+					if (!string.IsNullOrWhiteSpace(targetSongId) && !string.Equals(rowSong?.Id, targetSongId, StringComparison.Ordinal))
+					{
+						continue;
+					}
+					FillListViewItemFromSongInfo(listViewItem, rowSong, checked(baseIndex + dataIndex));
+				}
+			}
+			finally
+			{
+				EndListViewUpdateAndRefreshAccessibility();
+			}
+		});
+	}
+
 	private static List<T> CloneList<T>(IEnumerable<T> source)
 	{
 		if (source == null)
@@ -17563,130 +17639,74 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 
 	private async Task<bool> RecursivePreloadNextAvailableAsync(QualityLevel quality, int maxAttempts = 10)
 	{
-		SongUrlInfo songUrl = null;
-		string resolvedUrl = null;
-		checked
+		for (int attempt = 0; attempt < maxAttempts; attempt++)
 		{
-			for (int attempt = 0; attempt < maxAttempts; attempt++)
+			SongInfo nextSong = PredictNextSong();
+			if (nextSong == null)
 			{
-				SongInfo nextSong = PredictNextSong();
-				if (nextSong == null)
+				Debug.WriteLine($"[MainForm] Preload: no candidate song ({attempt + 1}/{maxAttempts})");
+				return false;
+			}
+			Debug.WriteLine($"[MainForm] Preload attempt {attempt + 1}: {nextSong.Name}, IsAvailable={nextSong.IsAvailable}");
+			if (nextSong.IsAvailable != true)
+			{
+				try
 				{
-					Debug.WriteLine($"[MainForm] \ud83d\udd0d 预加载：无可用的下一首（尝试 {attempt + 1}/{maxAttempts}）");
-					return false;
+					using CancellationTokenSource resolveCts = new CancellationTokenSource(TimeSpan.FromSeconds(20.0));
+					SongResolveResult resolveResult = await ResolveSongPlaybackAsync(nextSong, quality, resolveCts.Token, suppressStatusUpdates: true).ConfigureAwait(continueOnCapturedContext: false);
+					if (resolveResult.Status == SongResolveStatus.NotAvailable)
+					{
+						nextSong.IsAvailable = false;
+						Debug.WriteLine("[MainForm] Preload skip not-available song (after unblock flow): " + nextSong.Name);
+						continue;
+					}
+					if (resolveResult.Status != SongResolveStatus.Success)
+					{
+						Debug.WriteLine("[MainForm] Preload resolve failed, try next song: " + nextSong.Name + ", status=" + resolveResult.Status);
+						continue;
+					}
 				}
-				Debug.WriteLine($"[MainForm] \ud83d\udd0d 预加载尝试 {attempt + 1}：{nextSong.Name}, IsAvailable={nextSong.IsAvailable}");
-				if (!nextSong.IsAvailable.HasValue)
+				catch (OperationCanceledException)
 				{
-					Debug.WriteLine("[MainForm] \ud83d\udd0d 歌曲未检查过（IsAvailable=null），执行有效性检查: " + nextSong.Name);
-					try
-					{
-						int num;
-						if ((await _apiClient.GetSongUrlAsync(new string[1] { nextSong.Id }, quality).ConfigureAwait(continueOnCapturedContext: false))?.TryGetValue(nextSong.Id, out songUrl) ?? false)
-						{
-							if (songUrl != null)
-							{
-								resolvedUrl = songUrl.Url;
-								if (resolvedUrl != null)
-								{
-									num = ((resolvedUrl.Length > 0) ? 1 : 0);
-									goto IL_02c3;
-								}
-							}
-							num = 0;
-						}
-						else
-						{
-							num = 0;
-						}
-						goto IL_02c3;
-						IL_02c3:
-						if (num != 0)
-						{
-							FreeTrialInfo trialInfo = songUrl.FreeTrialInfo;
-							bool isTrial = trialInfo != null;
-							long trialStart = trialInfo?.Start ?? 0;
-							long trialEnd = trialInfo?.End ?? 0;
-							if (isTrial)
-							{
-								Debug.WriteLine(unchecked($"[MainForm] \ud83c\udfb5 试听版本（预加载检查）: {nextSong.Name}, 片段: {trialStart / 1000}s - {trialEnd / 1000}s"));
-							}
-							long resolvedSize = songUrl.Size;
-							if (resolvedSize <= 0)
-							{
-								long contentLength = (await HttpRangeHelper.CheckRangeSupportAsync(resolvedUrl, null, CancellationToken.None, nextSong.CustomHeaders).ConfigureAwait(continueOnCapturedContext: false)).Item2;
-								if (contentLength > 0)
-								{
-									resolvedSize = contentLength;
-								}
-							}
-							if (resolvedSize <= 0)
-							{
-								resolvedSize = StreamSizeEstimator.EstimateSizeFromBitrate(songUrl.Br, nextSong.Duration);
-							}
-							nextSong.IsAvailable = true;
-							nextSong.Url = resolvedUrl;
-							string text = (nextSong.Level = songUrl.Level ?? quality.ToString().ToLowerInvariant());
-							string resolvedLevel = text;
-							nextSong.Size = resolvedSize;
-							nextSong.IsTrial = isTrial;
-							nextSong.TrialStart = trialStart;
-							nextSong.TrialEnd = trialEnd;
-							string actualLevel = resolvedLevel.ToLowerInvariant();
-							nextSong.SetQualityUrl(actualLevel, resolvedUrl, resolvedSize, isAvailable: true, isTrial, trialStart, trialEnd);
-							Debug.WriteLine($"[MainForm] ✓ 歌曲可用并已缓存: {nextSong.Name}, 音质: {actualLevel}, 试听: {isTrial}");
-							songUrl = null;
-							resolvedUrl = null;
-							goto IL_06f0;
-						}
-						nextSong.IsAvailable = false;
-						Debug.WriteLine("[MainForm] ✗ 歌曲不可用: " + nextSong.Name + "，尝试下一首");
-					}
-					catch (Exception ex)
-					{
-						Exception ex2 = ex;
-						Exception ex3 = ex2;
-						Debug.WriteLine("[MainForm] 检查可用性异常: " + nextSong.Name + ", " + ex3.Message);
-						nextSong.IsAvailable = false;
-					}
+					Debug.WriteLine("[MainForm] Preload resolve canceled/timeout, try next song: " + nextSong.Name);
 					continue;
 				}
-				goto IL_06f0;
-				IL_06f0:
-				if (nextSong.IsAvailable == false)
+				catch (Exception ex)
 				{
-					Debug.WriteLine("[MainForm] ⏭\ufe0f 跳过不可用歌曲: " + nextSong.Name + "，继续查找");
+					Debug.WriteLine("[MainForm] Preload resolve exception: " + nextSong.Name + ", " + ex.Message);
 					continue;
-				}
-				SongInfo currentSong = _audioEngine?.CurrentSong;
-				if (currentSong != null)
-				{
-					_nextSongPreloader?.CleanupStaleData(currentSong.Id, nextSong.Id);
-				}
-				Debug.WriteLine("[MainForm] \ud83c\udfaf 开始预加载可用歌曲：" + nextSong.Name);
-				if (_nextSongPreloader == null)
-				{
-					Debug.WriteLine("[MainForm] ⚠\ufe0f 预加载器未初始化");
-					return false;
-				}
-				if (await _nextSongPreloader.StartPreloadAsync(nextSong, quality))
-				{
-					PreloadedData gaplessData = _nextSongPreloader.TryGetPreloadedData(nextSong.Id);
-					if (gaplessData != null)
-					{
-						_audioEngine?.RegisterGaplessPreload(nextSong, gaplessData);
-					}
-					Debug.WriteLine("[MainForm] ✓✓✓ 预加载成功: " + nextSong.Name);
-					return true;
-				}
-				Debug.WriteLine("[MainForm] ⚠\ufe0f 预加载失败: " + nextSong.Name + "，尝试下一首（不标记不可用，允许后续重试）");
-				if (nextSong.IsAvailable == false)
-				{
 				}
 			}
-			Debug.WriteLine($"[MainForm] ❌ 尝试了 {maxAttempts} 次，未找到可用歌曲");
-			return false;
+			if (nextSong.IsAvailable == false)
+			{
+				Debug.WriteLine("[MainForm] Preload skip unavailable song: " + nextSong.Name);
+				continue;
+			}
+			SongInfo currentSong = _audioEngine?.CurrentSong;
+			if (currentSong != null)
+			{
+				_nextSongPreloader?.CleanupStaleData(currentSong.Id, nextSong.Id);
+			}
+			Debug.WriteLine("[MainForm] Start preloading candidate: " + nextSong.Name);
+			if (_nextSongPreloader == null)
+			{
+				Debug.WriteLine("[MainForm] Preloader is not initialized");
+				return false;
+			}
+			if (await _nextSongPreloader.StartPreloadAsync(nextSong, quality))
+			{
+				PreloadedData gaplessData = _nextSongPreloader.TryGetPreloadedData(nextSong.Id);
+				if (gaplessData != null)
+				{
+					_audioEngine?.RegisterGaplessPreload(nextSong, gaplessData);
+				}
+				Debug.WriteLine("[MainForm] Preload succeeded: " + nextSong.Name);
+				return true;
+			}
+			Debug.WriteLine("[MainForm] Preload failed, continue: " + nextSong.Name);
 		}
+		Debug.WriteLine($"[MainForm] Preload exhausted after {maxAttempts} attempts");
+		return false;
 	}
 
 	private async Task BatchCheckSongsAvailabilityAsync(List<SongInfo> songs, CancellationToken cancellationToken)
@@ -17700,7 +17720,7 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 			List<SongInfo> uncheckedSongs = songs.Where((SongInfo s) => !s.IsAvailable.HasValue).ToList();
 			if (uncheckedSongs.Count == 0)
 			{
-				Debug.WriteLine("[StreamCheck] 所有歌曲都已检查过，跳过");
+				Debug.WriteLine("[StreamCheck] All songs are already checked, skip");
 			}
 			else
 			{
@@ -17708,9 +17728,8 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 				{
 					return;
 				}
-				Debug.WriteLine($"[StreamCheck] \ud83d\ude80 开始流式检查 {uncheckedSongs.Count} 首歌曲（实时填入）");
-				string defaultQualityName = _config.DefaultQuality ?? "超清母带";
-				QualityLevel selectedQuality = NeteaseApiClient.GetQualityLevelFromName(defaultQualityName);
+				Debug.WriteLine($"[StreamCheck] Start stream availability check for {uncheckedSongs.Count} songs");
+				QualityLevel selectedQuality = GetCurrentQuality();
 				string[] ids = (from s in uncheckedSongs
 					select s.Id into id
 					where !string.IsNullOrWhiteSpace(id)
@@ -17720,41 +17739,61 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 					return;
 				}
 				ConcurrentDictionary<string, SongInfo> songLookup = new ConcurrentDictionary<string, SongInfo>(uncheckedSongs.Where((SongInfo s) => !string.IsNullOrWhiteSpace(s.Id)).ToDictionary<SongInfo, string, SongInfo>((SongInfo s) => s.Id, (SongInfo s) => s, StringComparer.Ordinal), StringComparer.Ordinal);
+				ConcurrentDictionary<string, SongInfo> unblockCandidates = new ConcurrentDictionary<string, SongInfo>(StringComparer.Ordinal);
 				int available = 0;
 				int unavailable = 0;
 				await _apiClient.BatchCheckSongsAvailabilityStreamAsync(ids, selectedQuality, delegate(string songId, bool isAvailable)
 				{
 					if (!cancellationToken.IsCancellationRequested && songLookup.TryGetValue(songId, out var value))
 					{
-						value.IsAvailable = isAvailable;
 						if (isAvailable)
 						{
+							value.IsAvailable = true;
 							Interlocked.Increment(ref available);
 						}
 						else
 						{
-							Interlocked.Increment(ref unavailable);
-							Debug.WriteLine("[StreamCheck] ⚠\ufe0f 标记不可用: " + value.Name);
+							value.IsAvailable = null;
+							unblockCandidates.TryAdd(songId, value);
 						}
 					}
 				}, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+				if (!cancellationToken.IsCancellationRequested && unblockCandidates.Count > 0)
+				{
+					int recoveredByUnblock = 0;
+					foreach (SongInfo candidate in unblockCandidates.Values)
+					{
+						cancellationToken.ThrowIfCancellationRequested();
+						if (await TryRecoverSongAvailabilityByUnblockAsync(candidate, selectedQuality, cancellationToken).ConfigureAwait(continueOnCapturedContext: false))
+						{
+							recoveredByUnblock++;
+							continue;
+						}
+						candidate.IsAvailable = false;
+						unavailable++;
+						Debug.WriteLine("[StreamCheck] Mark unavailable after unblock fallback: " + candidate.Name);
+					}
+					available += recoveredByUnblock;
+					Debug.WriteLine($"[StreamCheck] Unblock fallback recovered {recoveredByUnblock} songs");
+				}
 				if (!cancellationToken.IsCancellationRequested)
 				{
-					Debug.WriteLine($"[StreamCheck] \ud83c\udf89 流式检查全部完成：{available} 首可用，{unavailable} 首不可用");
+					Debug.WriteLine($"[StreamCheck] Completed: {available} available, {unavailable} unavailable");
+					RefreshAvailabilityIndicatorsInCurrentView();
 				}
 			}
 		}
 		catch (OperationCanceledException)
 		{
-			Debug.WriteLine("[StreamCheck] 可用性检查任务已取消");
+			Debug.WriteLine("[StreamCheck] Availability check canceled");
 		}
 		catch (Exception ex2)
 		{
-			Debug.WriteLine("[StreamCheck] 流式检查失败: " + ex2.Message);
+			Debug.WriteLine("[StreamCheck] Availability stream check failed: " + ex2.Message);
 		}
 	}
 
-        private void UpdateStatusBar(string? message)
+	private void UpdateStatusBar(string? message)
         {
                 if (message != null)
                 {
@@ -22572,8 +22611,43 @@ private static void SetMenuItemCheckedState(ToolStripMenuItem? menuItem, bool is
 		bool available = false;
 		if ((await _apiClient.BatchCheckSongsAvailabilityAsync(new string[1] { song.Id }, quality))?.TryGetValue(song.Id, out available) ?? false)
 		{
-			song.IsAvailable = available;
-			return available;
+			if (available)
+			{
+				song.IsAvailable = true;
+				return true;
+			}
+			using CancellationTokenSource unblockCts = new CancellationTokenSource(TimeSpan.FromSeconds(12.0));
+			if (await TryRecoverSongAvailabilityByUnblockAsync(song, quality, unblockCts.Token))
+			{
+				return true;
+			}
+			song.IsAvailable = false;
+			return false;
+		}
+		return false;
+	}
+
+	private async Task<bool> TryRecoverSongAvailabilityByUnblockAsync(SongInfo song, QualityLevel quality, CancellationToken cancellationToken)
+	{
+		if (song == null || string.IsNullOrWhiteSpace(song.Id))
+		{
+			return false;
+		}
+		try
+		{
+			if (await TryApplyUnblockAsync(song, GetQualityLevelString(quality), cancellationToken).ConfigureAwait(continueOnCapturedContext: false))
+			{
+				Debug.WriteLine("[Unblock] Availability recovered: " + song.Name + " (" + song.Id + ")");
+				return true;
+			}
+		}
+		catch (OperationCanceledException)
+		{
+			throw;
+		}
+		catch (Exception ex)
+		{
+			Debug.WriteLine("[Unblock] Availability recover check failed: " + ex.Message);
 		}
 		return false;
 	}
@@ -22588,12 +22662,34 @@ private static void SetMenuItemCheckedState(ToolStripMenuItem? menuItem, bool is
 			return new Dictionary<string, bool>(StringComparer.Ordinal);
 		}
 		QualityLevel quality = GetCurrentQuality();
-		Dictionary<string, bool> availability = await _apiClient.BatchCheckSongsAvailabilityAsync(idList, quality);
+		Dictionary<string, bool> availability = await _apiClient.BatchCheckSongsAvailabilityAsync(idList, quality) ?? new Dictionary<string, bool>(StringComparer.Ordinal);
+		List<SongInfo> unblockCandidates = new List<SongInfo>();
 		foreach (SongInfo song in songs)
 		{
 			if (song != null && !string.IsNullOrWhiteSpace(song.Id) && availability.TryGetValue(song.Id, out var available))
 			{
-				song.IsAvailable = available;
+				if (available)
+				{
+					song.IsAvailable = true;
+				}
+				else
+				{
+					song.IsAvailable = null;
+					unblockCandidates.Add(song);
+				}
+			}
+		}
+		foreach (SongInfo candidate in unblockCandidates)
+		{
+			using CancellationTokenSource unblockCts = new CancellationTokenSource(TimeSpan.FromSeconds(12.0));
+			if (await TryRecoverSongAvailabilityByUnblockAsync(candidate, quality, unblockCts.Token))
+			{
+				availability[candidate.Id] = true;
+			}
+			else
+			{
+				candidate.IsAvailable = false;
+				availability[candidate.Id] = false;
 			}
 		}
 		return availability;
@@ -24476,6 +24572,7 @@ private static void SetMenuItemCheckedState(ToolStripMenuItem? menuItem, bool is
 			song.Level = level;
 			song.Size = size;
 			OptimizedHttpClientFactory.PreWarmConnection(song.Url);
+			RefreshAvailabilityIndicatorsInCurrentView(song.Id, song);
 			Debug.WriteLine($"[Unblock] ✓ 解封成功: {song.Name} ({song.UnblockSource}), level={level}, size={size}");
 			return true;
 		}
@@ -24495,7 +24592,8 @@ private static void SetMenuItemCheckedState(ToolStripMenuItem? menuItem, bool is
 		{
 			string actualLevel = songUrl.Level?.ToLower() ?? selectedQualityLevel;
 			song.SetQualityUrl(actualLevel, songUrl.Url, resolvedSize, isAvailable: true, isTrial, trialStart, trialEnd);
-			Debug.WriteLine($"[MainForm] ✓ 已缓存音质URL: {song.Name}, 音质: {actualLevel}, 大小: {resolvedSize}, 试听: {isTrial}");
+			Debug.WriteLine($"[MainForm] Official URL cached: {song.Name}, level={actualLevel}, size={resolvedSize}, trial={isTrial}");
+			song.IsAvailable = true;
 			song.Url = songUrl.Url;
 			song.Level = songUrl.Level;
 			song.Size = resolvedSize;
@@ -24503,6 +24601,7 @@ private static void SetMenuItemCheckedState(ToolStripMenuItem? menuItem, bool is
 			song.TrialStart = trialStart;
 			song.TrialEnd = trialEnd;
 			OptimizedHttpClientFactory.PreWarmConnection(song.Url);
+			RefreshAvailabilityIndicatorsInCurrentView(song.Id, song);
 		}
 
 		if (song.IsAvailable == false)
@@ -24552,12 +24651,14 @@ private static void SetMenuItemCheckedState(ToolStripMenuItem? menuItem, bool is
 		if (cachedQuality != null && !string.IsNullOrEmpty(cachedQuality.Url))
 		{
 			Debug.WriteLine($"[MainForm] ✓ 命中多音质缓存: {song.Name}, 音质: {selectedQualityLevel}, 试听: {cachedQuality.IsTrial}");
+			song.IsAvailable = true;
 			song.Url = cachedQuality.Url;
 			song.Level = cachedQuality.Level;
 			song.Size = cachedQuality.Size;
 			song.IsTrial = cachedQuality.IsTrial;
 			song.TrialStart = cachedQuality.TrialStart;
 			song.TrialEnd = cachedQuality.TrialEnd;
+			RefreshAvailabilityIndicatorsInCurrentView(song.Id, song);
 			return SongResolveResult.Success();
 		}
 
@@ -24568,11 +24669,7 @@ private static void SetMenuItemCheckedState(ToolStripMenuItem? menuItem, bool is
 
 		if (!song.IsAvailable.HasValue && !(await EnsureSongAvailabilityAsync(song, selectedQuality, cancellationToken).ConfigureAwait(continueOnCapturedContext: false)))
 		{
-			Debug.WriteLine("[MainForm] 单曲可用性检查判定为不可用: " + song.Name);
-			if (await TryApplyUnblockAsync(song, selectedQualityLevel, cancellationToken).ConfigureAwait(continueOnCapturedContext: false))
-			{
-				return SongResolveResult.Success(usedUnblock: true);
-			}
+			Debug.WriteLine("[MainForm] Single-song availability check returned unavailable: " + song.Name);
 			song.IsAvailable = false;
 			return SongResolveResult.NotAvailable();
 		}
@@ -25273,8 +25370,7 @@ private Task PlaySongByIndex(int index)
 		}
 
 		SongInfo song = moveResult.Song;
-		string defaultQualityName = _config.DefaultQuality ?? "????";
-		QualityLevel selectedQuality = NeteaseApiClient.GetQualityLevelFromName(defaultQualityName);
+		QualityLevel selectedQuality = GetCurrentQuality();
 
 		using CancellationTokenSource resolveCts = new CancellationTokenSource(TimeSpan.FromSeconds(20.0));
 		try
@@ -28028,22 +28124,39 @@ private Task PlaySongByIndex(int index)
 		{
 			return false;
 		}
-		if (song.IsAvailable.HasValue)
+		if (song.IsAvailable == true)
 		{
-			return song.IsAvailable.Value;
+			return true;
+		}
+		if (song.IsAvailable == false && song.IsUnblocked)
+		{
+			return true;
 		}
 		try
 		{
-			bool isAvailable = default(bool);
+			bool isAvailable = false;
 			if ((await _apiClient.BatchCheckSongsAvailabilityAsync(new string[1] { song.Id }, quality).ConfigureAwait(continueOnCapturedContext: false))?.TryGetValue(song.Id, out isAvailable) ?? false)
 			{
-				song.IsAvailable = isAvailable;
-				return isAvailable;
+				if (isAvailable)
+				{
+					song.IsAvailable = true;
+					return true;
+				}
+				if (await TryRecoverSongAvailabilityByUnblockAsync(song, quality, cancellationToken).ConfigureAwait(continueOnCapturedContext: false))
+				{
+					return true;
+				}
+				song.IsAvailable = false;
+				return false;
 			}
+		}
+		catch (OperationCanceledException)
+		{
+			throw;
 		}
 		catch (Exception ex)
 		{
-			Debug.WriteLine("[StreamCheck] 单曲可用性检查失败（忽略，按可用继续）: " + ex.Message);
+			Debug.WriteLine("[StreamCheck] Single-song availability check failed (continue as available): " + ex.Message);
 		}
 		return true;
 	}

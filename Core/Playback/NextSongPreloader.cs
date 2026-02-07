@@ -128,71 +128,42 @@ namespace YTPlayer.Core.Playback
                 return false;
             }
 
-            // 如果已经检查过，直接返回结果
-            if (song.IsAvailable != null)
+            if (song.IsAvailable.HasValue)
             {
                 return song.IsAvailable.Value;
             }
 
             try
             {
-                System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] 🔍 检查歌曲可用性: {song.Name}");
-
-                // 调用 GetSongUrl API 检查
-                var urlResult = await _apiClient.GetSongUrlAsync(
-                    new[] { song.Id },
-                    quality,
-                    skipAvailabilityCheck: false).ConfigureAwait(false);
-
-                if (cancellationToken.IsCancellationRequested) return false;
-
-                // 检查 URL 是否有效
-                if (urlResult != null &&
-                    urlResult.TryGetValue(song.Id, out var songUrl) &&
-                    !string.IsNullOrEmpty(songUrl?.Url))
+                SongResolveResult resolveResult = await _resolvePlaybackAsync(song, quality, cancellationToken).ConfigureAwait(false);
+                if (resolveResult.Status == SongResolveStatus.Success)
                 {
-                    long resolvedSize = songUrl.Size;
-                    if (resolvedSize <= 0)
-                    {
-                        var (_, contentLength) = await HttpRangeHelper.CheckRangeSupportAsync(songUrl.Url, _httpClient, cancellationToken, song.CustomHeaders).ConfigureAwait(false);
-                        if (contentLength > 0)
-                        {
-                            resolvedSize = contentLength;
-                        }
-                    }
-                    if (resolvedSize <= 0)
-                    {
-                        resolvedSize = StreamSizeEstimator.EstimateSizeFromBitrate(songUrl.Br, song.Duration);
-                    }
-
-                    // 歌曲可用
                     song.IsAvailable = true;
-                    song.Url = songUrl.Url;
-                    song.Level = songUrl.Level;
-                    song.Size = resolvedSize;
-                    System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] ✓ 歌曲可用: {song.Name}");
                     return true;
                 }
-                else
+
+                if (resolveResult.Status == SongResolveStatus.NotAvailable)
                 {
-                    // 歌曲不可用
                     song.IsAvailable = false;
-                    System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] ✗ 歌曲不可用: {song.Name}");
-                    return false;
                 }
+
+                return false;
+            }
+            catch (OperationCanceledException)
+            {
+                return false;
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] 检查可用性异常: {song.Name}, {ex.Message}");
-                song.IsAvailable = false;
+                System.Diagnostics.Debug.WriteLine($"[NextSongPreloader] Unified availability check failed: {song.Name}, {ex.Message}");
                 return false;
             }
         }
 
         /// <summary>
-        /// 开始预加载下一首歌曲（异步非阻塞）
+        /// Start preloading the next track asynchronously.
         /// </summary>
-        /// <returns>true 表示预加载成功或正在进行，false 表示歌曲不可用需要跳过</returns>
+        /// <returns>true if preload succeeded; otherwise false.</returns>
         public async Task<bool> StartPreloadAsync(SongInfo nextSong, QualityLevel quality)
         {
             if (nextSong == null || string.IsNullOrWhiteSpace(nextSong.Id))

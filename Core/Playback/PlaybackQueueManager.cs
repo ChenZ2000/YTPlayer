@@ -499,16 +499,14 @@ namespace YTPlayer.Core.Playback
                         // 检查歌曲是否可用
                         // IsAvailable == null 表示未检查，认为可能可用
                         // IsAvailable == true 表示可用
-                        // IsAvailable == false 表示不可用，跳过
+                        // IsAvailable == false means previously marked unavailable.
+                        // Do not hard-skip here; unified resolve may recover via unblock.
                         if (song.IsAvailable == false)
                         {
-                            System.Diagnostics.Debug.WriteLine($"[PlaybackQueue] 跳过不可用歌曲: {song.Name} (索引 {nextIndex})");
-                            checkedIndex = nextIndex;
-                            continue; // 继续查找下一首
+                            System.Diagnostics.Debug.WriteLine($"[PlaybackQueue] Candidate is marked unavailable, but keep it for unified resolve: {song.Name} (index {nextIndex})");
                         }
 
-                        // 找到可用或未知状态的歌曲
-                        System.Diagnostics.Debug.WriteLine($"[PlaybackQueue] 找到可用歌曲: {song.Name} (索引 {nextIndex}, 尝试次数 {attempts})");
+                        System.Diagnostics.Debug.WriteLine($"[PlaybackQueue] Predict candidate: {song.Name} (index {nextIndex}, attempt {attempts}, IsAvailable={song.IsAvailable})");
                         return song;
                     }
 
