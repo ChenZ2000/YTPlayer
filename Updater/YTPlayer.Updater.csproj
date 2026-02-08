@@ -100,6 +100,10 @@
     <None Include="App.config" />
   </ItemGroup>
 
+  <Target Name="CleanGeneratedVersionInfo" BeforeTargets="Clean">
+    <Delete Files="Properties\VersionInfo.g.cs" Condition="Exists('Properties\VersionInfo.g.cs')" />
+  </Target>
+
   <Target Name="GenerateVersionInfo" Inputs="$(VersionFile)" Outputs="Properties\VersionInfo.g.cs" BeforeTargets="BeforeCompile">
     <Error Condition="!Exists('$(VersionFile)')" Text="缺少版本号文件 $(VersionFile)。" />
     <ReadLinesFromFile File="$(VersionFile)">

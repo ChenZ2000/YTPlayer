@@ -292,33 +292,65 @@ namespace YTPlayer
 
                 _nvdaBufferedNavigationDelta = 0;
 
+                int total = resultListView.Items.Count;
+
                 int currentIndex = GetSelectedListViewIndex();
 
-                if (currentIndex < 0)
+                if (currentIndex < 0 && resultListView.FocusedItem != null)
 
                 {
 
-                        currentIndex = GetFocusedListViewIndex();
+                        currentIndex = resultListView.FocusedItem.Index;
 
                 }
 
-                if (currentIndex < 0)
+                bool hasAnchor = currentIndex >= 0;
+
+                int targetIndex;
+
+                int movedSteps;
+
+                if (!hasAnchor)
 
                 {
 
-                        currentIndex = 0;
+                        if (delta > 0)
+
+                        {
+
+                                targetIndex = Math.Max(0, Math.Min(delta - 1, total - 1));
+
+                                movedSteps = targetIndex + 1;
+
+                        }
+
+                        else
+
+                        {
+
+                                targetIndex = 0;
+
+                                movedSteps = 1;
+
+                        }
 
                 }
 
-                int targetIndex = Math.Max(0, Math.Min(currentIndex + delta, resultListView.Items.Count - 1));
-
-                int movedSteps = Math.Abs(targetIndex - currentIndex);
-
-                if (movedSteps <= 0)
+                else
 
                 {
 
-                        return;
+                        targetIndex = Math.Max(0, Math.Min(currentIndex + delta, total - 1));
+
+                        movedSteps = Math.Abs(targetIndex - currentIndex);
+
+                        if (movedSteps <= 0)
+
+                        {
+
+                                return;
+
+                        }
 
                 }
 
@@ -527,6 +559,10 @@ namespace YTPlayer
                         ClearListViewSelection();
 
                         ListViewItem listViewItem = resultListView.Items[targetIndex];
+
+                        bool setRole = IsNvdaRunningCached();
+
+                        UpdateListViewItemAccessibilityProperties(listViewItem, setRole, updateAccessibleObjectName: !setRole);
 
                         listViewItem.Selected = true;
 
@@ -1480,7 +1516,7 @@ namespace YTPlayer
 
 				}
 
-				else if (!(isNvda && isNarrator))
+				else if (!isNvda && !isNarrator)
 
 				{
 
@@ -1539,8 +1575,16 @@ namespace YTPlayer
 				if (interruptAnnouncement)
 
 				{
-
-					RaiseAccessibilityAnnouncement(text);
+					bool nvdaRunning = IsNvdaRunningCached();
+					bool narratorRunning = IsNarratorRunningCached();
+					if (nvdaRunning || narratorRunning)
+					{
+						RaiseAccessibilityAnnouncementUiOnly(text, AutomationNotificationProcessing.ImportantMostRecent, AutomationLiveSetting.Assertive);
+					}
+					else
+					{
+						RaiseAccessibilityAnnouncement(text, preferInterrupt: true);
+					}
 
 				}
 
@@ -2729,11 +2773,9 @@ namespace YTPlayer
 
                         {
 
-                                Stopwatch setSw = null;
-
 #if DEBUG
 
-                                setSw = Stopwatch.StartNew();
+                                Stopwatch setSw = Stopwatch.StartNew();
 
 #endif
 
@@ -2769,11 +2811,9 @@ namespace YTPlayer
 
                         {
 
-                                Stopwatch nameSw = null;
-
 #if DEBUG
 
-                                nameSw = Stopwatch.StartNew();
+                                Stopwatch nameSw = Stopwatch.StartNew();
 
 #endif
 
@@ -3627,11 +3667,9 @@ namespace YTPlayer
 
                 bool updateAccessibleObjectName = ShouldUpdateAccessibleObjectNameForSelection(isNvda);
 
-                Stopwatch selectionSw = null;
-
 #if DEBUG
 
-                selectionSw = Stopwatch.StartNew();
+                Stopwatch selectionSw = Stopwatch.StartNew();
 
 #endif
 
@@ -3659,11 +3697,9 @@ namespace YTPlayer
 
                 {
 
-                        Stopwatch notifySw = null;
-
 #if DEBUG
 
-                        notifySw = Stopwatch.StartNew();
+                        Stopwatch notifySw = Stopwatch.StartNew();
 
 #endif
 
@@ -5340,11 +5376,9 @@ namespace YTPlayer
 
 
 
-                Stopwatch sw = null;
-
 #if DEBUG
 
-                sw = Stopwatch.StartNew();
+                Stopwatch sw = Stopwatch.StartNew();
 
 #endif
 

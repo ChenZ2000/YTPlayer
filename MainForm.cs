@@ -2374,6 +2374,17 @@ public partial class MainForm : Form
                         return;
                 }
                 resultListView.DeferMultiLineLayout = deferred;
+
+                if (deferred)
+                {
+                        _lastListViewFocusChangeUtc = DateTime.UtcNow;
+                        if (_listViewLayoutDebounceTimer == null)
+                        {
+                                _listViewLayoutDebounceTimer = new System.Windows.Forms.Timer();
+                                _listViewLayoutDebounceTimer.Tick += (_, _) => HandleListViewLayoutTimerTick();
+                        }
+                        ScheduleListViewLayoutTimer();
+                }
         }
 
         private void SetListViewRedrawDeferred(bool deferred)
@@ -3185,6 +3196,7 @@ public partial class MainForm : Form
                 int totalItemCount = GetResultListViewItemCount();
                 if (ShouldUseResultListViewLayoutFastPath(totalItemCount))
                 {
+                        ApplyResultListViewAutoShrinkLayout(availableWidth, desiredContentWidth: 0, allowAutoShrink: false);
                         int[] fastWidths = BuildFallbackColumnWidths(availableWidth, hideSequence);
                         ApplyResultListViewColumnWidths(fastWidths);
                         DebugListViewLayout($"FastPath: rows={totalItemCount}, availableWidth={availableWidth}, hideSequence={hideSequence}, widths=[{string.Join(",", fastWidths)}]");
@@ -3451,7 +3463,20 @@ public partial class MainForm : Form
                         int flexWidth = availableWidth - totalFixed;
                         minFlexSum = flexColumns.Count * minFlexWidth;
                         DebugListViewLayout($"Flex: flexWidth={flexWidth}, minFlexWidth={minFlexWidth}, minFlexSum={minFlexSum}");
-                        if (flexWidth <= 0 || flexWidth < minFlexSum)
+                        bool appliedOptimizedPlaylists = false;
+                        if (rows.Count > 0 &&
+                                !hasCustomAny &&
+                                !_isUserResizingListViewColumns &&
+                                GetCurrentListViewDataMode() == ListViewDataMode.Playlists)
+                        {
+                                appliedOptimizedPlaylists = TryApplyPlaylistsFlexLayout(widths, hide, roles, flexColumns, flexWidth, minFlexWidth, maxSingleLineWidths, autoStats);
+                        }
+
+                        if (appliedOptimizedPlaylists)
+                        {
+                                DebugListViewLayout("Flex: playlists optimized");
+                        }
+                        else if (flexWidth <= 0 || flexWidth < minFlexSum)
                         {
                                 foreach (int columnIndex in flexColumns)
                                 {
@@ -3761,6 +3786,239 @@ public partial class MainForm : Form
                         remainder--;
                         index++;
                 }
+        }
+
+        private bool TryApplyPlaylistsFlexLayout(int[] widths, bool[] hide, ListViewColumnRole[] roles, IReadOnlyList<int> flexColumns, int flexWidth, int minFlexWidth, int[] maxSingleLineWidths, ColumnAutoSizeStats[] autoStats)
+        {
+                if (resultListView == null || widths == null || hide == null || roles == null || flexColumns == null || maxSingleLineWidths == null || autoStats == null)
+                {
+                        return false;
+                }
+
+                if (flexWidth <= 0 || minFlexWidth <= 0)
+                {
+                        return false;
+                }
+
+                if (GetCurrentListViewDataMode() != ListViewDataMode.Playlists)
+                {
+                        return false;
+                }
+
+                int titleColumnIndex = FindColumnIndexByRole(roles, ListViewColumnRole.Title);
+                int creatorColumnIndex = FindColumnIndexByRole(roles, ListViewColumnRole.Creator);
+                int descriptionColumnIndex = FindColumnIndexByRole(roles, ListViewColumnRole.Description);
+                if (titleColumnIndex <= 0 || creatorColumnIndex <= 0 || descriptionColumnIndex <= 0)
+                {
+                        return false;
+                }
+
+                if (!flexColumns.Contains(titleColumnIndex) || !flexColumns.Contains(creatorColumnIndex) || !flexColumns.Contains(descriptionColumnIndex))
+                {
+                        return false;
+                }
+
+                int titleIndex = titleColumnIndex - 1;
+                int creatorIndex = creatorColumnIndex - 1;
+                int descriptionIndex = descriptionColumnIndex - 1;
+
+                if (titleIndex < 0 || titleIndex >= widths.Length || creatorIndex < 0 || creatorIndex >= widths.Length || descriptionIndex < 0 || descriptionIndex >= widths.Length)
+                {
+                        return false;
+                }
+
+                if (hide[titleIndex] || hide[creatorIndex] || hide[descriptionIndex])
+                {
+                        return false;
+                }
+
+                int titleMin = minFlexWidth;
+                int creatorMin = CalculatePlaylistsCreatorMinWidth(minFlexWidth);
+                int descriptionMin = minFlexWidth;
+
+                int minSum = checked(titleMin + creatorMin + descriptionMin);
+                if (flexWidth < minSum)
+                {
+                        widths[titleIndex] = titleMin;
+                        widths[creatorIndex] = minFlexWidth;
+                        widths[descriptionIndex] = descriptionMin;
+                        DebugListViewLayout($"Flex: playlists clamp flexWidth={flexWidth} < minSum={minSum}");
+                        return true;
+                }
+
+                int titleIdeal = Math.Max(titleMin, maxSingleLineWidths[titleIndex]);
+                int creatorIdeal = Math.Max(creatorMin, maxSingleLineWidths[creatorIndex]);
+
+                int descriptionMax = Math.Max(descriptionMin, Math.Min(maxSingleLineWidths[descriptionIndex], flexWidth));
+                int lineHeight = MeasureListViewLineHeight();
+                int descriptionIdeal = CalculatePlaylistsDescriptionIdealWidth(autoStats[descriptionIndex], descriptionMin, descriptionMax, lineHeight, maxLines: ListViewMultiLineMaxLines);
+
+                int titleWidth = titleMin;
+                int creatorWidth = creatorMin;
+                int descriptionWidth = descriptionMin;
+                int remaining = checked(flexWidth - titleWidth - creatorWidth - descriptionWidth);
+                TakeWidthUpTo(ref titleWidth, titleIdeal, ref remaining);
+                TakeWidthUpTo(ref creatorWidth, creatorIdeal, ref remaining);
+                TakeWidthUpTo(ref descriptionWidth, descriptionIdeal, ref remaining);
+                if (remaining > 0)
+                {
+                        DistributeRemainingWidthTitleCreator(ref titleWidth, ref creatorWidth, remaining);
+                        remaining = 0;
+                }
+
+                widths[titleIndex] = titleWidth;
+                widths[creatorIndex] = creatorWidth;
+                widths[descriptionIndex] = descriptionWidth;
+
+                DebugListViewLayout($"Flex: playlists title=[{titleWidth}/{titleIdeal}] creator=[{creatorWidth}/{creatorIdeal}] desc=[{descriptionWidth}/{descriptionIdeal}] flexWidth={flexWidth}");
+                return true;
+        }
+
+        private static int FindColumnIndexByRole(ListViewColumnRole[] roles, ListViewColumnRole target)
+        {
+                if (roles == null)
+                {
+                        return -1;
+                }
+
+                for (int i = 0; i < roles.Length; i++)
+                {
+                        if (roles[i] == target)
+                        {
+                                return i + 1;
+                        }
+                }
+
+                return -1;
+        }
+
+        private int CalculatePlaylistsCreatorMinWidth(int minFlexWidth)
+        {
+                int min = minFlexWidth;
+                int chinese = MeasureSingleLineWidth("中中中中") + ListViewTextHorizontalPadding;
+                int digits = MeasureSingleLineWidth("88888888") + ListViewTextHorizontalPadding;
+                min = Math.Max(min, Math.Max(chinese, digits));
+                return min;
+        }
+
+        private int CalculatePlaylistsDescriptionIdealWidth(ColumnAutoSizeStats stats, int minWidth, int maxWidth, int lineHeight, int maxLines)
+        {
+                if (resultListView == null || stats == null)
+                {
+                        return minWidth;
+                }
+
+                string sample = stats.MaxTextSample ?? string.Empty;
+                int probeChars = checked(18 * Math.Max(1, maxLines));
+                string probe = BuildPlaylistsDescriptionProbeText(sample, probeChars);
+                if (string.IsNullOrWhiteSpace(probe))
+                {
+                        return minWidth;
+                }
+
+                int ideal = FindMinColumnWidthToFitLines(probe, maxLines, minWidth, maxWidth, lineHeight);
+                ideal = Math.Max(minWidth, Math.Min(maxWidth, ideal));
+                return ideal;
+        }
+
+        private static string BuildPlaylistsDescriptionProbeText(string sample, int maxChars)
+        {
+                if (string.IsNullOrWhiteSpace(sample) || maxChars <= 0)
+                {
+                        return string.Empty;
+                }
+
+                string text = sample.Replace("\r", " ").Replace("\n", " ").Trim();
+                if (text.Length <= maxChars)
+                {
+                        return text;
+                }
+
+                return text.Substring(0, maxChars).TrimEnd();
+        }
+
+        private int FindMinColumnWidthToFitLines(string text, int maxLines, int minWidth, int maxWidth, int lineHeight)
+        {
+                if (resultListView == null)
+                {
+                        return minWidth;
+                }
+
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                        return minWidth;
+                }
+
+                maxLines = Math.Max(1, maxLines);
+                int maxHeight = Math.Max(1, checked(lineHeight * maxLines));
+
+                minWidth = Math.Max(0, minWidth);
+                maxWidth = Math.Max(minWidth, maxWidth);
+
+                int left = Math.Max(1, minWidth - ListViewTextHorizontalPadding);
+                int right = Math.Max(left, maxWidth - ListViewTextHorizontalPadding);
+                int best = right;
+                TextFormatFlags flags = TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.TextBoxControl | TextFormatFlags.NoPadding;
+
+                while (left <= right)
+                {
+                        int mid = left + (right - left) / 2;
+                        Size measured = TextRenderer.MeasureText(text, resultListView.Font, new Size(mid, int.MaxValue), flags);
+                        if (measured.Height <= maxHeight)
+                        {
+                                best = mid;
+                                right = mid - 1;
+                        }
+                        else
+                        {
+                                left = mid + 1;
+                        }
+                }
+
+                int columnWidth = checked(best + ListViewTextHorizontalPadding);
+                columnWidth = Math.Max(minWidth, Math.Min(maxWidth, columnWidth));
+                return columnWidth;
+        }
+
+        private int MeasureListViewLineHeight()
+        {
+                if (resultListView == null)
+                {
+                        return 0;
+                }
+
+                Size measured = TextRenderer.MeasureText("A", resultListView.Font, new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
+                return Math.Max(1, measured.Height);
+        }
+
+        private static void TakeWidthUpTo(ref int width, int target, ref int remaining)
+        {
+                if (remaining <= 0 || width >= target)
+                {
+                        return;
+                }
+
+                int add = Math.Min(remaining, target - width);
+                if (add <= 0)
+                {
+                        return;
+                }
+
+                width = checked(width + add);
+                remaining -= add;
+        }
+
+        private static void DistributeRemainingWidthTitleCreator(ref int titleWidth, ref int creatorWidth, int remaining)
+        {
+                if (remaining <= 0)
+                {
+                        return;
+                }
+
+                int titleAdd = (int)Math.Floor(remaining * 2.0 / 3.0);
+                int creatorAdd = remaining - titleAdd;
+                titleWidth = checked(titleWidth + titleAdd);
+                creatorWidth = checked(creatorWidth + creatorAdd);
         }
 
 
@@ -9840,7 +10098,8 @@ private void ActivateMixedSearchTypeOption()
 			}
 			Debug.WriteLine($"[LoadRecentPlayedSongs] 异常: {ex}");
 			MessageBox.Show("加载最近播放失败: " + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
-			throw;
+			UpdateStatusBar("加载最近播放失败");
+			ShowListRetryPlaceholderCore("recent_play", resultListView?.AccessibleName, "歌曲列表", announceHeader: true, suppressFocus: false);
 		}
 	}
 
@@ -9978,7 +10237,8 @@ private void ActivateMixedSearchTypeOption()
 			}
 			Debug.WriteLine($"[LoadRecentPodcasts] 异常: {ex}");
 			MessageBox.Show("加载最近播客失败: " + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
-			throw;
+			UpdateStatusBar("加载最近播客失败");
+			ShowListRetryPlaceholderCore("recent_podcasts", resultListView?.AccessibleName, "播客列表", announceHeader: true, suppressFocus: false);
 		}
 	}
 
@@ -10254,7 +10514,8 @@ private void ActivateMixedSearchTypeOption()
 			}
 			Debug.WriteLine($"[LoadRecentPlaylists] 异常: {ex}");
 			MessageBox.Show("加载最近歌单失败: " + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
-			throw;
+			UpdateStatusBar("加载最近歌单失败");
+			ShowListRetryPlaceholderCore("recent_playlists", resultListView?.AccessibleName, "歌单列表", announceHeader: true, suppressFocus: false);
 		}
 	}
 
@@ -10303,6 +10564,33 @@ private void ActivateMixedSearchTypeOption()
 					UpdateStatusBar(status);
 				}
 			}).ConfigureAwait(continueOnCapturedContext: false);
+			if (!viewToken.IsCancellationRequested && list.Count > 0)
+			{
+				bool metaUpdated = await EnrichRecentPlaylistsMetaAsync(list, viewToken).ConfigureAwait(continueOnCapturedContext: false);
+				if (!viewToken.IsCancellationRequested && metaUpdated)
+				{
+					await ExecuteOnUiThreadAsync(delegate
+					{
+						if (string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
+						{
+							SafeListView safeListView = resultListView;
+							int num = ((safeListView != null && safeListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : (-1));
+							if (_currentPlaylists.Count == list.Count)
+							{
+								PatchPlaylists(list, 1, showPagination: false, hasPreviousPage: false, hasNextPage: false, num, allowSelection: false);
+							}
+							else
+							{
+								DisplayPlaylists(list, preserveSelection: true, viewSource, accessibleName, 1, showPagination: false, hasNextPage: false, announceHeader: false, suppressFocus: true);
+								if (num >= 0)
+								{
+									EnsureListSelectionWithoutFocus(Math.Min(num, checked(resultListView.Items.Count - 1)));
+								}
+							}
+						}
+					}).ConfigureAwait(continueOnCapturedContext: false);
+				}
+			}
 		}
 		catch (Exception ex)
 		{
@@ -10313,6 +10601,83 @@ private void ActivateMixedSearchTypeOption()
 				Debug.WriteLine($"[RecentPlaylists] 丰富最近歌单失败: {ex3}");
 			}
 		}
+	}
+
+	private async Task<bool> EnrichRecentPlaylistsMetaAsync(List<PlaylistInfo> playlists, CancellationToken cancellationToken)
+	{
+		if (playlists == null || playlists.Count == 0 || _apiClient == null)
+		{
+			return false;
+		}
+		List<PlaylistInfo> targets = playlists.Where((PlaylistInfo p) => p != null && !string.IsNullOrWhiteSpace(p.Id) && p.TrackCount <= 0).ToList();
+		if (targets.Count == 0)
+		{
+			return false;
+		}
+		int updatedCount = 0;
+		using SemaphoreSlim semaphore = new SemaphoreSlim(4);
+		List<Task> tasks = new List<Task>();
+		foreach (PlaylistInfo target in targets)
+		{
+			tasks.Add(Task.Run(async delegate
+			{
+				bool acquired = false;
+				try
+				{
+					await semaphore.WaitAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+					acquired = true;
+					cancellationToken.ThrowIfCancellationRequested();
+					PlaylistInfo detail = await _apiClient.GetPlaylistDetailAsync(target.Id).ConfigureAwait(continueOnCapturedContext: false);
+					cancellationToken.ThrowIfCancellationRequested();
+					if (detail == null)
+					{
+						return;
+					}
+					bool changed = false;
+					if (target.TrackCount <= 0 && detail.TrackCount > 0)
+					{
+						target.TrackCount = detail.TrackCount;
+						changed = true;
+					}
+					if (string.IsNullOrWhiteSpace(target.Description) && !string.IsNullOrWhiteSpace(detail.Description))
+					{
+						target.Description = detail.Description;
+						changed = true;
+					}
+					if (string.IsNullOrWhiteSpace(target.Creator) && !string.IsNullOrWhiteSpace(detail.Creator))
+					{
+						target.Creator = detail.Creator;
+						changed = true;
+					}
+					if (changed)
+					{
+						Interlocked.Increment(ref updatedCount);
+					}
+				}
+				catch (OperationCanceledException)
+				{
+				}
+				catch (Exception ex)
+				{
+					Debug.WriteLine($"[RecentPlaylists] 获取歌单详情失败: {target?.Id} {ex.Message}");
+				}
+				finally
+				{
+					if (acquired)
+					{
+						semaphore.Release();
+					}
+				}
+			}, cancellationToken));
+		}
+		try
+		{
+			await Task.WhenAll(tasks).ConfigureAwait(continueOnCapturedContext: false);
+		}
+		catch (OperationCanceledException)
+		{
+		}
+		return updatedCount > 0;
 	}
 
 	private async Task LoadRecentAlbumsAsync(int pendingFocusIndex = -1)
@@ -10348,7 +10713,8 @@ private void ActivateMixedSearchTypeOption()
 			}
 			Debug.WriteLine($"[LoadRecentAlbums] 异常: {ex}");
 			MessageBox.Show("加载最近专辑失败: " + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
-			throw;
+			UpdateStatusBar("加载最近专辑失败");
+			ShowListRetryPlaceholderCore("recent_albums", resultListView?.AccessibleName, "专辑列表", announceHeader: true, suppressFocus: false);
 		}
 	}
 
@@ -12126,6 +12492,24 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 		{
 			return;
 		}
+		if (resultListView.Items.Count == 1)
+		{
+			ListViewItem onlyItem = resultListView.Items[0];
+			if (IsListViewLoadingPlaceholderItem(onlyItem) || IsListViewRetryPlaceholderItem(onlyItem))
+			{
+				resultListView.BeginUpdate();
+				try
+				{
+					EnsureSubItemCount(onlyItem, 6);
+					onlyItem.SubItems[1].Text = string.Empty;
+				}
+				finally
+				{
+					EndListViewUpdateAndRefreshAccessibility();
+				}
+				return;
+			}
+		}
 		resultListView.BeginUpdate();
 		checked
 		{
@@ -12200,6 +12584,8 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 			return;
 		}
 		bool flag = _isVirtualSongListActive || ShouldUseVirtualSongList(list);
+		int focusedListViewIndex = GetFocusedListViewIndex();
+		bool shouldAnnounceFocusedRefresh = false;
 		resultListView.BeginUpdate();
 		bool flag2 = false;
 		int count = list.Count;
@@ -12211,8 +12597,24 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 			{
 				SongInfo song = list[i];
 				ListViewItem listViewItem = resultListView.Items[i];
+				string beforeSpeech = null;
+				bool trackFocusedChange = !allowSelection && i == focusedListViewIndex;
+				if (trackFocusedChange)
+				{
+					EnsureSubItemCount(listViewItem, 6);
+					beforeSpeech = BuildListViewItemSpeech(listViewItem);
+				}
 				FillListViewItemFromSongInfo(listViewItem, song, startIndex + i);
 				listViewItem.Tag = i;
+				if (trackFocusedChange)
+				{
+					EnsureSubItemCount(listViewItem, 6);
+					string afterSpeech = BuildListViewItemSpeech(listViewItem);
+					if (!string.Equals(beforeSpeech, afterSpeech, StringComparison.Ordinal))
+					{
+						shouldAnnounceFocusedRefresh = true;
+					}
+				}
 			}
 			for (int j = count2; j < count; j++)
 			{
@@ -12328,6 +12730,10 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 				}
 			}
 			TryAnnounceLoadingPlaceholderReplacement();
+			if (!allowSelection && shouldAnnounceFocusedRefresh)
+			{
+				QueueFocusedListViewItemRefreshAnnouncement(focusedListViewIndex);
+			}
 			if (!skipAvailabilityCheck)
 			{
 				ScheduleAvailabilityCheck(list);
@@ -12608,6 +13014,8 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 			ShowListRetryPlaceholderCore(_currentViewSource, resultListView?.AccessibleName, "歌单列表", announceHeader: true, suppressFocus: IsSearchViewSource(_currentViewSource));
 			return;
 		}
+		int focusedListViewIndex = GetFocusedListViewIndex();
+		bool shouldAnnounceFocusedRefresh = false;
 		resultListView.BeginUpdate();
 		int count = list.Count;
 		int count2 = resultListView.Items.Count;
@@ -12619,6 +13027,12 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 				PlaylistInfo playlistInfo = list[i];
 				ListViewItem listViewItem = resultListView.Items[i];
 				EnsureSubItemCount(listViewItem, 6);
+				string beforeSpeech = null;
+				bool trackFocusedChange = !allowSelection && i == focusedListViewIndex;
+				if (trackFocusedChange)
+				{
+					beforeSpeech = BuildListViewItemSpeech(listViewItem);
+				}
 				listViewItem.SubItems[1].Text = FormatIndex(startIndex + i);
 				listViewItem.SubItems[2].Text = playlistInfo.Name ?? "未知";
 				listViewItem.SubItems[3].Text = (string.IsNullOrWhiteSpace(playlistInfo.Creator) ? string.Empty : playlistInfo.Creator);
@@ -12628,6 +13042,14 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 				SetListViewItemPrimaryText(listViewItem, listViewItem.SubItems[2].Text);
 				listViewItem.ForeColor = SystemColors.WindowText;
 				listViewItem.ToolTipText = null;
+				if (trackFocusedChange)
+				{
+					string afterSpeech = BuildListViewItemSpeech(listViewItem);
+					if (!string.Equals(beforeSpeech, afterSpeech, StringComparison.Ordinal))
+					{
+						shouldAnnounceFocusedRefresh = true;
+					}
+				}
 			}
 			for (int j = count2; j < count; j++)
 			{
@@ -12713,6 +13135,10 @@ private void TryDispatchPendingPlaceholderPlayback(Dictionary<int, SongInfo> upd
 				EnsureListSelectionWithoutFocus(fallbackIndex);
 			}
 			TryAnnounceLoadingPlaceholderReplacement();
+			if (!allowSelection && shouldAnnounceFocusedRefresh)
+			{
+				QueueFocusedListViewItemRefreshAnnouncement(focusedListViewIndex);
+			}
 		}
 	}
 
@@ -14416,6 +14842,8 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 			ShowListRetryPlaceholderCore(_currentViewSource, resultListView?.AccessibleName, "专辑列表", announceHeader: true, suppressFocus: IsSearchViewSource(_currentViewSource));
 			return;
 		}
+		int focusedListViewIndex = GetFocusedListViewIndex();
+		bool shouldAnnounceFocusedRefresh = false;
 		resultListView.BeginUpdate();
 		int count = list.Count;
 		int count2 = resultListView.Items.Count;
@@ -14427,6 +14855,12 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 				AlbumInfo albumInfo = list[i];
 				ListViewItem listViewItem = resultListView.Items[i];
 				EnsureSubItemCount(listViewItem, 6);
+				string beforeSpeech = null;
+				bool trackFocusedChange = !allowSelection && i == focusedListViewIndex;
+				if (trackFocusedChange)
+				{
+					beforeSpeech = BuildListViewItemSpeech(listViewItem);
+				}
 				(string, string, string) tuple = BuildAlbumDisplayLabels(albumInfo);
 				listViewItem.SubItems[1].Text = FormatIndex(startIndex + i);
 				listViewItem.SubItems[2].Text = albumInfo.Name ?? "未知";
@@ -14435,6 +14869,14 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 				listViewItem.SubItems[5].Text = tuple.Item3;
 				listViewItem.Tag = albumInfo;
 				SetListViewItemPrimaryText(listViewItem, listViewItem.SubItems[2].Text);
+				if (trackFocusedChange)
+				{
+					string afterSpeech = BuildListViewItemSpeech(listViewItem);
+					if (!string.Equals(beforeSpeech, afterSpeech, StringComparison.Ordinal))
+					{
+						shouldAnnounceFocusedRefresh = true;
+					}
+				}
 			}
 			for (int j = count2; j < count; j++)
 			{
@@ -14521,6 +14963,10 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 				EnsureListSelectionWithoutFocus(fallbackIndex);
 			}
 			TryAnnounceLoadingPlaceholderReplacement();
+			if (!allowSelection && shouldAnnounceFocusedRefresh)
+			{
+				QueueFocusedListViewItemRefreshAnnouncement(focusedListViewIndex);
+			}
 		}
 	}
 
@@ -14674,6 +15120,9 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 			ShowListRetryPlaceholderCore(_currentViewSource, resultListView?.AccessibleName, "播客列表", announceHeader: true, suppressFocus: IsSearchViewSource(_currentViewSource));
 			return;
 		}
+		bool canAnnounceFocusedRefresh = !allowSelection && !IsSearchViewSource(_currentViewSource);
+		int focusedListViewIndex = canAnnounceFocusedRefresh ? GetFocusedListViewIndex() : (-1);
+		bool shouldAnnounceFocusedRefresh = false;
 		resultListView.BeginUpdate();
 		int count = list.Count;
 		int count2 = resultListView.Items.Count;
@@ -14685,6 +15134,12 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 				PodcastRadioInfo podcastRadioInfo = list[i];
 				ListViewItem listViewItem = resultListView.Items[i];
 				EnsureSubItemCount(listViewItem, 6);
+				string beforeSpeech = null;
+				bool trackFocusedChange = canAnnounceFocusedRefresh && i == focusedListViewIndex;
+				if (trackFocusedChange)
+				{
+					beforeSpeech = BuildListViewItemSpeech(listViewItem);
+				}
 				string text = podcastRadioInfo?.DjName ?? string.Empty;
 				if (!string.IsNullOrWhiteSpace(podcastRadioInfo?.SecondCategory))
 				{
@@ -14702,6 +15157,14 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 				listViewItem.SubItems[5].Text = podcastRadioInfo?.Description ?? string.Empty;
 				listViewItem.Tag = podcastRadioInfo;
 				SetListViewItemPrimaryText(listViewItem, listViewItem.SubItems[2].Text);
+				if (trackFocusedChange)
+				{
+					string afterSpeech = BuildListViewItemSpeech(listViewItem);
+					if (!string.Equals(beforeSpeech, afterSpeech, StringComparison.Ordinal))
+					{
+						shouldAnnounceFocusedRefresh = true;
+					}
+				}
 			}
 			for (int j = count2; j < count; j++)
 			{
@@ -14797,6 +15260,10 @@ private void FillListViewItemFromListItemInfo(ListViewItem item, ListItemInfo li
 				EnsureListSelectionWithoutFocus(fallbackIndex);
 			}
 			TryAnnounceLoadingPlaceholderReplacement();
+			if (canAnnounceFocusedRefresh && shouldAnnounceFocusedRefresh)
+			{
+				QueueFocusedListViewItemRefreshAnnouncement(focusedListViewIndex);
+			}
 		}
 	}
 
@@ -30764,7 +31231,7 @@ private async Task EnrichArtistCategoryAllResultsAsync(int typeCode, int areaCod
 			ListViewItem value = new ListViewItem(new string[6]
 			{
 				string.Empty,
-				FormatIndex(1),
+				string.Empty,
 				ListLoadingPlaceholderText,
 				string.Empty,
 				string.Empty,
@@ -30830,7 +31297,7 @@ private async Task EnrichArtistCategoryAllResultsAsync(int typeCode, int areaCod
 			ListViewItem value = new ListViewItem(new string[6]
 			{
 				string.Empty,
-				FormatIndex(1),
+				string.Empty,
 				ListRetryPlaceholderText,
 				string.Empty,
 				string.Empty,
@@ -30847,7 +31314,7 @@ private async Task EnrichArtistCategoryAllResultsAsync(int typeCode, int areaCod
 			EndListViewUpdateAndRefreshAccessibility();
 		}
 		ApplyListViewContext(viewSource, accessibleName, fallbackName, announceHeader);
-		ApplyStandardListViewSelection(0, allowSelection: true, suppressFocus: suppressFocus);
+		EnsureListSelectionWithoutFocus(0);
 	}
 
 
@@ -30917,15 +31384,15 @@ private async Task EnrichArtistCategoryAllResultsAsync(int typeCode, int areaCod
                         }
 			ResetCurrentViewDataForLoading();
                         ShowLoadingPlaceholderCore(request.ViewSource, request.AccessibleName, request.LoadingText);
-                        if (!request.SuppressLoadingFocus && !IsListAutoFocusSuppressed && resultListView != null && resultListView.Items.Count != 0)
-                        {
-				int targetIndex = ((request.PendingFocusIndex >= 0) ? Math.Max(0, Math.Min(request.PendingFocusIndex, checked(resultListView.Items.Count - 1))) : 0);
-				EnsureListSelectionWithoutFocus(targetIndex);
-				if (resultListView.CanFocus)
-				{
-					resultListView.Focus();
-				}
-			}
+					if (resultListView != null && resultListView.Items.Count != 0)
+					{
+						int targetIndex = ((request.PendingFocusIndex >= 0) ? Math.Max(0, Math.Min(request.PendingFocusIndex, checked(resultListView.Items.Count - 1))) : 0);
+						EnsureListSelectionWithoutFocus(targetIndex);
+						if (!request.SuppressLoadingFocus && !IsListAutoFocusSuppressed && resultListView.CanFocus)
+						{
+							resultListView.Focus();
+						}
+					}
 		});
 	}
 
