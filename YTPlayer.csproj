@@ -81,23 +81,16 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
     <PackageReference Include="QRCoder" Version="1.4.3" />
     <PackageReference Include="taglib-sharp-netstandard2.0" Version="2.1.0" />
     <PackageReference Include="BrotliSharpLib" Version="0.3.3" />
-    <PackageReference Include="BouncyCastle.Cryptography" Version="2.6.2" />
     <PackageReference Include="Microsoft.ClearScript.Core" Version="7.5.0" />
     <PackageReference Include="Microsoft.ClearScript.V8" Version="7.5.0" />
     <PackageReference Include="Microsoft.ClearScript.V8.Native.win-x64" Version="7.5.0" />
     <PackageReference Include="Microsoft.ClearScript.V8.ICUData" Version="7.5.0" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2420.47" />
   </ItemGroup>
-
-  <ItemGroup>
-    <Reference Include="UIAutomationProvider" />
-    <Reference Include="UIAutomationTypes" />
-  </ItemGroup>
-
 
   <ItemGroup>
     <Compile Include="Program.cs">
@@ -107,6 +100,26 @@
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="MainForm.Accessibility.cs" />
+    <Compile Include="Forms\MainForm\MainForm.Navigation.cs" />
+    <Compile Include="Forms\MainForm\MainForm.ContextMenus.cs" />
+    <Compile Include="Forms\MainForm\MainForm.Search.cs" />
+    <Compile Include="Forms\MainForm\MainForm.Downloads.cs" />
+    <Compile Include="Forms\MainForm\MainForm.Artists.cs" />
+    <Compile Include="Forms\MainForm\MainForm.HomeContent.cs" />
+    <Compile Include="Forms\MainForm\MainForm.HomeRecentContent.cs" />
+    <Compile Include="Forms\MainForm\MainForm.HomeRecommendations.cs" />
+    <Compile Include="Forms\MainForm\MainForm.HomeProviders.cs" />
+    <Compile Include="Forms\MainForm\MainForm.LibraryContent.cs" />
+    <Compile Include="Forms\MainForm\MainForm.LibraryState.cs" />
+    <Compile Include="Forms\MainForm\MainForm.PlaybackCore.cs" />
+    <Compile Include="Forms\MainForm\MainForm.ResultListRendering.cs" />
+    <Compile Include="Forms\MainForm\MainForm.PlaylistsRendering.cs" />
+    <Compile Include="Forms\MainForm\MainForm.ListItemsRendering.cs" />
+    <Compile Include="Forms\MainForm\MainForm.AlbumsRendering.cs" />
+    <Compile Include="Forms\MainForm\MainForm.PodcastsRendering.cs" />
+    <Compile Include="Forms\MainForm\MainForm.ResultListInteractions.cs" />
+    <Compile Include="Forms\MainForm\MainForm.Pagination.cs" />
+    <Compile Include="Forms\MainForm\MainForm.ArtistSongIndexing.cs" />
     <Compile Include="Forms\AccessibleTrackBar.cs">
       <SubType>Component</SubType>
     </Compile>
@@ -148,6 +161,19 @@
     <Compile Include="Properties\VersionInfo.g.cs" />
     <Compile Include="Core\NeteaseApiClient.cs" />
     <Compile Include="Core\NeteaseApiClient.AuthCookies.cs" />
+    <Compile Include="Core\NeteaseApiClient\NeteaseApiClient.Infrastructure.cs" />
+    <Compile Include="Core\NeteaseApiClient\NeteaseApiClient.Transport.cs" />
+    <Compile Include="Core\NeteaseApiClient\NeteaseApiClient.Auth.cs" />
+    <Compile Include="Core\NeteaseApiClient\NeteaseApiClient.Search.cs" />
+    <Compile Include="Core\NeteaseApiClient\NeteaseApiClient.Songs.cs" />
+    <Compile Include="Core\NeteaseApiClient\NeteaseApiClient.Playlists.cs" />
+    <Compile Include="Core\NeteaseApiClient\NeteaseApiClient.Artists.cs" />
+    <Compile Include="Core\NeteaseApiClient\NeteaseApiClient.Lyrics.cs" />
+    <Compile Include="Core\NeteaseApiClient\NeteaseApiClient.Recommendations.cs" />
+    <Compile Include="Core\NeteaseApiClient\NeteaseApiClient.Parsing.cs" />
+    <Compile Include="Core\NeteaseApiClient\NeteaseApiClient.Quality.cs" />
+    <Compile Include="Core\NeteaseApiClient\NeteaseApiClient.Podcasts.cs" />
+    <Compile Include="Core\NeteaseApiClient\NeteaseApiClient.Comments.cs" />
     <Compile Include="Core\BassAudioEngine.cs" />
     <Compile Include="Core\SeekManager.cs" />
     <Compile Include="Core\ConfigManager.cs" />
