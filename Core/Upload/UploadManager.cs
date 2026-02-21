@@ -448,14 +448,18 @@ namespace YTPlayer.Core.Upload
             _isRunning = false;
             _schedulerCts?.Cancel();
 
-            try
+            Task? schedulerTask = _schedulerTask;
+            if (schedulerTask != null && !schedulerTask.IsCompleted)
             {
-                _schedulerTask?.Wait(TimeSpan.FromSeconds(5));
+                _ = schedulerTask.ContinueWith(task =>
+                {
+                    if (task.IsFaulted && task.Exception != null)
+                    {
+                        DebugLogger.LogException("UploadManager", task.Exception, "Scheduler task ended with error after cancellation");
+                    }
+                }, TaskScheduler.Default);
             }
-            catch
-            {
-                // 忽略等待超时
-            }
+            _schedulerTask = null;
 
             _schedulerCts?.Dispose();
             _schedulerCts = null;
@@ -463,12 +467,9 @@ namespace YTPlayer.Core.Upload
             DebugLogger.Log(
                 DebugLogger.LogLevel.Info,
                 "UploadManager",
-                "调度器已停止");
+                "Scheduler stopped");
         }
 
-        /// <summary>
-        /// 调度循环
-        /// </summary>
         private async Task SchedulerLoopAsync(CancellationToken cancellationToken)
         {
             while (!cancellationToken.IsCancellationRequested)

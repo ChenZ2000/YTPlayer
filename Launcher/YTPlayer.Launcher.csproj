@@ -14,6 +14,9 @@
     <ImplicitUsings>disable</ImplicitUsings>
     <Deterministic>true</Deterministic>
     <VersionFile>..\version.txt</VersionFile>
+    <IconPngPath>$(MSBuildProjectDirectory)\..\Icon.png</IconPngPath>
+    <GeneratedAppIconPath>$(BaseIntermediateOutputPath)Generated\YTPlayer.Launcher.ico</GeneratedAppIconPath>
+    <ApplicationIcon>$(GeneratedAppIconPath)</ApplicationIcon>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
@@ -77,8 +80,22 @@
 
   <ItemGroup />
 
+  <ItemGroup>
+    <Content Include="..\Icon.png">
+      <Link>Icon.png</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>libs\assets\Icon.png</TargetPath>
+    </Content>
+  </ItemGroup>
+
   <Target Name="CleanGeneratedVersionInfo" BeforeTargets="Clean">
     <Delete Files="Properties\VersionInfo.g.cs" Condition="Exists('Properties\VersionInfo.g.cs')" />
+  </Target>
+
+  <Target Name="GenerateApplicationIconFromPng" BeforeTargets="BeforeCompile">
+    <Error Condition="!Exists('$(IconPngPath)')" Text="缺少图标源文件 $(IconPngPath)。" />
+    <MakeDir Directories="$(IntermediateOutputPath)Generated" />
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\scripts\Generate-AppIconFromPng.ps1&quot; -PngPath &quot;$(IconPngPath)&quot; -IcoPath &quot;$(GeneratedAppIconPath)&quot;" />
   </Target>
 
   <Target Name="GenerateVersionInfo" Inputs="$(VersionFile)" Outputs="Properties\VersionInfo.g.cs" BeforeTargets="BeforeCompile">

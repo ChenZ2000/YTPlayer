@@ -65,6 +65,11 @@ namespace YTPlayer.Models
         public bool FollowCursor { get; set; } = true;
 
         /// <summary>
+        /// Playback focus follow switch (global, enabled by default).
+        /// </summary>
+        public bool FocusFollowPlayback { get; set; } = true;
+
+        /// <summary>
         /// 跳转最小间隔（毫秒）
         /// Python: cfg.setdefault("seek_min_interval_ms", 30)
         /// </summary>

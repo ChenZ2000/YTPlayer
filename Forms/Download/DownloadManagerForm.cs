@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
@@ -26,6 +27,18 @@ namespace YTPlayer.Forms.Download
         private UploadTask? _selectedUploadTask;
         private static int _lastSelectedTabIndex = 0;
         private static bool _hasLastTabSelection;
+
+        private sealed class ContextMenuState
+        {
+            public Control Owner { get; }
+            public string Name { get; }
+
+            public ContextMenuState(Control owner, string name)
+            {
+                Owner = owner;
+                Name = name;
+            }
+        }
 
         #endregion
 
@@ -377,6 +390,67 @@ namespace YTPlayer.Forms.Download
 
         #region 上下文菜单
 
+        private void ShowAccessibleContextMenu(ContextMenuStrip menu, Control owner, Point location, string menuName)
+        {
+            if (menu.Items.Count == 0)
+            {
+                menu.Dispose();
+                return;
+            }
+
+            menu.Tag = new ContextMenuState(owner, menuName);
+            menu.Opened += TemporaryContextMenu_Opened;
+            menu.Closed += TemporaryContextMenu_Closed;
+            ContextMenuAccessibilityHelper.PrimeForAccessibility(menu);
+            menu.Show(owner, location);
+        }
+
+        private void TemporaryContextMenu_Opened(object? sender, EventArgs e)
+        {
+            if (sender is not ContextMenuStrip menu || IsDisposed)
+            {
+                return;
+            }
+
+            string menuName = (menu.Tag as ContextMenuState)?.Name ?? "ContextMenu";
+            ContextMenuAccessibilityHelper.EnsureFirstItemFocusedOnOpen(this, menu, menuName, message => Debug.WriteLine(message));
+        }
+
+        private void TemporaryContextMenu_Closed(object? sender, ToolStripDropDownClosedEventArgs e)
+        {
+            if (sender is not ContextMenuStrip menu)
+            {
+                return;
+            }
+
+            menu.Opened -= TemporaryContextMenu_Opened;
+            menu.Closed -= TemporaryContextMenu_Closed;
+
+            if (menu.Tag is ContextMenuState state &&
+                e.CloseReason != ToolStripDropDownCloseReason.ItemClicked &&
+                !state.Owner.IsDisposed &&
+                state.Owner.CanFocus)
+            {
+                try
+                {
+                    state.Owner.BeginInvoke(new Action(() =>
+                    {
+                        if (!state.Owner.IsDisposed && state.Owner.CanFocus)
+                        {
+                            state.Owner.Focus();
+                        }
+                    }));
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"[{state.Name}] 恢复焦点失败: {ex.Message}");
+                }
+            }
+
+            menu.Tag = null;
+            menu.Dispose();
+        }
+
         private void ShowDownloadContextMenu(Point location)
         {
             var menu = new ContextMenuStrip();
@@ -442,7 +516,7 @@ namespace YTPlayer.Forms.Download
                 menu.Items.Add(copyUrlItem);
             }
 
-            menu.Show(lvActive, location);
+            ShowAccessibleContextMenu(menu, lvActive, location, "DownloadActiveContextMenu");
         }
 
         private void ShowCompletedContextMenu(Point location, bool isDownload)
@@ -497,7 +571,7 @@ namespace YTPlayer.Forms.Download
                 menu.Items.Add(removeItem);
             }
 
-            menu.Show(lvCompleted, location);
+            ShowAccessibleContextMenu(menu, lvCompleted, location, isDownload ? "DownloadCompletedContextMenu" : "UploadCompletedContextMenu");
         }
 
         #endregion
@@ -982,7 +1056,7 @@ namespace YTPlayer.Forms.Download
                 menu.Items.Add(cancelItem);
             }
 
-            menu.Show(lvUpload, location);
+            ShowAccessibleContextMenu(menu, lvUpload, location, "UploadContextMenu");
         }
 
         #endregion

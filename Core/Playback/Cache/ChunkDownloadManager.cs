@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Threading;
@@ -18,6 +19,7 @@ namespace YTPlayer.Core.Playback.Cache
 
         // 基础重试延迟（毫秒），使用指数退避
         private const int BaseRetryDelayMs = 300;
+        private const int ChunkBodyReadTimeoutMs = 15000;
 
         private readonly string _url;
         private readonly long _totalSize;
@@ -68,10 +70,12 @@ namespace YTPlayer.Core.Playback.Cache
                             DebugLogger.LogLevel.Warning,
                             "ChunkDownload",
                             $"Range download {chunkIndex} failed ({response.StatusCode}) attempt {attempt + 1}");
+
+                        await DelayBeforeRetryAsync(chunkIndex, attempt, token, response).ConfigureAwait(false);
                         continue;
                     }
 
-                    byte[] data = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+                    byte[] data = await ReadChunkBodyAsync(response.Content, chunkIndex, token).ConfigureAwait(false);
 
                     if (data.Length == 0)
                     {
@@ -79,6 +83,8 @@ namespace YTPlayer.Core.Playback.Cache
                             DebugLogger.LogLevel.Warning,
                             "ChunkDownload",
                             $"Range download {chunkIndex} returned 0 bytes");
+
+                        await DelayBeforeRetryAsync(chunkIndex, attempt, token).ConfigureAwait(false);
                         continue;
                     }
 
@@ -91,19 +97,93 @@ namespace YTPlayer.Core.Playback.Cache
                 catch (Exception ex)
                 {
                     DebugLogger.LogException("ChunkDownload", ex, $"下载块 {chunkIndex} 失败 (attempt {attempt + 1}/{MaxRetryCount})");
-
-                    // 使用指数退避：300ms, 600ms, 1200ms, 2400ms, 4800ms
-                    int delayMs = BaseRetryDelayMs * (int)Math.Pow(2, attempt);
-                    DebugLogger.Log(
-                        DebugLogger.LogLevel.Info,
-                        "ChunkDownload",
-                        $"等待 {delayMs}ms 后重试块 {chunkIndex}...");
-
-                    await Task.Delay(delayMs, token).ConfigureAwait(false);
+                    await DelayBeforeRetryAsync(chunkIndex, attempt, token).ConfigureAwait(false);
                 }
             }
 
             return null;
+        }
+
+        private async Task<byte[]> ReadChunkBodyAsync(HttpContent content, int chunkIndex, CancellationToken token)
+        {
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(ChunkBodyReadTimeoutMs));
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token, timeoutCts.Token);
+
+            try
+            {
+                await using Stream stream = await content.ReadAsStreamAsync(linkedCts.Token).ConfigureAwait(false);
+                using var memory = new MemoryStream(_chunkSize);
+                byte[] buffer = new byte[16 * 1024];
+
+                while (true)
+                {
+                    int read = await stream.ReadAsync(buffer.AsMemory(0, buffer.Length), linkedCts.Token).ConfigureAwait(false);
+                    if (read <= 0)
+                    {
+                        break;
+                    }
+
+                    memory.Write(buffer, 0, read);
+
+                    // Prevent runaway payloads when a server ignores range semantics.
+                    if (memory.Length > _chunkSize * 2L)
+                    {
+                        break;
+                    }
+                }
+
+                return memory.ToArray();
+            }
+            catch (OperationCanceledException) when (!token.IsCancellationRequested)
+            {
+                throw new TimeoutException($"Chunk body read timeout for chunk {chunkIndex} ({ChunkBodyReadTimeoutMs}ms)");
+            }
+        }
+
+        private async Task DelayBeforeRetryAsync(int chunkIndex, int attempt, CancellationToken token, HttpResponseMessage? response = null)
+        {
+            int delayMs = GetRetryDelayMs(attempt, response?.Headers?.RetryAfter);
+            DebugLogger.Log(
+                DebugLogger.LogLevel.Info,
+                "ChunkDownload",
+                $"Wait {delayMs}ms before retrying chunk {chunkIndex} (attempt {attempt + 1}/{MaxRetryCount})");
+
+            await Task.Delay(delayMs, token).ConfigureAwait(false);
+        }
+
+        private static int GetRetryDelayMs(int attempt, RetryConditionHeaderValue? retryAfter)
+        {
+            if (retryAfter != null)
+            {
+                if (retryAfter.Delta.HasValue)
+                {
+                    return ClampRetryDelayMs((int)Math.Ceiling(retryAfter.Delta.Value.TotalMilliseconds));
+                }
+
+                if (retryAfter.Date.HasValue)
+                {
+                    TimeSpan delta = retryAfter.Date.Value - DateTimeOffset.UtcNow;
+                    if (delta.TotalMilliseconds > 0)
+                    {
+                        return ClampRetryDelayMs((int)Math.Ceiling(delta.TotalMilliseconds));
+                    }
+                }
+            }
+
+            // Exponential backoff: 300, 600, 1200, 2400, 4800ms.
+            return ClampRetryDelayMs(BaseRetryDelayMs * (1 << Math.Min(attempt, 10)));
+        }
+
+        private static int ClampRetryDelayMs(int delayMs)
+        {
+            const int minDelay = 200;
+            const int maxDelay = 30000;
+            if (delayMs < minDelay)
+            {
+                return minDelay;
+            }
+
+            return delayMs > maxDelay ? maxDelay : delayMs;
         }
 
         public async Task DownloadAllChunksSequentialAsync(

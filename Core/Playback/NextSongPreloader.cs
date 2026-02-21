@@ -90,24 +90,39 @@ namespace YTPlayer.Core.Playback
 
         public void Dispose()
         {
+            List<PreloadedSongData> snapshot;
             lock (_lock)
             {
                 _preloadCts?.Cancel();
                 _preloadCts?.Dispose();
                 _preloadCts = null;
 
-                foreach (var data in _preloadedData.Values)
-                {
-                    // ⭐ 释放 BASS 流资源
-                    if (data.StreamHandle != 0)
-                    {
-                        BASS_StreamFree(data.StreamHandle);
-                    }
-                    data.StreamProvider?.Dispose();
-                    data.CacheManager?.Dispose();
-                }
-
+                snapshot = _preloadedData.Values.ToList();
                 _preloadedData.Clear();
+            }
+
+            if (snapshot.Count > 0)
+            {
+                // Do not block the UI thread while releasing native handles during app shutdown.
+                _ = Task.Run(() =>
+                {
+                    foreach (var data in snapshot)
+                    {
+                        try
+                        {
+                            if (data.StreamHandle != 0)
+                            {
+                                BASS_StreamFree(data.StreamHandle);
+                            }
+
+                            data.StreamProvider?.Dispose();
+                            data.CacheManager?.Dispose();
+                        }
+                        catch
+                        {
+                        }
+                    }
+                });
             }
 
             _httpClient?.Dispose();

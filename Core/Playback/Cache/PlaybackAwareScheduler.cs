@@ -67,23 +67,51 @@ namespace YTPlayer.Core.Playback.Cache
         /// </summary>
         public void Stop()
         {
+            Task? schedulerTask = null;
+            CancellationTokenSource? schedulerCts = null;
+
             lock (_lock)
             {
                 if (!_isRunning)
+                {
                     return;
+                }
 
-                _schedulerCts?.Cancel();
                 _isRunning = false;
+                schedulerTask = _schedulerTask;
+                schedulerCts = _schedulerCts;
+                _schedulerTask = null;
+                _schedulerCts = null;
             }
 
             try
             {
-                _schedulerTask?.Wait(TimeSpan.FromSeconds(5));
+                schedulerCts?.Cancel();
             }
-            catch (Exception ex)
+            catch (ObjectDisposedException)
             {
-                Utils.DebugLogger.Log(Utils.LogLevel.Warning, "PlaybackAwareScheduler",
-                    $"Stop exception: {ex.Message}");
+            }
+
+            if (schedulerTask != null && !schedulerTask.IsCompleted)
+            {
+                _ = schedulerTask.ContinueWith(task =>
+                {
+                    try
+                    {
+                        if (task.IsFaulted && task.Exception != null)
+                        {
+                            Utils.DebugLogger.LogException("PlaybackAwareScheduler", task.Exception, "Scheduler task ended with error after cancellation");
+                        }
+                    }
+                    finally
+                    {
+                        schedulerCts?.Dispose();
+                    }
+                }, TaskScheduler.Default);
+            }
+            else
+            {
+                schedulerCts?.Dispose();
             }
         }
 

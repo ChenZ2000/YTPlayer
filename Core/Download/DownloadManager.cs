@@ -650,17 +650,20 @@ namespace YTPlayer.Core.Download
             _isRunning = false;
             _schedulerCts?.Cancel();
 
-            // 🔧 修复：先等待调度器任务完成
-            try
+            // Avoid blocking the UI thread during application shutdown.
+            Task? schedulerTask = _schedulerTask;
+            if (schedulerTask != null && !schedulerTask.IsCompleted)
             {
-                _schedulerTask?.Wait(TimeSpan.FromSeconds(5));
+                _ = schedulerTask.ContinueWith(task =>
+                {
+                    if (task.IsFaulted && task.Exception != null)
+                    {
+                        DebugLogger.LogException("DownloadManager", task.Exception, "Scheduler task ended with error after cancellation");
+                    }
+                }, TaskScheduler.Default);
             }
-            catch
-            {
-                // 忽略等待超时
-            }
+            _schedulerTask = null;
 
-            // 🔧 修复：取消所有活动的下载任务并等待它们响应取消
             System.Collections.Generic.List<System.Threading.CancellationTokenSource> activeCancellations;
             lock (_queueLock)
             {
@@ -674,7 +677,6 @@ namespace YTPlayer.Core.Download
                 }
             }
 
-            // 发送取消信号给所有活动任务
             foreach (var cts in activeCancellations)
             {
                 try
@@ -683,14 +685,8 @@ namespace YTPlayer.Core.Download
                 }
                 catch (Exception ex)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[DownloadManager] 取消任务时异常: {ex.Message}");
+                    System.Diagnostics.Debug.WriteLine($"[DownloadManager] Cancel task failed: {ex.Message}");
                 }
-            }
-
-            // 给予短暂时间让任务响应取消（避免长时间阻塞）
-            if (activeCancellations.Count > 0)
-            {
-                Task.Delay(500).GetAwaiter().GetResult(); // 500ms 应该足够任务响应取消
             }
 
             _schedulerCts?.Dispose();
@@ -699,12 +695,9 @@ namespace YTPlayer.Core.Download
             DebugLogger.Log(
                 DebugLogger.LogLevel.Info,
                 "DownloadManager",
-                "调度器已停止");
+                "Scheduler stopped");
         }
 
-        /// <summary>
-        /// 调度循环
-        /// </summary>
         private async Task SchedulerLoopAsync(CancellationToken cancellationToken)
         {
             while (!cancellationToken.IsCancellationRequested)

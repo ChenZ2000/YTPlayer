@@ -15,6 +15,9 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <SupportedOSPlatformVersion>7.0</SupportedOSPlatformVersion>
     <VersionFile>version.txt</VersionFile>
+    <IconPngPath>$(MSBuildProjectDirectory)\Icon.png</IconPngPath>
+    <GeneratedAppIconPath>$(BaseIntermediateOutputPath)Generated\YTPlayer.App.ico</GeneratedAppIconPath>
+    <ApplicationIcon>$(GeneratedAppIconPath)</ApplicationIcon>
     <NoWarn>MSB3277</NoWarn>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
@@ -91,14 +94,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Reference Include="UIAutomationProvider">
-      <HintPath>$(ProgramFiles)\dotnet\packs\Microsoft.WindowsDesktop.App.Ref\10.0.2\ref\net10.0\UIAutomationProvider.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="UIAutomationTypes">
-      <HintPath>$(ProgramFiles)\dotnet\packs\Microsoft.WindowsDesktop.App.Ref\10.0.2\ref\net10.0\UIAutomationTypes.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
+    <Reference Include="UIAutomationProvider" />
+    <Reference Include="UIAutomationTypes" />
   </ItemGroup>
 
 
@@ -216,9 +213,11 @@
     <Compile Include="Utils\ArtistMetadataHelper.cs" />
     <Compile Include="Utils\DocumentationLoader.cs" />
     <Compile Include="Utils\PathHelper.cs" />
+    <Compile Include="Utils\IconAssetProvider.cs" />
     <Compile Include="Utils\ContextMenuHost.cs">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="Utils\ContextMenuAccessibilityHelper.cs" />
     <Compile Include="Utils\WorkScopes.cs" />
     <Compile Include="Utils\NeteaseUrlParser.cs" />
     <Compile Include="Models\SongInfo.cs" />
@@ -328,6 +327,10 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <TargetPath>libs\assets\WeChatQRCode.jpg</TargetPath>
     </Content>
+    <Content Include="Icon.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>libs\assets\Icon.png</TargetPath>
+    </Content>
   </ItemGroup>
 
   <ItemGroup>
@@ -355,6 +358,12 @@
     <None Include="version.txt" />
     <!-- Launcher exe is built by Launcher project into bin output. -->
   </ItemGroup>
+
+  <Target Name="GenerateApplicationIconFromPng" BeforeTargets="BeforeCompile">
+    <Error Condition="!Exists('$(IconPngPath)')" Text="缺少图标源文件 $(IconPngPath)。" />
+    <MakeDir Directories="$(IntermediateOutputPath)Generated" />
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\scripts\Generate-AppIconFromPng.ps1&quot; -PngPath &quot;$(IconPngPath)&quot; -IcoPath &quot;$(GeneratedAppIconPath)&quot;" />
+  </Target>
 
   <Target Name="GenerateVersionInfo" Inputs="$(VersionFile)" Outputs="Properties\VersionInfo.g.cs" BeforeTargets="BeforeCompile">
     <Error Condition="!Exists('$(VersionFile)')" Text="缺少版本号文件 $(VersionFile)。" />

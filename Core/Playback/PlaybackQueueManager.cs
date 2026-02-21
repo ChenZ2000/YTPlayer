@@ -185,6 +185,10 @@ namespace YTPlayer.Core.Playback
 
         private PendingInjectionInfo? _pendingInjection;
         private readonly Random _random = new Random();
+        private const int RandomTimelineLimit = 8192;
+        private readonly List<int> _randomTimeline = new List<int>();
+        private int _randomTimelineCursor = -1;
+        private readonly List<int> _randomCycleRemaining = new List<int>();
 
         public PlaybackSelectionResult ManualSelect(SongInfo song, IReadOnlyList<SongInfo> viewSongs, string viewSource)
         {
@@ -208,12 +212,110 @@ namespace YTPlayer.Core.Playback
                 {
                     _queueIndex = indexInQueue;
                     bool cleared = ClearInjectionInternal();
+                    SyncRandomHistoryWithQueueIndex();
                     return PlaybackSelectionResult.ForQueue(song, _queueIndex, false, cleared);
                 }
 
                 int injectionIndex = AppendInjection(song, viewSource);
                 return PlaybackSelectionResult.ForInjection(song, injectionIndex);
             }
+        }
+
+        public bool TrySyncQueueWithView(IReadOnlyList<SongInfo> viewSongs, string viewSource, int anchorIndex)
+        {
+            if (viewSongs == null || viewSongs.Count == 0 || anchorIndex < 0 || anchorIndex >= viewSongs.Count)
+            {
+                return false;
+            }
+
+            lock (_syncRoot)
+            {
+                RebuildQueueFromView(viewSongs, viewSource, anchorIndex);
+                return _queue.Count > 0;
+            }
+        }
+
+        public bool TryAppendQueueSongs(IReadOnlyList<SongInfo> songs, string expectedQueueSource)
+        {
+            if (songs == null || songs.Count == 0 || string.IsNullOrWhiteSpace(expectedQueueSource))
+            {
+                return false;
+            }
+
+            lock (_syncRoot)
+            {
+                if (!string.Equals(_queueSource, expectedQueueSource, StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+
+                HashSet<string> existingKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (SongInfo item in _queue)
+                {
+                    string itemKey = BuildQueueAppendKey(item);
+                    if (!string.IsNullOrWhiteSpace(itemKey))
+                    {
+                        existingKeys.Add(itemKey);
+                    }
+                }
+
+                bool appended = false;
+                foreach (SongInfo song in songs)
+                {
+                    if (song == null)
+                    {
+                        continue;
+                    }
+
+                    string songKey = BuildQueueAppendKey(song);
+                    if (!string.IsNullOrWhiteSpace(songKey) && existingKeys.Contains(songKey))
+                    {
+                        continue;
+                    }
+
+                    AssignSongViewSource(song, expectedQueueSource);
+                    _queue.Add(song);
+                    appended = true;
+
+                    if (!string.IsNullOrWhiteSpace(songKey))
+                    {
+                        existingKeys.Add(songKey);
+                    }
+                }
+
+                if (appended && _queueIndex < 0 && _queue.Count > 0)
+                {
+                    _queueIndex = 0;
+                    SyncRandomHistoryWithQueueIndex();
+                }
+
+                return appended;
+            }
+        }
+
+        private static string BuildQueueAppendKey(SongInfo? song)
+        {
+            if (song == null)
+            {
+                return string.Empty;
+            }
+
+            if (!string.IsNullOrWhiteSpace(song.Id))
+            {
+                return "id:" + song.Id.Trim();
+            }
+
+            string name = (song.Name ?? string.Empty).Trim();
+            string artist = (song.Artist ?? string.Empty).Trim();
+            string album = (song.Album ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(name) &&
+                string.IsNullOrWhiteSpace(artist) &&
+                string.IsNullOrWhiteSpace(album))
+            {
+                return string.Empty;
+            }
+
+            return $"meta:{name}|{artist}|{album}";
         }
 
         public void SetPendingInjection(SongInfo song, string source)
@@ -274,6 +376,7 @@ namespace YTPlayer.Core.Playback
                 if (_queueIndex < 0)
                 {
                     _queueIndex = 0;
+                    SyncRandomHistoryWithQueueIndex();
                     var currentSong = _queue[_queueIndex];
                     return PlaybackMoveResult.ForQueue(currentSong, _queueIndex, false);
                 }
@@ -289,6 +392,7 @@ namespace YTPlayer.Core.Playback
                 }
 
                 _queueIndex = candidate.Value;
+                SyncRandomHistoryWithQueueIndex();
                 var queueSong = _queue[_queueIndex];
                 return PlaybackMoveResult.ForQueue(queueSong, _queueIndex, wrapped);
             }
@@ -312,6 +416,7 @@ namespace YTPlayer.Core.Playback
                     bool cleared = ClearInjectionInternal();
                     if (_queue.Count > 0 && _queueIndex >= 0 && _queueIndex < _queue.Count)
                     {
+                        SyncRandomHistoryWithQueueIndex();
                         var currentQueueSong = _queue[_queueIndex];
                         return PlaybackMoveResult.ForReturnToQueue(currentQueueSong, _queueIndex);
                     }
@@ -327,6 +432,22 @@ namespace YTPlayer.Core.Playback
                 if (_queueIndex < 0)
                 {
                     _queueIndex = 0;
+                    SyncRandomHistoryWithQueueIndex();
+                }
+
+                if (playMode == PlayMode.Random)
+                {
+                    if (!TryGetRandomPreviousQueueIndex(allowExpand: isManual, out int randomPreviousIndex))
+                    {
+                        return isManual
+                            ? PlaybackMoveResult.Boundary()
+                            : PlaybackMoveResult.None;
+                    }
+
+                    _queueIndex = randomPreviousIndex;
+                    SyncRandomHistoryWithQueueIndex();
+                    var randomPreviousSong = _queue[_queueIndex];
+                    return PlaybackMoveResult.ForQueue(randomPreviousSong, _queueIndex, wrapped: false);
                 }
 
                 int prevCandidate = _queueIndex - 1;
@@ -344,6 +465,7 @@ namespace YTPlayer.Core.Playback
                 }
 
                 _queueIndex = prevCandidate;
+                SyncRandomHistoryWithQueueIndex();
                 var previousQueueSong = _queue[_queueIndex];
                 return PlaybackMoveResult.ForQueue(previousQueueSong, _queueIndex, wrapped);
             }
@@ -560,6 +682,7 @@ namespace YTPlayer.Core.Playback
                 if (indexInQueue >= 0)
                 {
                     _queueIndex = indexInQueue;
+                    SyncRandomHistoryWithQueueIndex();
                     return PlaybackMoveResult.ForQueue(actualSong, _queueIndex, false);
                 }
 
@@ -665,6 +788,7 @@ namespace YTPlayer.Core.Playback
             lock (_syncRoot)
             {
                 bool removed = false;
+                bool removedFromQueue = false;
 
                 if (_pendingInjection?.Song?.Id == songId)
                 {
@@ -700,6 +824,7 @@ namespace YTPlayer.Core.Playback
                     {
                         _queue.RemoveAt(i);
                         removed = true;
+                        removedFromQueue = true;
 
                         if (_queueIndex >= i)
                         {
@@ -725,6 +850,12 @@ namespace YTPlayer.Core.Playback
                     }
                 }
 
+                if (removedFromQueue)
+                {
+                    ResetRandomNavigationState();
+                    SyncRandomHistoryWithQueueIndex();
+                }
+
                 return removed;
             }
         }
@@ -747,6 +878,47 @@ namespace YTPlayer.Core.Playback
                 }
             }
             return changed;
+        }
+
+
+        public bool TryReplaceQueueSongAt(int queueIndex, SongInfo updated, string? expectedQueueSource = null)
+        {
+            if (updated == null || queueIndex < 0)
+            {
+                return false;
+            }
+
+            lock (_syncRoot)
+            {
+                if (queueIndex < 0 || queueIndex >= _queue.Count)
+                {
+                    return false;
+                }
+
+                if (!string.IsNullOrWhiteSpace(expectedQueueSource) &&
+                    !string.Equals(_queueSource, expectedQueueSource, StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+
+                string effectiveSource = string.IsNullOrWhiteSpace(updated.ViewSource)
+                    ? _queueSource
+                    : updated.ViewSource;
+                AssignSongViewSource(updated, effectiveSource);
+                _queue[queueIndex] = updated;
+
+                if (!string.IsNullOrWhiteSpace(updated.Id))
+                {
+                    ReplaceSongIfMatch(_injectionChain, updated);
+                    if (_pendingInjection?.Song != null &&
+                        string.Equals(_pendingInjection.Song.Id, updated.Id, StringComparison.OrdinalIgnoreCase))
+                    {
+                        _pendingInjection = new PendingInjectionInfo(updated, _pendingInjection.Source);
+                    }
+                }
+
+                return true;
+            }
         }
 
         private static bool ReplaceSongIfMatch(List<SongInfo> list, SongInfo updated)
@@ -820,6 +992,8 @@ namespace YTPlayer.Core.Playback
 
             _queueSource = viewSource ?? string.Empty;
             _queueIndex = Math.Max(0, Math.Min(selectedIndex, _queue.Count - 1));
+            ResetRandomNavigationState();
+            SyncRandomHistoryWithQueueIndex();
             ClearInjectionInternal();
         }
 
@@ -920,20 +1094,13 @@ namespace YTPlayer.Core.Playback
                     break;
 
                 case PlayMode.Random:
-                    if (_queue.Count == 1)
+                    int? randomNext = GetRandomNextQueueIndex();
+                    if (!randomNext.HasValue)
                     {
-                        nextIndex = 0;
-                        break;
+                        reachedBoundary = isManual && _queue.Count <= 1;
+                        return null;
                     }
-
-                    nextIndex = _random.Next(_queue.Count);
-                    if (_queueIndex >= 0 && _queue.Count > 1)
-                    {
-                        if (nextIndex == _queueIndex)
-                        {
-                            nextIndex = (nextIndex + 1) % _queue.Count;
-                        }
-                    }
+                    nextIndex = randomNext.Value;
                     break;
 
                 default:
@@ -947,6 +1114,190 @@ namespace YTPlayer.Core.Playback
             }
 
             return nextIndex;
+        }
+
+        private void ResetRandomNavigationState()
+        {
+            _randomTimeline.Clear();
+            _randomTimelineCursor = -1;
+            _randomCycleRemaining.Clear();
+        }
+
+        private void SyncRandomHistoryWithQueueIndex()
+        {
+            if (_queue.Count == 0 || _queueIndex < 0 || _queueIndex >= _queue.Count)
+            {
+                ResetRandomNavigationState();
+                return;
+            }
+
+            if (_randomTimelineCursor >= 0 &&
+                _randomTimelineCursor < _randomTimeline.Count &&
+                _randomTimeline[_randomTimelineCursor] == _queueIndex)
+            {
+                return;
+            }
+
+            _randomTimeline.Clear();
+            _randomTimeline.Add(_queueIndex);
+            _randomTimelineCursor = 0;
+            RebuildRandomCycleRemaining();
+            System.Diagnostics.Debug.WriteLine($"[PlaybackQueue][Random] timeline reset to queueIndex={_queueIndex}, queueCount={_queue.Count}, remaining={_randomCycleRemaining.Count}");
+        }
+
+        private void RebuildRandomCycleRemaining()
+        {
+            _randomCycleRemaining.Clear();
+            if (_queue.Count <= 1)
+            {
+                return;
+            }
+
+            for (int i = 0; i < _queue.Count; i++)
+            {
+                if (i != _queueIndex)
+                {
+                    _randomCycleRemaining.Add(i);
+                }
+            }
+        }
+
+        private int? GetRandomNextQueueIndex()
+        {
+            SyncRandomHistoryWithQueueIndex();
+            if (_queue.Count == 0)
+            {
+                return null;
+            }
+
+            if (_queue.Count == 1)
+            {
+                return 0;
+            }
+
+            if (_randomTimelineCursor >= 0 && _randomTimelineCursor + 1 < _randomTimeline.Count)
+            {
+                _randomTimelineCursor++;
+                int historyIndex = _randomTimeline[_randomTimelineCursor];
+                System.Diagnostics.Debug.WriteLine($"[PlaybackQueue][Random] next from timeline: index={historyIndex}, cursor={_randomTimelineCursor}/{_randomTimeline.Count - 1}");
+                return historyIndex;
+            }
+
+            if (_randomCycleRemaining.Count == 0)
+            {
+                RebuildRandomCycleRemaining();
+            }
+
+            if (_randomCycleRemaining.Count == 0)
+            {
+                return null;
+            }
+
+            int slot = _random.Next(_randomCycleRemaining.Count);
+            int nextIndex = _randomCycleRemaining[slot];
+            _randomCycleRemaining.RemoveAt(slot);
+            AppendRandomTimeline(nextIndex);
+            System.Diagnostics.Debug.WriteLine($"[PlaybackQueue][Random] next from cycle: index={nextIndex}, slot={slot}, remaining={_randomCycleRemaining.Count}, queueCount={_queue.Count}");
+            return nextIndex;
+        }
+
+        private bool TryGetRandomPreviousQueueIndex(bool allowExpand, out int previousIndex)
+        {
+            previousIndex = -1;
+            SyncRandomHistoryWithQueueIndex();
+
+            if (_queue.Count <= 1)
+            {
+                return false;
+            }
+
+            if (_randomTimelineCursor > 0)
+            {
+                _randomTimelineCursor--;
+                previousIndex = _randomTimeline[_randomTimelineCursor];
+                System.Diagnostics.Debug.WriteLine($"[PlaybackQueue][Random] previous from timeline: index={previousIndex}, cursor={_randomTimelineCursor}/{_randomTimeline.Count - 1}");
+                return previousIndex >= 0 && previousIndex < _queue.Count;
+            }
+
+            if (!allowExpand || !TryExpandRandomPreviousQueueIndex(out previousIndex))
+            {
+                return false;
+            }
+
+            return previousIndex >= 0 && previousIndex < _queue.Count;
+        }
+
+        private bool TryExpandRandomPreviousQueueIndex(out int previousIndex)
+        {
+            previousIndex = -1;
+            if (!TryTakeRandomIndexFromCycle(out int candidateIndex))
+            {
+                return false;
+            }
+
+            PrependRandomTimeline(candidateIndex);
+            previousIndex = candidateIndex;
+            System.Diagnostics.Debug.WriteLine($"[PlaybackQueue][Random] previous expanded from cycle: index={candidateIndex}, remaining={_randomCycleRemaining.Count}, queueCount={_queue.Count}");
+            return true;
+        }
+
+        private bool TryTakeRandomIndexFromCycle(out int queueIndex)
+        {
+            queueIndex = -1;
+            if (_randomCycleRemaining.Count == 0)
+            {
+                RebuildRandomCycleRemaining();
+            }
+
+            if (_randomCycleRemaining.Count == 0)
+            {
+                return false;
+            }
+
+            int slot = _random.Next(_randomCycleRemaining.Count);
+            queueIndex = _randomCycleRemaining[slot];
+            _randomCycleRemaining.RemoveAt(slot);
+            return queueIndex >= 0 && queueIndex < _queue.Count;
+        }
+
+        private void PrependRandomTimeline(int queueIndex)
+        {
+            if (_randomTimelineCursor > 0 && _randomTimelineCursor < _randomTimeline.Count)
+            {
+                _randomTimeline.RemoveRange(0, _randomTimelineCursor);
+                _randomTimelineCursor = 0;
+            }
+
+            _randomTimeline.Insert(0, queueIndex);
+            _randomTimelineCursor = 0;
+
+            int overflow = _randomTimeline.Count - RandomTimelineLimit;
+            if (overflow <= 0)
+            {
+                return;
+            }
+
+            _randomTimeline.RemoveRange(_randomTimeline.Count - overflow, overflow);
+        }
+
+        private void AppendRandomTimeline(int queueIndex)
+        {
+            if (_randomTimelineCursor >= 0 && _randomTimelineCursor < _randomTimeline.Count - 1)
+            {
+                _randomTimeline.RemoveRange(_randomTimelineCursor + 1, _randomTimeline.Count - _randomTimelineCursor - 1);
+            }
+
+            _randomTimeline.Add(queueIndex);
+            _randomTimelineCursor = _randomTimeline.Count - 1;
+
+            int overflow = _randomTimeline.Count - RandomTimelineLimit;
+            if (overflow <= 0)
+            {
+                return;
+            }
+
+            _randomTimeline.RemoveRange(0, overflow);
+            _randomTimelineCursor = Math.Max(0, _randomTimelineCursor - overflow);
         }
 
         private static int FindSongIndex(IReadOnlyList<SongInfo> list, string songId)

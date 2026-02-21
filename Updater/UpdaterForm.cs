@@ -46,6 +46,7 @@ namespace YTPlayer.Updater
             Directory.CreateDirectory(_extractionDirectory);
 
             InitializeComponent();
+            IconAssetProvider.TryApplyFormIcon(this);
             Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Regular);
             ThemeManager.ApplyTheme(this);
             logPlaceholderLabel.ForeColor = ThemeManager.Current.TextSecondary;

@@ -467,20 +467,38 @@ namespace YTPlayer.Core.Playback
         {
             UnsubscribeFromEvents();
 
-            // 🔧 修复：先取消清理任务，然后等待其完成
-            _cleanupCts?.Cancel();
+            CancellationTokenSource? cleanupCts = _cleanupCts;
+            Task? cleanupTask = _cleanupTask;
 
-            // 等待清理任务完成（避免在 Dispose 期间后台任务仍在访问资源）
             try
             {
-                _cleanupTask?.Wait(TimeSpan.FromSeconds(2));
+                cleanupCts?.Cancel();
             }
-            catch (Exception ex)
+            catch (ObjectDisposedException)
             {
-                System.Diagnostics.Debug.WriteLine($"[UnifiedCacheCoordinator] 等待清理任务完成时异常: {ex.Message}");
             }
 
-            _cleanupCts?.Dispose();
+            if (cleanupTask != null && !cleanupTask.IsCompleted)
+            {
+                _ = cleanupTask.ContinueWith(task =>
+                {
+                    try
+                    {
+                        if (task.IsFaulted && task.Exception != null)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[UnifiedCacheCoordinator] Cleanup task faulted after cancellation: {task.Exception.GetBaseException().Message}");
+                        }
+                    }
+                    finally
+                    {
+                        cleanupCts?.Dispose();
+                    }
+                }, TaskScheduler.Default);
+            }
+            else
+            {
+                cleanupCts?.Dispose();
+            }
 
             lock (_lock)
             {
@@ -492,13 +510,13 @@ namespace YTPlayer.Core.Playback
                     }
                     catch (Exception ex)
                     {
-                        System.Diagnostics.Debug.WriteLine($"[UnifiedCacheCoordinator] 释放缓存条目时异常: {ex.Message}");
+                        System.Diagnostics.Debug.WriteLine($"[UnifiedCacheCoordinator] Failed to dispose cache entry: {ex.Message}");
                     }
                 }
                 _cacheEntries.Clear();
             }
 
-            System.Diagnostics.Debug.WriteLine("[UnifiedCacheCoordinator] 已释放");
+            System.Diagnostics.Debug.WriteLine("[UnifiedCacheCoordinator] Disposed");
         }
 
         #endregion

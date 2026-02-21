@@ -86,6 +86,8 @@ namespace YTPlayer
 
                 public const int OBJID_CLIENT = -4;
 
+                public const int OBJID_WINDOW = 0;
+
                 public const int CHILDID_SELF = 0;
 
                 public const int LVM_FIRST = 4096;
@@ -137,6 +139,12 @@ namespace YTPlayer
                 [DllImport("user32.dll")]
 
                 public static extern void NotifyWinEvent(uint eventId, nint hwnd, int idObject, int idChild);
+
+
+
+                [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+
+                public static extern bool SetWindowText(nint hWnd, string lpString);
 
 
 
@@ -2409,6 +2417,48 @@ namespace YTPlayer
 
 
 
+
+
+	private void UpdatePlaybackQueueSongs(IReadOnlyDictionary<int, SongInfo> songsByIndex, string expectedQueueSource)
+
+	{
+
+		if (songsByIndex == null || songsByIndex.Count == 0)
+
+		{
+
+			return;
+
+		}
+
+		foreach (KeyValuePair<int, SongInfo> entry in songsByIndex)
+
+		{
+
+			SongInfo song = entry.Value;
+
+			if (song == null)
+
+			{
+
+				continue;
+
+			}
+
+			bool replaced = _playbackQueue.TryReplaceQueueSongAt(entry.Key, song, expectedQueueSource);
+
+			if (!replaced)
+
+			{
+
+				_playbackQueue.TryUpdateSongDetail(song);
+
+			}
+
+		}
+
+	}
+
 	private bool TryGetListViewVisibleRange(out int startIndex, out int endIndex)
 
 	{
@@ -3941,6 +3991,8 @@ namespace YTPlayer
 
                 _pendingListViewSelectionViewSource = _currentViewSource;
 
+                HandlePersonalFmSelectionChanged(selectedListViewIndex);
+
                 if (_listViewSelectionBurstActive)
 
                 {
@@ -4146,6 +4198,16 @@ namespace YTPlayer
                 {
 
                         EndListViewColumnResizeTracking();
+
+                }
+
+                if (e.Button == MouseButtons.Right && resultListView != null && resultListView.ContextMenuStrip != null)
+
+                {
+
+                        // 右键打开菜单时避免与菜单项朗读抢占，保持“菜单首项优先”。
+
+                        return;
 
                 }
 
@@ -4682,7 +4744,7 @@ namespace YTPlayer
 
         {
 
-                if (resultListView != null && resultListView.Items.Count != 0 && ShouldUseCustomListViewSpeech())
+                if (resultListView != null && resultListView.Items.Count != 0 && ShouldUseCustomListViewSpeech() && !IsAnyMainContextMenuVisible())
 
                 {
 
@@ -4920,7 +4982,7 @@ namespace YTPlayer
 
 			await Task.Delay(120, token);
 
-			if (token.IsCancellationRequested || base.IsDisposed || resultListView == null || !resultListView.ContainsFocus)
+			if (token.IsCancellationRequested || base.IsDisposed || resultListView == null || !resultListView.ContainsFocus || IsAnyMainContextMenuVisible())
 
 			{
 
@@ -5437,4 +5499,3 @@ namespace YTPlayer
     }
 
 }
-

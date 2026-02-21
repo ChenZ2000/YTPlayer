@@ -628,24 +628,39 @@ namespace YTPlayer.Core
                     else if (isUsingCache && cacheManager != null)
                     {
                         long targetBytes = _audioEngine.GetBytesFromSeconds(targetSeconds);
-                        int timeoutMs = isPreview ? PREVIEW_CACHE_WAIT_TIMEOUT_MS : SEEK_CACHE_WAIT_TIMEOUT_MS;
-                        bool waitTargetOnly = false;
+                        PlaybackState state = _audioEngine.GetPlaybackState();
+                        bool bufferingLikeState = state == PlaybackState.Buffering || state == PlaybackState.Loading;
 
-                        // 长距离跳转：提前触发目标区间的按需缓存，缩短等待时间
-                        cacheManager.RequestSeekBoost(targetBytes, effectiveToken);
-                        _ = cacheManager.PrefetchAroundAsync(targetBytes, aheadChunks: 6, effectiveToken, allowRangeRescue: true);
-
-                        success = await _audioEngine.SetPositionWithCacheWaitAsync(
-                            targetSeconds,
-                            timeoutMs,
-                            effectiveToken,
-                            waitTargetOnly: waitTargetOnly).ConfigureAwait(false);
-
-                        // 若等待超时/失败，则进入后台缓冲等待，避免跳转后长时间无声
-                        if (!success && !effectiveToken.IsCancellationRequested)
+                        // During prolonged buffering, jump immediately and hydrate cache in background for responsiveness.
+                        if (bufferingLikeState)
                         {
-                            Debug.WriteLine($"[SeekManager] ?? 缓存未就绪，转入后台缓冲等待: {targetSeconds:F1}s");
-                            success = await ExecuteDeferredSeekAsync(targetSeconds, cacheManager, effectiveToken).ConfigureAwait(false);
+                            success = _audioEngine.SetPosition(targetSeconds);
+                            cacheManager.RequestSeekBoost(targetBytes, effectiveToken);
+                            _ = cacheManager.PrefetchAroundAsync(targetBytes, aheadChunks: 8, effectiveToken, allowRangeRescue: true);
+                            _ = cacheManager.EnsurePositionAsync(targetBytes, effectiveToken, allowRangeRescue: true);
+                            Debug.WriteLine($"[SeekManager] Buffering-state fast seek: {targetSeconds:F1}s (state={state}, success={success})");
+                        }
+                        else
+                        {
+                            int timeoutMs = isPreview ? PREVIEW_CACHE_WAIT_TIMEOUT_MS : SEEK_CACHE_WAIT_TIMEOUT_MS;
+                            bool waitTargetOnly = false;
+
+                            // Long-distance seek: prefetch target region before waiting for readiness.
+                            cacheManager.RequestSeekBoost(targetBytes, effectiveToken);
+                            _ = cacheManager.PrefetchAroundAsync(targetBytes, aheadChunks: 6, effectiveToken, allowRangeRescue: true);
+
+                            success = await _audioEngine.SetPositionWithCacheWaitAsync(
+                                targetSeconds,
+                                timeoutMs,
+                                effectiveToken,
+                                waitTargetOnly: waitTargetOnly).ConfigureAwait(false);
+
+                            // If readiness wait times out, fallback to deferred background buffering.
+                            if (!success && !effectiveToken.IsCancellationRequested)
+                            {
+                                Debug.WriteLine($"[SeekManager] Cache not ready, falling back to deferred seek wait: {targetSeconds:F1}s");
+                                success = await ExecuteDeferredSeekAsync(targetSeconds, cacheManager, effectiveToken).ConfigureAwait(false);
+                            }
                         }
                     }
                     else

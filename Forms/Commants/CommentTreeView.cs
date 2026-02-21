@@ -7,7 +7,6 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using Accessibility;
-using System.Windows.Automation.Provider;
 using System.Windows.Forms;
 using YTPlayer.Utils;
 
@@ -32,7 +31,7 @@ namespace YTPlayer.Forms
         private const uint TVIF_TEXT = 0x0001;
         private const uint TVIF_CHILDREN = 0x0040;
         private static readonly Guid IID_IAccessible = new Guid("618736E0-3C3D-11CF-810C-00AA00389B71");
-        private static readonly int UiaRootObjectId = AutomationInteropProvider.RootObjectId;
+        private const int UiaRootObjectId = -25;
         private const int UIA_PFIA_DEFAULT = 0x0;
         private static readonly bool LogNativeItemRequests = false;
         private static readonly bool LogAccIdMapping = false;
@@ -575,19 +574,12 @@ namespace YTPlayer.Forms
                     try
                     {
                         var acc = AccessibilityObject;
-                        if (acc is IRawElementProviderSimple provider)
-                        {
-                            m.Result = AutomationInteropProvider.ReturnRawElementProvider(Handle, m.WParam, m.LParam, provider);
-                            LogTree("WM_GETOBJECT override UIA (direct)");
-                            return;
-                        }
-
                         if (acc is IAccessible iacc)
                         {
                             int hr = UiaProviderFromIAccessible(iacc, 0, UIA_PFIA_DEFAULT, out var msaaProvider);
                             if (hr >= 0 && msaaProvider != null)
                             {
-                                m.Result = AutomationInteropProvider.ReturnRawElementProvider(Handle, m.WParam, m.LParam, msaaProvider);
+                                m.Result = UiaReturnRawElementProvider(Handle, m.WParam, m.LParam, msaaProvider);
                                 LogTree($"WM_GETOBJECT override UIA (from MSAA) hr=0x{hr:X}");
                                 return;
                             }
@@ -1292,7 +1284,10 @@ namespace YTPlayer.Forms
         private static extern IntPtr LresultFromObject(ref Guid riid, IntPtr wParam, IntPtr punk);
 
         [DllImport("uiautomationcore.dll")]
-        private static extern int UiaProviderFromIAccessible([MarshalAs(UnmanagedType.Interface)] IAccessible accessible, int idChild, int dwFlags, out IRawElementProviderSimple provider);
+        private static extern IntPtr UiaReturnRawElementProvider(IntPtr hWnd, IntPtr wParam, IntPtr lParam, [MarshalAs(UnmanagedType.IUnknown)] object provider);
+
+        [DllImport("uiautomationcore.dll")]
+        private static extern int UiaProviderFromIAccessible([MarshalAs(UnmanagedType.Interface)] IAccessible accessible, int idChild, int dwFlags, [MarshalAs(UnmanagedType.IUnknown)] out object provider);
 
         private void FlushAccessibilityRefresh()
         {

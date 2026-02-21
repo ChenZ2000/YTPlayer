@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using YTPlayer.Models;
 using YTPlayer.Utils;
 using YTPlayer.Core.Auth;
@@ -194,10 +195,26 @@ namespace YTPlayer.Core
                     // 读取配置文件
                     string json = File.ReadAllText(ConfigFilePath);
 
-                    // 反序列化配置
+                    bool hasFocusFollowPlaybackField = false;
+                    bool hasValidFocusFollowPlaybackField = false;
+                    try
+                    {
+                        var root = JObject.Parse(json);
+                        if (root.TryGetValue(nameof(ConfigModel.FocusFollowPlayback), StringComparison.OrdinalIgnoreCase, out JToken? focusFollowPlaybackToken))
+                        {
+                            hasFocusFollowPlaybackField = true;
+                            hasValidFocusFollowPlaybackField = focusFollowPlaybackToken.Type == JTokenType.Boolean;
+                        }
+                    }
+                    catch (JsonException)
+                    {
+                        // Ignore here; the outer JsonException handler will process corrupted config.
+                    }
+
+                    // Deserialize config.
                     var config = JsonConvert.DeserializeObject<ConfigModel>(json);
 
-                    // 如果反序列化失败，返回默认配置
+                    // Fallback to default config when deserialization fails.
                     if (config == null)
                     {
                         config = CreateDefaultConfig();
@@ -205,8 +222,15 @@ namespace YTPlayer.Core
                     }
                     else
                     {
-                        // 验证和修复配置
-                        bool changed = ValidateAndFixConfig(config);
+                        bool changed = false;
+                        if (!hasFocusFollowPlaybackField || !hasValidFocusFollowPlaybackField)
+                        {
+                            config.FocusFollowPlayback = true;
+                            changed = true;
+                        }
+
+                        // Validate and auto-fix persisted config.
+                        changed = ValidateAndFixConfig(config) || changed;
                         if (changed)
                         {
                             Save(config);
@@ -214,6 +238,7 @@ namespace YTPlayer.Core
                     }
 
                     return config;
+
                 }
                 catch (JsonException ex)
                 {
@@ -316,6 +341,7 @@ namespace YTPlayer.Core
 
                 // UI 和交互
                 FollowCursor = true,
+                FocusFollowPlayback = true,
                 SeekMinIntervalMs = 30,
                 SequenceNumberHidden = false,
                 CommentSequenceNumberHidden = false,

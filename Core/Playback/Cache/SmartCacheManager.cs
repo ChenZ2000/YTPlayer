@@ -875,34 +875,28 @@ namespace YTPlayer.Core.Playback.Cache
                 _seekBoostCts = null;
             }
 
+            Task? mainDownloadTask = _mainDownloadTask;
+            CancellationTokenSource? mainDownloadCts = _mainDownloadCts;
+            Task? preloadTask = _preloadTask;
+            CancellationTokenSource? preloadCts = _preloadCts;
+
+            _mainDownloadTask = null;
+            _mainDownloadCts = null;
+            _preloadTask = null;
+            _preloadCts = null;
+
             try
             {
-                _mainDownloadCts?.Cancel();
-                _mainDownloadTask?.Wait(TimeSpan.FromSeconds(1));
-
-                _preloadCts?.Cancel();
-                _preloadTask?.Wait(TimeSpan.FromSeconds(1));
-            }
-            catch (AggregateException ex)
-            {
-                foreach (var inner in ex.InnerExceptions)
-                {
-                    DebugLogger.LogException("SmartCache", inner, "预加载任务结束时出现异常");
-                }
+                mainDownloadCts?.Cancel();
+                preloadCts?.Cancel();
             }
             catch (Exception ex)
             {
-                DebugLogger.LogException("SmartCache", ex, "释放预加载任务时发生异常");
+                DebugLogger.LogException("SmartCache", ex, "Failed to cancel background download tasks");
             }
-            finally
-            {
-                _mainDownloadCts?.Dispose();
-                _mainDownloadCts = null;
-                _mainDownloadTask = null;
 
-                _preloadCts?.Dispose();
-                _preloadTask = null;
-            }
+            ReleaseBackgroundTask(mainDownloadTask, mainDownloadCts, "main download task");
+            ReleaseBackgroundTask(preloadTask, preloadCts, "preload task");
 
             _scheduler?.Dispose();
             _cache.Clear();
@@ -917,9 +911,51 @@ namespace YTPlayer.Core.Playback.Cache
             }
             _lifecycleCts.Dispose();
 
-            // ⭐ 阶段3：清理智能预缓存
+            // Stage 3: release smart pre-cache resources.
             _smartPreCache?.Dispose();
             _smartPreCache = null;
+
+            void ReleaseBackgroundTask(Task? task, CancellationTokenSource? cts, string taskName)
+            {
+                if (cts == null)
+                {
+                    return;
+                }
+
+                if (task != null && !task.IsCompleted)
+                {
+                    _ = task.ContinueWith(completed =>
+                    {
+                        try
+                        {
+                            if (completed.IsFaulted && completed.Exception != null)
+                            {
+                                DebugLogger.LogException("SmartCache", completed.Exception, $"{taskName} ended with error after cancellation");
+                            }
+                        }
+                        finally
+                        {
+                            try
+                            {
+                                cts.Dispose();
+                            }
+                            catch (ObjectDisposedException)
+                            {
+                            }
+                        }
+                    }, TaskScheduler.Default);
+                }
+                else
+                {
+                    try
+                    {
+                        cts.Dispose();
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+                }
+            }
         }
 
         private async Task<bool> InitializeRangeModeAsync(CancellationToken token, bool isPreload)

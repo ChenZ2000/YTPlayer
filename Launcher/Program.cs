@@ -160,6 +160,21 @@ namespace YTPlayer.Launcher
             string[] args,
             string rootDir)
         {
+            // Prefer launching the app host directly so the shell and screen readers
+            // identify the window as YTPlayer instead of generic ".NET Host".
+            if (File.Exists(appExe))
+            {
+                return new ProcessStartInfo
+                {
+                    FileName = appExe,
+                    Arguments = BuildArgumentString(args),
+                    WorkingDirectory = rootDir,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    WindowStyle = ProcessWindowStyle.Hidden
+                };
+            }
+
             if (!string.IsNullOrWhiteSpace(dotNetExe) && File.Exists(dotNetExe))
             {
                 string execArgs =
@@ -175,15 +190,7 @@ namespace YTPlayer.Launcher
                 };
             }
 
-            return new ProcessStartInfo
-            {
-                FileName = appExe,
-                Arguments = BuildArgumentString(args),
-                WorkingDirectory = rootDir,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                WindowStyle = ProcessWindowStyle.Hidden
-            };
+            throw new FileNotFoundException("No valid app entry point found.", appExe);
         }
 
         private static string BuildArgumentString(string[] args)

@@ -66,10 +66,10 @@ namespace YTPlayer.Core.Streaming
         // 读取缓冲区（避免频繁分配）
         private byte[]? _readBuffer;
         private const int READ_BUFFER_SIZE = 64 * 1024;  // 64KB
-        private const int BaseReadTimeoutMs = 15000;      // 缓存等待基础超时
-        private const int NearEofReadTimeoutMs = 5000;    // 接近 EOF 的较短等待
-        private const int MaxStallWaitMs = 60000;         // 单次读取最大等待时间
-        private const int MaxConsecutiveStalls = 3;
+        private const int BaseReadTimeoutMs = 8000;       // 缓存等待基础超时
+        private const int NearEofReadTimeoutMs = 3000;    // 接近 EOF 的较短等待
+        private const int MaxStallWaitMs = 15000;         // 单次读取最大等待时间
+        private const int MaxConsecutiveStalls = 2;
         private const int StallBackoffDelayMs = 200;
 
         // 统计信息
@@ -79,6 +79,7 @@ namespace YTPlayer.Core.Streaming
         private int _consecutiveStallCount = 0;
 
         private bool _disposed = false;
+        private readonly CancellationTokenSource _abortReadCts = new CancellationTokenSource();
 
         #endregion
 
@@ -178,6 +179,22 @@ namespace YTPlayer.Core.Streaming
 
         #endregion
 
+        public void AbortPendingReads()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            try
+            {
+                _abortReadCts.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
+
         #region BASS 回调实现
 
         /// <summary>
@@ -213,7 +230,7 @@ namespace YTPlayer.Core.Streaming
         {
             try
             {
-                if (_disposed || _cacheManager.IsDisposed)
+                if (_disposed || _cacheManager.IsDisposed || _abortReadCts.IsCancellationRequested)
                 {
                     Debug.WriteLine("[BassStreamProvider] FileRead called after disposal, returning -1");
                     return -1;
@@ -237,7 +254,7 @@ namespace YTPlayer.Core.Streaming
 
                 while (true)
                 {
-                    if (_disposed || _cacheManager.IsDisposed)
+                    if (_disposed || _cacheManager.IsDisposed || _abortReadCts.IsCancellationRequested)
                     {
                         return -1;
                     }
@@ -253,7 +270,7 @@ namespace YTPlayer.Core.Streaming
                     int timeoutMs = nearEof ? NearEofReadTimeoutMs : BaseReadTimeoutMs;
 
                     using (var timeoutCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(timeoutMs)))
-                    using (var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(timeoutCts.Token, _cacheManager.LifecycleToken))
+                    using (var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(timeoutCts.Token, _cacheManager.LifecycleToken, _abortReadCts.Token))
                     {
                         try
                         {
@@ -263,6 +280,11 @@ namespace YTPlayer.Core.Streaming
                         }
                         catch (OperationCanceledException)
                         {
+                            if (_abortReadCts.IsCancellationRequested || _disposed || _cacheManager.IsDisposed)
+                            {
+                                return -1;
+                            }
+
                             bytesRead = 0;
                         }
                         catch (AggregateException aex)
@@ -305,7 +327,14 @@ namespace YTPlayer.Core.Streaming
                         return 0;
                     }
 
-                    Task.Delay(StallBackoffDelayMs).GetAwaiter().GetResult();
+                    try
+                    {
+                        Task.Delay(StallBackoffDelayMs, _abortReadCts.Token).GetAwaiter().GetResult();
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        return -1;
+                    }
                 }
 
                 if (bytesRead > length)
@@ -408,6 +437,16 @@ namespace YTPlayer.Core.Streaming
                 return;
 
             _disposed = true;
+
+            try
+            {
+                _abortReadCts.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+
+            _abortReadCts.Dispose();
 
             _readBuffer = null;
 

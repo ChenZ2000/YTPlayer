@@ -207,6 +207,9 @@ namespace YTPlayer.Core
         private int _currentDeviceIndex;
         private string _activeOutputDeviceId = AudioOutputDeviceInfo.WindowsDefaultId;
         private DateTime _lastDeviceResumeAttemptUtc = DateTime.MinValue;
+        private static readonly TimeSpan MaxBufferingDuration = TimeSpan.FromSeconds(45);
+        private DateTime _bufferingStateSinceUtc = DateTime.MinValue;
+        private bool _bufferingTimeoutTriggered;
 
         #endregion
 
@@ -572,6 +575,7 @@ namespace YTPlayer.Core
                     OnPlaybackError($"音频格式识别失败: stream长度无效 ({channelLength} bytes)");
 
                     // 清理已创建的资源
+                    _currentStreamProvider?.AbortPendingReads();
                     if (_currentStream != 0)
                     {
                         BASS_ChannelStop(_currentStream);
@@ -1142,6 +1146,8 @@ namespace YTPlayer.Core
 
             _positionMonitorCts = new CancellationTokenSource();
             var token = _positionMonitorCts.Token;
+            _bufferingStateSinceUtc = DateTime.MinValue;
+            _bufferingTimeoutTriggered = false;
 
             bool endChunksRequested = false;
 
@@ -1153,25 +1159,42 @@ namespace YTPlayer.Core
                     {
                         int activeState = BASS_ChannelIsActive(_currentStream);
 
-                        if (activeState == BASS_ACTIVE_STALLED)
+                        if (activeState == BASS_ACTIVE_STALLED || activeState == BASS_ACTIVE_PAUSED_DEVICE)
                         {
-                            _stateMachine.TransitionTo(PlaybackState.Buffering);
-                        }
-                        else if (activeState == BASS_ACTIVE_PAUSED_DEVICE)
-                        {
+                            if (_bufferingStateSinceUtc == DateTime.MinValue)
+                            {
+                                _bufferingStateSinceUtc = DateTime.UtcNow;
+                            }
+
                             _stateMachine.TransitionTo(PlaybackState.Buffering);
 
-                            if (DateTime.UtcNow - _lastDeviceResumeAttemptUtc > TimeSpan.FromSeconds(2))
+                            if (activeState == BASS_ACTIVE_PAUSED_DEVICE && DateTime.UtcNow - _lastDeviceResumeAttemptUtc > TimeSpan.FromSeconds(2))
                             {
                                 _lastDeviceResumeAttemptUtc = DateTime.UtcNow;
                                 EnsureDeviceContext();
                                 bool resumed = BASS_Start();
                                 Debug.WriteLine($"[BassAudioEngine] Attempted BASS_Start after device pause: {resumed}");
                             }
+
+                            if (!_bufferingTimeoutTriggered && DateTime.UtcNow - _bufferingStateSinceUtc >= MaxBufferingDuration)
+                            {
+                                _bufferingTimeoutTriggered = true;
+                                Debug.WriteLine($"[BassAudioEngine] Buffering timeout exceeded {MaxBufferingDuration.TotalSeconds:F0}s, stopping playback");
+                                StopInternal(raiseEvent: false);
+                                _stateMachine.TransitionTo(PlaybackState.Idle);
+                                OnPlaybackError($"Buffering timeout ({MaxBufferingDuration.TotalSeconds:F0}s)");
+                                break;
+                            }
                         }
-                        else if (activeState == BASS_ACTIVE_PLAYING && _stateMachine.CurrentState == PlaybackState.Buffering)
+                        else
                         {
-                            _stateMachine.TransitionTo(PlaybackState.Playing);
+                            _bufferingStateSinceUtc = DateTime.MinValue;
+                            _bufferingTimeoutTriggered = false;
+
+                            if (activeState == BASS_ACTIVE_PLAYING && _stateMachine.CurrentState == PlaybackState.Buffering)
+                            {
+                                _stateMachine.TransitionTo(PlaybackState.Playing);
+                            }
                         }
 
                         long positionBytes = BASS_ChannelGetPosition(_currentStream, BASS_POS_BYTE);
@@ -1223,6 +1246,8 @@ namespace YTPlayer.Core
             BassStreamProvider? oldStreamProvider = null;
             SmartCacheManager? oldCacheManager = null;
             int oldStream = 0;
+            int oldEndSyncHandle = 0;
+            int oldNearEndSyncHandle = 0;
             var pendingPreload = TakeGaplessPreload();
 
             if (pendingPreload != null)
@@ -1237,79 +1262,90 @@ namespace YTPlayer.Core
                 _positionMonitorCts = null;
                 _positionMonitorTask = null;
 
-                if (_currentStream != 0)
-                {
-                    BASS_ChannelStop(_currentStream);
-
-                    if (_endSyncHandle != 0)
-                    {
-                        BASS_ChannelRemoveSync(_currentStream, _endSyncHandle);
-                        _endSyncHandle = 0;
-                    }
-
-                    if (_nearEndSyncHandle != 0)
-                    {
-                        BASS_ChannelRemoveSync(_currentStream, _nearEndSyncHandle);
-                        _nearEndSyncHandle = 0;
-                    }
-
-                    // ⭐ 保存引用，稍后异步释放
-                    oldStream = _currentStream;
-                    _currentStream = 0;
-                }
-
-                // ⭐ 保存引用，稍后异步释放
+                oldStream = _currentStream;
                 oldStreamProvider = _currentStreamProvider;
                 if (oldStreamProvider != null)
                 {
                     UnregisterStreamProviderCallbacks(oldStreamProvider);
                 }
-                _currentStreamProvider = null;
 
                 oldCacheManager = _currentCacheManager;
+                oldEndSyncHandle = _endSyncHandle;
+                oldNearEndSyncHandle = _nearEndSyncHandle;
+
+                _endSyncHandle = 0;
+                _nearEndSyncHandle = 0;
+                _currentStream = 0;
+                _currentStreamProvider = null;
                 _currentCacheManager = null;
+                _currentSong = null;
             }
 
-            // ⭐⭐⭐ 异步释放资源（避免 CallbackOnCollectedDelegate）
-            // 与 OnStreamEnded 相同的修复策略
+            if (oldStreamProvider != null)
+            {
+                try
+                {
+                    oldStreamProvider.AbortPendingReads();
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"[BassAudioEngine] AbortPendingReads failed: {ex.Message}");
+                }
+            }
+
+            if (oldStream != 0)
+            {
+                if (oldEndSyncHandle != 0)
+                {
+                    BASS_ChannelRemoveSync(oldStream, oldEndSyncHandle);
+                }
+
+                if (oldNearEndSyncHandle != 0)
+                {
+                    BASS_ChannelRemoveSync(oldStream, oldNearEndSyncHandle);
+                }
+
+                Debug.WriteLine($"[BassAudioEngine] StopInternal stopping stream outside lock: {oldStream}");
+                BASS_ChannelStop(oldStream);
+            }
+
+            // Release resources asynchronously so native callbacks can unwind safely.
             if (oldStream != 0 || oldStreamProvider != null || oldCacheManager != null)
             {
                 Task.Run(async () =>
                 {
                     try
                     {
-                        Debug.WriteLine($"[BassAudioEngine] ⚙️ StopInternal: 开始异步释放资源（stream={oldStream}）...");
+                        Debug.WriteLine($"[BassAudioEngine] StopInternal: async release start (stream={oldStream})");
 
-                        // 释放 BASS stream
                         if (oldStream != 0)
                         {
                             BASS_StreamFree(oldStream);
-                            Debug.WriteLine($"[BassAudioEngine] ✓ StopInternal: 已调用 BASS_StreamFree: {oldStream}");
+                            Debug.WriteLine($"[BassAudioEngine] StopInternal: BASS_StreamFree called: {oldStream}");
                         }
 
-                        // ⭐ 延迟释放托管资源（避免 GC 回收委托）
-                        Debug.WriteLine("[BassAudioEngine] ⏳ StopInternal: 等待 200ms，确保 BASS 完成所有回调...");
+                        Debug.WriteLine("[BassAudioEngine] StopInternal: waiting 200ms before managed dispose");
                         await Task.Delay(200);
-                        Debug.WriteLine("[BassAudioEngine] ✓ StopInternal: 延迟完成，开始释放托管资源");
+                        Debug.WriteLine("[BassAudioEngine] StopInternal: disposing managed resources");
 
                         if (oldStreamProvider != null)
                         {
                             oldStreamProvider.Dispose();
-                            Debug.WriteLine("[BassAudioEngine] ✓ StopInternal: 已释放 StreamProvider");
+                            Debug.WriteLine("[BassAudioEngine] StopInternal: disposed StreamProvider");
                         }
 
                         if (oldCacheManager != null)
                         {
                             DetachCacheManager(oldCacheManager);
                             oldCacheManager.Dispose();
-                            Debug.WriteLine("[BassAudioEngine] ✓ StopInternal: 已释放 CacheManager");
+                            Debug.WriteLine("[BassAudioEngine] StopInternal: disposed CacheManager");
                         }
 
-                        Debug.WriteLine("[BassAudioEngine] ✓✓✓ StopInternal: 资源释放完成");
+                        Debug.WriteLine("[BassAudioEngine] StopInternal: async release completed");
                     }
                     catch (Exception ex)
                     {
-                        Debug.WriteLine($"[BassAudioEngine] ❌ StopInternal 释放资源异常: {ex.Message}");
+                        Debug.WriteLine($"[BassAudioEngine] StopInternal release error: {ex.Message}");
                     }
                 });
             }
@@ -1319,8 +1355,10 @@ namespace YTPlayer.Core
                 DispatchEvent(PlaybackStopped, this, EventArgs.Empty);
             }
 
-            _currentSong = null;
+            _bufferingStateSinceUtc = DateTime.MinValue;
+            _bufferingTimeoutTriggered = false;
         }
+
 
         private void RemoveSyncs()
         {
@@ -1361,15 +1399,7 @@ namespace YTPlayer.Core
         /// </summary>
         private void OnStreamEnded(int handle, int channel, int data, IntPtr user)
         {
-            Debug.WriteLine("[BassAudioEngine] ⚡ BASS SYNC_END 回调触发（流播放结束）");
-
-            bool loopOneMode = _playMode == PlayMode.LoopOne;
-            var gaplessEntry = TakeGaplessPreload();
-            if (loopOneMode && gaplessEntry != null)
-            {
-                ReleasePreloadedResources(gaplessEntry);
-                gaplessEntry = null;
-            }
+            Debug.WriteLine($"[BassAudioEngine] SYNC_END callback fired (stream={channel})");
 
             int oldStream;
             BassStreamProvider? oldStreamProvider;
@@ -1378,6 +1408,12 @@ namespace YTPlayer.Core
 
             lock (_syncRoot)
             {
+                if (_currentStream == 0 || channel == 0 || channel != _currentStream)
+                {
+                    Debug.WriteLine($"[BassAudioEngine] Ignoring stale SYNC_END callback: callback={channel}, current={_currentStream}");
+                    return;
+                }
+
                 oldStream = _currentStream;
                 oldStreamProvider = _currentStreamProvider;
                 if (oldStreamProvider != null)
@@ -1396,6 +1432,16 @@ namespace YTPlayer.Core
                 _currentStreamProvider = null;
                 _currentCacheManager = null;
                 _currentSong = null;
+                _endSyncHandle = 0;
+                _nearEndSyncHandle = 0;
+            }
+
+            bool loopOneMode = _playMode == PlayMode.LoopOne;
+            var gaplessEntry = TakeGaplessPreload();
+            if (loopOneMode && gaplessEntry != null)
+            {
+                ReleasePreloadedResources(gaplessEntry);
+                gaplessEntry = null;
             }
 
             bool gaplessStarted = false;
@@ -1412,9 +1458,10 @@ namespace YTPlayer.Core
 
             if (oldStream != 0)
             {
-                Debug.WriteLine($"[BassAudioEngine] ⚡ 立即停止前一首音频输出（stream={oldStream}）");
+                Debug.WriteLine($"[BassAudioEngine] Stopping finished stream immediately: {oldStream}");
+                oldStreamProvider?.AbortPendingReads();
                 BASS_ChannelStop(oldStream);
-                Debug.WriteLine("[BassAudioEngine] ✓ 前一首已停止");
+                Debug.WriteLine("[BassAudioEngine] Finished stream stopped");
             }
 
             if (!gaplessStarted)
@@ -1423,7 +1470,7 @@ namespace YTPlayer.Core
 
                 if (finishedSong != null)
                 {
-                    Debug.WriteLine($"[BassAudioEngine] ✓ 触发 PlaybackEnded 事件: {finishedSong.Name}");
+                    Debug.WriteLine($"[BassAudioEngine] Raising PlaybackEnded: {finishedSong.Name}");
                     DispatchEvent(PlaybackEnded, this, finishedSong);
                 }
             }
@@ -1432,39 +1479,40 @@ namespace YTPlayer.Core
             {
                 try
                 {
-                    Debug.WriteLine($"[BassAudioEngine] ⚙️ 开始异步释放前一首资源（stream={oldStream}）...");
+                    Debug.WriteLine($"[BassAudioEngine] Async release for ended stream start (stream={oldStream})");
 
                     if (oldStream != 0)
                     {
                         BASS_StreamFree(oldStream);
-                        Debug.WriteLine($"[BassAudioEngine] ✓ 已调用 BASS_StreamFree: {oldStream}");
+                        Debug.WriteLine($"[BassAudioEngine] BASS_StreamFree called for ended stream: {oldStream}");
                     }
 
-                    Debug.WriteLine("[BassAudioEngine] ⏳ 等待 200ms，确保 BASS 完成所有回调...");
+                    Debug.WriteLine("[BassAudioEngine] Waiting 200ms before releasing managed ended-stream resources");
                     await Task.Delay(200);
-                    Debug.WriteLine("[BassAudioEngine] ✓ 延迟完成，开始释放托管资源");
+                    Debug.WriteLine("[BassAudioEngine] Releasing managed ended-stream resources");
 
                     if (oldStreamProvider != null)
                     {
                         oldStreamProvider.Dispose();
-                        Debug.WriteLine("[BassAudioEngine] ✓ 已释放 StreamProvider");
+                        Debug.WriteLine("[BassAudioEngine] Disposed ended StreamProvider");
                     }
 
                     if (oldCacheManager != null)
                     {
                         DetachCacheManager(oldCacheManager);
                         oldCacheManager.Dispose();
-                        Debug.WriteLine("[BassAudioEngine] ✓ 已释放 CacheManager");
+                        Debug.WriteLine("[BassAudioEngine] Disposed ended CacheManager");
                     }
 
-                    Debug.WriteLine("[BassAudioEngine] ✓✓✓ 前一首资源释放完成");
+                    Debug.WriteLine("[BassAudioEngine] Async release for ended stream completed");
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"[BassAudioEngine] ❌ 释放资源异常: {ex.Message}");
+                    Debug.WriteLine($"[BassAudioEngine] Ended stream release error: {ex.Message}");
                 }
             });
         }
+
 
         private bool TryStartGaplessPlayback(GaplessPreloadEntry entry, SongInfo? previousSong, out SongInfo? nextSong)
         {

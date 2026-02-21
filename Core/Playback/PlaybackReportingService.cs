@@ -233,14 +233,14 @@ namespace YTPlayer.Core.Playback
                         switch (operation.Kind)
                         {
                             case PlaybackReportOperationKind.Start:
-                                bool startSuccess = await SendStartLogsAsync(operation.Context).ConfigureAwait(false);
+                                bool startSuccess = await SendStartLogsAsync(operation.Context, token).ConfigureAwait(false);
                                 if (!startSuccess)
                                 {
                                     PersistFailedOperation(operation);
                                 }
                                 break;
                             case PlaybackReportOperationKind.Complete:
-                                bool completeSuccess = await SendCompleteLogAsync(operation.Context, operation.EndReason).ConfigureAwait(false);
+                                bool completeSuccess = await SendCompleteLogAsync(operation.Context, operation.EndReason, token).ConfigureAwait(false);
                                 if (!completeSuccess)
                                 {
                                     PersistFailedOperation(operation);
@@ -322,7 +322,7 @@ namespace YTPlayer.Core.Playback
             }
         }
 
-        private Task<bool> SendStartLogsAsync(PlaybackReportContext context)
+        private Task<bool> SendStartLogsAsync(PlaybackReportContext context, CancellationToken cancellationToken)
         {
             var logs = new List<Dictionary<string, object>>();
             string content = BuildContent(context);
@@ -357,10 +357,10 @@ namespace YTPlayer.Core.Playback
                 }
             });
 
-            return SendLogsWithFallbackAsync(logs, context);
+            return SendLogsWithFallbackAsync(logs, context, cancellationToken);
         }
 
-        private async Task<bool> SendCompleteLogAsync(PlaybackReportContext context, PlaybackEndReason reason)
+        private async Task<bool> SendCompleteLogAsync(PlaybackReportContext context, PlaybackEndReason reason, CancellationToken cancellationToken)
         {
             int reportedSeconds = (int)Math.Max(1, Math.Round(context.PlayedSeconds > 0 ? context.PlayedSeconds : context.DurationSeconds));
             if (context.DurationSeconds > 0)
@@ -398,12 +398,12 @@ namespace YTPlayer.Core.Playback
 
             var logs = new List<Dictionary<string, object>> { log };
 
-            bool weblogOk = await SendLogsWithFallbackAsync(logs, context).ConfigureAwait(false);
+            bool weblogOk = await SendLogsWithFallbackAsync(logs, context, cancellationToken).ConfigureAwait(false);
             bool scrobbleOk = await _apiClient.SendScrobbleEapiAsync(
                 long.TryParse(context.SongId, out var sid) ? sid : 0,
                 context.Source.SourceIdLong ?? 0,
                 reportedSeconds,
-                MapEndReason(reason)).ConfigureAwait(false);
+                MapEndReason(reason), cancellationToken).ConfigureAwait(false);
 
             return weblogOk || scrobbleOk;
         }
@@ -459,17 +459,17 @@ namespace YTPlayer.Core.Playback
             return content;
         }
 
-        private async Task<bool> SendLogsWithFallbackAsync(IEnumerable<Dictionary<string, object>> logs, PlaybackReportContext context)
+        private async Task<bool> SendLogsWithFallbackAsync(IEnumerable<Dictionary<string, object>> logs, PlaybackReportContext context, CancellationToken cancellationToken)
         {
             try
             {
-                bool primary = await _apiClient.SendPlaybackLogsAsync(logs).ConfigureAwait(false);
+                bool primary = await _apiClient.SendPlaybackLogsAsync(logs, cancellationToken).ConfigureAwait(false);
                 if (primary)
                 {
                     return true;
                 }
 
-                return await _apiClient.SendPlaybackLogsEapiAsync(logs).ConfigureAwait(false);
+                return await _apiClient.SendPlaybackLogsEapiAsync(logs, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -489,20 +489,24 @@ namespace YTPlayer.Core.Playback
             _cts.Cancel();
             _queue.CompleteAdding();
 
-            try
+            if (_workerTask.IsCompleted)
             {
-                _workerTask.Wait(TimeSpan.FromSeconds(2));
-            }
-            catch (AggregateException)
-            {
-                // ignored
-            }
-            catch (ObjectDisposedException)
-            {
+                _cts.Dispose();
+                _queue.Dispose();
+                return;
             }
 
-            _cts.Dispose();
-            _queue.Dispose();
+            _ = _workerTask.ContinueWith(_ =>
+            {
+                try
+                {
+                    _cts.Dispose();
+                    _queue.Dispose();
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+            }, TaskScheduler.Default);
         }
     }
 }

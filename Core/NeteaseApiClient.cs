@@ -1825,7 +1825,7 @@ namespace YTPlayer.Core
         /// <summary>
         /// EAPI POST 请求
         /// </summary>
-        public async Task<T> PostEApiAsync<T>(string path, object payload, bool useIosHeaders = true, int retryCount = 0, bool skipErrorHandling = false, bool injectRealIpHeaders = false)
+        public async Task<T> PostEApiAsync<T>(string path, object payload, bool useIosHeaders = true, int retryCount = 0, bool skipErrorHandling = false, bool injectRealIpHeaders = false, CancellationToken cancellationToken = default)
         {
             try
             {
@@ -1880,7 +1880,7 @@ namespace YTPlayer.Core
                         request.Headers.TryAddWithoutValidation("Cookie", cookieHeader);
                     }
 
-                    var response = await _eapiClient.SendAsync(request);
+                    var response = await _eapiClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
 
                     byte[] rawBytes = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
                     string decryptedText = null;
@@ -2051,7 +2051,7 @@ namespace YTPlayer.Core
                             if (refreshed)
                             {
                                 System.Diagnostics.Debug.WriteLine("[EAPI] 检测到 301，已自动刷新登录，重试当前请求。");
-                                return await PostEApiAsync<T>(path, payload, useIosHeaders, retryCount + 1, skipErrorHandling).ConfigureAwait(false);
+                                return await PostEApiAsync<T>(path, payload, useIosHeaders, retryCount + 1, skipErrorHandling, injectRealIpHeaders, cancellationToken).ConfigureAwait(false);
                             }
                         }
 
@@ -2072,8 +2072,8 @@ namespace YTPlayer.Core
                 if (ShouldRetry(ex))
                 {
                     int delayMs = GetRandomRetryDelay();
-                    await Task.Delay(delayMs).ConfigureAwait(false);
-                    return await PostEApiAsync<T>(path, payload, useIosHeaders, retryCount + 1, skipErrorHandling);
+                    await Task.Delay(delayMs, cancellationToken).ConfigureAwait(false);
+                    return await PostEApiAsync<T>(path, payload, useIosHeaders, retryCount + 1, skipErrorHandling, injectRealIpHeaders, cancellationToken).ConfigureAwait(false);
                 }
 
                 throw;
@@ -2430,7 +2430,7 @@ namespace YTPlayer.Core
         /// 专用于海外试听兜底：在 payload/header 中注入 realIP（大陆随机），其余逻辑保持不变。
         /// 仅在未登录/无个人 Cookie 且主请求返回失败时调用，避免影响正常会员链路。
         /// </summary>
-        private async Task<JObject> PostEApiWithOverseasBypassAsync(string path, Dictionary<string, object> originalPayload)
+        private async Task<JObject> PostEApiWithOverseasBypassAsync(string path, Dictionary<string, object> originalPayload, CancellationToken cancellationToken = default)
         {
             var payload = new Dictionary<string, object>(originalPayload ?? new Dictionary<string, object>(), StringComparer.OrdinalIgnoreCase);
             string realIp = GenerateRandomChineseIp();
@@ -2443,7 +2443,7 @@ namespace YTPlayer.Core
                 payload["header"] = header;
             }
 
-            return await PostEApiAsync<JObject>(path, payload, useIosHeaders: true, skipErrorHandling: true, injectRealIpHeaders: true).ConfigureAwait(false);
+            return await PostEApiAsync<JObject>(path, payload, useIosHeaders: true, skipErrorHandling: true, injectRealIpHeaders: true, cancellationToken: cancellationToken).ConfigureAwait(false);
         }
 
         private IDictionary<string, object> EnsureEapiHeader(Dictionary<string, object> payloadDict)
@@ -4367,7 +4367,7 @@ namespace YTPlayer.Core
                 try
                 {
                     System.Diagnostics.Debug.WriteLine("[SongUrl] 未登录，优先使用公共API获取歌曲URL。");
-                    var simplifiedResult = await GetSongUrlViaSimplifiedApiAsync(ids, requestedLevel);
+                    var simplifiedResult = await GetSongUrlViaSimplifiedApiAsync(ids, requestedLevel, cancellationToken).ConfigureAwait(false);
                     if (simplifiedResult != null && simplifiedResult.Count > 0)
                     {
                         System.Diagnostics.Debug.WriteLine("[SongUrl] 公共API成功返回歌曲URL，跳过 EAPI 尝试。");
@@ -4396,6 +4396,7 @@ namespace YTPlayer.Core
 
             for (int i = startIndex; i < qualityOrder.Length; i++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 string currentLevel = qualityOrder[i];
 
                 try
@@ -4440,7 +4441,7 @@ namespace YTPlayer.Core
                         payload["immerseType"] = "c51";
                     }
 
-                    var response = await PostEApiAsync<JObject>("/api/song/enhance/player/url/v1", payload, useIosHeaders: true, skipErrorHandling: true);
+                    var response = await PostEApiAsync<JObject>("/api/song/enhance/player/url/v1", payload, useIosHeaders: true, skipErrorHandling: true, cancellationToken: cancellationToken).ConfigureAwait(false);
                     if (response == null)
                     {
                         System.Diagnostics.Debug.WriteLine("[EAPI] 响应为空，尝试下一个音质");
@@ -4461,7 +4462,7 @@ namespace YTPlayer.Core
                         if (!UsePersonalCookie && string.IsNullOrEmpty(_musicU))
                         {
                             System.Diagnostics.Debug.WriteLine($"[EAPI] code={code}，尝试海外兜底 realIP 获取试听 URL");
-                            response = await PostEApiWithOverseasBypassAsync("/api/song/enhance/player/url/v1", payload);
+                            response = await PostEApiWithOverseasBypassAsync("/api/song/enhance/player/url/v1", payload, cancellationToken).ConfigureAwait(false);
                             code = response?["code"]?.Value<int>() ?? code;
                             message = response?["message"]?.Value<string>() ?? response?["msg"]?.Value<string>() ?? message;
                         }
@@ -4530,7 +4531,7 @@ namespace YTPlayer.Core
                                 {
                                     ["ids"] = new[] { long.Parse(id, CultureInfo.InvariantCulture) }
                                 };
-                                var fallback = await PostEApiWithOverseasBypassAsync("/api/song/enhance/player/url/v1", singlePayload);
+                                var fallback = await PostEApiWithOverseasBypassAsync("/api/song/enhance/player/url/v1", singlePayload, cancellationToken).ConfigureAwait(false);
                                 var fallbackData = fallback?["data"] as JArray;
                                 var first = fallbackData?.FirstOrDefault();
                                 if (first != null)
@@ -4627,7 +4628,7 @@ namespace YTPlayer.Core
                 try
                 {
                     System.Diagnostics.Debug.WriteLine("[EAPI] 所有音质的加密接口均失败，回退到公共API。");
-                    return await GetSongUrlViaSimplifiedApiAsync(ids, requestedLevel);
+                    return await GetSongUrlViaSimplifiedApiAsync(ids, requestedLevel, cancellationToken).ConfigureAwait(false);
                 }
                 catch (Exception simplifiedEx)
                 {
@@ -4646,13 +4647,14 @@ namespace YTPlayer.Core
         /// <summary>
         /// 通过公共API获取歌曲URL（参考 Python 版本：get_song_url_api，256-298行）
         /// </summary>
-        private async Task<Dictionary<string, SongUrlInfo>> GetSongUrlViaSimplifiedApiAsync(string[] ids, string level)
+        private async Task<Dictionary<string, SongUrlInfo>> GetSongUrlViaSimplifiedApiAsync(string[] ids, string level, CancellationToken cancellationToken = default)
         {
             var result = new Dictionary<string, SongUrlInfo>();
 
             // 公共API一次只能查询一首歌曲，所以需要循环调用
             foreach (var songId in ids)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 try
                 {
                     // Python源码参考：
@@ -4673,7 +4675,7 @@ namespace YTPlayer.Core
 
                     System.Diagnostics.Debug.WriteLine($"[API] 公共API请求: {apiUrl}, songId={songId}, level={level}");
 
-                    var response = await _simplifiedClient.PostAsync(apiUrl, content);
+                    var response = await _simplifiedClient.PostAsync(apiUrl, content, cancellationToken).ConfigureAwait(false);
                     string responseText = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
 
                     System.Diagnostics.Debug.WriteLine($"[API] 公共API响应状态: {response.StatusCode}");
@@ -7445,7 +7447,7 @@ namespace YTPlayer.Core
             try
             {
                 // 使用 EAPI 客户端，路径以 /api/ 开头，由 PostEApiAsync 自动替换为 /eapi/
-                var response = await PostEApiAsync<JObject>("/api/feedback/weblog", payload, useIosHeaders: true).ConfigureAwait(false);
+                var response = await PostEApiAsync<JObject>("/api/feedback/weblog", payload, useIosHeaders: true, cancellationToken: cancellationToken).ConfigureAwait(false);
                 int code = response["code"]?.Value<int>() ?? -1;
                 if (code != 200)
                 {
