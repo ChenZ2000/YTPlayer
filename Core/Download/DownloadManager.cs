@@ -410,6 +410,8 @@ namespace YTPlayer.Core.Download
                     // 取消下载
                     task.CancellationTokenSource?.Cancel();
                     task.Status = DownloadStatus.Paused;
+                    task.DownloadSpeed = 0;
+                    task.ErrorMessage = null;
 
                     DebugLogger.Log(
                         DebugLogger.LogLevel.Info,
@@ -438,6 +440,8 @@ namespace YTPlayer.Core.Download
                     // 移回待下载队列
                     _activeQueue.Remove(task);
                     task.Status = DownloadStatus.Pending;
+                    task.DownloadSpeed = 0;
+                    task.ErrorMessage = null;
                     _pendingQueue.Insert(0, task);  // 插入到队首优先下载
 
                     DebugLogger.Log(
@@ -830,6 +834,11 @@ namespace YTPlayer.Core.Download
         {
             lock (_queueLock)
             {
+                if (task.Status == DownloadStatus.Paused || task.Status == DownloadStatus.Pending)
+                {
+                    return;
+                }
+
                 _activeQueue.Remove(task);
                 // 失败的任务也移到完成队列（便于用户查看失败原因）
                 _completedQueue.Add(task);

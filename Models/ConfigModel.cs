@@ -155,6 +155,16 @@ namespace YTPlayer.Models
         public bool CommentSequenceNumberHidden { get; set; } = false;
 
         /// <summary>
+        /// 是否隐藏传输管理列表序号（默认显示）
+        /// </summary>
+        public bool TransferListSequenceNumberHidden { get; set; } = false;
+
+        /// <summary>
+        /// 是否隐藏下载复选对话框序号（默认显示）
+        /// </summary>
+        public bool BatchDownloadDialogSequenceNumberHidden { get; set; } = false;
+
+        /// <summary>
         /// 是否隐藏控制栏（默认显示）
         /// </summary>
         public bool ControlBarHidden { get; set; } = false;

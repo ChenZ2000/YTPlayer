@@ -478,6 +478,12 @@ public partial class MainForm : Form
 
 		public int ArtistArea { get; set; }
 
+		public int AlbumCategoryType { get; set; }
+
+		public int AlbumCategoryArea { get; set; }
+
+		public int AlbumCategoryOffset { get; set; }
+
 		public long PodcastRadioId { get; set; }
 
 		public int PodcastOffset { get; set; }
@@ -1336,6 +1342,8 @@ public partial class MainForm : Form
 
 	private readonly bool _enableArtistCategoryAll = true;
 
+	private readonly bool _enableAlbumCategoryAll = true;
+
 	private static readonly char[] MultiUrlSeparators = new char[2] { ';', '；' };
 
 	private readonly Dictionary<LibraryEntityType, DateTime> _libraryCacheTimestamps = new Dictionary<LibraryEntityType, DateTime>
@@ -1415,6 +1423,14 @@ public partial class MainForm : Form
 
 	private int _currentArtistCategoryTotalCount;
 
+	private int _currentAlbumTypeFilter = -1;
+
+	private int _currentAlbumAreaFilter = -1;
+
+	private bool _currentAlbumCategoryHasMore;
+
+	private int _currentAlbumCategoryTotalCount;
+
 	private readonly Dictionary<long, (int MusicCount, int AlbumCount)> _artistStatsCache = new Dictionary<long, (int, int)>();
 
 	private readonly HashSet<long> _artistStatsInFlight = new HashSet<long>();
@@ -1426,6 +1442,8 @@ public partial class MainForm : Form
 	private const int ArtistSongsPageSize = 100;
 
 	private const int ArtistAlbumsPageSize = 100;
+
+	private const int AlbumCategoryPageSize = 100;
 
 	private const int ArtistDetailFetchConcurrency = 8;
 
@@ -1454,6 +1472,8 @@ public partial class MainForm : Form
 	private bool _currentHighQualityHasMore;
 
 	private bool _currentArtistCategoryLoadedAll;
+
+	private bool _currentAlbumCategoryLoadedAll;
 
 	private int _currentNewSongsTotalCount;
 
@@ -1754,17 +1774,33 @@ public partial class MainForm : Form
 
 	private ToolStripMenuItem shareSongDirectMenuItem;
 
+	private ToolStripMenuItem shareSongOpenWebMenuItem;
+
 	private ToolStripMenuItem sharePlaylistMenuItem;
+
+	private ToolStripMenuItem sharePlaylistCopyWebMenuItem;
+
+	private ToolStripMenuItem sharePlaylistOpenWebMenuItem;
 
 	private ToolStripMenuItem shareAlbumMenuItem;
 
+	private ToolStripMenuItem shareAlbumCopyWebMenuItem;
+
+	private ToolStripMenuItem shareAlbumOpenWebMenuItem;
+
 	private ToolStripMenuItem sharePodcastMenuItem;
+
+	private ToolStripMenuItem sharePodcastCopyWebMenuItem;
+
+	private ToolStripMenuItem sharePodcastOpenWebMenuItem;
 
 	private ToolStripMenuItem sharePodcastEpisodeMenuItem;
 
 	private ToolStripMenuItem sharePodcastEpisodeWebMenuItem;
 
 	private ToolStripMenuItem sharePodcastEpisodeDirectMenuItem;
+
+	private ToolStripMenuItem sharePodcastEpisodeOpenWebMenuItem;
 
 	private ToolStripMenuItem artistSongsSortMenuItem;
 
@@ -1789,6 +1825,10 @@ public partial class MainForm : Form
 	private ToolStripMenuItem commentMenuItem;
 
 	private ToolStripMenuItem shareArtistMenuItem;
+
+	private ToolStripMenuItem shareArtistCopyWebMenuItem;
+
+	private ToolStripMenuItem shareArtistOpenWebMenuItem;
 
 	private ToolStripMenuItem subscribeArtistMenuItem;
 
@@ -1963,6 +2003,7 @@ public partial class MainForm : Form
         public MainForm()
         {
                 InitializeComponent();
+                MenuNavigationBoundaryHelper.Attach(menuStrip1);
                 IconAssetProvider.TryApplyFormIcon(this);
                 ApplySearchPanelStyle();
                 ApplyResultListViewStyle();
@@ -1978,11 +2019,13 @@ public partial class MainForm : Form
 			songContextMenu.ShowCheckMargin = true;
                         songContextMenu.Opened += SongContextMenu_Opened;
                         ContextMenuAccessibilityHelper.PrimeForAccessibility(songContextMenu);
+                        MenuNavigationBoundaryHelper.Attach(songContextMenu);
 		}
                 if (searchTextContextMenu != null)
                 {
                         searchTextContextMenu.Opened += SearchTextContextMenu_Opened;
                         ContextMenuAccessibilityHelper.PrimeForAccessibility(searchTextContextMenu);
+                        MenuNavigationBoundaryHelper.Attach(searchTextContextMenu);
                 }
 		EnsureSortMenuCheckMargins();
 		InitializeServices();
@@ -1999,6 +2042,7 @@ public partial class MainForm : Form
                 trayContextMenu.Opened += TrayContextMenu_Opened;
                 trayContextMenu.Closed += TrayContextMenu_Closed;
                 ContextMenuAccessibilityHelper.PrimeForAccessibility(trayContextMenu);
+                MenuNavigationBoundaryHelper.Attach(trayContextMenu);
                 SyncPlayPauseButtonText();
 #if DEBUG
                 InitializeUiThreadWatchdog();
@@ -11358,32 +11402,36 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 			ConfigureArtistContextMenu(menuContextSnapshot.Artist);
 			return;
 		}
+		bool flag2 = false;
 		if (!menuContextSnapshot.IsCurrentPlayback && menuContextSnapshot.PrimaryEntity == MenuEntityKind.Category)
 		{
-			ConfigureCategoryMenu();
-			return;
+			ConfigureCategoryMenu(menuContextSnapshot, ref showViewSection, ref contextCommentTarget);
+			flag2 = true;
 		}
-		switch (menuContextSnapshot.PrimaryEntity)
+		if (!flag2)
 		{
-		case MenuEntityKind.Playlist:
-			ConfigurePlaylistMenu(menuContextSnapshot, menuContextSnapshot.IsLoggedIn, ref showViewSection, ref contextCommentTarget);
-			break;
-		case MenuEntityKind.Album:
-			ConfigureAlbumMenu(menuContextSnapshot, menuContextSnapshot.IsLoggedIn, ref showViewSection, ref contextCommentTarget);
-			break;
-		case MenuEntityKind.Podcast:
-			ConfigurePodcastMenu(menuContextSnapshot, menuContextSnapshot.IsLoggedIn, ref showViewSection);
-			break;
-		case MenuEntityKind.Song:
-		case MenuEntityKind.PodcastEpisode:
-			ConfigureSongOrEpisodeMenu(menuContextSnapshot, menuContextSnapshot.IsLoggedIn, menuContextSnapshot.IsCloudView, ref showViewSection, ref contextCommentTarget, ref contextPodcastForEpisode, ref effectiveEpisode, ref isPodcastEpisodeContext);
-			break;
-		default:
-			if (!menuContextSnapshot.IsCurrentPlayback)
+			switch (menuContextSnapshot.PrimaryEntity)
 			{
-				e.Cancel = true;
+			case MenuEntityKind.Playlist:
+				ConfigurePlaylistMenu(menuContextSnapshot, menuContextSnapshot.IsLoggedIn, ref showViewSection, ref contextCommentTarget);
+				break;
+			case MenuEntityKind.Album:
+				ConfigureAlbumMenu(menuContextSnapshot, menuContextSnapshot.IsLoggedIn, ref showViewSection, ref contextCommentTarget);
+				break;
+			case MenuEntityKind.Podcast:
+				ConfigurePodcastMenu(menuContextSnapshot, menuContextSnapshot.IsLoggedIn, ref showViewSection);
+				break;
+			case MenuEntityKind.Song:
+			case MenuEntityKind.PodcastEpisode:
+				ConfigureSongOrEpisodeMenu(menuContextSnapshot, menuContextSnapshot.IsLoggedIn, menuContextSnapshot.IsCloudView, ref showViewSection, ref contextCommentTarget, ref contextPodcastForEpisode, ref effectiveEpisode, ref isPodcastEpisodeContext);
+				break;
+			default:
+				if (!menuContextSnapshot.IsCurrentPlayback)
+				{
+					e.Cancel = true;
+				}
+				return;
 			}
-			return;
 		}
 		if (contextCommentTarget != null && !isPodcastEpisodeContext)
 		{
@@ -12775,6 +12823,22 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 				}
 				await LoadArtistsByCategoryAsync(artistType2, artistArea, offset3, skipSave: true);
 			}
+			else if (string.Equals(viewSource, "new_album_category_periods", StringComparison.OrdinalIgnoreCase))
+			{
+				await LoadAlbumCategoryTypesAsync(skipSave: true);
+			}
+			else if (viewSource.StartsWith("new_album_category_period:", StringComparison.OrdinalIgnoreCase))
+			{
+				if (int.TryParse(viewSource.Substring("new_album_category_period:".Length), out var albumType))
+				{
+					await LoadAlbumCategoryAreasAsync(albumType, skipSave: true);
+				}
+			}
+			else if (viewSource.StartsWith("new_album_category_list:", StringComparison.OrdinalIgnoreCase))
+			{
+				ParseAlbumCategoryListViewSource(viewSource, out var albumTypeCode, out var albumAreaCode, out var albumOffset);
+				await LoadAlbumsByCategoryAsync(albumTypeCode, albumAreaCode, albumOffset, skipSave: true);
+			}
 			else if (viewSource.StartsWith("podcast:", StringComparison.OrdinalIgnoreCase))
 			{
 				ParsePodcastViewSource(viewSource, out var radioId, out var offset4, out var ascending);
@@ -12797,7 +12861,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 			{
 				await LoadPersonalFm((personalFmFocusIndex >= 0) ? personalFmFocusIndex : ResolvePersonalFmFocusIndexForViewSourceNavigation(currentSong));
 			}
-			else if (string.Equals(normalizedViewSource, "recent_play", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "recent_playlists", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "recent_albums", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "recent_listened", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "recent_podcasts", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "daily_recommend", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "personalized", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "toplist", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "daily_recommend_songs", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "daily_recommend_playlists", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "personalized_playlists", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "personalized_newsongs", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, PersonalFmCategoryId, StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "highquality_playlists", StringComparison.OrdinalIgnoreCase) || normalizedViewSource.StartsWith("playlist_cat_", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "playlist_category", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "new_songs", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "new_songs_all", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "new_songs_chinese", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "new_songs_western", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "new_songs_japan", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "new_songs_korea", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "new_albums", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "user_liked_songs", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "user_playlists", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "user_albums", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "user_podcasts", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "user_cloud", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "artist_favorites", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "artist_categories", StringComparison.OrdinalIgnoreCase) || normalizedViewSource.StartsWith("artist_top_", StringComparison.OrdinalIgnoreCase) || normalizedViewSource.StartsWith("artist_songs_", StringComparison.OrdinalIgnoreCase) || normalizedViewSource.StartsWith("artist_albums_", StringComparison.OrdinalIgnoreCase) || normalizedViewSource.StartsWith("artist_type_", StringComparison.OrdinalIgnoreCase) || normalizedViewSource.StartsWith("artist_area_", StringComparison.OrdinalIgnoreCase))
+			else if (string.Equals(normalizedViewSource, "recent_play", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "recent_playlists", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "recent_albums", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "recent_listened", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "recent_podcasts", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "daily_recommend", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "personalized", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "toplist", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "daily_recommend_songs", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "daily_recommend_playlists", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "personalized_playlists", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "personalized_newsongs", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, PersonalFmCategoryId, StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "highquality_playlists", StringComparison.OrdinalIgnoreCase) || normalizedViewSource.StartsWith("playlist_cat_", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "playlist_category", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "new_songs", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "new_songs_all", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "new_songs_chinese", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "new_songs_western", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "new_songs_japan", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "new_songs_korea", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "new_albums", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "user_liked_songs", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "user_playlists", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "user_albums", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "user_podcasts", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "user_cloud", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "artist_favorites", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "artist_categories", StringComparison.OrdinalIgnoreCase) || normalizedViewSource.StartsWith("artist_top_", StringComparison.OrdinalIgnoreCase) || normalizedViewSource.StartsWith("artist_songs_", StringComparison.OrdinalIgnoreCase) || normalizedViewSource.StartsWith("artist_albums_", StringComparison.OrdinalIgnoreCase) || normalizedViewSource.StartsWith("artist_type_", StringComparison.OrdinalIgnoreCase) || normalizedViewSource.StartsWith("artist_area_", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "new_album_categories", StringComparison.OrdinalIgnoreCase) || normalizedViewSource.StartsWith("new_album_period_", StringComparison.OrdinalIgnoreCase) || normalizedViewSource.StartsWith("new_album_area_", StringComparison.OrdinalIgnoreCase))
 			{
 				if (!string.Equals(viewSource, "user_cloud", StringComparison.OrdinalIgnoreCase))
 				{
@@ -12878,11 +12942,12 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 			string item = ((song.ArtistNames != null && song.ArtistNames.Count > 0) ? song.ArtistNames[0] : song.Artist) ?? string.Empty;
 			return (ArtistId: song.ArtistIds[0], ArtistName: item);
 		}
-		if (string.IsNullOrWhiteSpace(song.Id))
+		string text = ResolveSongIdForLibraryState(song) ?? song.Id;
+		if (string.IsNullOrWhiteSpace(text))
 		{
 			return (ArtistId: 0L, ArtistName: string.Empty);
 		}
-		SongInfo detail = (await _apiClient.GetSongDetailAsync(new string[1] { song.Id }))?.FirstOrDefault();
+		SongInfo detail = (await _apiClient.GetSongDetailAsync(new string[1] { text }))?.FirstOrDefault();
 		if (detail != null)
 		{
 			song.ArtistIds = new List<long>(detail.ArtistIds ?? new List<long>());
@@ -12910,6 +12975,40 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 			}
 		}
 		return (ArtistId: 0L, ArtistName: string.Empty);
+	}
+
+	private static string? ResolvePrimaryArtistKeyword(SongInfo? song)
+	{
+		if (song == null)
+		{
+			return null;
+		}
+		if (song.ArtistNames != null)
+		{
+			string text = song.ArtistNames.FirstOrDefault((string n) => !string.IsNullOrWhiteSpace(n));
+			if (!string.IsNullOrWhiteSpace(text))
+			{
+				return text.Trim();
+			}
+		}
+		if (string.IsNullOrWhiteSpace(song.Artist))
+		{
+			return null;
+		}
+		string[] separators = new string[6] { "/", "、", "&", ",", "，", "；" };
+		string text2 = song.Artist;
+		string[] array = separators;
+		for (int i = 0; i < array.Length; i++)
+		{
+			string separator = array[i];
+			if (text2.Contains(separator))
+			{
+				text2 = text2.Split(new string[1] { separator }, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? text2;
+				break;
+			}
+		}
+		text2 = text2.Trim();
+		return string.IsNullOrWhiteSpace(text2) ? null : text2;
 	}
 
 	private static bool HasValidAlbumId(string? albumId)
@@ -12978,6 +13077,150 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		};
 	}
 
+	private static List<ArtistInfo> BuildSongArtistInfoList(SongInfo? song)
+	{
+		List<ArtistInfo> list = new List<ArtistInfo>();
+		if (song == null)
+		{
+			return list;
+		}
+		HashSet<long> hashSet = new HashSet<long>();
+		HashSet<string> hashSet2 = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+		List<long> list2 = song.ArtistIds ?? new List<long>();
+		List<string> list3 = song.ArtistNames ?? new List<string>();
+		int num = Math.Max(list2.Count, list3.Count);
+		for (int i = 0; i < num; i = checked(i + 1))
+		{
+			long num2 = ((i < list2.Count) ? list2[i] : 0);
+			string text = ((i < list3.Count) ? list3[i] : null) ?? string.Empty;
+			text = text.Trim();
+			if (num2 <= 0 && string.IsNullOrWhiteSpace(text))
+			{
+				continue;
+			}
+			if (num2 > 0 && !hashSet.Add(num2))
+			{
+				continue;
+			}
+			if (string.IsNullOrWhiteSpace(text))
+			{
+				text = "歌手 " + num2;
+			}
+			string text2 = text.Trim();
+			if (num2 <= 0 && !hashSet2.Add(text2))
+			{
+				continue;
+			}
+			hashSet2.Add(text2);
+			list.Add(new ArtistInfo
+			{
+				Id = num2,
+				Name = text2
+			});
+		}
+		if (list.Count == 0 && !string.IsNullOrWhiteSpace(song.Artist))
+		{
+			List<string> list4 = SplitArtistNames(song.Artist);
+			for (int j = 0; j < list4.Count; j = checked(j + 1))
+			{
+				string text3 = list4[j];
+				if (!string.IsNullOrWhiteSpace(text3) && hashSet2.Add(text3))
+				{
+					list.Add(new ArtistInfo
+					{
+						Id = 0L,
+						Name = text3
+					});
+				}
+			}
+		}
+		if (list.Count == 0)
+		{
+			ArtistInfo artistInfo = TryCreatePrimaryArtistInfoFromSong(song);
+			if (artistInfo != null && artistInfo.Id > 0)
+			{
+				list.Add(artistInfo);
+			}
+		}
+		return list;
+	}
+
+	private static List<string> SplitArtistNames(string? artistText)
+	{
+		List<string> list = new List<string>();
+		if (string.IsNullOrWhiteSpace(artistText))
+		{
+			return list;
+		}
+		string[] array = artistText.Split(new string[6] { "/", "、", "&", ",", "，", "；" }, StringSplitOptions.RemoveEmptyEntries);
+		for (int i = 0; i < array.Length; i = checked(i + 1))
+		{
+			string text = (array[i] ?? string.Empty).Trim();
+			if (!string.IsNullOrWhiteSpace(text) && !list.Contains(text, StringComparer.OrdinalIgnoreCase))
+			{
+				list.Add(text);
+			}
+		}
+		return list;
+	}
+
+	private static List<ArtistInfo> BuildAlbumArtistInfoList(AlbumInfo? album)
+	{
+		List<ArtistInfo> list = new List<ArtistInfo>();
+		if (album == null)
+		{
+			return list;
+		}
+		HashSet<long> hashSet = new HashSet<long>();
+		HashSet<string> hashSet2 = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+		void AddArtist(long artistId, string? artistName)
+		{
+			string text = (artistName ?? string.Empty).Trim();
+			if (artistId <= 0 && string.IsNullOrWhiteSpace(text))
+			{
+				return;
+			}
+			if (artistId > 0 && !hashSet.Add(artistId))
+			{
+				return;
+			}
+			if (string.IsNullOrWhiteSpace(text))
+			{
+				text = "歌手 " + artistId;
+			}
+			if (artistId <= 0 && !hashSet2.Add(text))
+			{
+				return;
+			}
+			hashSet2.Add(text);
+			list.Add(new ArtistInfo
+			{
+				Id = artistId,
+				Name = text
+			});
+		}
+		if (album.Songs != null && album.Songs.Count > 0)
+		{
+			foreach (SongInfo song in album.Songs)
+			{
+				foreach (ArtistInfo item in BuildSongArtistInfoList(song))
+				{
+					AddArtist(item?.Id ?? 0L, item?.Name);
+				}
+			}
+		}
+		List<string> list2 = SplitArtistNames(album.Artist);
+		for (int i = 0; i < list2.Count; i = checked(i + 1))
+		{
+			AddArtist(0L, list2[i]);
+		}
+		if (list.Count == 0 && !string.IsNullOrWhiteSpace(album.Artist))
+		{
+			AddArtist(0L, album.Artist);
+		}
+		return list;
+	}
+
 	private async Task<string?> ResolveSongAlbumIdAsync(SongInfo song)
 	{
 		if (song == null)
@@ -13018,6 +13261,28 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		return HasValidAlbumId(song.AlbumId) ? song.AlbumId : null;
 	}
 
+	private async Task<ArtistInfo?> ResolveArtistByKeywordAsync(string keyword)
+	{
+		string text = keyword?.Trim();
+		if (string.IsNullOrWhiteSpace(text))
+		{
+			return null;
+		}
+		try
+		{
+			SearchResult<ArtistInfo> searchResult = await _apiClient.SearchArtistsAsync(text, 10, 0);
+			List<ArtistInfo> list = searchResult?.Items ?? new List<ArtistInfo>();
+			return list.FirstOrDefault((ArtistInfo a) => a != null && a.Id > 0 && !string.IsNullOrWhiteSpace(a.Name) && string.Equals(a.Name.Trim(), text, StringComparison.OrdinalIgnoreCase))
+				?? list.FirstOrDefault((ArtistInfo a) => a != null && a.Id > 0 && !string.IsNullOrWhiteSpace(a.Name) && (a.Name.Contains(text, StringComparison.OrdinalIgnoreCase) || text.Contains(a.Name, StringComparison.OrdinalIgnoreCase)))
+				?? list.FirstOrDefault((ArtistInfo a) => a != null && a.Id > 0);
+		}
+		catch (Exception ex)
+		{
+			Debug.WriteLine("[ArtistResolve] SearchArtistsAsync failed: " + ex.Message);
+		}
+		return null;
+	}
+
 	private async Task<ArtistInfo?> ResolveSongArtistForSubscriptionAsync(SongInfo? song, bool isCloudSongContext)
 	{
 		ArtistInfo artistInfo = TryCreatePrimaryArtistInfoFromSong(song);
@@ -13025,20 +13290,35 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		{
 			return artistInfo;
 		}
-		if (song == null || isCloudSongContext)
+		if (song == null)
 		{
 			return null;
 		}
-		var (artistId, artistName) = await ResolvePrimaryArtistAsync(song);
-		if (artistId <= 0)
+		if (!isCloudSongContext)
+		{
+			try
+			{
+				var (artistId, artistName) = await ResolvePrimaryArtistAsync(song);
+				if (artistId > 0)
+				{
+					return new ArtistInfo
+					{
+						Id = artistId,
+						Name = (string.IsNullOrWhiteSpace(artistName) ? ("歌手 " + artistId) : artistName)
+					};
+				}
+			}
+			catch (Exception ex)
+			{
+				Debug.WriteLine("[ArtistSubscribe] ResolvePrimaryArtistAsync failed: " + ex.Message);
+			}
+		}
+		string text = ResolvePrimaryArtistKeyword(song);
+		if (string.IsNullOrWhiteSpace(text))
 		{
 			return null;
 		}
-		return new ArtistInfo
-		{
-			Id = artistId,
-			Name = (string.IsNullOrWhiteSpace(artistName) ? ("\u6B4C\u624B " + artistId) : artistName)
-		};
+		return await ResolveArtistByKeywordAsync(text);
 	}
 
 	private async Task<bool> EnsureSongAvailabilityAsync(SongInfo song)
@@ -13169,33 +13449,71 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 
 	private async void viewSongArtistMenuItem_Click(object sender, EventArgs e)
 	{
-		SongInfo song = GetSelectedSongFromContextMenu(sender);
-		if (song == null || string.IsNullOrWhiteSpace(song.Id))
+		ArtistInfo artistInfo = null;
+		string text = null;
+		if (sender is ToolStripItem { Tag: ArtistInfo tag } && tag != null)
 		{
-			MessageBox.Show("无法获取当前歌曲信息。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
-			return;
+			if (tag.Id > 0)
+			{
+				artistInfo = new ArtistInfo
+				{
+					Id = tag.Id,
+					Name = (string.IsNullOrWhiteSpace(tag.Name) ? ("歌手 " + tag.Id) : tag.Name)
+				};
+			}
+			else if (!string.IsNullOrWhiteSpace(tag.Name))
+			{
+				text = tag.Name.Trim();
+			}
+		}
+		SongInfo song = null;
+		if (artistInfo == null)
+		{
+			if (!string.IsNullOrWhiteSpace(text))
+			{
+				UpdateStatusBar("正在加载歌手信息...");
+				artistInfo = await ResolveArtistByKeywordAsync(text);
+				if (artistInfo == null || artistInfo.Id <= 0)
+				{
+					MessageBox.Show("未找到该歌曲的歌手信息。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+					UpdateStatusBar("无法打开歌手");
+					return;
+				}
+			}
+			else
+			{
+				song = GetSelectedSongFromContextMenu(sender);
+				if (song == null || string.IsNullOrWhiteSpace(song.Id))
+				{
+					MessageBox.Show("无法获取当前歌曲信息。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+					return;
+				}
+			}
 		}
 		try
 		{
-			UpdateStatusBar("正在加载歌手信息...");
-			var (artistId, artistName) = await ResolvePrimaryArtistAsync(song);
-			if (artistId <= 0)
+			if (artistInfo == null)
 			{
-				MessageBox.Show("未找到该歌曲的歌手信息。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
-				UpdateStatusBar("无法打开歌手");
-				return;
+				UpdateStatusBar("正在加载歌手信息...");
+				var (artistId, artistName) = await ResolvePrimaryArtistAsync(song);
+				if (artistId <= 0)
+				{
+					MessageBox.Show("未找到该歌曲的歌手信息。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+					UpdateStatusBar("无法打开歌手");
+					return;
+				}
+				if (string.IsNullOrWhiteSpace(artistName))
+				{
+					artistName = song.ArtistNames.FirstOrDefault() ?? song.Artist ?? "歌手";
+				}
+				artistInfo = new ArtistInfo
+				{
+					Id = artistId,
+					Name = artistName
+				};
 			}
-			if (string.IsNullOrWhiteSpace(artistName))
-			{
-				artistName = song.ArtistNames.FirstOrDefault() ?? song.Artist ?? "歌手";
-			}
-			ArtistInfo artist = new ArtistInfo
-			{
-				Id = artistId,
-				Name = artistName
-			};
-			await OpenArtistAsync(artist);
-			UpdateStatusBar("已打开歌手：" + artistName);
+			await OpenArtistAsync(artistInfo);
+			UpdateStatusBar("已打开歌手：" + artistInfo.Name);
 		}
 		catch (Exception ex)
 		{
@@ -13206,8 +13524,19 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 
 	private async void viewSongAlbumMenuItem_Click(object sender, EventArgs e)
 	{
+		AlbumInfo albumInfo = null;
+		if (sender is ToolStripItem { Tag: AlbumInfo tag } && tag != null && !string.IsNullOrWhiteSpace(tag.Id))
+		{
+			albumInfo = new AlbumInfo
+			{
+				Id = tag.Id,
+				Name = (string.IsNullOrWhiteSpace(tag.Name) ? ("专辑 " + tag.Id) : tag.Name),
+				Artist = tag.Artist ?? string.Empty,
+				PicUrl = tag.PicUrl ?? string.Empty
+			};
+		}
 		SongInfo song = GetSelectedSongFromContextMenu(sender);
-		if (song == null || string.IsNullOrWhiteSpace(song.Id))
+		if (albumInfo == null && (song == null || string.IsNullOrWhiteSpace(song.Id)))
 		{
 			MessageBox.Show("无法获取当前歌曲信息。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
 			return;
@@ -13215,22 +13544,25 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		try
 		{
 			UpdateStatusBar("正在加载专辑...");
-			string albumId = await ResolveSongAlbumIdAsync(song);
-			if (string.IsNullOrWhiteSpace(albumId))
+			if (albumInfo == null)
 			{
-				MessageBox.Show("未找到该歌曲的专辑信息。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
-				UpdateStatusBar("无法打开专辑");
-				return;
+				string albumId = await ResolveSongAlbumIdAsync(song);
+				if (string.IsNullOrWhiteSpace(albumId))
+				{
+					MessageBox.Show("未找到该歌曲的专辑信息。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+					UpdateStatusBar("无法打开专辑");
+					return;
+				}
+				albumInfo = new AlbumInfo
+				{
+					Id = albumId,
+					Name = (string.IsNullOrWhiteSpace(song.Album) ? ("专辑 " + albumId) : song.Album),
+					Artist = song.Artist,
+					PicUrl = song.PicUrl
+				};
 			}
-			AlbumInfo album = new AlbumInfo
-			{
-				Id = albumId,
-				Name = (string.IsNullOrWhiteSpace(song.Album) ? ("专辑 " + albumId) : song.Album),
-				Artist = song.Artist,
-				PicUrl = song.PicUrl
-			};
-			await OpenAlbum(album);
-			UpdateStatusBar("已打开专辑：" + album.Name);
+			await OpenAlbum(albumInfo);
+			UpdateStatusBar("已打开专辑：" + albumInfo.Name);
 		}
 		catch (Exception ex)
 		{
@@ -13261,94 +13593,303 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		}
 	}
 
+	private static string BuildSongOfficialWebUrl(string songId)
+	{
+		return "https://music.163.com/#/song?id=" + songId;
+	}
+
+	private static string BuildSongShareKeyword(SongInfo song)
+	{
+		if (song == null)
+		{
+			return string.Empty;
+		}
+		string artist = song.Artist;
+		if ((string.IsNullOrWhiteSpace(artist) || string.Equals(artist, "未知歌手", StringComparison.OrdinalIgnoreCase)) && song.ArtistNames != null && song.ArtistNames.Count > 0)
+		{
+			artist = song.ArtistNames[0];
+		}
+		if (string.IsNullOrWhiteSpace(artist))
+		{
+			return song.Name ?? string.Empty;
+		}
+		return (song.Name ?? string.Empty) + " " + artist;
+	}
+
+	private static string BuildUnblockFallbackWebUrl(SongInfo song, UnblockService.UnblockMatchResult matchResult)
+	{
+		string keyword = BuildSongShareKeyword(song);
+		if (string.IsNullOrWhiteSpace(keyword))
+		{
+			return string.Empty;
+		}
+		string query = Uri.EscapeDataString(keyword);
+		string provider = (matchResult?.Source ?? string.Empty).Trim().ToLowerInvariant();
+		switch (provider)
+		{
+		case "kugou":
+			return "https://www.kugou.com/yy/html/search.html#searchType=song&searchKeyWord=" + query;
+		case "kuwo":
+			return "https://www.kuwo.cn/search/list?key=" + query;
+		case "qq":
+			return "https://y.qq.com/n/ryqq/search?w=" + query;
+		case "migu":
+			return "https://music.migu.cn/v3/search?keyword=" + query;
+		case "joox":
+			return "https://www.joox.com/search/" + query;
+		case "bilibili":
+		case "bilivideo":
+			return "https://search.bilibili.com/all?keyword=" + query;
+		case "bodian":
+			return "https://www.bing.com/search?q=" + Uri.EscapeDataString(keyword + " 波点音乐");
+		case "pyncmd":
+			return "https://music.163.com/#/search/m/?s=" + query + "&type=1";
+		default:
+			if (!string.IsNullOrWhiteSpace(provider))
+			{
+				return "https://www.bing.com/search?q=" + Uri.EscapeDataString(keyword + " " + provider);
+			}
+			return matchResult?.Url ?? string.Empty;
+		}
+	}
+
+	private static SongInfo CreateSongShareProbe(SongInfo sourceSong, string songId)
+	{
+		SongInfo songInfo = new SongInfo
+		{
+			Id = songId ?? string.Empty,
+			Name = sourceSong?.Name ?? string.Empty,
+			Artist = sourceSong?.Artist ?? string.Empty,
+			Album = sourceSong?.Album ?? string.Empty,
+			AlbumId = sourceSong?.AlbumId ?? string.Empty,
+			Duration = sourceSong?.Duration ?? 0,
+			PicUrl = sourceSong?.PicUrl ?? string.Empty
+		};
+		if (sourceSong?.ArtistNames != null && sourceSong.ArtistNames.Count > 0)
+		{
+			songInfo.ArtistNames = new List<string>(sourceSong.ArtistNames);
+		}
+		if (sourceSong?.ArtistIds != null && sourceSong.ArtistIds.Count > 0)
+		{
+			songInfo.ArtistIds = new List<long>(sourceSong.ArtistIds);
+		}
+		return songInfo;
+	}
+
+	private bool TryCopyLinkToClipboard(string url, string successStatus)
+	{
+		try
+		{
+			Clipboard.SetText(url);
+			UpdateStatusBar(successStatus);
+			return true;
+		}
+		catch (ExternalException ex)
+		{
+			MessageBox.Show("复制链接失败：" + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+			UpdateStatusBar("复制链接失败");
+			return false;
+		}
+		catch (Exception ex2)
+		{
+			MessageBox.Show("复制链接失败：" + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+			UpdateStatusBar("复制链接失败");
+			return false;
+		}
+	}
+
+	private bool TryOpenLinkInDefaultBrowser(string url, string successStatus)
+	{
+		try
+		{
+			Process.Start(new ProcessStartInfo
+			{
+				FileName = url,
+				UseShellExecute = true
+			});
+			UpdateStatusBar(successStatus);
+			return true;
+		}
+		catch (Exception ex)
+		{
+			MessageBox.Show("打开链接失败：" + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+			UpdateStatusBar("打开链接失败");
+			return false;
+		}
+	}
+
+	private async Task<(string Url, bool UsedFallback)> ResolveSongWebShareUrlAsync(SongInfo song, CancellationToken cancellationToken)
+	{
+		string resolvedSongId = ResolveSongIdForLibraryState(song);
+		if (string.IsNullOrWhiteSpace(resolvedSongId))
+		{
+			resolvedSongId = song?.Id;
+		}
+		if (string.IsNullOrWhiteSpace(resolvedSongId))
+		{
+			return (string.Empty, false);
+		}
+		QualityLevel quality = GetCurrentQuality();
+		bool available = false;
+		bool availabilityChecked = false;
+		try
+		{
+			Dictionary<string, bool> availability = await _apiClient.BatchCheckSongsAvailabilityAsync(new string[1] { resolvedSongId }, quality);
+			if (availability != null && availability.TryGetValue(resolvedSongId, out available))
+			{
+				availabilityChecked = true;
+			}
+		}
+		catch (Exception ex)
+		{
+			Debug.WriteLine("[ShareWeb] 检查歌曲可用性失败: " + ex.Message);
+		}
+		if (availabilityChecked && available)
+		{
+			return (BuildSongOfficialWebUrl(resolvedSongId), false);
+		}
+		if (!availabilityChecked && song.IsAvailable == true)
+		{
+			return (BuildSongOfficialWebUrl(resolvedSongId), false);
+		}
+		if (_unblockService != null)
+		{
+			try
+			{
+				SongInfo songShareProbe = CreateSongShareProbe(song, resolvedSongId);
+				UnblockService.UnblockMatchResult unblockMatchResult = await _unblockService.TryMatchAsync(songShareProbe, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+				if (unblockMatchResult != null)
+				{
+					string text = BuildUnblockFallbackWebUrl(songShareProbe, unblockMatchResult);
+					if (!string.IsNullOrWhiteSpace(text))
+					{
+						return (text, true);
+					}
+				}
+			}
+			catch (OperationCanceledException)
+			{
+				throw;
+			}
+			catch (Exception ex2)
+			{
+				Debug.WriteLine("[ShareWeb] 解封兜底失败: " + ex2.Message);
+			}
+		}
+		return (string.Empty, false);
+	}
+
+	private static string ResolveSongShareEntityName(SongInfo song)
+	{
+		return (song != null && song.IsCloudSong) ? "音乐" : "歌曲";
+	}
+
 	private async void shareSongWebMenuItem_Click(object sender, EventArgs e)
 	{
 		SongInfo song = GetSelectedSongFromContextMenu(sender);
-		if (song == null || string.IsNullOrWhiteSpace(song.Id))
+		string text = ResolveSongShareEntityName(song);
+		if (song == null || string.IsNullOrWhiteSpace(ResolveSongIdForLibraryState(song) ?? song.Id))
 		{
-			MessageBox.Show("无法获取当前歌曲信息，无法分享。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+			MessageBox.Show("无法获取当前" + text + "信息，无法分享。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
 			return;
 		}
 		try
 		{
-			UpdateStatusBar("正在检查歌曲资源...");
-			if (!(await EnsureSongAvailabilityAsync(song)))
+			UpdateStatusBar("正在生成" + text + "网页链接...");
+			using CancellationTokenSource cancellationTokenSource = new CancellationTokenSource(TimeSpan.FromSeconds(12.0));
+			var (url, usedFallback) = await ResolveSongWebShareUrlAsync(song, cancellationTokenSource.Token);
+			if (string.IsNullOrWhiteSpace(url))
 			{
-				MessageBox.Show("该歌曲资源不可用，无法分享网页链接。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
-				UpdateStatusBar("歌曲资源不可用");
+				MessageBox.Show("该" + text + "资源不可用，无法分享网页链接。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+				UpdateStatusBar(text + "资源不可用");
 				return;
 			}
-			string url = "https://music.163.com/#/song?id=" + song.Id;
-			try
-			{
-				Clipboard.SetText(url);
-			}
-			catch (ExternalException ex)
-			{
-				ExternalException ex2 = ex;
-				ExternalException ex3 = ex2;
-				MessageBox.Show("复制链接失败：" + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
-				UpdateStatusBar("复制链接失败");
-				return;
-			}
-			UpdateStatusBar("歌曲网页链接已复制到剪贴板");
+			string successStatus = usedFallback ? (text + "替代网页链接已复制到剪贴板") : (text + "网页链接已复制到剪贴板");
+			TryCopyLinkToClipboard(url, successStatus);
 		}
-		catch (Exception ex4)
+		catch (OperationCanceledException)
 		{
-			MessageBox.Show("分享歌曲失败：" + ex4.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
-			UpdateStatusBar("歌曲分享失败");
+			UpdateStatusBar("生成网页链接已取消");
+		}
+		catch (Exception ex)
+		{
+			MessageBox.Show("分享" + text + "失败：" + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+			UpdateStatusBar(text + "分享失败");
+		}
+	}
+
+	private async void shareSongOpenWebMenuItem_Click(object sender, EventArgs e)
+	{
+		SongInfo song = GetSelectedSongFromContextMenu(sender);
+		string text = ResolveSongShareEntityName(song);
+		if (song == null || string.IsNullOrWhiteSpace(ResolveSongIdForLibraryState(song) ?? song.Id))
+		{
+			MessageBox.Show("无法获取当前" + text + "信息，无法打开网页。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+			return;
+		}
+		try
+		{
+			UpdateStatusBar("正在生成" + text + "网页链接...");
+			using CancellationTokenSource cancellationTokenSource = new CancellationTokenSource(TimeSpan.FromSeconds(12.0));
+			var (url, usedFallback) = await ResolveSongWebShareUrlAsync(song, cancellationTokenSource.Token);
+			if (string.IsNullOrWhiteSpace(url))
+			{
+				MessageBox.Show("该" + text + "资源不可用，无法打开网页链接。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+				UpdateStatusBar(text + "资源不可用");
+				return;
+			}
+			string successStatus = usedFallback ? ("已在浏览器打开" + text + "替代网页") : ("已在浏览器打开" + text + "网页");
+			TryOpenLinkInDefaultBrowser(url, successStatus);
+		}
+		catch (OperationCanceledException)
+		{
+			UpdateStatusBar("生成网页链接已取消");
+		}
+		catch (Exception ex)
+		{
+			MessageBox.Show("打开" + text + "网页失败：" + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+			UpdateStatusBar("打开网页失败");
 		}
 	}
 
 	private async void shareSongDirectMenuItem_Click(object sender, EventArgs e)
 	{
 		SongInfo song = GetSelectedSongFromContextMenu(sender);
+		string text = ResolveSongShareEntityName(song);
 		if (song == null || string.IsNullOrWhiteSpace(song.Id))
 		{
-			MessageBox.Show("无法获取当前歌曲信息，无法分享。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+			MessageBox.Show("无法获取当前" + text + "信息，无法分享。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
 			return;
 		}
 		try
 		{
-			UpdateStatusBar("正在生成歌曲直链...");
+			UpdateStatusBar("正在生成" + text + "直链...");
 			var (resolve, url) = await ResolveShareUrlAsync(song, GetCurrentQuality(), CancellationToken.None);
 			Debug.WriteLine($"[ShareDirect] song={song.Name}, id={song.Id}, usedUnblock={resolve.UsedUnblock}, level={song.Level}, url={(string.IsNullOrWhiteSpace(url) ? "<null>" : url)}");
 			if (resolve.Status == SongResolveStatus.NotAvailable)
 			{
-				MessageBox.Show("该歌曲资源不可用，无法分享直链。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
-				UpdateStatusBar("歌曲资源不可用");
+				MessageBox.Show("该" + text + "资源不可用，无法分享直链。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+				UpdateStatusBar(text + "资源不可用");
 				return;
 			}
 			if (resolve.Status == SongResolveStatus.PaidAlbumNotPurchased)
 			{
-				MessageBox.Show("该歌曲属于付费数字专辑，未购买无法分享直链。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+				MessageBox.Show("该" + text + "属于付费数字专辑，未购买无法分享直链。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
 				UpdateStatusBar("付费专辑不可用");
 				return;
 			}
 			if (string.IsNullOrWhiteSpace(url))
 			{
-				MessageBox.Show("未能获取歌曲直链，可能需要登录或切换音质。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+				MessageBox.Show("未能获取" + text + "直链，可能需要登录或切换音质。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
 				UpdateStatusBar("获取直链失败");
 				return;
 			}
-			try
-			{
-				Clipboard.SetText(url);
-			}
-			catch (ExternalException ex)
-			{
-				ExternalException ex2 = ex;
-				ExternalException ex3 = ex2;
-				MessageBox.Show("复制链接失败：" + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
-				UpdateStatusBar("复制链接失败");
-				return;
-			}
-			UpdateStatusBar("歌曲直链已复制到剪贴板");
+			TryCopyLinkToClipboard(url, text + "直链已复制到剪贴板");
 		}
-		catch (Exception ex4)
+		catch (Exception ex)
 		{
-			MessageBox.Show("分享歌曲直链失败：" + ex4.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
-			UpdateStatusBar("歌曲分享失败");
+			MessageBox.Show("分享" + text + "直链失败：" + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+			UpdateStatusBar(text + "分享失败");
 		}
 	}
 
@@ -13363,14 +13904,25 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		try
 		{
 			string text = "https://music.163.com/#/playlist?id=" + selectedPlaylistFromContextMenu.Id;
-			Clipboard.SetText(text);
-			UpdateStatusBar("歌单链接已复制到剪贴板");
+			TryCopyLinkToClipboard(text, "歌单网页链接已复制到剪贴板");
 		}
 		catch (Exception ex)
 		{
 			MessageBox.Show("复制链接失败：" + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 			UpdateStatusBar("复制链接失败");
 		}
+	}
+
+	private void sharePlaylistOpenWebMenuItem_Click(object sender, EventArgs e)
+	{
+		PlaylistInfo selectedPlaylistFromContextMenu = GetSelectedPlaylistFromContextMenu(sender);
+		if (selectedPlaylistFromContextMenu == null || string.IsNullOrWhiteSpace(selectedPlaylistFromContextMenu.Id))
+		{
+			MessageBox.Show("无法获取歌单信息，无法打开网页。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+			return;
+		}
+		string text = "https://music.163.com/#/playlist?id=" + selectedPlaylistFromContextMenu.Id;
+		TryOpenLinkInDefaultBrowser(text, "已在浏览器打开歌单网页");
 	}
 
 	private void shareAlbumMenuItem_Click(object sender, EventArgs e)
@@ -13384,14 +13936,25 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		try
 		{
 			string text = "https://music.163.com/#/album?id=" + selectedAlbumFromContextMenu.Id;
-			Clipboard.SetText(text);
-			UpdateStatusBar("专辑链接已复制到剪贴板");
+			TryCopyLinkToClipboard(text, "专辑网页链接已复制到剪贴板");
 		}
 		catch (Exception ex)
 		{
 			MessageBox.Show("复制链接失败：" + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 			UpdateStatusBar("复制链接失败");
 		}
+	}
+
+	private void shareAlbumOpenWebMenuItem_Click(object sender, EventArgs e)
+	{
+		AlbumInfo selectedAlbumFromContextMenu = GetSelectedAlbumFromContextMenu(sender);
+		if (selectedAlbumFromContextMenu == null || string.IsNullOrWhiteSpace(selectedAlbumFromContextMenu.Id))
+		{
+			MessageBox.Show("无法获取专辑信息，无法打开网页。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+			return;
+		}
+		string text = "https://music.163.com/#/album?id=" + selectedAlbumFromContextMenu.Id;
+		TryOpenLinkInDefaultBrowser(text, "已在浏览器打开专辑网页");
 	}
 
 	private async void createPlaylistMenuItem_Click(object sender, EventArgs e)
@@ -13575,38 +14138,50 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 
 	private async void subscribeSongArtistMenuItem_Click(object sender, EventArgs e)
 	{
-		ArtistInfo artistInfo = null;
-		SongInfo song = null;
-		if (sender is ToolStripItem toolStripItem)
+		try
 		{
-			artistInfo = toolStripItem.Tag as ArtistInfo;
-			song = toolStripItem.Tag as SongInfo;
+			ArtistInfo artistInfo = null;
+			SongInfo song = null;
+			if (sender is ToolStripItem toolStripItem)
+			{
+				artistInfo = toolStripItem.Tag as ArtistInfo;
+				song = toolStripItem.Tag as SongInfo;
+			}
+			if (artistInfo != null && artistInfo.Id <= 0 && !string.IsNullOrWhiteSpace(artistInfo.Name))
+			{
+				artistInfo = await ResolveArtistByKeywordAsync(artistInfo.Name);
+			}
+			if (song == null)
+			{
+				song = GetSelectedSongFromContextMenu(sender);
+			}
+			bool isCloudSongContext = IsCloudSongContext(song);
+			if (!isCloudSongContext && _isCurrentPlayingMenuActive)
+			{
+				string text2 = ResolveCurrentPlayingViewSource(song);
+				isCloudSongContext = !string.IsNullOrWhiteSpace(text2) && text2.StartsWith("user_cloud", StringComparison.OrdinalIgnoreCase);
+			}
+			if (artistInfo == null)
+			{
+				artistInfo = await ResolveSongArtistForSubscriptionAsync(song, isCloudSongContext);
+			}
+			if (artistInfo == null || artistInfo.Id <= 0)
+			{
+				MessageBox.Show("\u65E0\u6CD5\u8BC6\u522B\u6B4C\u624B\u4FE1\u606F\uFF0C\u6536\u85CF\u64CD\u4F5C\u5DF2\u53D6\u6D88\u3002", "\u63D0\u793A", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+				return;
+			}
+			if (IsArtistSubscribed(artistInfo))
+			{
+				UpdateStatusBar("\u8BE5\u6B4C\u66F2\u6B4C\u624B\u5DF2\u5728\u6536\u85CF\u4E2D");
+				return;
+			}
+			await SubscribeArtistAsync(artistInfo);
 		}
-		if (song == null)
+		catch (Exception ex)
 		{
-			song = GetSelectedSongFromContextMenu(sender);
+			MessageBox.Show("收藏歌手失败: " + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+			UpdateStatusBar("收藏歌手失败");
 		}
-		bool isCloudSongContext = IsCloudSongContext(song);
-		if (!isCloudSongContext && _isCurrentPlayingMenuActive)
-		{
-			string text2 = ResolveCurrentPlayingViewSource(song);
-			isCloudSongContext = !string.IsNullOrWhiteSpace(text2) && text2.StartsWith("user_cloud", StringComparison.OrdinalIgnoreCase);
-		}
-		if (artistInfo == null)
-		{
-			artistInfo = await ResolveSongArtistForSubscriptionAsync(song, isCloudSongContext);
-		}
-		if (artistInfo == null || artistInfo.Id <= 0)
-		{
-			MessageBox.Show("\u65E0\u6CD5\u8BC6\u522B\u6B4C\u624B\u4FE1\u606F\uFF0C\u6536\u85CF\u64CD\u4F5C\u5DF2\u53D6\u6D88\u3002", "\u63D0\u793A", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
-			return;
-		}
-		if (IsArtistSubscribed(artistInfo))
-		{
-			UpdateStatusBar("\u8BE5\u6B4C\u66F2\u6B4C\u624B\u5DF2\u5728\u6536\u85CF\u4E2D");
-			return;
-		}
-		await SubscribeArtistAsync(artistInfo);
 	}
 
 	private async void subscribeSongAlbumMenuItem_Click(object sender, EventArgs e)
@@ -13696,14 +14271,25 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		try
 		{
 			string text = $"https://music.163.com/#/djradio?id={selectedPodcastFromContextMenu.Id}";
-			Clipboard.SetText(text);
-			UpdateStatusBar("播客链接已复制到剪贴板");
+			TryCopyLinkToClipboard(text, "播客网页链接已复制到剪贴板");
 		}
 		catch (ExternalException ex)
 		{
 			MessageBox.Show("复制链接失败：" + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 			UpdateStatusBar("复制链接失败");
 		}
+	}
+
+	private void sharePodcastOpenWebMenuItem_Click(object sender, EventArgs e)
+	{
+		PodcastRadioInfo selectedPodcastFromContextMenu = GetSelectedPodcastFromContextMenu(sender);
+		if (selectedPodcastFromContextMenu == null || selectedPodcastFromContextMenu.Id <= 0)
+		{
+			MessageBox.Show("无法获取播客信息，无法打开网页。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+			return;
+		}
+		string text = $"https://music.163.com/#/djradio?id={selectedPodcastFromContextMenu.Id}";
+		TryOpenLinkInDefaultBrowser(text, "已在浏览器打开播客网页");
 	}
 
 	private void sharePodcastEpisodeWebMenuItem_Click(object sender, EventArgs e)
@@ -13717,14 +14303,25 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		try
 		{
 			string text = $"https://music.163.com/#/program?id={selectedPodcastEpisodeFromContextMenu.ProgramId}";
-			Clipboard.SetText(text);
-			UpdateStatusBar("节目网页链接已复制到剪贴板");
+			TryCopyLinkToClipboard(text, "节目网页链接已复制到剪贴板");
 		}
 		catch (ExternalException ex)
 		{
 			MessageBox.Show("复制链接失败：" + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 			UpdateStatusBar("复制链接失败");
 		}
+	}
+
+	private void sharePodcastEpisodeOpenWebMenuItem_Click(object sender, EventArgs e)
+	{
+		PodcastEpisodeInfo selectedPodcastEpisodeFromContextMenu = GetSelectedPodcastEpisodeFromContextMenu(sender);
+		if (selectedPodcastEpisodeFromContextMenu == null || selectedPodcastEpisodeFromContextMenu.ProgramId <= 0)
+		{
+			MessageBox.Show("无法获取节目详情，无法打开网页。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+			return;
+		}
+		string text = $"https://music.163.com/#/program?id={selectedPodcastEpisodeFromContextMenu.ProgramId}";
+		TryOpenLinkInDefaultBrowser(text, "已在浏览器打开节目网页");
 	}
 
 	private async void sharePodcastEpisodeDirectMenuItem_Click(object sender, EventArgs e)
@@ -13763,8 +14360,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 			}
 			else
 			{
-				Clipboard.SetText(url);
-				UpdateStatusBar("节目直链已复制到剪贴板");
+				TryCopyLinkToClipboard(url, "节目直链已复制到剪贴板");
 			}
 		}
 		catch (ExternalException ex)
@@ -16066,12 +16662,20 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		this.shareSongMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.shareSongWebMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.shareSongDirectMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+		this.shareSongOpenWebMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.sharePlaylistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+		this.sharePlaylistCopyWebMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+		this.sharePlaylistOpenWebMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.shareAlbumMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+		this.shareAlbumCopyWebMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+		this.shareAlbumOpenWebMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.sharePodcastMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+		this.sharePodcastCopyWebMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+		this.sharePodcastOpenWebMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.sharePodcastEpisodeMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.sharePodcastEpisodeWebMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.sharePodcastEpisodeDirectMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+		this.sharePodcastEpisodeOpenWebMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.viewPodcastMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.artistSongsSortMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.artistSongsSortHotMenuItem = new System.Windows.Forms.ToolStripMenuItem();
@@ -16086,6 +16690,8 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		this.commentMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.toolStripSeparatorArtist = new System.Windows.Forms.ToolStripSeparator();
 		this.shareArtistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+		this.shareArtistCopyWebMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+		this.shareArtistOpenWebMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.subscribeArtistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.unsubscribeArtistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.toolStripSeparatorDownload3 = new System.Windows.Forms.ToolStripSeparator();
@@ -16675,14 +17281,12 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		this.toolStripSeparatorView.Visible = false;
 		this.viewSongArtistMenuItem.Name = "viewSongArtistMenuItem";
 		this.viewSongArtistMenuItem.Size = new System.Drawing.Size(210, 24);
-		this.viewSongArtistMenuItem.Text = "查看歌手(&A)";
+		this.viewSongArtistMenuItem.Text = "歌手(&A)";
 		this.viewSongArtistMenuItem.Visible = false;
-		this.viewSongArtistMenuItem.Click += new System.EventHandler(viewSongArtistMenuItem_Click);
 		this.viewSongAlbumMenuItem.Name = "viewSongAlbumMenuItem";
 		this.viewSongAlbumMenuItem.Size = new System.Drawing.Size(210, 24);
-		this.viewSongAlbumMenuItem.Text = "查看专辑(&B)";
+		this.viewSongAlbumMenuItem.Text = "专辑(&B)";
 		this.viewSongAlbumMenuItem.Visible = false;
-		this.viewSongAlbumMenuItem.Click += new System.EventHandler(viewSongAlbumMenuItem_Click);
 		this.subscribeSongArtistMenuItem.Name = "subscribeSongArtistMenuItem";
 		this.subscribeSongArtistMenuItem.Size = new System.Drawing.Size(210, 24);
 		this.subscribeSongArtistMenuItem.Text = "\u6536\u85CF\u6B4C\u624B(&F)";
@@ -16696,47 +17300,79 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		this.toolStripSeparatorArtist.Name = "toolStripSeparatorArtist";
 		this.toolStripSeparatorArtist.Size = new System.Drawing.Size(207, 6);
 		this.toolStripSeparatorArtist.Visible = false;
-		this.shareSongMenuItem.DropDownItems.AddRange(this.shareSongWebMenuItem, this.shareSongDirectMenuItem);
+		this.shareSongMenuItem.DropDownItems.AddRange(this.shareSongWebMenuItem, this.shareSongDirectMenuItem, this.shareSongOpenWebMenuItem);
 		this.shareSongMenuItem.Name = "shareSongMenuItem";
 		this.shareSongMenuItem.Size = new System.Drawing.Size(210, 24);
 		this.shareSongMenuItem.Text = "分享歌曲(&H)";
 		this.shareSongMenuItem.Visible = false;
 		this.shareSongWebMenuItem.Name = "shareSongWebMenuItem";
 		this.shareSongWebMenuItem.Size = new System.Drawing.Size(210, 26);
-		this.shareSongWebMenuItem.Text = "分享网页(&W)";
+		this.shareSongWebMenuItem.Text = "复制歌曲网页链接(&W)";
 		this.shareSongWebMenuItem.Click += new System.EventHandler(shareSongWebMenuItem_Click);
 		this.shareSongDirectMenuItem.Name = "shareSongDirectMenuItem";
 		this.shareSongDirectMenuItem.Size = new System.Drawing.Size(210, 26);
-		this.shareSongDirectMenuItem.Text = "分享直链(&L)";
+		this.shareSongDirectMenuItem.Text = "复制歌曲直链(&L)";
 		this.shareSongDirectMenuItem.Click += new System.EventHandler(shareSongDirectMenuItem_Click);
+		this.shareSongOpenWebMenuItem.Name = "shareSongOpenWebMenuItem";
+		this.shareSongOpenWebMenuItem.Size = new System.Drawing.Size(210, 26);
+		this.shareSongOpenWebMenuItem.Text = "用默认浏览器打开(&B)";
+		this.shareSongOpenWebMenuItem.Click += new System.EventHandler(shareSongOpenWebMenuItem_Click);
+		this.sharePlaylistMenuItem.DropDownItems.AddRange(this.sharePlaylistCopyWebMenuItem, this.sharePlaylistOpenWebMenuItem);
 		this.sharePlaylistMenuItem.Name = "sharePlaylistMenuItem";
 		this.sharePlaylistMenuItem.Size = new System.Drawing.Size(210, 24);
 		this.sharePlaylistMenuItem.Text = "分享歌单(&J)";
 		this.sharePlaylistMenuItem.Visible = false;
-		this.sharePlaylistMenuItem.Click += new System.EventHandler(sharePlaylistMenuItem_Click);
+		this.sharePlaylistCopyWebMenuItem.Name = "sharePlaylistCopyWebMenuItem";
+		this.sharePlaylistCopyWebMenuItem.Size = new System.Drawing.Size(210, 26);
+		this.sharePlaylistCopyWebMenuItem.Text = "复制歌单网页链接(&C)";
+		this.sharePlaylistCopyWebMenuItem.Click += new System.EventHandler(sharePlaylistMenuItem_Click);
+		this.sharePlaylistOpenWebMenuItem.Name = "sharePlaylistOpenWebMenuItem";
+		this.sharePlaylistOpenWebMenuItem.Size = new System.Drawing.Size(210, 26);
+		this.sharePlaylistOpenWebMenuItem.Text = "用默认浏览器打开(&B)";
+		this.sharePlaylistOpenWebMenuItem.Click += new System.EventHandler(sharePlaylistOpenWebMenuItem_Click);
+		this.shareAlbumMenuItem.DropDownItems.AddRange(this.shareAlbumCopyWebMenuItem, this.shareAlbumOpenWebMenuItem);
 		this.shareAlbumMenuItem.Name = "shareAlbumMenuItem";
 		this.shareAlbumMenuItem.Size = new System.Drawing.Size(210, 24);
 		this.shareAlbumMenuItem.Text = "分享专辑(&K)";
 		this.shareAlbumMenuItem.Visible = false;
-		this.shareAlbumMenuItem.Click += new System.EventHandler(shareAlbumMenuItem_Click);
+		this.shareAlbumCopyWebMenuItem.Name = "shareAlbumCopyWebMenuItem";
+		this.shareAlbumCopyWebMenuItem.Size = new System.Drawing.Size(210, 26);
+		this.shareAlbumCopyWebMenuItem.Text = "复制专辑网页链接(&C)";
+		this.shareAlbumCopyWebMenuItem.Click += new System.EventHandler(shareAlbumMenuItem_Click);
+		this.shareAlbumOpenWebMenuItem.Name = "shareAlbumOpenWebMenuItem";
+		this.shareAlbumOpenWebMenuItem.Size = new System.Drawing.Size(210, 26);
+		this.shareAlbumOpenWebMenuItem.Text = "用默认浏览器打开(&B)";
+		this.shareAlbumOpenWebMenuItem.Click += new System.EventHandler(shareAlbumOpenWebMenuItem_Click);
+		this.sharePodcastMenuItem.DropDownItems.AddRange(this.sharePodcastCopyWebMenuItem, this.sharePodcastOpenWebMenuItem);
 		this.sharePodcastMenuItem.Name = "sharePodcastMenuItem";
 		this.sharePodcastMenuItem.Size = new System.Drawing.Size(210, 24);
 		this.sharePodcastMenuItem.Text = "分享播客(&P)";
 		this.sharePodcastMenuItem.Visible = false;
-		this.sharePodcastMenuItem.Click += new System.EventHandler(sharePodcastMenuItem_Click);
-		this.sharePodcastEpisodeMenuItem.DropDownItems.AddRange(this.sharePodcastEpisodeWebMenuItem, this.sharePodcastEpisodeDirectMenuItem);
+		this.sharePodcastCopyWebMenuItem.Name = "sharePodcastCopyWebMenuItem";
+		this.sharePodcastCopyWebMenuItem.Size = new System.Drawing.Size(210, 26);
+		this.sharePodcastCopyWebMenuItem.Text = "复制播客网页链接(&C)";
+		this.sharePodcastCopyWebMenuItem.Click += new System.EventHandler(sharePodcastMenuItem_Click);
+		this.sharePodcastOpenWebMenuItem.Name = "sharePodcastOpenWebMenuItem";
+		this.sharePodcastOpenWebMenuItem.Size = new System.Drawing.Size(210, 26);
+		this.sharePodcastOpenWebMenuItem.Text = "用默认浏览器打开(&B)";
+		this.sharePodcastOpenWebMenuItem.Click += new System.EventHandler(sharePodcastOpenWebMenuItem_Click);
+		this.sharePodcastEpisodeMenuItem.DropDownItems.AddRange(this.sharePodcastEpisodeWebMenuItem, this.sharePodcastEpisodeDirectMenuItem, this.sharePodcastEpisodeOpenWebMenuItem);
 		this.sharePodcastEpisodeMenuItem.Name = "sharePodcastEpisodeMenuItem";
 		this.sharePodcastEpisodeMenuItem.Size = new System.Drawing.Size(210, 24);
 		this.sharePodcastEpisodeMenuItem.Text = "分享节目(&E)";
 		this.sharePodcastEpisodeMenuItem.Visible = false;
 		this.sharePodcastEpisodeWebMenuItem.Name = "sharePodcastEpisodeWebMenuItem";
 		this.sharePodcastEpisodeWebMenuItem.Size = new System.Drawing.Size(210, 26);
-		this.sharePodcastEpisodeWebMenuItem.Text = "分享网页(&W)";
+		this.sharePodcastEpisodeWebMenuItem.Text = "复制节目网页链接(&W)";
 		this.sharePodcastEpisodeWebMenuItem.Click += new System.EventHandler(sharePodcastEpisodeWebMenuItem_Click);
 		this.sharePodcastEpisodeDirectMenuItem.Name = "sharePodcastEpisodeDirectMenuItem";
 		this.sharePodcastEpisodeDirectMenuItem.Size = new System.Drawing.Size(210, 26);
-		this.sharePodcastEpisodeDirectMenuItem.Text = "分享直链(&L)";
+		this.sharePodcastEpisodeDirectMenuItem.Text = "复制节目直链(&L)";
 		this.sharePodcastEpisodeDirectMenuItem.Click += new System.EventHandler(sharePodcastEpisodeDirectMenuItem_Click);
+		this.sharePodcastEpisodeOpenWebMenuItem.Name = "sharePodcastEpisodeOpenWebMenuItem";
+		this.sharePodcastEpisodeOpenWebMenuItem.Size = new System.Drawing.Size(210, 26);
+		this.sharePodcastEpisodeOpenWebMenuItem.Text = "用默认浏览器打开(&B)";
+		this.sharePodcastEpisodeOpenWebMenuItem.Click += new System.EventHandler(sharePodcastEpisodeOpenWebMenuItem_Click);
 		this.artistSongsSortMenuItem.DropDownItems.AddRange(this.artistSongsSortHotMenuItem, this.artistSongsSortTimeMenuItem);
 		this.artistSongsSortMenuItem.Name = "artistSongsSortMenuItem";
 		this.artistSongsSortMenuItem.Size = new System.Drawing.Size(210, 24);
@@ -16790,11 +17426,19 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		this.commentMenuItem.Text = "评论(&C)";
 		this.commentMenuItem.Visible = false;
 		this.commentMenuItem.Click += new System.EventHandler(commentMenuItem_Click);
+		this.shareArtistMenuItem.DropDownItems.AddRange(this.shareArtistCopyWebMenuItem, this.shareArtistOpenWebMenuItem);
 		this.shareArtistMenuItem.Name = "shareArtistMenuItem";
 		this.shareArtistMenuItem.Size = new System.Drawing.Size(210, 24);
 		this.shareArtistMenuItem.Text = "分享歌手(&S)";
 		this.shareArtistMenuItem.Visible = false;
-		this.shareArtistMenuItem.Click += new System.EventHandler(shareArtistMenuItem_Click);
+		this.shareArtistCopyWebMenuItem.Name = "shareArtistCopyWebMenuItem";
+		this.shareArtistCopyWebMenuItem.Size = new System.Drawing.Size(210, 26);
+		this.shareArtistCopyWebMenuItem.Text = "复制歌手网页链接(&C)";
+		this.shareArtistCopyWebMenuItem.Click += new System.EventHandler(shareArtistMenuItem_Click);
+		this.shareArtistOpenWebMenuItem.Name = "shareArtistOpenWebMenuItem";
+		this.shareArtistOpenWebMenuItem.Size = new System.Drawing.Size(210, 26);
+		this.shareArtistOpenWebMenuItem.Text = "用默认浏览器打开(&B)";
+		this.shareArtistOpenWebMenuItem.Click += new System.EventHandler(shareArtistOpenWebMenuItem_Click);
 		this.subscribeArtistMenuItem.Name = "subscribeArtistMenuItem";
 		this.subscribeArtistMenuItem.Size = new System.Drawing.Size(210, 24);
 		this.subscribeArtistMenuItem.Text = "收藏歌手(&C)";

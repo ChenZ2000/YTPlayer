@@ -105,9 +105,19 @@ namespace YTPlayer.Models.Upload
         public string MatchedSongId { get; set; } = string.Empty;
 
         /// <summary>
+        /// 上传条目解析出的时长（秒）
+        /// </summary>
+        public int DurationSeconds { get; set; }
+
+        /// <summary>
         /// 错误信息
         /// </summary>
         public string ErrorMessage { get; set; } = string.Empty;
+
+        /// <summary>
+        /// 创建时间
+        /// </summary>
+        public DateTime CreatedTime { get; set; } = DateTime.Now;
 
         /// <summary>
         /// 开始时间

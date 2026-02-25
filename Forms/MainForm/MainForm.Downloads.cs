@@ -113,6 +113,17 @@ public partial class MainForm
 		}
 	}
 
+	private void NotifyTransferTaskAdded(string message)
+	{
+		if (string.IsNullOrWhiteSpace(message))
+		{
+			return;
+		}
+
+		AnnounceUiMessage(message, interrupt: true);
+		UpdateStatusBar(message);
+	}
+
 	internal async void DownloadSong_Click(object? sender, EventArgs e)
 	{
 		SongInfo song = GetSelectedSongFromContextMenu(sender);
@@ -125,9 +136,10 @@ public partial class MainForm
 		{
 			QualityLevel quality = GetCurrentQuality();
 			string sourceList = GetCurrentViewName();
+			NotifyTransferTaskAdded("正在添加下载任务...");
 			if (await _downloadManager.AddSongDownloadAsync(song, quality, sourceList) != null)
 			{
-				MessageBox.Show("已添加到下载队列：\n" + song.Name + " - " + song.Artist, "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+				NotifyTransferTaskAdded("已添加下载任务：" + song.Name + " - " + song.Artist);
 			}
 			else
 			{
@@ -157,9 +169,10 @@ public partial class MainForm
 				return;
 			}
 			string sourceList = GetCurrentViewName();
+			NotifyTransferTaskAdded("正在添加歌词下载任务...");
 			if (await _downloadManager.AddLyricDownloadAsync(song, sourceList, lyricInfo.Lyric) != null)
 			{
-				MessageBox.Show("已添加歌词下载任务：\n" + song.Name + " - " + song.Artist, "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+				NotifyTransferTaskAdded("已添加歌词下载任务：" + song.Name + " - " + song.Artist);
 			}
 			else
 			{
@@ -183,32 +196,51 @@ public partial class MainForm
 		{
 			try
 			{
-				List<SongInfo> songs = new List<SongInfo>(_currentSongs);
-				List<string> displayNames = new List<string>();
-				for (int i = 0; i < songs.Count; i++)
-				{
-					SongInfo song = songs[i];
-					displayNames.Add($"{i + 1}. {song.Name} - {song.Artist}");
-				}
-				if (songs.Count == 0)
+				string viewName = GetCurrentViewName();
+				string viewSource = _currentViewSource ?? string.Empty;
+				SongDialogLoadState state = new SongDialogLoadState(new List<SongInfo>(_currentSongs ?? new List<SongInfo>()));
+				if (state.Songs.Count == 0)
 				{
 					MessageBox.Show("当前列表中没有可下载的歌曲", "提示", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
 					return;
 				}
-				string viewName = GetCurrentViewName();
+				List<string> displayNames = state.Songs.Select(BuildSongDownloadDisplayText).ToList();
 				BatchDownloadDialog dialog = new BatchDownloadDialog(displayNames, "批量下载 - " + viewName);
-				if (dialog.ShowDialog() != DialogResult.OK)
+				using CancellationTokenSource syncCts = new CancellationTokenSource();
+				Task syncTask = SyncBatchDialogWithCurrentSongsAsync(dialog, state.Songs, viewSource, syncCts.Token);
+				DialogResult result = dialog.ShowDialog();
+				syncCts.Cancel();
+				try
+				{
+					await syncTask;
+				}
+				catch (OperationCanceledException)
+				{
+				}
+				catch (Exception ex)
+				{
+					Debug.WriteLine($"[BatchDownload] 同步主列表到下载对话框失败: {ex.Message}");
+				}
+				if (result != DialogResult.OK)
 				{
 					return;
 				}
 				List<int> selectedIndices = dialog.SelectedIndices;
-				if (selectedIndices.Count != 0)
+				if (selectedIndices.Count == 0)
 				{
-					List<SongInfo> selectedSongs = selectedIndices.Select((int index) => songs[index]).ToList();
-					List<int> originalIndices = selectedIndices.Select((int num) => num + 1).ToList();
-					QualityLevel quality = GetCurrentQuality();
-					MessageBox.Show($"已添加 {(await _downloadManager.AddBatchDownloadAsync(selectedSongs, quality, viewName, viewName, originalIndices)).Count}/{selectedSongs.Count} 个下载任务", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+					return;
 				}
+				var (selectedSongs, originalIndices, missingCount) = await ResolveSelectedSongsFromStateAsync(state, selectedIndices, viewSource, CancellationToken.None);
+				if (selectedSongs.Count == 0)
+				{
+					MessageBox.Show("选中的条目仍在加载中，请稍后重试。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
+					return;
+				}
+				QualityLevel quality = GetCurrentQuality();
+				NotifyTransferTaskAdded("正在添加批量下载任务...");
+				int addedCount = (await _downloadManager.AddBatchDownloadAsync(selectedSongs, quality, viewName, viewName, originalIndices)).Count;
+				string suffix = (missingCount > 0) ? $"（{missingCount} 项尚未加载，已跳过）" : string.Empty;
+				NotifyTransferTaskAdded($"已添加 {addedCount}/{selectedSongs.Count} 个下载任务{suffix}");
 			}
 			catch (Exception ex)
 			{
@@ -233,40 +265,91 @@ public partial class MainForm
 		{
 			try
 			{
+				if (string.IsNullOrWhiteSpace(playlist.Id))
+				{
+					MessageBox.Show("歌单 ID 无效，无法下载。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
+					return;
+				}
+				string viewSource = "playlist:" + playlist.Id;
+				PlaylistInfo playlistSeed = playlist;
 				Cursor originalCursor = System.Windows.Forms.Cursor.Current;
 				System.Windows.Forms.Cursor.Current = Cursors.WaitCursor;
 				try
 				{
-					PlaylistInfo playlistDetail = await _apiClient.GetPlaylistDetailAsync(playlist.Id);
-					if (playlistDetail == null || playlistDetail.Songs == null || playlistDetail.Songs.Count == 0)
+					PlaylistInfo detail = await _apiClient.GetPlaylistDetailAsync(playlist.Id);
+					if (detail != null)
 					{
-						MessageBox.Show("无法获取歌单歌曲列表或歌单为空", "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
-						return;
-					}
-					List<string> displayNames = new List<string>();
-					for (int i = 0; i < playlistDetail.Songs.Count; i++)
-					{
-						SongInfo song = playlistDetail.Songs[i];
-						displayNames.Add($"{i + 1}. {song.Name} - {song.Artist}");
-					}
-					BatchDownloadDialog dialog = new BatchDownloadDialog(displayNames, "下载歌单 - " + playlist.Name);
-					if (dialog.ShowDialog() == DialogResult.OK)
-					{
-						List<int> selectedIndices = dialog.SelectedIndices;
-						if (selectedIndices.Count == 0)
+						if (string.IsNullOrWhiteSpace(detail.Name))
 						{
-							return;
+							detail.Name = playlist.Name;
 						}
-						List<SongInfo> selectedSongs = selectedIndices.Select((int index) => playlistDetail.Songs[index]).ToList();
-						List<int> originalIndices = selectedIndices.Select((int num) => num + 1).ToList();
-						QualityLevel quality = GetCurrentQuality();
-						MessageBox.Show($"已添加 {(await _downloadManager.AddBatchDownloadAsync(selectedSongs, quality, playlist.Name, playlist.Name, originalIndices)).Count}/{selectedSongs.Count} 个下载任务\n歌单：{playlist.Name}", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+						if (detail.TrackCount <= 0)
+						{
+							detail.TrackCount = playlist.TrackCount;
+						}
+						playlistSeed = detail;
 					}
+				}
+				catch (Exception ex)
+				{
+					Debug.WriteLine($"[DownloadPlaylist] 获取歌单详情失败，继续使用占位加载: {ex.Message}");
 				}
 				finally
 				{
 					System.Windows.Forms.Cursor.Current = originalCursor;
 				}
+				List<SongInfo> knownSongs = (playlistSeed.Songs != null && playlistSeed.Songs.Count > 0)
+					? new List<SongInfo>(playlistSeed.Songs.Where((SongInfo song) => song != null))
+					: new List<SongInfo>();
+				int totalCount = Math.Max(playlistSeed.TrackCount, knownSongs.Count);
+				if (totalCount <= 0)
+				{
+					MessageBox.Show("无法获取歌单歌曲列表或歌单为空", "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+					return;
+				}
+				SongDialogLoadState state = new SongDialogLoadState(BuildPlaceholderSongBuffer(totalCount, viewSource));
+				for (int i = 0; i < knownSongs.Count && i < state.Songs.Count; i++)
+				{
+					state.Songs[i] = MergeSongFields(state.Songs[i], knownSongs[i], viewSource);
+				}
+				string playlistName = string.IsNullOrWhiteSpace(playlistSeed.Name) ? (string.IsNullOrWhiteSpace(playlist.Name) ? $"歌单_{playlist.Id}" : playlist.Name) : playlistSeed.Name;
+				List<string> displayNames = state.Songs.Select(BuildSongDownloadDisplayText).ToList();
+				BatchDownloadDialog dialog = new BatchDownloadDialog(displayNames, "下载歌单 - " + playlistName);
+				using CancellationTokenSource enrichCts = new CancellationTokenSource();
+				Task enrichTask = EnrichSongDialogByOrderedIdsAsync(viewSource, state, dialog, (CancellationToken ct) => FetchPlaylistTrackIdsAsync(playlist.Id, ct), (List<string> ids, CancellationToken ct) => FetchPlaylistSongsByIdsBatchAsync(ids, ct), enrichCts.Token);
+				DialogResult result = dialog.ShowDialog();
+				enrichCts.Cancel();
+				try
+				{
+					await enrichTask;
+				}
+				catch (OperationCanceledException)
+				{
+				}
+				catch (Exception ex)
+				{
+					Debug.WriteLine($"[DownloadPlaylist] 歌单条目补齐失败: {ex.Message}");
+				}
+				if (result != DialogResult.OK)
+				{
+					return;
+				}
+				List<int> selectedIndices = dialog.SelectedIndices;
+				if (selectedIndices.Count == 0)
+				{
+					return;
+				}
+				var (selectedSongs, originalIndices, missingCount) = await ResolveSelectedSongsFromStateAsync(state, selectedIndices, viewSource, CancellationToken.None);
+				if (selectedSongs.Count == 0)
+				{
+					MessageBox.Show("选中的条目仍在加载中，请稍后重试。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
+					return;
+				}
+				QualityLevel quality = GetCurrentQuality();
+				NotifyTransferTaskAdded("正在添加歌单下载任务...");
+				int addedCount = (await _downloadManager.AddBatchDownloadAsync(selectedSongs, quality, playlistName, playlistName, originalIndices)).Count;
+				string suffix = (missingCount > 0) ? $"（{missingCount} 项尚未加载，已跳过）" : string.Empty;
+				NotifyTransferTaskAdded($"已添加 {addedCount}/{selectedSongs.Count} 个下载任务，歌单：{playlistName}{suffix}");
 			}
 			catch (Exception ex)
 			{
@@ -291,41 +374,98 @@ public partial class MainForm
 		{
 			try
 			{
+				if (string.IsNullOrWhiteSpace(album.Id))
+				{
+					MessageBox.Show("专辑 ID 无效，无法下载。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
+					return;
+				}
+				string albumId = album.Id;
+				string viewSource = "album:" + albumId;
+				AlbumInfo albumSeed = album;
 				Cursor originalCursor = System.Windows.Forms.Cursor.Current;
 				System.Windows.Forms.Cursor.Current = Cursors.WaitCursor;
 				try
 				{
-					List<SongInfo> songs = await _apiClient.GetAlbumSongsAsync(album.Id);
-					if (songs == null || songs.Count == 0)
+					AlbumInfo detail = await _apiClient.GetAlbumDetailAsync(albumId);
+					if (detail != null)
 					{
-						MessageBox.Show("无法获取专辑歌曲列表或专辑为空", "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
-						return;
-					}
-					List<string> displayNames = new List<string>();
-					for (int i = 0; i < songs.Count; i++)
-					{
-						SongInfo song = songs[i];
-						displayNames.Add($"{i + 1}. {song.Name} - {song.Artist}");
-					}
-					BatchDownloadDialog dialog = new BatchDownloadDialog(displayNames, "下载专辑 - " + album.Name);
-					if (dialog.ShowDialog() == DialogResult.OK)
-					{
-						List<int> selectedIndices = dialog.SelectedIndices;
-						if (selectedIndices.Count == 0)
+						if (string.IsNullOrWhiteSpace(detail.Name))
 						{
-							return;
+							detail.Name = album.Name;
 						}
-						List<SongInfo> selectedSongs = selectedIndices.Select((int index) => songs[index]).ToList();
-						List<int> originalIndices = selectedIndices.Select((int num) => num + 1).ToList();
-						QualityLevel quality = GetCurrentQuality();
-						List<DownloadTask> tasks = await _downloadManager.AddBatchDownloadAsync(selectedSongs, quality, album.Name + " - " + album.Artist, album.Name + " - " + album.Artist, originalIndices);
-						MessageBox.Show($"已添加 {tasks.Count}/{selectedSongs.Count} 个下载任务\n专辑：{album.Name} - {album.Artist}", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+						if (string.IsNullOrWhiteSpace(detail.Artist))
+						{
+							detail.Artist = album.Artist;
+						}
+						if (detail.TrackCount <= 0)
+						{
+							detail.TrackCount = album.TrackCount;
+						}
+						albumSeed = detail;
 					}
+				}
+				catch (Exception ex)
+				{
+					Debug.WriteLine($"[DownloadAlbum] 获取专辑详情失败，继续使用占位加载: {ex.Message}");
 				}
 				finally
 				{
 					System.Windows.Forms.Cursor.Current = originalCursor;
 				}
+				List<SongInfo> knownSongs = (albumSeed.Songs != null && albumSeed.Songs.Count > 0)
+					? new List<SongInfo>(albumSeed.Songs.Where((SongInfo song) => song != null))
+					: new List<SongInfo>();
+				int totalCount = Math.Max(albumSeed.TrackCount, knownSongs.Count);
+				if (totalCount <= 0)
+				{
+					MessageBox.Show("无法获取专辑歌曲列表或专辑为空", "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+					return;
+				}
+				SongDialogLoadState state = new SongDialogLoadState(BuildPlaceholderSongBuffer(totalCount, viewSource));
+				for (int i = 0; i < knownSongs.Count && i < state.Songs.Count; i++)
+				{
+					state.Songs[i] = MergeSongFields(state.Songs[i], knownSongs[i], viewSource);
+				}
+				string albumName = string.IsNullOrWhiteSpace(albumSeed.Name) ? (string.IsNullOrWhiteSpace(album.Name) ? $"专辑_{albumId}" : album.Name) : albumSeed.Name;
+				string albumArtist = string.IsNullOrWhiteSpace(albumSeed.Artist) ? album.Artist : albumSeed.Artist;
+				string albumFolderName = string.IsNullOrWhiteSpace(albumArtist) ? albumName : (albumName + " - " + albumArtist);
+				List<string> displayNames = state.Songs.Select(BuildSongDownloadDisplayText).ToList();
+				BatchDownloadDialog dialog = new BatchDownloadDialog(displayNames, "下载专辑 - " + albumName);
+				using CancellationTokenSource enrichCts = new CancellationTokenSource();
+				Task enrichTask = EnrichSongDialogByOrderedIdsAsync(viewSource, state, dialog, (CancellationToken ct) => _apiClient.GetAlbumSongIdsAsync(albumId, ct), (List<string> ids, CancellationToken ct) => _apiClient.GetSongsByIdsAsync(ids, ct), enrichCts.Token);
+				DialogResult result = dialog.ShowDialog();
+				enrichCts.Cancel();
+				try
+				{
+					await enrichTask;
+				}
+				catch (OperationCanceledException)
+				{
+				}
+				catch (Exception ex)
+				{
+					Debug.WriteLine($"[DownloadAlbum] 专辑条目补齐失败: {ex.Message}");
+				}
+				if (result != DialogResult.OK)
+				{
+					return;
+				}
+				List<int> selectedIndices = dialog.SelectedIndices;
+				if (selectedIndices.Count == 0)
+				{
+					return;
+				}
+				var (selectedSongs, originalIndices, missingCount) = await ResolveSelectedSongsFromStateAsync(state, selectedIndices, viewSource, CancellationToken.None);
+				if (selectedSongs.Count == 0)
+				{
+					MessageBox.Show("选中的条目仍在加载中，请稍后重试。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
+					return;
+				}
+				QualityLevel quality = GetCurrentQuality();
+				NotifyTransferTaskAdded("正在添加专辑下载任务...");
+				List<DownloadTask> tasks = await _downloadManager.AddBatchDownloadAsync(selectedSongs, quality, albumFolderName, albumFolderName, originalIndices);
+				string suffix = (missingCount > 0) ? $"（{missingCount} 项尚未加载，已跳过）" : string.Empty;
+				NotifyTransferTaskAdded($"已添加 {tasks.Count}/{selectedSongs.Count} 个下载任务，专辑：{albumFolderName}{suffix}");
 			}
 			catch (Exception ex)
 			{
@@ -346,83 +486,65 @@ public partial class MainForm
 		{
 			try
 			{
-				Cursor originalCursor = System.Windows.Forms.Cursor.Current;
-				System.Windows.Forms.Cursor.Current = Cursors.WaitCursor;
+				string safeName = (string.IsNullOrWhiteSpace(podcast.Name) ? $"播客_{podcast.Id}" : podcast.Name);
+				string viewSource = "podcast:" + podcast.Id.ToString(CultureInfo.InvariantCulture);
+				int initialTotal = Math.Max(0, podcast.ProgramCount);
+				List<SongInfo> seedSongs = BuildPlaceholderSongBuffer(initialTotal, viewSource);
+				List<string> seedTitles = new List<string>(initialTotal);
+				EnsureTitleBufferSize(seedTitles, initialTotal);
+				PodcastDialogLoadState state = new PodcastDialogLoadState(seedSongs, seedTitles, initialTotal);
+				List<string> displayNames = new List<string>(state.Titles);
+				BatchDownloadDialog dialog = new BatchDownloadDialog(displayNames, "下载播客 - " + safeName);
+				using CancellationTokenSource enrichCts = new CancellationTokenSource();
+				Task enrichTask = EnrichPodcastDialogAsync(podcast.Id, viewSource, state, dialog, enrichCts.Token);
+				DialogResult result = dialog.ShowDialog();
+				enrichCts.Cancel();
 				try
 				{
-					List<PodcastEpisodeInfo> episodes = await FetchAllPodcastEpisodesAsync(podcast.Id);
-					if (episodes == null || episodes.Count == 0)
-					{
-						MessageBox.Show("该播客暂无可下载的节目。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
-						return;
-					}
-					List<string> displayNames = new List<string>();
-					for (int i = 0; i < episodes.Count; i++)
-					{
-						PodcastEpisodeInfo episode = episodes[i];
-						string meta = string.Empty;
-						if (episode.PublishTime.HasValue)
-						{
-							meta = episode.PublishTime.Value.ToString("yyyy-MM-dd");
-						}
-						if (episode.Duration > TimeSpan.Zero)
-						{
-							string durationLabel = $"{episode.Duration:mm\\:ss}";
-							meta = (string.IsNullOrEmpty(meta) ? durationLabel : (meta + " | " + durationLabel));
-						}
-						string hostLabel = string.Empty;
-						if (!string.IsNullOrWhiteSpace(episode.RadioName))
-						{
-							hostLabel = episode.RadioName;
-						}
-						if (!string.IsNullOrWhiteSpace(episode.DjName))
-						{
-							hostLabel = (string.IsNullOrWhiteSpace(hostLabel) ? episode.DjName : (hostLabel + " / " + episode.DjName));
-						}
-						string line = $"{i + 1}. {episode.Name}";
-						if (!string.IsNullOrWhiteSpace(meta))
-						{
-							line = line + " (" + meta + ")";
-						}
-						if (!string.IsNullOrWhiteSpace(hostLabel))
-						{
-							line = line + " - " + hostLabel;
-						}
-						displayNames.Add(line);
-					}
-					string safeName = (string.IsNullOrWhiteSpace(podcast.Name) ? $"播客_{podcast.Id}" : podcast.Name);
-					BatchDownloadDialog dialog = new BatchDownloadDialog(displayNames, "下载播客 - " + safeName);
-					if (dialog.ShowDialog() != DialogResult.OK || dialog.SelectedIndices.Count == 0)
-					{
-						return;
-					}
-					List<int> selectedIndices = dialog.SelectedIndices;
-					List<SongInfo> selectedSongs = new List<SongInfo>();
-					List<int> originalIndices = new List<int>();
-					foreach (int index in selectedIndices)
-					{
-						if (index >= 0 && index < episodes.Count)
-						{
-							SongInfo song = episodes[index].Song;
-							if (song != null)
-							{
-								selectedSongs.Add(song);
-								originalIndices.Add(index + 1);
-							}
-						}
-					}
-					if (selectedSongs.Count == 0)
-					{
-						MessageBox.Show("选中的节目缺少可下载的音频信息。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
-						return;
-					}
-					QualityLevel quality = GetCurrentQuality();
-					MessageBox.Show(string.Format("已添加 {0}/{1} 个下载任务\n播客：{2}", (await _downloadManager.AddBatchDownloadAsync(selectedSongs, quality, "播客 - " + safeName, safeName, originalIndices)).Count, selectedSongs.Count, safeName), "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+					await enrichTask;
 				}
-				finally
+				catch (OperationCanceledException)
 				{
-					System.Windows.Forms.Cursor.Current = originalCursor;
 				}
+				catch (Exception ex)
+				{
+					Debug.WriteLine($"[DownloadPodcast] 播客条目补齐失败: {ex.Message}");
+				}
+				if (result != DialogResult.OK || dialog.SelectedIndices.Count == 0)
+				{
+					return;
+				}
+				List<int> selectedIndices = dialog.SelectedIndices;
+				await EnsurePodcastSelectionsLoadedAsync(podcast.Id, state, selectedIndices, viewSource, dialog, CancellationToken.None);
+				List<SongInfo> selectedSongs = new List<SongInfo>();
+				List<int> originalIndices = new List<int>();
+				int missingCount = 0;
+				foreach (int index in selectedIndices)
+				{
+					if (index < 0 || index >= state.Songs.Count)
+					{
+						missingCount++;
+						continue;
+					}
+					SongInfo song = state.Songs[index];
+					if (song == null || IsPlaceholderSong(song))
+					{
+						missingCount++;
+						continue;
+					}
+					selectedSongs.Add(song);
+					originalIndices.Add(index + 1);
+				}
+				if (selectedSongs.Count == 0)
+				{
+					MessageBox.Show("选中的节目仍在加载中或缺少可下载音频信息，请稍后重试。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
+					return;
+				}
+				QualityLevel quality = GetCurrentQuality();
+				NotifyTransferTaskAdded("正在添加播客下载任务...");
+				int addedCount = (await _downloadManager.AddBatchDownloadAsync(selectedSongs, quality, "播客 - " + safeName, safeName, originalIndices)).Count;
+				string suffix = (missingCount > 0) ? $"（{missingCount} 项尚未加载，已跳过）" : string.Empty;
+				NotifyTransferTaskAdded($"已添加 {addedCount}/{selectedSongs.Count} 个下载任务，播客：{safeName}{suffix}");
 			}
 			catch (Exception ex)
 			{
@@ -447,6 +569,661 @@ public partial class MainForm
 		return "下载";
 	}
 
+	private sealed class SongDialogLoadState
+	{
+		public SongDialogLoadState(List<SongInfo> songs)
+		{
+			Songs = songs ?? new List<SongInfo>();
+		}
+
+		public List<SongInfo> Songs { get; }
+
+		public List<string> OrderedSongIds { get; } = new List<string>();
+
+		public Dictionary<string, int> SongIdIndexMap { get; } = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+	}
+
+	private sealed class PodcastDialogLoadState
+	{
+		public PodcastDialogLoadState(List<SongInfo> songs, List<string> titles, int totalCount)
+		{
+			Songs = songs ?? new List<SongInfo>();
+			Titles = titles ?? new List<string>();
+			TotalCount = Math.Max(0, totalCount);
+		}
+
+		public List<SongInfo> Songs { get; }
+
+		public List<string> Titles { get; }
+
+		public int TotalCount { get; set; }
+	}
+
+	private static string BuildSongDownloadDisplayText(SongInfo song)
+	{
+		if (song == null || IsPlaceholderSong(song))
+		{
+			return "正在加载 ...";
+		}
+
+		string name = string.IsNullOrWhiteSpace(song.Name) ? "未知歌曲" : song.Name.Trim();
+		string artist = string.IsNullOrWhiteSpace(song.Artist) ? string.Empty : song.Artist.Trim();
+		return string.IsNullOrWhiteSpace(artist) ? name : (name + " - " + artist);
+	}
+
+	private static string BuildPodcastEpisodeDownloadDisplayText(PodcastEpisodeInfo episode)
+	{
+		if (episode == null)
+		{
+			return "正在加载 ...";
+		}
+
+		string meta = string.Empty;
+		if (episode.PublishTime.HasValue)
+		{
+			meta = episode.PublishTime.Value.ToString("yyyy-MM-dd");
+		}
+
+		if (episode.Duration > TimeSpan.Zero)
+		{
+			string durationLabel = $"{episode.Duration:mm\\:ss}";
+			meta = string.IsNullOrEmpty(meta) ? durationLabel : (meta + " | " + durationLabel);
+		}
+
+		string hostLabel = string.Empty;
+		if (!string.IsNullOrWhiteSpace(episode.RadioName))
+		{
+			hostLabel = episode.RadioName;
+		}
+
+		if (!string.IsNullOrWhiteSpace(episode.DjName))
+		{
+			hostLabel = string.IsNullOrWhiteSpace(hostLabel) ? episode.DjName : (hostLabel + " / " + episode.DjName);
+		}
+
+		string line = string.IsNullOrWhiteSpace(episode.Name) ? "未命名节目" : episode.Name;
+		if (!string.IsNullOrWhiteSpace(meta))
+		{
+			line = line + " (" + meta + ")";
+		}
+
+		if (!string.IsNullOrWhiteSpace(hostLabel))
+		{
+			line = line + " - " + hostLabel;
+		}
+
+		return line;
+	}
+
+	private static List<SongInfo> BuildPlaceholderSongBuffer(int totalCount, string viewSource)
+	{
+		int count = Math.Max(0, totalCount);
+		List<SongInfo> placeholders = new List<SongInfo>(count);
+		for (int i = 0; i < count; i++)
+		{
+			placeholders.Add(CreatePlaceholderSong(viewSource));
+		}
+
+		return placeholders;
+	}
+
+	private static void EnsureSongBufferSize(List<SongInfo> songs, int totalCount, string viewSource)
+	{
+		if (songs == null)
+		{
+			return;
+		}
+
+		int target = Math.Max(0, totalCount);
+		if (songs.Count >= target)
+		{
+			return;
+		}
+
+		for (int i = songs.Count; i < target; i++)
+		{
+			songs.Add(CreatePlaceholderSong(viewSource));
+		}
+	}
+
+	private static void EnsureTitleBufferSize(List<string> titles, int totalCount)
+	{
+		if (titles == null)
+		{
+			return;
+		}
+
+		int target = Math.Max(0, totalCount);
+		if (titles.Count >= target)
+		{
+			return;
+		}
+
+		for (int i = titles.Count; i < target; i++)
+		{
+			titles.Add("正在加载 ...");
+		}
+	}
+
+	private static bool HasSongDisplayChanged(SongInfo oldSong, SongInfo newSong)
+	{
+		if (oldSong == null && newSong == null)
+		{
+			return false;
+		}
+
+		if (oldSong == null || newSong == null)
+		{
+			return true;
+		}
+
+		return !string.Equals(oldSong.Id ?? string.Empty, newSong.Id ?? string.Empty, StringComparison.OrdinalIgnoreCase)
+			|| !string.Equals(oldSong.Name ?? string.Empty, newSong.Name ?? string.Empty, StringComparison.Ordinal)
+			|| !string.Equals(oldSong.Artist ?? string.Empty, newSong.Artist ?? string.Empty, StringComparison.Ordinal);
+	}
+
+	private async Task SyncBatchDialogWithCurrentSongsAsync(BatchDownloadDialog dialog, List<SongInfo> songs, string viewSource, CancellationToken cancellationToken)
+	{
+		if (dialog == null || songs == null)
+		{
+			return;
+		}
+
+		while (!cancellationToken.IsCancellationRequested)
+		{
+			bool viewMatched = true;
+			List<SongInfo> snapshot = null;
+
+			await ExecuteOnUiThreadAsync(delegate
+			{
+				if (!string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
+				{
+					viewMatched = false;
+					return;
+				}
+
+				snapshot = (_currentSongs != null) ? new List<SongInfo>(_currentSongs) : new List<SongInfo>();
+			}).ConfigureAwait(continueOnCapturedContext: false);
+
+			if (!viewMatched || snapshot == null)
+			{
+				return;
+			}
+
+			if (snapshot.Count > 0)
+			{
+				dialog.EnsureItemCount(snapshot.Count);
+				EnsureSongBufferSize(songs, snapshot.Count, viewSource);
+
+				Dictionary<int, string> updates = new Dictionary<int, string>();
+				for (int i = 0; i < snapshot.Count; i++)
+				{
+					SongInfo current = snapshot[i] ?? CreatePlaceholderSong(viewSource);
+					SongInfo previous = songs[i] ?? CreatePlaceholderSong(viewSource);
+					if (HasSongDisplayChanged(previous, current))
+					{
+						songs[i] = current;
+						updates[i] = BuildSongDownloadDisplayText(current);
+					}
+				}
+
+				if (updates.Count > 0)
+				{
+					dialog.QueueItemTextUpdates(updates);
+				}
+			}
+
+			await Task.Delay(250, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+		}
+	}
+
+	private static void UpdateOrderedSongIdState(SongDialogLoadState state, IReadOnlyList<string> orderedIds)
+	{
+		if (state == null)
+		{
+			return;
+		}
+
+		state.OrderedSongIds.Clear();
+		state.SongIdIndexMap.Clear();
+		if (orderedIds == null)
+		{
+			return;
+		}
+
+		for (int i = 0; i < orderedIds.Count; i++)
+		{
+			string id = orderedIds[i] ?? string.Empty;
+			state.OrderedSongIds.Add(id);
+			if (!string.IsNullOrWhiteSpace(id) && !state.SongIdIndexMap.ContainsKey(id))
+			{
+				state.SongIdIndexMap[id] = i;
+			}
+		}
+	}
+
+	private async Task EnrichSongDialogByOrderedIdsAsync(string viewSource, SongDialogLoadState state, BatchDownloadDialog dialog, Func<CancellationToken, Task<List<string>>> orderedIdsLoader, Func<List<string>, CancellationToken, Task<List<SongInfo>>> songBatchLoader, CancellationToken cancellationToken)
+	{
+		if (state == null || dialog == null || orderedIdsLoader == null || songBatchLoader == null)
+		{
+			return;
+		}
+
+		List<string> orderedIds = await orderedIdsLoader(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+		if (orderedIds == null || orderedIds.Count == 0)
+		{
+			return;
+		}
+
+		UpdateOrderedSongIdState(state, orderedIds);
+		int totalCount = orderedIds.Count;
+		EnsureSongBufferSize(state.Songs, totalCount, viewSource);
+		dialog.EnsureItemCount(totalCount);
+
+		Dictionary<int, SongInfo> knownByIndex = new Dictionary<int, SongInfo>();
+		for (int i = 0; i < state.Songs.Count; i++)
+		{
+			SongInfo known = state.Songs[i];
+			if (known != null && !IsPlaceholderSong(known) && !string.IsNullOrWhiteSpace(known.Id) && state.SongIdIndexMap.TryGetValue(known.Id, out int index))
+			{
+				knownByIndex[index] = MergeSongFields(state.Songs[index], known, viewSource);
+			}
+		}
+
+		for (int i = 0; i < state.Songs.Count; i++)
+		{
+			state.Songs[i] = CreatePlaceholderSong(viewSource);
+		}
+
+		Dictionary<int, string> initialUpdates = new Dictionary<int, string>();
+		foreach (KeyValuePair<int, SongInfo> known in knownByIndex)
+		{
+			if (known.Key >= 0 && known.Key < state.Songs.Count)
+			{
+				state.Songs[known.Key] = known.Value;
+				initialUpdates[known.Key] = BuildSongDownloadDisplayText(known.Value);
+			}
+		}
+
+		if (initialUpdates.Count > 0)
+		{
+			dialog.QueueItemTextUpdates(initialUpdates);
+		}
+
+		bool[] loadedFlags = new bool[totalCount];
+		int loadedCount = 0;
+		for (int i = 0; i < totalCount; i++)
+		{
+			SongInfo current = (i < state.Songs.Count) ? state.Songs[i] : null;
+			if (current != null && !string.IsNullOrWhiteSpace(current.Id) && string.Equals(current.Id, orderedIds[i], StringComparison.OrdinalIgnoreCase))
+			{
+				loadedFlags[i] = true;
+				loadedCount++;
+			}
+		}
+
+		List<int> pendingBatchStarts = new List<int>();
+		for (int start = 0; start < totalCount; start += 200)
+		{
+			int end = Math.Min(start + 200, totalCount);
+			bool hasMissing = false;
+			for (int i = start; i < end; i++)
+			{
+				if (!loadedFlags[i])
+				{
+					hasMissing = true;
+					break;
+				}
+			}
+
+			if (hasMissing)
+			{
+				pendingBatchStarts.Add(start);
+			}
+		}
+
+		int batchFetched = 0;
+		while (pendingBatchStarts.Count > 0)
+		{
+			cancellationToken.ThrowIfCancellationRequested();
+
+			int focusedIndex = dialog.GetPreferredLoadIndex();
+			int focusedBatchStart = (focusedIndex >= 0) ? (focusedIndex / 200) * 200 : -1;
+			int batchStart = (focusedBatchStart >= 0 && pendingBatchStarts.Contains(focusedBatchStart)) ? focusedBatchStart : pendingBatchStarts[0];
+			pendingBatchStarts.Remove(batchStart);
+
+			int batchEnd = Math.Min(batchStart + 200, totalCount);
+			List<string> idsToFetch = new List<string>();
+			for (int i = batchStart; i < batchEnd; i++)
+			{
+				if (!loadedFlags[i])
+				{
+					string id = orderedIds[i];
+					if (!string.IsNullOrWhiteSpace(id))
+					{
+						idsToFetch.Add(id);
+					}
+				}
+			}
+
+			if (idsToFetch.Count == 0)
+			{
+				continue;
+			}
+
+			if (batchFetched > 0)
+			{
+				await Task.Delay(1500, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+			}
+
+			batchFetched++;
+			List<SongInfo> fetchedSongs = await songBatchLoader(idsToFetch, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+			if (fetchedSongs == null || fetchedSongs.Count == 0)
+			{
+				continue;
+			}
+
+			Dictionary<int, SongInfo> updates = new Dictionary<int, SongInfo>();
+			foreach (SongInfo fetched in fetchedSongs)
+			{
+				if (fetched == null || string.IsNullOrWhiteSpace(fetched.Id) || !state.SongIdIndexMap.TryGetValue(fetched.Id, out int index) || index < 0 || index >= state.Songs.Count)
+				{
+					continue;
+				}
+
+				SongInfo merged = MergeSongFields(state.Songs[index], fetched, viewSource);
+				state.Songs[index] = merged;
+				updates[index] = merged;
+				if (!loadedFlags[index])
+				{
+					loadedFlags[index] = true;
+					loadedCount++;
+				}
+			}
+
+			if (updates.Count > 0)
+			{
+				Dictionary<int, string> displayUpdates = updates.ToDictionary(k => k.Key, v => BuildSongDownloadDisplayText(v.Value));
+				dialog.QueueItemTextUpdates(displayUpdates);
+			}
+		}
+	}
+
+	private async Task<(List<SongInfo> Songs, List<int> OriginalIndices, int MissingCount)> ResolveSelectedSongsFromStateAsync(SongDialogLoadState state, List<int> selectedIndices, string viewSource, CancellationToken cancellationToken)
+	{
+		List<SongInfo> selectedSongs = new List<SongInfo>();
+		List<int> originalIndices = new List<int>();
+		int missingCount = 0;
+
+		if (state == null || selectedIndices == null || selectedIndices.Count == 0)
+		{
+			return (selectedSongs, originalIndices, missingCount);
+		}
+
+		foreach (int index in selectedIndices)
+		{
+			if (index < 0 || index >= state.Songs.Count)
+			{
+				missingCount++;
+				continue;
+			}
+
+			SongInfo song = state.Songs[index];
+			if (song == null || IsPlaceholderSong(song))
+			{
+				song = await ResolveSongForSelectionAsync(state, viewSource, index, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+				if (song != null && !IsPlaceholderSong(song))
+				{
+					state.Songs[index] = song;
+				}
+			}
+
+			if (song == null || IsPlaceholderSong(song))
+			{
+				missingCount++;
+				continue;
+			}
+
+			selectedSongs.Add(song);
+			originalIndices.Add(index + 1);
+		}
+
+		return (selectedSongs, originalIndices, missingCount);
+	}
+
+	private async Task<SongInfo> ResolveSongForSelectionAsync(SongDialogLoadState state, string viewSource, int index, CancellationToken cancellationToken)
+	{
+		if (state != null && index >= 0 && index < state.OrderedSongIds.Count)
+		{
+			string songId = state.OrderedSongIds[index];
+			if (!string.IsNullOrWhiteSpace(songId))
+			{
+				List<SongInfo> fetched = await FetchPlaylistSongsByIdsBatchAsync(new List<string> { songId }, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+				SongInfo fetchedSong = fetched?.FirstOrDefault((SongInfo s) => s != null && string.Equals(s.Id, songId, StringComparison.OrdinalIgnoreCase));
+				if (fetchedSong != null && !IsPlaceholderSong(fetchedSong))
+				{
+					return MergeSongFields(state.Songs[index], fetchedSong, viewSource);
+				}
+			}
+		}
+
+		SongInfo fallback = await ResolvePlaceholderSongByIndexAsync(viewSource, index, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+		if (fallback != null && !IsPlaceholderSong(fallback))
+		{
+			return fallback;
+		}
+
+		return CreatePlaceholderSong(viewSource);
+	}
+
+	private async Task EnrichPodcastDialogAsync(long podcastId, string viewSource, PodcastDialogLoadState state, BatchDownloadDialog dialog, CancellationToken cancellationToken)
+	{
+		if (podcastId <= 0 || state == null || dialog == null)
+		{
+			return;
+		}
+
+		int totalCount = Math.Max(state.TotalCount, state.Songs.Count);
+		if (totalCount > 0)
+		{
+			state.TotalCount = totalCount;
+			EnsureSongBufferSize(state.Songs, totalCount, viewSource);
+			EnsureTitleBufferSize(state.Titles, totalCount);
+			dialog.EnsureItemCount(totalCount);
+		}
+
+		HashSet<int> pendingPages = new HashSet<int>();
+		if (totalCount > 0)
+		{
+			for (int start = 0; start < totalCount; start += 100)
+			{
+				pendingPages.Add(start);
+			}
+		}
+		else
+		{
+			pendingPages.Add(0);
+		}
+
+		while (pendingPages.Count > 0)
+		{
+			cancellationToken.ThrowIfCancellationRequested();
+
+			int focusedIndex = dialog.GetPreferredLoadIndex();
+			int focusedPage = (focusedIndex >= 0) ? (focusedIndex / 100) * 100 : -1;
+			int pageStart = (focusedPage >= 0 && pendingPages.Contains(focusedPage)) ? focusedPage : pendingPages.First();
+			pendingPages.Remove(pageStart);
+
+			var (episodes, hasMore, reportedTotal) = await _apiClient.GetPodcastEpisodesAsync(podcastId, 100, pageStart).ConfigureAwait(continueOnCapturedContext: false);
+			int requiredCount = totalCount;
+			if (reportedTotal > requiredCount)
+			{
+				requiredCount = reportedTotal;
+			}
+			if (episodes != null && episodes.Count > 0)
+			{
+				requiredCount = Math.Max(requiredCount, pageStart + episodes.Count);
+			}
+			if (requiredCount > totalCount)
+			{
+				totalCount = requiredCount;
+				state.TotalCount = totalCount;
+				EnsureSongBufferSize(state.Songs, totalCount, viewSource);
+				EnsureTitleBufferSize(state.Titles, totalCount);
+				dialog.EnsureItemCount(totalCount);
+				for (int extra = 0; extra < totalCount; extra += 100)
+				{
+					if (extra >= pageStart + 100)
+					{
+						pendingPages.Add(extra);
+					}
+				}
+			}
+
+			if (episodes == null || episodes.Count == 0)
+			{
+				if (!hasMore)
+				{
+					continue;
+				}
+
+				if (pageStart + 100 < totalCount)
+				{
+					pendingPages.Add(pageStart + 100);
+				}
+				continue;
+			}
+
+			Dictionary<int, string> titleUpdates = new Dictionary<int, string>();
+			for (int i = 0; i < episodes.Count; i++)
+			{
+				int index = pageStart + i;
+				if (index < 0 || index >= state.Songs.Count)
+				{
+					continue;
+				}
+
+				PodcastEpisodeInfo episode = episodes[i];
+				SongInfo mergedSong = MergeSongFields(state.Songs[index], episode?.Song, viewSource);
+				state.Songs[index] = mergedSong;
+				string title = BuildPodcastEpisodeDownloadDisplayText(episode);
+				state.Titles[index] = title;
+				titleUpdates[index] = title;
+			}
+
+			if (titleUpdates.Count > 0)
+			{
+				dialog.QueueItemTextUpdates(titleUpdates);
+			}
+
+			if (hasMore)
+			{
+				int nextPage = pageStart + 100;
+				if (nextPage < totalCount || episodes.Count > 0)
+				{
+					pendingPages.Add(nextPage);
+				}
+			}
+		}
+	}
+
+	private async Task<int> EnsurePodcastSelectionsLoadedAsync(long podcastId, PodcastDialogLoadState state, IEnumerable<int> selectedIndices, string viewSource, BatchDownloadDialog dialog, CancellationToken cancellationToken)
+	{
+		if (podcastId <= 0 || state == null || selectedIndices == null)
+		{
+			return 0;
+		}
+
+		HashSet<int> pages = new HashSet<int>();
+		foreach (int index in selectedIndices)
+		{
+			if (index < 0 || index >= state.Songs.Count)
+			{
+				continue;
+			}
+
+			if (IsPlaceholderSong(state.Songs[index]))
+			{
+				pages.Add((index / 100) * 100);
+			}
+		}
+
+		int loaded = 0;
+		foreach (int pageStart in pages)
+		{
+			cancellationToken.ThrowIfCancellationRequested();
+			var (episodes, _, _) = await _apiClient.GetPodcastEpisodesAsync(podcastId, 100, pageStart).ConfigureAwait(continueOnCapturedContext: false);
+			if (episodes == null || episodes.Count == 0)
+			{
+				continue;
+			}
+
+			Dictionary<int, string> titleUpdates = new Dictionary<int, string>();
+			for (int i = 0; i < episodes.Count; i++)
+			{
+				int index = pageStart + i;
+				if (index < 0 || index >= state.Songs.Count)
+				{
+					continue;
+				}
+
+				PodcastEpisodeInfo episode = episodes[i];
+				SongInfo mergedSong = MergeSongFields(state.Songs[index], episode?.Song, viewSource);
+				if (IsPlaceholderSong(state.Songs[index]) && !IsPlaceholderSong(mergedSong))
+				{
+					loaded++;
+				}
+				state.Songs[index] = mergedSong;
+				string title = BuildPodcastEpisodeDownloadDisplayText(episode);
+				state.Titles[index] = title;
+				titleUpdates[index] = title;
+			}
+
+			if (titleUpdates.Count > 0 && dialog != null)
+			{
+				dialog.QueueItemTextUpdates(titleUpdates);
+			}
+		}
+
+		return loaded;
+	}
+
+	private async Task<List<SongInfo>> FetchPlaylistSongsForDownloadAsync(PlaylistInfo playlist)
+	{
+		if (playlist == null || string.IsNullOrWhiteSpace(playlist.Id))
+		{
+			return new List<SongInfo>();
+		}
+
+		try
+		{
+			List<SongInfo> fullSongs = await _apiClient.GetPlaylistSongsAsync(playlist.Id);
+			if (fullSongs != null && fullSongs.Count > 0)
+			{
+				return fullSongs;
+			}
+		}
+		catch (Exception ex)
+		{
+			Debug.WriteLine($"[DownloadPlaylist] 全量拉取歌单歌曲失败，降级到详情接口: {ex.Message}");
+		}
+
+		try
+		{
+			PlaylistInfo detail = await _apiClient.GetPlaylistDetailAsync(playlist.Id);
+			if (detail?.Songs != null && detail.Songs.Count > 0)
+			{
+				return detail.Songs;
+			}
+		}
+		catch (Exception ex)
+		{
+			Debug.WriteLine($"[DownloadPlaylist] 歌单详情回退获取失败: {ex.Message}");
+		}
+
+		return new List<SongInfo>();
+	}
+
 	internal async void DownloadCategory_Click(object? sender, EventArgs e)
 	{
 		ListViewItem selectedItem = GetSelectedListViewItemSafe();
@@ -468,6 +1245,7 @@ public partial class MainForm
 			{
 				string categoryId = listItem.CategoryId;
 				string categoryName = listItem.CategoryName ?? listItem.CategoryId;
+				NotifyTransferTaskAdded("正在添加分类下载任务...");
 				QualityLevel quality = GetCurrentQuality();
 				int totalTasks;
 				switch (categoryId)
@@ -864,7 +1642,7 @@ public partial class MainForm
 				}
 				if (totalTasks > 0)
 				{
-					MessageBox.Show($"已添加 {totalTasks} 个下载任务\n分类：{categoryName}", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+					NotifyTransferTaskAdded($"已添加 {totalTasks} 个下载任务，分类：{categoryName}");
 				}
 			}
 			finally
@@ -937,7 +1715,7 @@ public partial class MainForm
 				for (int i = 0; i < songs.Count; i++)
 				{
 					SongInfo song = songs[i];
-					displayNames.Add($"{i + 1}. {song.Name} - {song.Artist}");
+					displayNames.Add($"{song.Name} - {song.Artist}");
 				}
 				BatchDownloadDialog dialog = new BatchDownloadDialog(displayNames, "下载分类 - " + categoryName);
 				if (dialog.ShowDialog() != DialogResult.OK || dialog.SelectedIndices.Count == 0)
@@ -980,14 +1758,14 @@ public partial class MainForm
 		int totalTasks = 0;
 		foreach (PlaylistInfo playlist in selectedPlaylists)
 		{
-			PlaylistInfo playlistDetail = await _apiClient.GetPlaylistDetailAsync(playlist.Id);
-			if (playlistDetail?.Songs != null && playlistDetail.Songs.Count > 0)
+			List<SongInfo> playlistSongs = await FetchPlaylistSongsForDownloadAsync(playlist);
+			if (playlistSongs.Count > 0)
 			{
 				string baseDirectory = (string.IsNullOrEmpty(parentDirectory) ? categoryName : Path.Combine(parentDirectory, categoryName));
 				string subDirectory = Path.Combine(baseDirectory, playlist.Name);
-				List<int> originalIndices = Enumerable.Range(1, playlistDetail.Songs.Count).ToList();
+				List<int> originalIndices = Enumerable.Range(1, playlistSongs.Count).ToList();
 				int num = totalTasks;
-				totalTasks = checked(num + (await _downloadManager.AddBatchDownloadAsync(playlistDetail.Songs, quality, playlist.Name, subDirectory, originalIndices)).Count);
+				totalTasks = checked(num + (await _downloadManager.AddBatchDownloadAsync(playlistSongs, quality, playlist.Name, subDirectory, originalIndices)).Count);
 			}
 		}
 		return totalTasks;
@@ -1217,7 +1995,7 @@ public partial class MainForm
 			}
 			if (totalTasks > 0)
 			{
-				MessageBox.Show($"已添加 {totalTasks} 个下载任务\n分类：{categoryName}", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+				NotifyTransferTaskAdded($"已添加 {totalTasks} 个下载任务，分类：{categoryName}");
 			}
 		}
 		finally
@@ -1283,18 +2061,19 @@ public partial class MainForm
 				try
 				{
 					QualityLevel quality = GetCurrentQuality();
+					NotifyTransferTaskAdded("正在添加批量下载任务...");
 					int totalTasks = 0;
 					foreach (int index in selectedIndices)
 					{
 						object item = items[index];
 						if (item is PlaylistInfo playlist2)
 						{
-							PlaylistInfo playlistDetail = await _apiClient.GetPlaylistDetailAsync(playlist2.Id);
-							if (playlistDetail?.Songs != null && playlistDetail.Songs.Count > 0)
+							List<SongInfo> playlistSongs = await FetchPlaylistSongsForDownloadAsync(playlist2);
+							if (playlistSongs.Count > 0)
 							{
-								List<int> originalIndices = Enumerable.Range(1, playlistDetail.Songs.Count).ToList();
+								List<int> originalIndices = Enumerable.Range(1, playlistSongs.Count).ToList();
 								int num = totalTasks;
-								totalTasks = num + (await _downloadManager.AddBatchDownloadAsync(playlistDetail.Songs, quality, playlist2.Name, playlist2.Name, originalIndices)).Count;
+								totalTasks = num + (await _downloadManager.AddBatchDownloadAsync(playlistSongs, quality, playlist2.Name, playlist2.Name, originalIndices)).Count;
 							}
 						}
 						else if (item is AlbumInfo album2)
@@ -1309,7 +2088,10 @@ public partial class MainForm
 							}
 						}
 					}
-					MessageBox.Show($"已添加 {totalTasks} 个下载任务", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+					if (totalTasks > 0)
+					{
+						NotifyTransferTaskAdded($"已添加 {totalTasks} 个下载任务");
+					}
 				}
 				finally
 				{
@@ -1511,8 +2293,16 @@ public partial class MainForm
 			return Task.CompletedTask;
 		}
 		UploadManager instance = UploadManager.Instance;
+		NotifyTransferTaskAdded("正在添加上传任务...");
 		List<UploadTask> list = instance.AddBatchUploadTasks(array, "云盘");
-		UpdateStatusBar($"已添加 {list.Count} 个上传任务到传输管理器");
+		if (list.Count > 0)
+		{
+			NotifyTransferTaskAdded($"已添加 {list.Count} 个上传任务到传输管理器");
+		}
+		else
+		{
+			UpdateStatusBar("未添加上传任务");
+		}
 		return Task.CompletedTask;
 	}
 

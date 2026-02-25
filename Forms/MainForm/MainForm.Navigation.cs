@@ -169,12 +169,29 @@ public partial class MainForm
 			navigationHistoryItem.ArtistArea = areaCode;
 			navigationHistoryItem.ArtistOffset = offset3;
 		}
+		else if (string.Equals(_currentViewSource, "new_album_category_periods", StringComparison.OrdinalIgnoreCase))
+		{
+			navigationHistoryItem.PageType = "new_album_category_periods";
+		}
+		else if (_currentViewSource.StartsWith("new_album_category_period:", StringComparison.OrdinalIgnoreCase))
+		{
+			navigationHistoryItem.PageType = "new_album_category_period";
+			navigationHistoryItem.AlbumCategoryType = checked((int)ParseArtistIdFromViewSource(_currentViewSource, "new_album_category_period:"));
+		}
+		else if (_currentViewSource.StartsWith("new_album_category_list:", StringComparison.OrdinalIgnoreCase))
+		{
+			navigationHistoryItem.PageType = "new_album_category_list";
+			ParseAlbumCategoryListViewSource(_currentViewSource, out var typeCode2, out var areaCode2, out var offset4);
+			navigationHistoryItem.AlbumCategoryType = typeCode2;
+			navigationHistoryItem.AlbumCategoryArea = areaCode2;
+			navigationHistoryItem.AlbumCategoryOffset = offset4;
+		}
 		else if (_currentViewSource.StartsWith("podcast:", StringComparison.OrdinalIgnoreCase))
 		{
 			navigationHistoryItem.PageType = "podcast";
-			ParsePodcastViewSource(_currentViewSource, out var radioId, out var offset4, out var ascending);
+			ParsePodcastViewSource(_currentViewSource, out var radioId, out var offset5, out var ascending);
 			navigationHistoryItem.PodcastRadioId = radioId;
-			navigationHistoryItem.PodcastOffset = offset4;
+			navigationHistoryItem.PodcastOffset = offset5;
 			navigationHistoryItem.PodcastRadioName = _currentPodcast?.Name ?? string.Empty;
 			navigationHistoryItem.PodcastAscending = ascending;
 		}
@@ -297,6 +314,12 @@ public partial class MainForm
 			return a.ArtistType == b.ArtistType;
 		case "artist_category_list":
 			return a.ArtistType == b.ArtistType && a.ArtistArea == b.ArtistArea && a.ArtistOffset == b.ArtistOffset;
+		case "new_album_category_periods":
+			return true;
+		case "new_album_category_period":
+			return a.AlbumCategoryType == b.AlbumCategoryType;
+		case "new_album_category_list":
+			return a.AlbumCategoryType == b.AlbumCategoryType && a.AlbumCategoryArea == b.AlbumCategoryArea && a.AlbumCategoryOffset == b.AlbumCategoryOffset;
 		case "podcast":
 			return a.PodcastRadioId == b.PodcastRadioId && a.PodcastOffset == b.PodcastOffset && a.PodcastAscending == b.PodcastAscending;
 		case "url_song":
@@ -520,6 +543,16 @@ public partial class MainForm
 					await LoadArtistsByCategoryAsync(state.ArtistType, state.ArtistArea, state.ArtistOffset, skipSave: true, pendingFocusIndex: state.SelectedIndex);
 					handledByView = true;
 					break;
+				case "new_album_category_periods":
+					await LoadAlbumCategoryTypesAsync(skipSave: true);
+					break;
+				case "new_album_category_period":
+					await LoadAlbumCategoryAreasAsync(state.AlbumCategoryType, skipSave: true);
+					break;
+				case "new_album_category_list":
+					await LoadAlbumsByCategoryAsync(state.AlbumCategoryType, state.AlbumCategoryArea, state.AlbumCategoryOffset, skipSave: true, pendingFocusIndex: state.SelectedIndex);
+					handledByView = true;
+					break;
 				case "podcast":
 					if (state.PodcastRadioId <= 0)
 					{
@@ -665,6 +698,12 @@ public partial class MainForm
 			return string.Equals(_currentViewSource, $"artist_category_type:{state.ArtistType}", StringComparison.OrdinalIgnoreCase);
 		case "artist_category_list":
 			return string.Equals(_currentViewSource, $"artist_category_list:{state.ArtistType}:{state.ArtistArea}:offset{state.ArtistOffset}", StringComparison.OrdinalIgnoreCase);
+		case "new_album_category_periods":
+			return string.Equals(_currentViewSource, "new_album_category_periods", StringComparison.OrdinalIgnoreCase);
+		case "new_album_category_period":
+			return string.Equals(_currentViewSource, $"new_album_category_period:{state.AlbumCategoryType}", StringComparison.OrdinalIgnoreCase);
+		case "new_album_category_list":
+			return string.Equals(_currentViewSource, $"new_album_category_list:{state.AlbumCategoryType}:{state.AlbumCategoryArea}:offset{state.AlbumCategoryOffset}", StringComparison.OrdinalIgnoreCase);
 		case "podcast":
 		{
 			ParsePodcastViewSource(_currentViewSource, out var radioId, out var offset, out var ascending);

@@ -1280,6 +1280,326 @@ private async Task EnrichArtistCategoryAllResultsAsync(int typeCode, int areaCod
 		}
 	}
 
+	private async Task LoadAlbumCategoryTypesAsync(bool skipSave = false)
+	{
+		if (!skipSave)
+		{
+			SaveNavigationState();
+		}
+		ViewLoadRequest request = new ViewLoadRequest("new_album_category_periods", "新碟时间分类", "正在加载新碟时间...", !skipSave);
+		ViewLoadResult<List<ListItemInfo>> loadResult = await RunViewLoadAsync(request, (CancellationToken _) => Task.FromResult((from option in ArtistMetadataHelper.GetNewAlbumPeriodOptions()
+			select new ListItemInfo
+			{
+				Type = ListItemType.Category,
+				CategoryId = $"new_album_period_{option.Code}",
+				CategoryName = option.DisplayName
+			}).ToList()), "加载新碟时间已取消").ConfigureAwait(continueOnCapturedContext: true);
+		if (!loadResult.IsCanceled)
+		{
+			DisplayListItems(loadResult.Value, request.ViewSource, request.AccessibleName, preserveSelection: false, announceHeader: true, suppressFocus: true);
+			FocusListAfterEnrich(0);
+			UpdateStatusBar("请选择新碟时间");
+		}
+	}
+
+	private async Task LoadAlbumCategoryAreasAsync(int typeCode, bool skipSave = false)
+	{
+		if (!skipSave)
+		{
+			SaveNavigationState();
+		}
+		_currentAlbumTypeFilter = typeCode;
+		ViewLoadRequest request = new ViewLoadRequest($"new_album_category_period:{typeCode}", "新碟地区筛选", "正在加载新碟地区...", !skipSave);
+		ViewLoadResult<List<ListItemInfo>> loadResult = await RunViewLoadAsync(request, (CancellationToken _) => Task.FromResult((from option in ArtistMetadataHelper.GetNewAlbumAreaOptions()
+			select new ListItemInfo
+			{
+				Type = ListItemType.Category,
+				CategoryId = $"new_album_area_{typeCode}_{option.Code}",
+				CategoryName = option.DisplayName
+			}).ToList()), "加载新碟地区已取消").ConfigureAwait(continueOnCapturedContext: true);
+		if (!loadResult.IsCanceled)
+		{
+			DisplayListItems(loadResult.Value, request.ViewSource, request.AccessibleName, preserveSelection: false, announceHeader: true, suppressFocus: true);
+			FocusListAfterEnrich(0);
+			UpdateStatusBar("请选择新碟地区");
+		}
+	}
+
+	private async Task LoadAlbumsByCategoryAsync(int typeCode, int areaCode, int offset = 0, bool skipSave = false, int pendingFocusIndex = -1)
+	{
+		if (_enableAlbumCategoryAll)
+		{
+			await LoadAlbumsByCategoryAllAsync(typeCode, areaCode, skipSave, pendingFocusIndex);
+			return;
+		}
+		try
+		{
+			_currentAlbumCategoryLoadedAll = false;
+			const int pageSize = AlbumCategoryPageSize;
+			string paginationKey = BuildAlbumCategoryPaginationKey(typeCode, areaCode);
+			bool offsetClamped;
+			int normalizedOffset = NormalizeOffsetWithCap(paginationKey, pageSize, offset, out offsetClamped);
+			if (offsetClamped)
+			{
+				int normalizedPage = (normalizedOffset / pageSize) + 1;
+				UpdateStatusBar($"页码过大，已跳到第 {normalizedPage} 页");
+			}
+			offset = normalizedOffset;
+			if (!skipSave)
+			{
+				SaveNavigationState();
+			}
+			_currentAlbumTypeFilter = typeCode;
+			_currentAlbumAreaFilter = areaCode;
+			string viewSource = BuildAlbumCategoryViewSource(typeCode, areaCode, offset);
+			int page = (offset / pageSize) + 1;
+			int requestFocusIndex = (pendingFocusIndex >= 0) ? pendingFocusIndex : 0;
+			ViewLoadRequest request = new ViewLoadRequest(viewSource, "新碟分类列表", "正在加载新碟列表...", !skipSave, requestFocusIndex);
+			ViewLoadResult<SearchViewData<AlbumInfo>> loadResult = await RunViewLoadAsync(request, delegate
+			{
+				using (WorkScopes.BeginSkeleton("AlbumCategory", viewSource))
+				{
+					return Task.FromResult(BuildSearchSkeletonViewData("新碟分类", "专辑", page, offset + 1, _currentAlbums));
+				}
+			}, "加载新碟分类已取消").ConfigureAwait(continueOnCapturedContext: true);
+			if (!loadResult.IsCanceled)
+			{
+				SearchViewData<AlbumInfo> skeleton = loadResult.Value;
+				if (HasSkeletonItems(skeleton.Items))
+				{
+					DisplayAlbums(skeleton.Items, preserveSelection: false, viewSource, request.AccessibleName, skeleton.StartIndex, showPagination: false, hasNextPage: false, announceHeader: true, suppressFocus: true);
+				}
+				UpdateStatusBar(request.LoadingText);
+				EnrichAlbumCategoryResultsAsync(typeCode, areaCode, offset, viewSource, request.AccessibleName, pendingFocusIndex);
+			}
+		}
+		catch (Exception ex)
+		{
+			Exception ex2 = ex;
+			Exception ex3 = ex2;
+			Debug.WriteLine($"[AlbumCategory] 加载分类专辑失败: {ex3}");
+			MessageBox.Show("加载新碟分类失败：" + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+			UpdateStatusBar("加载新碟分类失败");
+		}
+	}
+
+	private async Task LoadAlbumsByCategoryAllAsync(int typeCode, int areaCode, bool skipSave = false, int pendingFocusIndex = -1)
+	{
+		try
+		{
+			_currentAlbumCategoryLoadedAll = false;
+			if (!skipSave)
+			{
+				SaveNavigationState();
+			}
+			_currentAlbumTypeFilter = typeCode;
+			_currentAlbumAreaFilter = areaCode;
+			int requestFocusIndex = (pendingFocusIndex >= 0) ? pendingFocusIndex : 0;
+			const int page = 1;
+			const int startIndex = 1;
+			string viewSource = BuildAlbumCategoryViewSource(typeCode, areaCode, 0);
+			ViewLoadRequest request = new ViewLoadRequest(viewSource, "新碟分类列表", "正在加载新碟列表...", !skipSave, requestFocusIndex);
+			ViewLoadResult<SearchViewData<AlbumInfo>> loadResult = await RunViewLoadAsync(request, delegate
+			{
+				using (WorkScopes.BeginSkeleton("AlbumCategoryAll", viewSource))
+				{
+					return Task.FromResult(BuildSearchSkeletonViewData("新碟分类", "专辑", page, startIndex, _currentAlbums));
+				}
+			}, "加载新碟分类已取消").ConfigureAwait(continueOnCapturedContext: true);
+			if (!loadResult.IsCanceled)
+			{
+				SearchViewData<AlbumInfo> skeleton = loadResult.Value;
+				if (HasSkeletonItems(skeleton.Items))
+				{
+					DisplayAlbums(skeleton.Items, preserveSelection: false, viewSource, request.AccessibleName, skeleton.StartIndex, showPagination: false, hasNextPage: false, announceHeader: true, suppressFocus: true);
+				}
+				UpdateStatusBar(request.LoadingText);
+				EnrichAlbumCategoryAllResultsAsync(typeCode, areaCode, viewSource, request.AccessibleName, pendingFocusIndex);
+			}
+		}
+		catch (Exception ex)
+		{
+			Exception ex2 = ex;
+			Exception ex3 = ex2;
+			Debug.WriteLine($"[AlbumCategory] 加载分类专辑失败: {ex3}");
+			MessageBox.Show("加载新碟分类失败：" + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+			UpdateStatusBar("加载新碟分类失败");
+		}
+	}
+
+	private async Task EnrichAlbumCategoryAllResultsAsync(int typeCode, int areaCode, string viewSource, string accessibleName, int pendingFocusIndex = -1)
+	{
+		const int pageSize = AlbumCategoryPageSize;
+		CancellationToken viewToken = GetCurrentViewContentToken();
+		using (WorkScopes.BeginEnrichment("AlbumCategoryAll", viewSource))
+		{
+			try
+			{
+				List<AlbumInfo> all = new List<AlbumInfo>();
+				int offset = 0;
+				int totalCount = 0;
+				bool hasMore = true;
+				int safety = 0;
+				while (hasMore && safety < 200)
+				{
+					viewToken.ThrowIfCancellationRequested();
+					SearchResult<AlbumInfo> result = await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.GetNewAlbumsByCategoryAsync(typeCode, areaCode, pageSize, offset), $"new_album_category:all:{typeCode}:{areaCode}:offset{offset}", viewToken, delegate(int attempt, Exception _)
+					{
+						SafeInvoke(delegate
+						{
+							UpdateStatusBar($"加载新碟分类失败，正在重试（第 {attempt} 次）...");
+						});
+					}).ConfigureAwait(continueOnCapturedContext: false);
+					List<AlbumInfo> pageItems = result?.Items ?? new List<AlbumInfo>();
+					if (pageItems.Count == 0)
+					{
+						hasMore = false;
+						break;
+					}
+					all.AddRange(pageItems);
+					offset = checked(offset + pageItems.Count);
+					totalCount = Math.Max(totalCount, result?.TotalCount ?? 0);
+					hasMore = result?.HasMore ?? false;
+					if (pageItems.Count < pageSize)
+					{
+						hasMore = false;
+					}
+					if (totalCount > 0 && offset >= totalCount)
+					{
+						hasMore = false;
+					}
+					safety++;
+					SafeInvoke(delegate
+					{
+						UpdateStatusBar($"正在加载新碟... 已获取 {all.Count} 张");
+					});
+				}
+				if (viewToken.IsCancellationRequested)
+				{
+					return;
+				}
+				await ExecuteOnUiThreadAsync(delegate
+				{
+					if (!ShouldAbortViewRender(viewToken, "加载新碟分类"))
+					{
+						_currentAlbums = CloneList(all);
+						_currentAlbumCategoryLoadedAll = true;
+						_currentAlbumCategoryHasMore = false;
+						_currentAlbumCategoryTotalCount = _currentAlbums.Count;
+						PatchAlbums(_currentAlbums, 1, showPagination: false, hasPreviousPage: false, hasNextPage: false, pendingFocusIndex);
+						FocusListAfterEnrich(pendingFocusIndex);
+						if (_currentAlbums.Count == 0)
+						{
+							UpdateStatusBar("暂无专辑");
+						}
+						else
+						{
+							UpdateStatusBar($"已加载 {_currentAlbums.Count} 张专辑");
+						}
+					}
+				}).ConfigureAwait(continueOnCapturedContext: false);
+				await EnsureLibraryStateFreshAsync(LibraryEntityType.Albums);
+			}
+			catch (Exception ex)
+			{
+				Exception ex2 = ex;
+				if (TryHandleOperationCancelled(ex2, "加载新碟分类已取消"))
+				{
+					return;
+				}
+				Debug.WriteLine($"[AlbumCategory] 加载分类专辑失败: {ex2}");
+				await ExecuteOnUiThreadAsync(delegate
+				{
+					if (!ShouldAbortViewRender(viewToken, "加载新碟分类"))
+					{
+						MessageBox.Show("加载新碟分类失败：" + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+						UpdateStatusBar("加载新碟分类失败");
+					}
+				}).ConfigureAwait(continueOnCapturedContext: false);
+			}
+		}
+	}
+
+	private async Task EnrichAlbumCategoryResultsAsync(int typeCode, int areaCode, int offset, string viewSource, string accessibleName, int pendingFocusIndex = -1)
+	{
+		const int pageSize = AlbumCategoryPageSize;
+		CancellationToken viewToken = GetCurrentViewContentToken();
+		using (WorkScopes.BeginEnrichment("AlbumCategory", viewSource))
+		{
+			try
+			{
+				SearchResult<AlbumInfo> result = await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.GetNewAlbumsByCategoryAsync(typeCode, areaCode, pageSize, offset), $"new_album_category:{typeCode}:{areaCode}:offset{offset}", viewToken, delegate(int attempt, Exception _)
+				{
+					SafeInvoke(delegate
+					{
+						UpdateStatusBar($"加载新碟分类失败，正在重试（第 {attempt} 次）...");
+					});
+				}).ConfigureAwait(continueOnCapturedContext: true);
+				List<AlbumInfo> albums = result?.Items ?? new List<AlbumInfo>();
+				int totalCount = result?.TotalCount ?? albums.Count;
+				bool hasMore = result?.HasMore ?? false;
+				string paginationKey = BuildAlbumCategoryPaginationKey(typeCode, areaCode);
+				if (TryHandlePaginationEmptyResult(paginationKey, offset, pageSize, totalCount, albums.Count, hasMore, viewSource, accessibleName))
+				{
+					return;
+				}
+				int page = (offset / pageSize) + 1;
+				int maxPage = (totalCount > 0) ? Math.Max(1, (int)Math.Ceiling((double)totalCount / pageSize)) : page;
+				if (viewToken.IsCancellationRequested)
+				{
+					return;
+				}
+				await ExecuteOnUiThreadAsync(delegate
+				{
+					if (!ShouldAbortViewRender(viewToken, "加载新碟分类"))
+					{
+						_currentAlbums = CloneList(albums);
+						_currentAlbumCategoryHasMore = hasMore;
+						_currentAlbumCategoryTotalCount = Math.Max(totalCount, offset + _currentAlbums.Count);
+						bool showPagination = offset > 0 || hasMore;
+						PatchAlbums(_currentAlbums, offset + 1, showPagination: showPagination, hasPreviousPage: offset > 0, hasNextPage: hasMore, pendingFocusIndex);
+						FocusListAfterEnrich(pendingFocusIndex);
+						if (_currentAlbums.Count == 0)
+						{
+							UpdateStatusBar("暂无专辑");
+						}
+						else if (totalCount > 0)
+						{
+							UpdateStatusBar($"第 {page}/{maxPage} 页，本页 {_currentAlbums.Count} 张 / 总 {totalCount} 张");
+						}
+						else
+						{
+							UpdateStatusBar($"第 {page} 页，本页 {_currentAlbums.Count} 张{(hasMore ? "，还有更多" : string.Empty)}");
+						}
+					}
+				}).ConfigureAwait(continueOnCapturedContext: false);
+				await EnsureLibraryStateFreshAsync(LibraryEntityType.Albums);
+			}
+			catch (Exception ex)
+			{
+				Exception ex2 = ex;
+				string paginationKey = BuildAlbumCategoryPaginationKey(typeCode, areaCode);
+				if (TryHandlePaginationOffsetError(ex2, paginationKey, offset, pageSize, viewSource, accessibleName))
+				{
+					return;
+				}
+				if (TryHandleOperationCancelled(ex2, "加载新碟分类已取消"))
+				{
+					return;
+				}
+				Debug.WriteLine($"[AlbumCategory] 加载分类专辑失败: {ex2}");
+				await ExecuteOnUiThreadAsync(delegate
+				{
+					if (!ShouldAbortViewRender(viewToken, "加载新碟分类"))
+					{
+						MessageBox.Show("加载新碟分类失败：" + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+						UpdateStatusBar("加载新碟分类失败");
+					}
+				}).ConfigureAwait(continueOnCapturedContext: false);
+			}
+		}
+	}
+
 	private void ConfigureArtistContextMenu(ArtistInfo artist)
 	{
 		insertPlayMenuItem.Visible = false;
@@ -1305,6 +1625,8 @@ private async Task EnrichArtistCategoryAllResultsAsync(int typeCode, int areaCod
 		unsubscribeAlbumMenuItem.Visible = false;
 		shareArtistMenuItem.Visible = true;
 		shareArtistMenuItem.Tag = artist;
+		shareArtistCopyWebMenuItem.Tag = artist;
+		shareArtistOpenWebMenuItem.Tag = artist;
 		subscribeArtistMenuItem.Tag = artist;
 		unsubscribeArtistMenuItem.Tag = artist;
 		bool flag = shareArtistMenuItem.Visible;
@@ -1360,14 +1682,25 @@ private async Task EnrichArtistCategoryAllResultsAsync(int typeCode, int areaCod
 		try
 		{
 			string text = $"https://music.163.com/#/artist?id={artistFromMenuSender.Id}";
-			Clipboard.SetText(text);
-			UpdateStatusBar("歌手链接已复制到剪贴板");
+			TryCopyLinkToClipboard(text, "歌手网页链接已复制到剪贴板");
 		}
 		catch (Exception ex)
 		{
 			MessageBox.Show("复制链接失败: " + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 			UpdateStatusBar("复制链接失败");
 		}
+	}
+
+	private void shareArtistOpenWebMenuItem_Click(object sender, EventArgs e)
+	{
+		ArtistInfo artistFromMenuSender = GetArtistFromMenuSender(sender);
+		if (artistFromMenuSender == null || artistFromMenuSender.Id <= 0)
+		{
+			MessageBox.Show("无法获取歌手信息，无法打开网页。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+			return;
+		}
+		string text = $"https://music.163.com/#/artist?id={artistFromMenuSender.Id}";
+		TryOpenLinkInDefaultBrowser(text, "已在浏览器打开歌手网页");
 	}
 
 	private async void subscribeArtistMenuItem_Click(object sender, EventArgs e)
@@ -1833,6 +2166,24 @@ private async Task EnrichArtistCategoryAllResultsAsync(int typeCode, int areaCod
 		}
 	}
 
+	private static void ParseAlbumCategoryListViewSource(string source, out int typeCode, out int areaCode, out int offset)
+	{
+		typeCode = 0;
+		areaCode = 0;
+		offset = 0;
+		string[] array = source.Split(':');
+		if (array.Length >= 3)
+		{
+			int.TryParse(array[1], out typeCode);
+			int.TryParse(array[2], out areaCode);
+		}
+		string text = array.LastOrDefault((string p) => p.StartsWith("offset", StringComparison.OrdinalIgnoreCase));
+		if (!string.IsNullOrEmpty(text))
+		{
+			int.TryParse(text.Substring("offset".Length), out offset);
+		}
+	}
+
 	private void UpdateArtistIntroCache(long artistId, string intro)
 	{
 		if (artistId <= 0)
@@ -1952,6 +2303,11 @@ private async Task EnrichArtistCategoryAllResultsAsync(int typeCode, int areaCod
 	private static string BuildPlaylistCategoryViewSource(string cat, int offset)
 	{
 		return $"playlist_cat_{cat}:offset{Math.Max(0, offset)}";
+	}
+
+	private static string BuildAlbumCategoryViewSource(int typeCode, int areaCode, int offset)
+	{
+		return $"new_album_category_list:{typeCode}:{areaCode}:offset{Math.Max(0, offset)}";
 	}
 
 	private static string BuildNewSongsViewSource(int areaType, int offset)

@@ -244,6 +244,7 @@
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="Utils\ContextMenuAccessibilityHelper.cs" />
+    <Compile Include="Utils\MenuNavigationBoundaryHelper.cs" />
     <Compile Include="Utils\WorkScopes.cs" />
     <Compile Include="Utils\NeteaseUrlParser.cs" />
     <Compile Include="Models\SongInfo.cs" />

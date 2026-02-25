@@ -92,6 +92,7 @@ public partial class MainForm
 		PlaylistInfo likedPlaylist = null;
 		int playlistCategoryCount = _homePlaylistCategoryPresets.Length;
 		int artistCategoryTypeCount = ArtistMetadataHelper.GetTypeOptions().Count;
+		int albumCategoryTypeCount = ArtistMetadataHelper.GetNewAlbumPeriodOptions().Count;
 		Task<List<PlaylistInfo>> toplistTask = _apiClient.GetToplistAsync();
 		Task<List<AlbumInfo>> newAlbumsTask = _apiClient.GetNewAlbumsAsync();
 		int toplistCount = 0;
@@ -323,10 +324,11 @@ public partial class MainForm
 				homeItems.Add(BuildHomeCategoryItem(PersonalFmCategoryId, PersonalFmAccessibleName, null, "专属于你的连续推荐电台"));
 				homeItems.Add(BuildHomeCategoryItem("highquality_playlists", "精品歌单", (highQualityCount > 0) ? highQualityCount : (int?)null));
 				homeItems.Add(BuildHomeCategoryItem("new_songs", "新歌速递", 5));
+				homeItems.Add(BuildHomeCategoryItem("new_albums", "新碟上架", newAlbumCount));
+				homeItems.Add(BuildHomeCategoryItem("new_album_categories", "新碟分类", albumCategoryTypeCount));
 				homeItems.Add(BuildHomeCategoryItem("playlist_category", "歌单分类", playlistCategoryCount));
 				homeItems.Add(BuildHomeCategoryItem("podcast_categories", "播客分类", podcastCategoryCount));
 				homeItems.Add(BuildHomeCategoryItem("artist_categories", "歌手分类", artistCategoryTypeCount));
-				homeItems.Add(BuildHomeCategoryItem("new_albums", "新碟上架", newAlbumCount));
 				homeItems.Add(BuildHomeCategoryItem("toplist", "官方排行榜", toplistCount));
 			}
 			else
@@ -336,10 +338,11 @@ public partial class MainForm
 				_cloudMaxSize = 0L;
 				homeItems.Add(BuildHomeCategoryItem("highquality_playlists", "精品歌单", (highQualityCount > 0) ? highQualityCount : (int?)null));
 				homeItems.Add(BuildHomeCategoryItem("new_songs", "新歌速递", 5));
+				homeItems.Add(BuildHomeCategoryItem("new_albums", "新碟上架", newAlbumCount));
+				homeItems.Add(BuildHomeCategoryItem("new_album_categories", "新碟分类", albumCategoryTypeCount));
 				homeItems.Add(BuildHomeCategoryItem("playlist_category", "歌单分类", playlistCategoryCount));
 				homeItems.Add(BuildHomeCategoryItem("podcast_categories", "播客分类", podcastCategoryCount));
 				homeItems.Add(BuildHomeCategoryItem("artist_categories", "歌手分类", artistCategoryTypeCount));
-				homeItems.Add(BuildHomeCategoryItem("new_albums", "新碟上架", newAlbumCount));
 				homeItems.Add(BuildHomeCategoryItem("toplist", "官方排行榜", toplistCount));
 			}
 			_homeCachedToplistCount = toplistCount;
@@ -622,12 +625,16 @@ public partial class MainForm
 				case "artist_categories":
 					await LoadArtistCategoryTypesAsync(skipSave: true);
 					return;
+				case "new_album_categories":
+					await LoadAlbumCategoryTypesAsync(skipSave: true);
+					return;
 				}
 			}
 			long artistTopId;
 			long artistSongsId;
 			long artistAlbumsId;
 			int typeCode;
+			int albumTypeCode;
 			if (normalizedCategoryId.StartsWith("playlist_cat_", StringComparison.OrdinalIgnoreCase))
 			{
 				ParsePlaylistCategoryViewSource(categoryId, out var catName, out var catOffset);
@@ -671,6 +678,22 @@ public partial class MainForm
 				else
 				{
 					MessageBox.Show("未知的歌手分类: " + categoryId, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+				}
+			}
+			else if (categoryId.StartsWith("new_album_period_", StringComparison.OrdinalIgnoreCase) && int.TryParse(categoryId.Substring("new_album_period_".Length), out albumTypeCode))
+			{
+				await LoadAlbumCategoryAreasAsync(albumTypeCode, skipSave: true);
+			}
+			else if (categoryId.StartsWith("new_album_area_", StringComparison.OrdinalIgnoreCase))
+			{
+				string[] parts = categoryId.Split('_');
+				if (parts.Length == 5 && int.TryParse(parts[3], out var typeFilter) && int.TryParse(parts[4], out var areaFilter))
+				{
+					await LoadAlbumsByCategoryAsync(typeFilter, areaFilter, 0, skipSave: true);
+				}
+				else
+				{
+					MessageBox.Show("未知的新碟分类: " + categoryId, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 				}
 			}
 			else

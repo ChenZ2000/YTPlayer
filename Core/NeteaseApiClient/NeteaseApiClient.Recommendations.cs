@@ -2365,6 +2365,228 @@ namespace YTPlayer.Core
         }
 
         /// <summary>
+        /// 获取新碟分类数据（时间 + 地区）。
+        /// 参考: NeteaseCloudMusicApi/module/top_album.js
+        /// </summary>
+        public async Task<SearchResult<AlbumInfo>> GetNewAlbumsByCategoryAsync(
+            int periodCode,
+            int areaCode,
+            int limit = 100,
+            int offset = 0,
+            int? year = null,
+            int? month = null)
+        {
+            limit = Math.Max(1, limit);
+            offset = Math.Max(0, offset);
+
+            string periodToken = ArtistMetadataHelper.ResolveNewAlbumPeriodApiToken(periodCode);
+            string areaToken = ArtistMetadataHelper.ResolveNewAlbumAreaApiToken(areaCode);
+
+            DateTime now = DateTime.Now;
+            int requestYear = (year.HasValue && year.Value > 0) ? year.Value : now.Year;
+            int requestMonth = (month.HasValue && month.Value >= 1 && month.Value <= 12) ? month.Value : now.Month;
+
+            try
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"[GetNewAlbumsByCategory] period={periodCode}({periodToken}), area={areaCode}({areaToken}), limit={limit}, offset={offset}, year={requestYear}, month={requestMonth}");
+
+                var merged = new List<JToken>();
+                var seenIds = new HashSet<string>(StringComparer.Ordinal);
+                bool upstreamHasMore = false;
+                int totalHint = 0;
+                JObject? lastResponse = null;
+
+                void AppendDistinct(JArray? source)
+                {
+                    if (source == null)
+                    {
+                        return;
+                    }
+
+                    foreach (JToken? item in source)
+                    {
+                        if (item == null)
+                        {
+                            continue;
+                        }
+
+                        string id = item["id"]?.Value<string>()
+                                    ?? item["id"]?.Value<long>().ToString(CultureInfo.InvariantCulture)
+                                    ?? string.Empty;
+                        if (string.IsNullOrWhiteSpace(id))
+                        {
+                            merged.Add(item);
+                            continue;
+                        }
+
+                        if (seenIds.Add(id))
+                        {
+                            merged.Add(item);
+                        }
+                    }
+                }
+
+                async Task<JObject?> FetchPageAsync(int targetYear, int targetMonth, int pageLimit, int pageOffset)
+                {
+                    var payload = new Dictionary<string, object>
+                    {
+                        { "area", areaToken },
+                        { "limit", pageLimit },
+                        { "offset", pageOffset },
+                        { "type", "new" },
+                        { "year", targetYear },
+                        { "month", targetMonth },
+                        { "total", false },
+                        { "rcmd", true }
+                    };
+
+                    JObject response = await PostWeApiAsync<JObject>(
+                        "/api/discovery/new/albums/area",
+                        payload,
+                        autoConvertApiSegment: true);
+
+                    if (response["code"]?.Value<int>() != 200)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[API] 获取新碟分类失败: {response["message"]}");
+                        return null;
+                    }
+
+                    lastResponse = response;
+                    totalHint = Math.Max(
+                        totalHint,
+                        response["total"]?.Value<int>()
+                            ?? response["count"]?.Value<int>()
+                            ?? 0);
+
+                    bool pageHasMore = response["hasMore"]?.Value<bool>()
+                                       ?? response["more"]?.Value<bool>()
+                                       ?? false;
+                    upstreamHasMore |= pageHasMore;
+                    return response;
+                }
+
+                async Task AppendMonthDataAcrossPagesAsync(int targetYear, int targetMonth)
+                {
+                    const int requestLimit = 200;
+                    int requestOffset = 0;
+                    int safety = 0;
+
+                    while (safety < 20)
+                    {
+                        JObject? response = await FetchPageAsync(targetYear, targetMonth, requestLimit, requestOffset);
+                        if (response == null)
+                        {
+                            break;
+                        }
+
+                        int beforeCount = merged.Count;
+                        JArray? monthData = response["monthData"] as JArray;
+                        if (monthData == null || monthData.Count == 0)
+                        {
+                            monthData = response["albums"] as JArray;
+                        }
+
+                        AppendDistinct(monthData);
+
+                        int addedCount = merged.Count - beforeCount;
+                        bool pageHasMore = response["hasMore"]?.Value<bool>()
+                                           ?? response["more"]?.Value<bool>()
+                                           ?? false;
+                        if (addedCount <= 0)
+                        {
+                            break;
+                        }
+
+                        if (!pageHasMore && addedCount < requestLimit)
+                        {
+                            break;
+                        }
+
+                        requestOffset += addedCount;
+                        safety++;
+                    }
+                }
+
+                if (string.Equals(periodToken, "week", StringComparison.OrdinalIgnoreCase))
+                {
+                    int requestLimit = Math.Max(limit + offset, 120);
+                    JObject? response = await FetchPageAsync(requestYear, requestMonth, requestLimit, 0);
+                    if (response != null)
+                    {
+                        AppendDistinct(response["weekData"] as JArray);
+                        if (merged.Count == 0)
+                        {
+                            AppendDistinct(response["monthData"] as JArray);
+                        }
+                        if (merged.Count == 0)
+                        {
+                            AppendDistinct(response["albums"] as JArray);
+                        }
+                    }
+                }
+                else if (string.Equals(periodToken, "year", StringComparison.OrdinalIgnoreCase))
+                {
+                    // 兼容旧状态传入的 year token，按当前自然年处理：1 月到当前月。
+                    int calendarYear = now.Year;
+                    int endMonth = now.Month;
+
+                    for (int currentMonth = 1; currentMonth <= endMonth; currentMonth++)
+                    {
+                        await AppendMonthDataAcrossPagesAsync(calendarYear, currentMonth);
+                    }
+                }
+                else
+                {
+                    int requestLimit = Math.Max(limit + offset, 120);
+                    JObject? response = await FetchPageAsync(requestYear, requestMonth, requestLimit, 0);
+                    if (response != null)
+                    {
+                        AppendDistinct(response["monthData"] as JArray);
+                        if (merged.Count == 0)
+                        {
+                            AppendDistinct(response["weekData"] as JArray);
+                        }
+                        if (merged.Count == 0)
+                        {
+                            AppendDistinct(response["albums"] as JArray);
+                        }
+                    }
+                }
+
+                List<JToken> orderedTokens = merged
+                    .OrderByDescending(item => item["publishTime"]?.Value<long>() ?? 0L)
+                    .ThenByDescending(item => item["id"]?.Value<long>() ?? 0L)
+                    .ToList();
+
+                List<AlbumInfo> allAlbums = ParseAlbumList(new JArray(orderedTokens));
+                List<AlbumInfo> pageItems = allAlbums.Skip(offset).Take(limit).ToList();
+
+                int totalCount = Math.Max(totalHint, allAlbums.Count);
+                bool hasMore = upstreamHasMore || (offset + pageItems.Count < totalCount);
+                if (hasMore && totalCount <= offset + pageItems.Count)
+                {
+                    totalCount = offset + Math.Max(limit, pageItems.Count) + 1;
+                }
+
+                System.Diagnostics.Debug.WriteLine(
+                    $"[API] 成功获取新碟分类 {pageItems.Count} 条，总计≈{totalCount}，period={periodToken}，merged={allAlbums.Count}，hasMore={hasMore}");
+
+                if (lastResponse != null)
+                {
+                    return new SearchResult<AlbumInfo>(pageItems, totalCount, offset, limit, lastResponse);
+                }
+
+                return new SearchResult<AlbumInfo>(pageItems, totalCount, offset, limit);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[API] 获取新碟分类异常: {ex.Message}");
+                return new SearchResult<AlbumInfo>(new List<AlbumInfo>(), 0, offset, limit);
+            }
+        }
+
+        /// <summary>
         /// 获取新碟上架
         /// 参考: NeteaseCloudMusicApi/module/album_newest.js
         /// </summary>

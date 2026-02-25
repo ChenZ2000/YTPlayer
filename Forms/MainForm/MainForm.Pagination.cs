@@ -72,6 +72,18 @@ public partial class MainForm
 					await LoadArtistsByCategoryAsync(offset: Math.Max(0, offset3 - 100), typeCode: typeCode, areaCode: areaCode, skipSave: true);
 				}
 			}
+			else if (!string.IsNullOrEmpty(_currentViewSource) && _currentViewSource.StartsWith("new_album_category_list:", StringComparison.OrdinalIgnoreCase))
+			{
+				ParseAlbumCategoryListViewSource(_currentViewSource, out var albumTypeCode, out var albumAreaCode, out var albumOffset);
+				if (albumOffset <= 0)
+				{
+					UpdateStatusBar("已经是第一页");
+				}
+				else
+				{
+					await LoadAlbumsByCategoryAsync(albumTypeCode, albumAreaCode, Math.Max(0, albumOffset - AlbumCategoryPageSize), skipSave: true);
+				}
+			}
 			else if (!string.IsNullOrEmpty(_currentViewSource) && _currentViewSource.StartsWith("podcast:", StringComparison.OrdinalIgnoreCase))
 			{
 				ParsePodcastViewSource(_currentViewSource, out var podcastId, out var offset4, out var ascending);
@@ -221,6 +233,17 @@ public partial class MainForm
 				ParseArtistCategoryListViewSource(_currentViewSource, out var typeCode, out var areaCode, out var offset3);
 				int newOffset3 = offset3 + 100;
 				await LoadArtistsByCategoryAsync(typeCode, areaCode, newOffset3, skipSave: true);
+			}
+			else if (!string.IsNullOrEmpty(_currentViewSource) && _currentViewSource.StartsWith("new_album_category_list:", StringComparison.OrdinalIgnoreCase))
+			{
+				if (!_currentAlbumCategoryHasMore)
+				{
+					UpdateStatusBar("已经是最后一页");
+					return;
+				}
+				ParseAlbumCategoryListViewSource(_currentViewSource, out var albumTypeCode, out var albumAreaCode, out var albumOffset);
+				int newOffset3 = albumOffset + AlbumCategoryPageSize;
+				await LoadAlbumsByCategoryAsync(albumTypeCode, albumAreaCode, newOffset3, skipSave: true);
 			}
 			else if (!string.IsNullOrEmpty(_currentViewSource) && _currentViewSource.StartsWith("podcast:", StringComparison.OrdinalIgnoreCase))
 			{
@@ -389,6 +412,24 @@ public partial class MainForm
 			{
 				int targetOffset = Math.Max(0, (page - 1) * ArtistSongsPageSize);
 				await LoadArtistsByCategoryAsync(typeCode, areaCode, targetOffset, skipSave: true);
+			};
+		}
+		else if (viewSource.StartsWith("new_album_category_list:", StringComparison.OrdinalIgnoreCase))
+		{
+			if (_currentAlbumCategoryLoadedAll)
+			{
+				UpdateStatusBar("已加载全部专辑，无法跳转");
+				return;
+			}
+			ParseAlbumCategoryListViewSource(viewSource, out var albumTypeCode, out var albumAreaCode, out var albumOffset);
+			currentPage = (albumOffset / AlbumCategoryPageSize) + 1;
+			maxPage = CalculateMaxPage(_currentAlbumCategoryTotalCount, AlbumCategoryPageSize, currentPage);
+			pageSize = AlbumCategoryPageSize;
+			paginationKey = BuildAlbumCategoryPaginationKey(albumTypeCode, albumAreaCode);
+			jumpAction = async delegate(int page)
+			{
+				int targetOffset = Math.Max(0, (page - 1) * AlbumCategoryPageSize);
+				await LoadAlbumsByCategoryAsync(albumTypeCode, albumAreaCode, targetOffset, skipSave: true);
 			};
 		}
 		else if (viewSource.StartsWith("podcast:", StringComparison.OrdinalIgnoreCase))
@@ -587,6 +628,11 @@ public partial class MainForm
 	private string BuildArtistCategoryPaginationKey(int typeCode, int areaCode)
 	{
 		return $"artist_category_list:{typeCode}:{areaCode}";
+	}
+
+	private string BuildAlbumCategoryPaginationKey(int typeCode, int areaCode)
+	{
+		return $"new_album_category_list:{typeCode}:{areaCode}";
 	}
 
 	private string BuildPodcastEpisodesPaginationKey(long radioId, bool ascending)

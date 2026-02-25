@@ -1,5 +1,6 @@
 using System;
 using System.Windows.Forms;
+using YTPlayer.Utils;
 
 namespace YTPlayer.Forms
 {
@@ -105,6 +106,7 @@ namespace YTPlayer.Forms
                 refreshItem
             });
 
+            MenuNavigationBoundaryHelper.Attach(_treeMenu);
             _commentTree.ContextMenuStrip = _treeMenu;
         }
 

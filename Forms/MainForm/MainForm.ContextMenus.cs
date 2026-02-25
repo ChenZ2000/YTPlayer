@@ -1,5 +1,6 @@
 #nullable disable
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Windows.Forms;
@@ -242,11 +243,15 @@ public partial class MainForm
 				downloadPodcastMenuItem.Tag = podcast;
 				sharePodcastMenuItem.Visible = allowShare;
 				sharePodcastMenuItem.Tag = (allowShare ? podcast : null);
+				sharePodcastCopyWebMenuItem.Tag = (allowShare ? podcast : null);
+				sharePodcastOpenWebMenuItem.Tag = (allowShare ? podcast : null);
 			}
 			else
 			{
 				sharePodcastMenuItem.Visible = false;
 				sharePodcastMenuItem.Tag = null;
+				sharePodcastCopyWebMenuItem.Tag = null;
+				sharePodcastOpenWebMenuItem.Tag = null;
 			}
 			if (isLoggedIn && flag)
 			{
@@ -289,6 +294,7 @@ public partial class MainForm
 			sharePodcastEpisodeMenuItem.Tag = null;
 			sharePodcastEpisodeWebMenuItem.Tag = null;
 			sharePodcastEpisodeDirectMenuItem.Tag = null;
+			sharePodcastEpisodeOpenWebMenuItem.Tag = null;
 		}
 		else
 		{
@@ -296,6 +302,7 @@ public partial class MainForm
 			sharePodcastEpisodeMenuItem.Tag = episode;
 			sharePodcastEpisodeWebMenuItem.Tag = episode;
 			sharePodcastEpisodeDirectMenuItem.Tag = episode;
+			sharePodcastEpisodeOpenWebMenuItem.Tag = episode;
 		}
 	}
 
@@ -713,6 +720,7 @@ public partial class MainForm
 		downloadAlbumMenuItem.Visible = false;
 		batchDownloadMenuItem.Visible = false;
 		downloadCategoryMenuItem.Visible = false;
+		downloadCategoryMenuItem.Text = "下载分类(&C)...";
 		batchDownloadPlaylistsMenuItem.Visible = false;
 		downloadPodcastMenuItem.Visible = false;
 		downloadPodcastMenuItem.Tag = null;
@@ -723,16 +731,27 @@ public partial class MainForm
 		deleteFromCloudMenuItem.Visible = false;
 		toolStripSeparatorArtist.Visible = false;
 		shareArtistMenuItem.Visible = false;
+		shareArtistMenuItem.Tag = null;
 		subscribeArtistMenuItem.Visible = false;
 		unsubscribeArtistMenuItem.Visible = false;
 		toolStripSeparatorView.Visible = false;
 		commentMenuItem.Visible = false;
 		commentMenuItem.Tag = null;
 		commentMenuSeparator.Visible = false;
-		viewSongArtistMenuItem.Visible = false;
-		viewSongArtistMenuItem.Tag = null;
-		viewSongAlbumMenuItem.Visible = false;
-		viewSongAlbumMenuItem.Tag = null;
+		if (viewSongArtistMenuItem != null)
+		{
+			viewSongArtistMenuItem.Visible = false;
+			viewSongArtistMenuItem.Tag = null;
+			viewSongArtistMenuItem.Text = "歌手(&A)";
+			viewSongArtistMenuItem.DropDownItems.Clear();
+		}
+		if (viewSongAlbumMenuItem != null)
+		{
+			viewSongAlbumMenuItem.Visible = false;
+			viewSongAlbumMenuItem.Tag = null;
+			viewSongAlbumMenuItem.Text = "专辑(&B)";
+			viewSongAlbumMenuItem.DropDownItems.Clear();
+		}
 		if (viewPodcastMenuItem != null)
 		{
 			viewPodcastMenuItem.Visible = false;
@@ -740,18 +759,30 @@ public partial class MainForm
 		}
 		shareSongMenuItem.Visible = false;
 		shareSongMenuItem.Tag = null;
+		shareSongWebMenuItem.Text = "复制歌曲网页链接(&W)";
+		shareSongDirectMenuItem.Text = "复制歌曲直链(&L)";
 		shareSongWebMenuItem.Tag = null;
 		shareSongDirectMenuItem.Tag = null;
+		shareSongOpenWebMenuItem.Tag = null;
 		sharePlaylistMenuItem.Visible = false;
 		sharePlaylistMenuItem.Tag = null;
+		sharePlaylistCopyWebMenuItem.Tag = null;
+		sharePlaylistOpenWebMenuItem.Tag = null;
 		shareAlbumMenuItem.Visible = false;
 		shareAlbumMenuItem.Tag = null;
+		shareAlbumCopyWebMenuItem.Tag = null;
+		shareAlbumOpenWebMenuItem.Tag = null;
 		sharePodcastMenuItem.Visible = false;
 		sharePodcastMenuItem.Tag = null;
+		sharePodcastCopyWebMenuItem.Tag = null;
+		sharePodcastOpenWebMenuItem.Tag = null;
 		sharePodcastEpisodeMenuItem.Visible = false;
 		sharePodcastEpisodeMenuItem.Tag = null;
 		sharePodcastEpisodeWebMenuItem.Tag = null;
 		sharePodcastEpisodeDirectMenuItem.Tag = null;
+		sharePodcastEpisodeOpenWebMenuItem.Tag = null;
+		shareArtistCopyWebMenuItem.Tag = null;
+		shareArtistOpenWebMenuItem.Tag = null;
 		podcastSortMenuItem.Visible = false;
 		if (artistSongsSortMenuItem != null)
 		{
@@ -804,10 +835,38 @@ public partial class MainForm
 		showViewSection = true;
 	}
 
-	private void ConfigureCategoryMenu()
+	private void ConfigureCategoryMenu(MenuContextSnapshot snapshot, ref bool showViewSection, ref CommentTarget? contextCommentTarget)
 	{
 		insertPlayMenuItem.Visible = false;
 		downloadCategoryMenuItem.Visible = true;
+		if (snapshot?.ListItem == null || !string.Equals(snapshot.ListItem.CategoryId, "user_liked_songs", StringComparison.OrdinalIgnoreCase))
+		{
+			return;
+		}
+		downloadCategoryMenuItem.Text = "下载歌单(&C)...";
+		PlaylistInfo playlistInfo = _userLikedPlaylist;
+		if (playlistInfo == null || string.IsNullOrWhiteSpace(playlistInfo.Id))
+		{
+			long currentUserId = GetCurrentUserId();
+			if (currentUserId > 0)
+			{
+				playlistInfo = new PlaylistInfo
+				{
+					Id = currentUserId.ToString(CultureInfo.InvariantCulture),
+					Name = "喜欢的音乐"
+				};
+			}
+			else
+			{
+				return;
+			}
+		}
+		sharePlaylistMenuItem.Visible = true;
+		sharePlaylistMenuItem.Tag = playlistInfo;
+		sharePlaylistCopyWebMenuItem.Tag = playlistInfo;
+		sharePlaylistOpenWebMenuItem.Tag = playlistInfo;
+		showViewSection = true;
+		contextCommentTarget = new CommentTarget(playlistInfo.Id, CommentType.Playlist, string.IsNullOrWhiteSpace(playlistInfo.Name) ? "喜欢的音乐" : playlistInfo.Name, playlistInfo.Creator);
 	}
 
 	private void ApplyViewContextFlags(MenuContextSnapshot snapshot, ref bool showViewSection)
@@ -848,6 +907,8 @@ public partial class MainForm
 			batchDownloadPlaylistsMenuItem.Visible = true;
 			sharePlaylistMenuItem.Visible = true;
 			sharePlaylistMenuItem.Tag = playlist;
+			sharePlaylistCopyWebMenuItem.Tag = playlist;
+			sharePlaylistOpenWebMenuItem.Tag = playlist;
 			showViewSection = true;
 			if (!string.IsNullOrWhiteSpace(playlist.Id))
 			{
@@ -877,6 +938,13 @@ public partial class MainForm
 			batchDownloadPlaylistsMenuItem.Visible = true;
 			shareAlbumMenuItem.Visible = true;
 			shareAlbumMenuItem.Tag = album;
+			shareAlbumCopyWebMenuItem.Tag = album;
+			shareAlbumOpenWebMenuItem.Tag = album;
+			bool flag2 = ConfigureAlbumArtistMenu(album, isLoggedIn);
+			if (flag2)
+			{
+				showViewSection = true;
+			}
 			showViewSection = true;
 			if (!string.IsNullOrWhiteSpace(album.Id))
 			{
@@ -897,6 +965,124 @@ public partial class MainForm
 				showViewSection = true;
 			}
 		}
+	}
+
+	private static string BuildArtistSummaryText(List<ArtistInfo> artists)
+	{
+		if (artists == null || artists.Count == 0)
+		{
+			return "未知歌手";
+		}
+		List<string> list = (from artist in artists
+			select (artist?.Name ?? string.Empty).Trim() into name
+			where !string.IsNullOrWhiteSpace(name)
+			select name).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+		if (list.Count == 0)
+		{
+			return "未知歌手";
+		}
+		return string.Join("/", list);
+	}
+
+	private bool ConfigureArtistOwnerMenu(List<ArtistInfo> artists, bool allowSubscribe, object ownerTag)
+	{
+		if (viewSongArtistMenuItem == null)
+		{
+			return false;
+		}
+		viewSongArtistMenuItem.DropDownItems.Clear();
+		List<ArtistInfo> list = (from artist in artists
+			where artist != null && (artist.Id > 0 || !string.IsNullOrWhiteSpace(artist.Name))
+			select artist).ToList();
+		if (list.Count == 0)
+		{
+			viewSongArtistMenuItem.Visible = false;
+			viewSongArtistMenuItem.Tag = null;
+			return false;
+		}
+		viewSongArtistMenuItem.Text = "歌手：" + BuildArtistSummaryText(list);
+		foreach (ArtistInfo item in list)
+		{
+			string text = (string.IsNullOrWhiteSpace(item.Name) ? ("歌手 " + item.Id) : item.Name.Trim());
+			ArtistInfo artistInfo = new ArtistInfo
+			{
+				Id = item.Id,
+				Name = text,
+				PicUrl = item.PicUrl ?? string.Empty
+			};
+			ToolStripMenuItem toolStripMenuItem = new ToolStripMenuItem(text);
+			toolStripMenuItem.Tag = artistInfo;
+			ToolStripMenuItem toolStripMenuItem2 = new ToolStripMenuItem("查看歌手");
+			toolStripMenuItem2.Tag = artistInfo;
+			toolStripMenuItem2.Click += viewSongArtistMenuItem_Click;
+			toolStripMenuItem.DropDownItems.Add(toolStripMenuItem2);
+			if (allowSubscribe)
+			{
+				bool flag = IsArtistSubscribed(artistInfo);
+				ToolStripMenuItem toolStripMenuItem3 = new ToolStripMenuItem(flag ? "收藏歌手（已收藏）" : "收藏歌手");
+				toolStripMenuItem3.Tag = artistInfo;
+				toolStripMenuItem3.Enabled = !flag;
+				toolStripMenuItem3.Click += subscribeSongArtistMenuItem_Click;
+				toolStripMenuItem.DropDownItems.Add(toolStripMenuItem3);
+			}
+			viewSongArtistMenuItem.DropDownItems.Add(toolStripMenuItem);
+		}
+		viewSongArtistMenuItem.Visible = viewSongArtistMenuItem.DropDownItems.Count > 0;
+		viewSongArtistMenuItem.Tag = (viewSongArtistMenuItem.Visible ? ownerTag : null);
+		return viewSongArtistMenuItem.Visible;
+	}
+
+	private bool ConfigureSongArtistMenu(SongInfo songInfo, bool allowSubscribe)
+	{
+		return ConfigureArtistOwnerMenu(BuildSongArtistInfoList(songInfo), allowSubscribe, songInfo);
+	}
+
+	private bool ConfigureAlbumArtistMenu(AlbumInfo albumInfo, bool allowSubscribe)
+	{
+		return ConfigureArtistOwnerMenu(BuildAlbumArtistInfoList(albumInfo), allowSubscribe, albumInfo);
+	}
+
+	private bool ConfigureSongAlbumMenu(SongInfo songInfo, AlbumInfo albumInfo, bool allowSubscribe)
+	{
+		if (viewSongAlbumMenuItem == null)
+		{
+			return false;
+		}
+		viewSongAlbumMenuItem.DropDownItems.Clear();
+		string text = (albumInfo?.Name ?? string.Empty).Trim();
+		if (string.IsNullOrWhiteSpace(text))
+		{
+			text = (songInfo?.Album ?? string.Empty).Trim();
+		}
+		if (string.IsNullOrWhiteSpace(text))
+		{
+			text = "未知专辑";
+		}
+		viewSongAlbumMenuItem.Text = "专辑：" + text;
+		if (songInfo != null || (albumInfo != null && !string.IsNullOrWhiteSpace(albumInfo.Id)))
+		{
+			ToolStripMenuItem toolStripMenuItem = new ToolStripMenuItem("查看专辑");
+			toolStripMenuItem.Tag = ((albumInfo != null && !string.IsNullOrWhiteSpace(albumInfo.Id)) ? ((object)albumInfo) : songInfo);
+			toolStripMenuItem.Click += viewSongAlbumMenuItem_Click;
+			viewSongAlbumMenuItem.DropDownItems.Add(toolStripMenuItem);
+		}
+		if (allowSubscribe)
+		{
+			object obj = ((albumInfo != null && !string.IsNullOrWhiteSpace(albumInfo.Id)) ? ((object)albumInfo) : songInfo);
+			if (obj != null)
+			{
+				bool flag = albumInfo != null && !string.IsNullOrWhiteSpace(albumInfo.Id) && IsAlbumSubscribed(albumInfo);
+				ToolStripMenuItem toolStripMenuItem2 = new ToolStripMenuItem(flag ? "收藏专辑（已收藏）" : "收藏专辑");
+				toolStripMenuItem2.Tag = obj;
+				toolStripMenuItem2.Enabled = !flag;
+				toolStripMenuItem2.Click += subscribeSongAlbumMenuItem_Click;
+				viewSongAlbumMenuItem.DropDownItems.Add(toolStripMenuItem2);
+			}
+		}
+		object obj2 = ((songInfo != null) ? ((object)songInfo) : albumInfo);
+		viewSongAlbumMenuItem.Visible = viewSongAlbumMenuItem.DropDownItems.Count > 0;
+		viewSongAlbumMenuItem.Tag = (viewSongAlbumMenuItem.Visible ? obj2 : null);
+		return viewSongAlbumMenuItem.Visible;
 	}
 
 	private void ConfigureSongOrEpisodeMenu(MenuContextSnapshot snapshot, bool isLoggedIn, bool isCloudView, ref bool showViewSection, ref CommentTarget? contextCommentTarget, ref PodcastRadioInfo? contextPodcastForEpisode, ref PodcastEpisodeInfo? effectiveEpisode, ref bool isPodcastEpisodeContext)
@@ -956,52 +1142,11 @@ public partial class MainForm
 				flag2 = !string.IsNullOrWhiteSpace(ResolveSongIdForLibraryState(songInfo)) && (albumInfo == null || !IsAlbumSubscribed(albumInfo));
 			}
 		}
-		object subscribeSongAlbumContext = null;
-		if (flag2)
-		{
-			if (albumInfo != null)
-			{
-				subscribeSongAlbumContext = albumInfo;
-			}
-			else if (songInfo != null && !isCloudSongContext)
-			{
-				subscribeSongAlbumContext = songInfo;
-			}
-		}
-		subscribeSongAlbumMenuItem.Visible = flag2;
-		subscribeSongAlbumMenuItem.Tag = subscribeSongAlbumContext;
-		bool canSubscribeSongArtist = isLoggedIn && !isPodcastEpisodeContext;
-		object subscribeSongArtistContext = null;
-		if (canSubscribeSongArtist)
-		{
-			ArtistInfo artistInfo = TryCreatePrimaryArtistInfoFromSong(songInfo);
-			if (isCloudSongContext)
-			{
-				canSubscribeSongArtist = artistInfo != null && !IsArtistSubscribed(artistInfo);
-				if (canSubscribeSongArtist)
-				{
-					subscribeSongArtistContext = artistInfo;
-				}
-			}
-			else if (string.IsNullOrWhiteSpace(ResolveSongIdForLibraryState(songInfo)))
-			{
-				canSubscribeSongArtist = false;
-			}
-			else if (artistInfo != null)
-			{
-				canSubscribeSongArtist = !IsArtistSubscribed(artistInfo);
-				if (canSubscribeSongArtist)
-				{
-					subscribeSongArtistContext = artistInfo;
-				}
-			}
-			else
-			{
-				subscribeSongArtistContext = songInfo;
-			}
-		}
-		subscribeSongArtistMenuItem.Visible = canSubscribeSongArtist;
-		subscribeSongArtistMenuItem.Tag = (canSubscribeSongArtist ? subscribeSongArtistContext : null);
+		subscribeSongAlbumMenuItem.Visible = false;
+		subscribeSongAlbumMenuItem.Tag = null;
+		bool canSubscribeSongArtist = isLoggedIn && !isPodcastEpisodeContext && songInfo != null;
+		subscribeSongArtistMenuItem.Visible = false;
+		subscribeSongArtistMenuItem.Tag = null;
 		if (isCloudView && songInfo != null && songInfo.IsCloudSong)
 		{
 			deleteFromCloudMenuItem.Visible = true;
@@ -1066,31 +1211,36 @@ public partial class MainForm
 		downloadLyricsMenuItem.Visible = flag9;
 		downloadLyricsMenuItem.Tag = (flag9 ? songInfo : null);
 		batchDownloadMenuItem.Visible = !flag8 && !snapshot.IsCurrentPlayback;
-		bool flag10 = songInfo != null && (!songInfo.IsCloudSong || !string.IsNullOrWhiteSpace(songInfo?.Artist));
-		bool flag11 = songInfo != null && (!songInfo.IsCloudSong || !string.IsNullOrWhiteSpace(songInfo?.Album));
+		bool flag10 = !isPodcastEpisodeContext && ConfigureSongArtistMenu(songInfo, canSubscribeSongArtist);
+		bool flag11 = false;
+		if (!isPodcastEpisodeContext && songInfo != null)
+		{
+			bool canShowAlbumOwnerMenu = !songInfo.IsCloudSong || !string.IsNullOrWhiteSpace(songInfo?.Album);
+			flag11 = ConfigureSongAlbumMenu(songInfo, canShowAlbumOwnerMenu ? albumInfo : null, flag2);
+		}
 		bool flag12 = songInfo != null && flag;
 		if (isPodcastEpisodeContext)
 		{
-			flag10 = false;
 			flag11 = false;
 			flag12 = false;
 		}
-		viewSongArtistMenuItem.Visible = flag10;
-		viewSongArtistMenuItem.Tag = (flag10 ? songInfo : null);
-		viewSongAlbumMenuItem.Visible = flag11;
-		viewSongAlbumMenuItem.Tag = (flag11 ? songInfo : null);
 		shareSongMenuItem.Visible = flag12;
 		if (flag12)
 		{
 			shareSongMenuItem.Tag = songInfo;
 			shareSongWebMenuItem.Tag = songInfo;
 			shareSongDirectMenuItem.Tag = songInfo;
+			shareSongOpenWebMenuItem.Tag = songInfo;
+			bool flag13 = songInfo != null && songInfo.IsCloudSong;
+			shareSongWebMenuItem.Text = (flag13 ? "复制音乐网页链接(&W)" : "复制歌曲网页链接(&W)");
+			shareSongDirectMenuItem.Text = (flag13 ? "复制音乐直链(&L)" : "复制歌曲直链(&L)");
 		}
 		else
 		{
 			shareSongMenuItem.Tag = null;
 			shareSongWebMenuItem.Tag = null;
 			shareSongDirectMenuItem.Tag = null;
+			shareSongOpenWebMenuItem.Tag = null;
 		}
 		if (contextPodcastForEpisode == null && effectiveEpisode == null && songInfo != null && songInfo.IsPodcastEpisode)
 		{
@@ -1104,17 +1254,17 @@ public partial class MainForm
 		{
 			ConfigurePodcastEpisodeShareMenu(null);
 		}
-		bool flag13 = false;
+		bool flag14 = false;
 		if (viewPodcastMenuItem != null)
 		{
-			bool flag14 = contextPodcastForEpisode != null && contextPodcastForEpisode.Id > 0;
-			viewPodcastMenuItem.Visible = flag14;
-			viewPodcastMenuItem.Tag = (flag14 ? contextPodcastForEpisode : null);
-			flag13 = flag14;
+			bool flag15 = contextPodcastForEpisode != null && contextPodcastForEpisode.Id > 0;
+			viewPodcastMenuItem.Visible = flag15;
+			viewPodcastMenuItem.Tag = (flag15 ? contextPodcastForEpisode : null);
+			flag14 = flag15;
 		}
 		bool visible = sharePodcastMenuItem.Visible;
 		bool visible2 = sharePodcastEpisodeMenuItem.Visible;
-		showViewSection = showViewSection || flag10 || flag11 || flag12 || flag2 || canSubscribeSongArtist || flag13 || visible || visible2;
+		showViewSection = showViewSection || flag10 || flag11 || flag12 || flag2 || flag14 || visible || visible2;
 	}
 
 

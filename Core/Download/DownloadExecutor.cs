@@ -193,6 +193,23 @@ namespace YTPlayer.Core.Download
                 }
                 catch (OperationCanceledException)
                 {
+                    // 暂停/恢复流程也通过 CancellationToken 中断，这里优先保留当前状态，避免误判为取消。
+                    if (task.Status != DownloadStatus.Cancelled)
+                    {
+                        if (task.Status == DownloadStatus.Downloading)
+                        {
+                            task.Status = DownloadStatus.Paused;
+                        }
+
+                        task.DownloadSpeed = 0;
+                        task.ErrorMessage = null;
+                        DebugLogger.Log(
+                            DebugLogger.LogLevel.Info,
+                            "DownloadExecutor",
+                            $"下载任务已中断并保留状态: {task.Song.Name}, status={task.Status}");
+                        return false;
+                    }
+
                     // 用户取消，不重试
                     task.Status = DownloadStatus.Cancelled;
                     task.ErrorMessage = "用户取消下载";
@@ -282,6 +299,18 @@ namespace YTPlayer.Core.Download
             }
             catch (OperationCanceledException)
             {
+                if (task.Status != DownloadStatus.Cancelled)
+                {
+                    if (task.Status == DownloadStatus.Downloading)
+                    {
+                        task.Status = DownloadStatus.Paused;
+                    }
+
+                    task.DownloadSpeed = 0;
+                    task.ErrorMessage = null;
+                    return false;
+                }
+
                 task.Status = DownloadStatus.Cancelled;
                 throw;
             }

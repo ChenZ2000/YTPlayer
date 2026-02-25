@@ -345,6 +345,8 @@ namespace YTPlayer.Core
                 SeekMinIntervalMs = 30,
                 SequenceNumberHidden = false,
                 CommentSequenceNumberHidden = false,
+                TransferListSequenceNumberHidden = false,
+                BatchDownloadDialogSequenceNumberHidden = false,
                 ControlBarHidden = false,
 
                 // 其他设置

@@ -31,6 +31,7 @@ public partial class MainForm
 		{ "playlist_category", "类" },
 		{ "podcast_categories", "类" },
 		{ "artist_categories", "类" },
+		{ "new_album_categories", "类" },
 		{ "new_albums", "张" },
 		{ "toplist", "个" },
 		{ PersonalFmCategoryId, "首" }
@@ -87,6 +88,7 @@ public partial class MainForm
 		List<ListItemInfo> list = new List<ListItemInfo>();
 		int value = _homePlaylistCategoryPresets.Length;
 		int count = ArtistMetadataHelper.GetTypeOptions().Count;
+		int albumCategoryTypeCount = ArtistMetadataHelper.GetNewAlbumPeriodOptions().Count;
 		if (flag)
 		{
 			int? likedCount = _userLikedPlaylist?.TrackCount;
@@ -111,10 +113,11 @@ public partial class MainForm
 		}
 		list.Add(BuildHomeCategoryItem("highquality_playlists", "精品歌单", _homeCachedHighQualityCount));
 		list.Add(BuildHomeCategoryItem("new_songs", "新歌速递", 5));
+		list.Add(BuildHomeCategoryItem("new_albums", "新碟上架", _homeCachedNewAlbumCount));
+		list.Add(BuildHomeCategoryItem("new_album_categories", "新碟分类", albumCategoryTypeCount));
 		list.Add(BuildHomeCategoryItem("playlist_category", "歌单分类", value));
 		list.Add(BuildHomeCategoryItem("podcast_categories", "播客分类", _homeCachedPodcastCategoryCount));
 		list.Add(BuildHomeCategoryItem("artist_categories", "歌手分类", count));
-		list.Add(BuildHomeCategoryItem("new_albums", "新碟上架", _homeCachedNewAlbumCount));
 		list.Add(BuildHomeCategoryItem("toplist", "官方排行榜", _homeCachedToplistCount));
 		string statusText = (flag ? "主页骨架已加载，正在同步数据..." : "欢迎使用，登录后解锁更多入口");
 		return new HomePageViewData(list, statusText);

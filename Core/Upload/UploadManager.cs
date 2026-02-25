@@ -171,6 +171,8 @@ namespace YTPlayer.Core.Upload
                     FileName = fileInfo.Name,
                     SourceList = sourceList,
                     TotalBytes = fileInfo.Length,
+                    DurationSeconds = TryResolveDurationFromLocalFile(filePath),
+                    CreatedTime = DateTime.Now,
                     Status = UploadStatus.Pending
                 };
 
@@ -238,6 +240,8 @@ namespace YTPlayer.Core.Upload
                 {
                     task.CancellationTokenSource?.Cancel();
                     task.Status = UploadStatus.Paused;
+                    task.CurrentSpeedBytesPerSecond = 0;
+                    task.StageMessage = "已暂停";
 
                     DebugLogger.Log(
                         DebugLogger.LogLevel.Info,
@@ -265,6 +269,7 @@ namespace YTPlayer.Core.Upload
                 {
                     _activeQueue.Remove(task);
                     task.Status = UploadStatus.Pending;
+                    task.StageMessage = "等待上传...";
                     _pendingQueue.Insert(0, task);
 
                     DebugLogger.Log(
@@ -404,6 +409,31 @@ namespace YTPlayer.Core.Upload
             lock (_queueLock)
             {
                 return new List<UploadTask>(_completedQueue);
+            }
+        }
+
+        private static int TryResolveDurationFromLocalFile(string filePath)
+        {
+            if (string.IsNullOrWhiteSpace(filePath) || !System.IO.File.Exists(filePath))
+            {
+                return 0;
+            }
+
+            try
+            {
+                using var tagFile = TagLib.File.Create(filePath);
+                TimeSpan duration = tagFile?.Properties?.Duration ?? TimeSpan.Zero;
+                if (duration <= TimeSpan.Zero)
+                {
+                    return 0;
+                }
+
+                int seconds = (int)Math.Round(duration.TotalSeconds, MidpointRounding.AwayFromZero);
+                return Math.Max(1, seconds);
+            }
+            catch
+            {
+                return 0;
             }
         }
 
@@ -599,6 +629,20 @@ namespace YTPlayer.Core.Upload
             }
             catch (OperationCanceledException)
             {
+                // 暂停/恢复流程也会触发取消异常。只要不是显式 Cancelled，就保留当前状态并留在活动列表。
+                if (task.Status != UploadStatus.Cancelled)
+                {
+                    if (task.Status == UploadStatus.Uploading)
+                    {
+                        task.Status = UploadStatus.Paused;
+                    }
+
+                    task.CurrentSpeedBytesPerSecond = 0;
+                    task.StageMessage = task.Status == UploadStatus.Pending ? "等待上传..." : "已暂停";
+                    QueueStateChanged?.Invoke();
+                    return;
+                }
+
                 task.Status = UploadStatus.Cancelled;
                 task.CurrentSpeedBytesPerSecond = 0;
                 task.StageMessage = "上传已取消";
@@ -635,6 +679,11 @@ namespace YTPlayer.Core.Upload
         {
             lock (_queueLock)
             {
+                if (task.Status == UploadStatus.Paused || task.Status == UploadStatus.Pending)
+                {
+                    return;
+                }
+
                 _activeQueue.Remove(task);
                 _completedQueue.Add(task);
             }
@@ -647,6 +696,11 @@ namespace YTPlayer.Core.Upload
         {
             lock (_queueLock)
             {
+                if (task.Status == UploadStatus.Paused || task.Status == UploadStatus.Pending)
+                {
+                    return;
+                }
+
                 _activeQueue.Remove(task);
             }
 
