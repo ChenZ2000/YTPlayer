@@ -1,4 +1,5 @@
 using System;
+using System.Reflection;
 using System.Threading;
 using System.Windows.Forms;
 using YTPlayer.Forms;
@@ -154,7 +155,7 @@ namespace YTPlayer
             {
                 ThemeManager.Initialize();
                 IWin32Window? resolvedOwner = ResolveOwner(owner);
-                TtsHelper.StopSpeaking();
+                TryStopSpeaking();
                 Interlocked.Increment(ref _activeDialogCount);
                 try
                 {
@@ -182,6 +183,19 @@ namespace YTPlayer
             }
 
             return ShowCore();
+        }
+
+        private static void TryStopSpeaking()
+        {
+            try
+            {
+                Type? ttsType = Type.GetType("YTPlayer.Utils.TtsHelper");
+                MethodInfo? stopMethod = ttsType?.GetMethod("StopSpeaking", BindingFlags.Public | BindingFlags.Static);
+                stopMethod?.Invoke(null, null);
+            }
+            catch
+            {
+            }
         }
     }
 }
