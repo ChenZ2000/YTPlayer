@@ -69,6 +69,142 @@ namespace YTPlayer.Core
         }
 
         /// <summary>
+        /// 歌单歌曲匹配检查结果。
+        /// </summary>
+        public sealed class PlaylistContainmentCheckResult
+        {
+            public bool ContainsSong { get; set; }
+
+            public bool IsTrackIdsComplete { get; set; }
+
+            public int TrackCount { get; set; }
+
+            public int TrackIdsCount { get; set; }
+
+            public bool UsedFallbackValidation { get; set; }
+        }
+
+        /// <summary>
+        /// 通过歌单详情中的 trackIds 判断歌曲是否已存在于歌单内。
+        /// 可选开启完整性校验：当 trackIds 数量明显小于 trackCount 时触发兜底校验。
+        /// </summary>
+        public async Task<PlaylistContainmentCheckResult> CheckPlaylistContainmentByTrackIdsAsync(
+            string playlistId,
+            string songId,
+            bool enforceCompletenessCheck = false,
+            CancellationToken cancellationToken = default)
+        {
+            var result = new PlaylistContainmentCheckResult
+            {
+                ContainsSong = false,
+                IsTrackIdsComplete = true,
+                TrackCount = 0,
+                TrackIdsCount = 0,
+                UsedFallbackValidation = false
+            };
+
+            if (string.IsNullOrWhiteSpace(playlistId) || string.IsNullOrWhiteSpace(songId))
+            {
+                return result;
+            }
+
+            var infoData = new Dictionary<string, object>
+            {
+                { "id", playlistId },
+                { "n", 1 },
+                { "s", 8 }
+            };
+
+            var infoResponse = await PostWeApiAsync<JObject>("/v3/playlist/detail", infoData, cancellationToken: cancellationToken);
+            int code = infoResponse["code"]?.Value<int>() ?? 0;
+            if (code != 200)
+            {
+                string msg = infoResponse["message"]?.Value<string>() ?? "未知错误";
+                throw new Exception($"获取歌单详情失败: code={code}, message={msg}");
+            }
+
+            var playlist = infoResponse["playlist"];
+            if (playlist == null)
+            {
+                return result;
+            }
+
+            var trackIds = playlist["trackIds"] as JArray;
+            int trackCount = playlist["trackCount"]?.Value<int>() ?? 0;
+            int trackIdsCount = trackIds?.Count ?? 0;
+
+            result.TrackCount = trackCount;
+            result.TrackIdsCount = trackIdsCount;
+            result.IsTrackIdsComplete = trackCount <= 0 || trackIdsCount >= trackCount;
+
+            if (trackIds == null || trackIdsCount == 0)
+            {
+                if (enforceCompletenessCheck && trackCount > 0)
+                {
+                    result.UsedFallbackValidation = true;
+                    var fallbackSongs = await GetPlaylistSongsAsync(playlistId, cancellationToken).ConfigureAwait(false);
+                    result.ContainsSong = fallbackSongs.Any(s => string.Equals(s?.Id, songId, StringComparison.Ordinal));
+                    result.IsTrackIdsComplete = true;
+                    result.TrackIdsCount = Math.Max(result.TrackIdsCount, fallbackSongs.Count);
+                }
+
+                return result;
+            }
+
+            bool contains = false;
+            if (long.TryParse(songId, NumberStyles.Integer, CultureInfo.InvariantCulture, out var targetId))
+            {
+                foreach (var track in trackIds)
+                {
+                    if ((track?["id"]?.Value<long>() ?? 0L) == targetId)
+                    {
+                        contains = true;
+                        break;
+                    }
+                }
+            }
+            else
+            {
+                foreach (var track in trackIds)
+                {
+                    var trackId = track?["id"]?.ToString();
+                    if (string.Equals(trackId, songId, StringComparison.Ordinal))
+                    {
+                        contains = true;
+                        break;
+                    }
+                }
+            }
+
+            result.ContainsSong = contains;
+
+            if (enforceCompletenessCheck && !result.IsTrackIdsComplete)
+            {
+                result.UsedFallbackValidation = true;
+                var fallbackSongs = await GetPlaylistSongsAsync(playlistId, cancellationToken).ConfigureAwait(false);
+                result.ContainsSong = fallbackSongs.Any(s => string.Equals(s?.Id, songId, StringComparison.Ordinal));
+                result.IsTrackIdsComplete = true;
+                result.TrackIdsCount = Math.Max(result.TrackIdsCount, fallbackSongs.Count);
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// 通过歌单详情中的 trackIds 判断歌曲是否已存在于歌单内。
+        /// 仅用于快速存在性匹配，默认不进行兜底完整性校验。
+        /// </summary>
+        public async Task<bool> PlaylistContainsSongByTrackIdsAsync(string playlistId, string songId, CancellationToken cancellationToken = default)
+        {
+            var result = await CheckPlaylistContainmentByTrackIdsAsync(
+                playlistId,
+                songId,
+                enforceCompletenessCheck: false,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+            return result.ContainsSong;
+        }
+
+        /// <summary>
         /// 获取歌单内的所有歌曲（参考 Python 版本 _fetch_playlist_via_weapi，11917-11966行）
         /// </summary>
         public async Task<List<SongInfo>> GetPlaylistSongsAsync(string playlistId, CancellationToken cancellationToken = default)

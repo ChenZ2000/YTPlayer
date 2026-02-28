@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using Newtonsoft.Json;
 using YTPlayer.Models;
 using YTPlayer.Models.Auth;
@@ -53,6 +54,9 @@ namespace YTPlayer.Core
 
                 // 确保集合不为空
                 state.Cookies = state.Cookies ?? new List<CookieItem>();
+                state.SongLyricLanguagePreferences = state.SongLyricLanguagePreferences ??
+                                                    new Dictionary<string, SongLyricLanguagePreference>(StringComparer.OrdinalIgnoreCase);
+                NormalizeSongLyricLanguagePreferences(state);
 
                 // 如果 IsLoggedIn=false，清空敏感数据（允许用户手动设置此标志来测试）
                 if (!state.IsLoggedIn)
@@ -67,6 +71,7 @@ namespace YTPlayer.Core
                     state.MusicU = null;
                     state.CsrfToken = null;
                     state.Cookies.Clear();
+                    state.SongLyricLanguagePreferences.Clear();
                 }
                 else
                 {
@@ -184,6 +189,7 @@ namespace YTPlayer.Core
                 state.MusicU = null;
                 state.CsrfToken = null;
                 state.Cookies?.Clear();
+                state.SongLyricLanguagePreferences?.Clear();
 
                 // 保留设备指纹字段：
                 // DeviceId, SDeviceId, DeviceMachineId, DeviceOs, DeviceOsVersion,
@@ -225,8 +231,55 @@ namespace YTPlayer.Core
             return new AccountState
             {
                 IsLoggedIn = false,
-                Cookies = new List<CookieItem>()
+                Cookies = new List<CookieItem>(),
+                SongLyricLanguagePreferences = new Dictionary<string, SongLyricLanguagePreference>(StringComparer.OrdinalIgnoreCase)
             };
+        }
+
+        private static void NormalizeSongLyricLanguagePreferences(AccountState state)
+        {
+            if (state == null)
+            {
+                return;
+            }
+
+            state.SongLyricLanguagePreferences ??=
+                new Dictionary<string, SongLyricLanguagePreference>(StringComparer.OrdinalIgnoreCase);
+
+            if (state.SongLyricLanguagePreferences.Count == 0)
+            {
+                return;
+            }
+
+            var normalized = new Dictionary<string, SongLyricLanguagePreference>(StringComparer.OrdinalIgnoreCase);
+            foreach (var pair in state.SongLyricLanguagePreferences)
+            {
+                string songId = pair.Key?.Trim() ?? string.Empty;
+                var preference = pair.Value;
+                if (string.IsNullOrWhiteSpace(songId) || preference == null)
+                {
+                    continue;
+                }
+
+                var selectedKeys = (preference.SelectedLanguageKeys ?? new List<string>())
+                    .Where(key => !string.IsNullOrWhiteSpace(key))
+                    .Select(key => key.Trim())
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                if (selectedKeys.Count == 0)
+                {
+                    continue;
+                }
+
+                normalized[songId] = new SongLyricLanguagePreference
+                {
+                    SongId = songId,
+                    SelectedLanguageKeys = selectedKeys
+                };
+            }
+
+            state.SongLyricLanguagePreferences = normalized;
         }
 
         /// <summary>

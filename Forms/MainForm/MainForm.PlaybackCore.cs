@@ -949,8 +949,7 @@ private async Task PlaySongDirect(SongInfo song, CancellationToken cancellationT
 				Debug.WriteLine("[MainForm] 播放请求已取消（播放前）");
 				return;
 			}
-			_lyricsDisplayManager?.Clear();
-			_currentLyrics?.Clear();
+			ApplyLoadedLyricsContext(null);
 			Debug.WriteLine("[MainForm] 已清空旧歌词，准备播放新歌曲");
 			bool playResult = await _audioEngine.PlayAsync(song, cancellationToken, preloadedData);
 			Debug.WriteLine($"[MainForm] _audioEngine.PlayAsync() 返回: {playResult}");

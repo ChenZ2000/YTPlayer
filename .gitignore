@@ -161,6 +161,7 @@ CodeCoverage/
 # Ignore all markdown files in root directory except README.md
 /*.md
 !README.md
+!changelog.md
 
 # Generated version info
 Properties/VersionInfo.g.cs

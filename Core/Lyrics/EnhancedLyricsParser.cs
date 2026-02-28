@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace YTPlayer.Core.Lyrics
@@ -13,6 +14,18 @@ namespace YTPlayer.Core.Lyrics
         // 正则表达式：匹配 [mm:ss.xx] 或 [mm:ss.xxx] 格式
         private static readonly Regex TimeStampRegex = new Regex(
             @"\[(\d{1,2}):(\d{2})\.(\d{2,3})\]",
+            RegexOptions.Compiled
+        );
+
+        // 正则表达式：匹配 YRC 行 [startMs,durationMs]...
+        private static readonly Regex YrcLineRegex = new Regex(
+            @"^\[(\d+),(\d+)\](.*)$",
+            RegexOptions.Compiled
+        );
+
+        // 正则表达式：匹配 YRC 逐字片段 (start,duration,0)word
+        private static readonly Regex YrcWordRegex = new Regex(
+            @"\((\d+),(\d+),\d+\)([^\(\)]*)",
             RegexOptions.Compiled
         );
 
@@ -33,18 +46,27 @@ namespace YTPlayer.Core.Lyrics
             var originalLines = ParseLrcLines(lrcContent);
 
             // 解析翻译歌词
-            var translationMap = ParseLrcLinesAsDictionary(translationContent);
+            var translationMap = ParseLrcDictionary(translationContent);
 
             // 解析罗马音歌词
-            var romaMap = ParseLrcLinesAsDictionary(romaContent);
+            var romaMap = ParseLrcDictionary(romaContent);
 
             // 合并所有信息
             foreach (var line in originalLines)
             {
+                if (!string.IsNullOrWhiteSpace(line.Text))
+                {
+                    line.LanguageTexts["orig"] = line.Text;
+                }
+
                 // 查找对应的翻译
                 if (translationMap.TryGetValue(line.Time, out var translation))
                 {
                     line.Translation = translation;
+                    if (!string.IsNullOrWhiteSpace(translation))
+                    {
+                        line.LanguageTexts["trans"] = translation;
+                    }
                     data.HasTranslation = true;
                 }
 
@@ -52,6 +74,10 @@ namespace YTPlayer.Core.Lyrics
                 if (romaMap.TryGetValue(line.Time, out var roma))
                 {
                     line.RomaLyric = roma;
+                    if (!string.IsNullOrWhiteSpace(roma))
+                    {
+                        line.LanguageTexts["roma"] = roma;
+                    }
                     data.HasRomaLyric = true;
                 }
 
@@ -63,6 +89,22 @@ namespace YTPlayer.Core.Lyrics
 
                 data.Lines.Add(line);
             }
+
+            data.AvailableLanguages = new List<LyricLanguageOption>
+            {
+                new LyricLanguageOption("orig", "原文")
+            };
+            if (data.HasTranslation)
+            {
+                data.AvailableLanguages.Add(new LyricLanguageOption("trans", "翻译"));
+            }
+            if (data.HasRomaLyric)
+            {
+                data.AvailableLanguages.Add(new LyricLanguageOption("roma", "罗马音"));
+            }
+
+            data.DefaultLanguageKeys = new List<string> { "orig" };
+            data.SelectedLanguageKeys = new List<string> { "orig" };
 
             return data;
         }
@@ -87,6 +129,10 @@ namespace YTPlayer.Core.Lyrics
                 var timeMatches = TimeStampRegex.Matches(line);
                 if (timeMatches.Count == 0)
                 {
+                    if (TryParseYrcLine(line, out var yrcLine))
+                    {
+                        result.Add(yrcLine);
+                    }
                     continue;
                 }
 
@@ -139,7 +185,7 @@ namespace YTPlayer.Core.Lyrics
         /// <summary>
         /// 解析 LRC 格式歌词为字典（时间 -> 文本）
         /// </summary>
-        private static Dictionary<TimeSpan, string> ParseLrcLinesAsDictionary(string? lrcContent)
+        public static Dictionary<TimeSpan, string> ParseLrcDictionary(string? lrcContent)
         {
             var result = new Dictionary<TimeSpan, string>();
 
@@ -155,6 +201,11 @@ namespace YTPlayer.Core.Lyrics
                 var timeMatches = TimeStampRegex.Matches(line);
                 if (timeMatches.Count == 0)
                 {
+                    if (TryParseYrcLine(line, out var yrcLine) &&
+                        !string.IsNullOrWhiteSpace(yrcLine.Text))
+                    {
+                        result[yrcLine.Time] = yrcLine.Text;
+                    }
                     continue;
                 }
 
@@ -255,6 +306,83 @@ namespace YTPlayer.Core.Lyrics
             {
                 return (textWithTimings, null);
             }
+        }
+
+        private static bool TryParseYrcLine(string rawLine, out EnhancedLyricLine yrcLine)
+        {
+            yrcLine = null!;
+            if (string.IsNullOrWhiteSpace(rawLine))
+            {
+                return false;
+            }
+
+            var lineMatch = YrcLineRegex.Match(rawLine.Trim());
+            if (!lineMatch.Success || !int.TryParse(lineMatch.Groups[1].Value, out int lineStartMs))
+            {
+                return false;
+            }
+
+            _ = int.TryParse(lineMatch.Groups[2].Value, out int lineDurationMs);
+            string payload = lineMatch.Groups[3].Value ?? string.Empty;
+            var wordMatches = YrcWordRegex.Matches(payload);
+            var lineTime = TimeSpan.FromMilliseconds(Math.Max(0, lineStartMs));
+            var words = new List<LyricWord>();
+            var textBuilder = new StringBuilder();
+            var segments = new List<(int StartMs, int DurationMs, string Text)>();
+
+            foreach (Match wordMatch in wordMatches)
+            {
+                if (!int.TryParse(wordMatch.Groups[1].Value, out int wordStartMs) ||
+                    !int.TryParse(wordMatch.Groups[2].Value, out int wordDurationMs))
+                {
+                    continue;
+                }
+
+                string wordText = wordMatch.Groups[3].Value;
+                if (string.IsNullOrEmpty(wordText))
+                {
+                    continue;
+                }
+
+                segments.Add((wordStartMs, wordDurationMs, wordText));
+                textBuilder.Append(wordText);
+            }
+
+            bool useRelativeStart = segments.Count > 0 && (
+                segments.Any(segment => segment.StartMs < lineStartMs) ||
+                (lineDurationMs > 0 && segments.Max(segment => segment.StartMs) <= lineDurationMs + 20)
+            );
+
+            foreach (var segment in segments)
+            {
+                int relativeStartMs = useRelativeStart
+                    ? Math.Max(0, segment.StartMs)
+                    : Math.Max(0, segment.StartMs - lineStartMs);
+                var offset = TimeSpan.FromMilliseconds(relativeStartMs);
+                var duration = TimeSpan.FromMilliseconds(Math.Max(0, segment.DurationMs));
+                var absolute = lineTime + offset;
+
+                words.Add(new LyricWord(segment.Text, offset, duration, absolute));
+            }
+
+            string text = textBuilder.ToString().Trim();
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                text = YrcWordRegex.Replace(payload, string.Empty).Trim();
+            }
+
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return false;
+            }
+
+            yrcLine = new EnhancedLyricLine(lineTime, text);
+            if (words.Count > 0)
+            {
+                yrcLine.Words = words;
+            }
+
+            return true;
         }
 
         /// <summary>

@@ -56,6 +56,18 @@ namespace YTPlayer.Models.Auth
     }
 
     /// <summary>
+    /// 单曲歌词语言偏好（仅在与默认选择不一致时持久化）。
+    /// </summary>
+    public class SongLyricLanguagePreference
+    {
+        /// <summary>歌曲ID</summary>
+        public string SongId { get; set; } = string.Empty;
+
+        /// <summary>用户选中的歌词语言键列表（按输出顺序）</summary>
+        public List<string> SelectedLanguageKeys { get; set; } = new List<string>();
+    }
+
+    /// <summary>
     /// 本地账户状态存档（account.json）。
     /// 包含登录状态、用户信息、Cookie、设备指纹等所有会话相关数据。
     /// 用户可以手动修改 IsLoggedIn 来测试不同登录状态（false时忽略账号数据）。
@@ -183,6 +195,14 @@ namespace YTPlayer.Models.Auth
 
         /// <summary>指纹最近刷新时间</summary>
         public DateTimeOffset? FingerprintLastUpdated { get; set; }
+
+        /// <summary>
+        /// 每首歌的歌词语言偏好（仅记录与默认不一致的条目）。
+        /// Key: SongId
+        /// Value: 该歌曲的歌词语言选择
+        /// </summary>
+        public Dictionary<string, SongLyricLanguagePreference> SongLyricLanguagePreferences { get; set; } =
+            new Dictionary<string, SongLyricLanguagePreference>(StringComparer.OrdinalIgnoreCase);
 
         #endregion
     }

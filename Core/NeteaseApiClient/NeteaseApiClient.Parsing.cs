@@ -966,7 +966,11 @@ namespace YTPlayer.Core
                 Lyric = lyricData["lrc"]?["lyric"]?.Value<string>(),
                 TLyric = lyricData["tlyric"]?["lyric"]?.Value<string>(),
                 RomaLyric = lyricData["romalrc"]?["lyric"]?.Value<string>(),
-                YrcLyric = lyricData["yrc"]?["lyric"]?.Value<string>()
+                YrcLyric = lyricData["yrc"]?["lyric"]?.Value<string>(),
+                YTLyric = lyricData["ytlyric"]?["lyric"]?.Value<string>() ??
+                          lyricData["ytlrc"]?["lyric"]?.Value<string>(),
+                YRomaLyric = lyricData["yromalrc"]?["lyric"]?.Value<string>(),
+                KLyric = lyricData["klyric"]?["lyric"]?.Value<string>()
             };
         }
 
@@ -980,7 +984,10 @@ namespace YTPlayer.Core
             return !string.IsNullOrWhiteSpace(lyric.Lyric) ||
                    !string.IsNullOrWhiteSpace(lyric.TLyric) ||
                    !string.IsNullOrWhiteSpace(lyric.RomaLyric) ||
-                   !string.IsNullOrWhiteSpace(lyric.YrcLyric);
+                   !string.IsNullOrWhiteSpace(lyric.YrcLyric) ||
+                   !string.IsNullOrWhiteSpace(lyric.YTLyric) ||
+                   !string.IsNullOrWhiteSpace(lyric.YRomaLyric) ||
+                   !string.IsNullOrWhiteSpace(lyric.KLyric);
         }
 
         /// <summary>

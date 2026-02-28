@@ -112,6 +112,7 @@
     <Compile Include="Forms\MainForm\MainForm.LibraryContent.cs" />
     <Compile Include="Forms\MainForm\MainForm.LibraryState.cs" />
     <Compile Include="Forms\MainForm\MainForm.PlaybackCore.cs" />
+    <Compile Include="Forms\MainForm\MainForm.LyricsLanguages.cs" />
     <Compile Include="Forms\MainForm\MainForm.ResultListRendering.cs" />
     <Compile Include="Forms\MainForm\MainForm.PlaylistsRendering.cs" />
     <Compile Include="Forms\MainForm\MainForm.ListItemsRendering.cs" />
@@ -208,6 +209,7 @@
     <Compile Include="Core\Lyrics\LyricsCacheManager.cs" />
     <Compile Include="Core\Lyrics\LyricsDisplayManager.cs" />
     <Compile Include="Core\Lyrics\LyricsLoader.cs" />
+    <Compile Include="Core\Lyrics\LyricLanguagePipeline.cs" />
     <Compile Include="Core\Streaming\BassStreamProvider.cs" />
     <Compile Include="Core\Streaming\StreamSkipDownloader.cs" />
     <Compile Include="Core\Recognition\AudioCaptureService.cs" />

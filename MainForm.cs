@@ -1840,6 +1840,8 @@ public partial class MainForm : Form
 
 	private ToolStripMenuItem downloadLyricsMenuItem;
 
+	private ToolStripMenuItem lyricsLanguageMenuItem;
+
 	private ToolStripMenuItem downloadPlaylistMenuItem;
 
 	private ToolStripMenuItem downloadAlbumMenuItem;
@@ -6138,6 +6140,10 @@ public partial class MainForm : Form
 			if (profileId.HasValue)
 			{
 				CacheLoggedInUserId(profileId.Value);
+				if (!_likedSongsCacheValid)
+				{
+					ScheduleLibraryStateRefresh(includeLikedSongs: true, includePlaylists: false, includeAlbums: false, includePodcasts: false, includeArtists: false);
+				}
 			}
 			_apiClient?.ApplyLoginProfile(profile);
 		}
@@ -6795,26 +6801,21 @@ public partial class MainForm : Form
 			{
 				return;
 			}
-			LyricsData lyricsData = await _lyricsLoader.LoadLyricsAsync(songId, cancellationToken);
+			LoadedLyricsContext loadedContext = await _lyricsLoader.LoadLyricsAsync(songId, cancellationToken);
 			if (cancellationToken.IsCancellationRequested)
 			{
 				return;
 			}
-			_lyricsDisplayManager.LoadLyrics(lyricsData);
+			ApplyLoadedLyricsContext(loadedContext, forceImmediateUpdate: true);
 			CancelPendingLyricSpeech(resetSuppression: true, stopGlobalTts: false);
-			if (lyricsData != null && !lyricsData.IsEmpty)
+			if (loadedContext != null)
 			{
-				_currentLyrics = lyricsData.Lines.Select((EnhancedLyricLine line) => new LyricLine(line.Time, line.Text)).ToList();
-			}
-			else
-			{
-				_currentLyrics.Clear();
+				CacheLoadedLyricsContext(loadedContext);
 			}
 		}
 		catch (TaskCanceledException)
 		{
-			_lyricsDisplayManager.Clear();
-			_currentLyrics.Clear();
+			ApplyLoadedLyricsContext(null);
 			CancelPendingLyricSpeech(resetSuppression: true, stopGlobalTts: false);
 		}
 		catch (Exception ex2)
@@ -6822,8 +6823,7 @@ public partial class MainForm : Form
 			Exception ex3 = ex2;
 			Exception ex4 = ex3;
 			Debug.WriteLine("[Lyrics] 加载失败: " + ex4.Message);
-			_lyricsDisplayManager.Clear();
-			_currentLyrics.Clear();
+			ApplyLoadedLyricsContext(null);
 			CancelPendingLyricSpeech(resetSuppression: true, stopGlobalTts: false);
 		}
 	}
@@ -7015,8 +7015,21 @@ public partial class MainForm : Form
 			else
 			{
 				currentPlayingMenuItem.Visible = song != null;
+				RefreshCurrentPlayingMenuCaption(song);
+				PrefetchCurrentPlayingContextMenuCaptions(song);
 			}
 		}
+	}
+
+	private void fileMenuItem_DropDownOpening(object sender, EventArgs e)
+	{
+		SongInfo songInfo = _audioEngine?.CurrentSong;
+		if (currentPlayingMenuItem != null)
+		{
+			currentPlayingMenuItem.Visible = songInfo != null;
+		}
+		RefreshCurrentPlayingMenuCaption(songInfo);
+		PrimeCurrentPlayingSourceMenuCaptionForFileMenu(songInfo);
 	}
 
 	private void UpdateWindowTitle(string? playbackDescription)
@@ -7740,7 +7753,7 @@ public partial class MainForm : Form
 
 	private void HandleLyricAutoRead(EnhancedLyricLine currentLine)
 	{
-		if (_lyricsCacheManager == null || currentLine == null)
+		if (_lyricsCacheManager == null || _lyricsDisplayManager == null || currentLine == null)
 		{
 			return;
 		}
@@ -7770,7 +7783,7 @@ public partial class MainForm : Form
 			}
 		}
 		List<string> list2 = (from line in list
-			select line.Text into text
+			from text in _lyricsDisplayManager.GetSpeechSegments(line)
 			where !string.IsNullOrWhiteSpace(text)
 			select text).Distinct<string>(StringComparer.Ordinal).ToList();
 		if (list2.Count != 0)
@@ -8040,8 +8053,7 @@ public partial class MainForm : Form
 				UpdateTrayIconTooltip(nextSong);
 				SyncPlayPauseButtonText();
 			});
-			_lyricsDisplayManager?.Clear();
-			_currentLyrics?.Clear();
+			ApplyLoadedLyricsContext(null);
 			LoadLyrics(nextSong.Id);
 			SafeInvoke(delegate
 			{
@@ -11326,10 +11338,13 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 			_isCurrentPlayingMenuActive = false;
 			_currentPlayingMenuSong = null;
 			currentPlayingMenuItem.Visible = false;
+			InvalidateCurrentPlayingMenuCaptionRequests();
+			ResetCurrentPlayingMenuCaptionToBase();
 			return;
 		}
 		_isCurrentPlayingMenuActive = true;
 		_currentPlayingMenuSong = songInfo;
+		RefreshCurrentPlayingMenuCaption(songInfo);
 		if (songContextMenu != null)
 		{
 			songContextMenu.Tag = "current_playing_context";
@@ -11350,6 +11365,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		{
 			viewSourceMenuItem.Visible = false;
 			viewSourceMenuItem.Tag = null;
+			ResetViewSourceMenuCaptionToBase(invalidatePendingRequest: true);
 			if (songContextMenu != null)
 			{
 				songContextMenu.Tag = null;
@@ -11372,11 +11388,13 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 			viewSourceMenuItem.Visible = true;
 			viewSourceMenuItem.Enabled = !string.IsNullOrWhiteSpace(text);
 			viewSourceMenuItem.Tag = text;
+			RefreshViewSourceMenuCaption(text, menuContextSnapshot.Song);
 		}
 		else
 		{
 			viewSourceMenuItem.Visible = false;
 			viewSourceMenuItem.Tag = null;
+			ResetViewSourceMenuCaptionToBase(invalidatePendingRequest: true);
 		}
 		_isCurrentPlayingMenuActive = menuContextSnapshot.IsCurrentPlayback;
 		if (!menuContextSnapshot.IsCurrentPlayback)
@@ -11467,6 +11485,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		}
 		viewSourceMenuItem.Visible = false;
 		viewSourceMenuItem.Tag = null;
+		ResetViewSourceMenuCaptionToBase(invalidatePendingRequest: true);
 	}
 
 	private void commentMenuItem_Click(object sender, EventArgs e)
@@ -15681,7 +15700,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 	{
 		if (!IsUserLoggedIn())
 		{
-			MessageBox.Show("请先登录后再添加歌曲到歌单", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+			MessageBox.Show(this, "请先登录后再添加歌曲到歌单", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
 			return;
 		}
 		SongInfo song = GetSelectedSongFromContextMenu(sender);
@@ -15697,36 +15716,151 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 			}
 			try
 			{
-				UserInfo userInfo = await _apiClient.GetUserInfoAsync();
-				if (userInfo == null)
+				long userId = ResolveAddToPlaylistUserId();
+				if (userId <= 0)
 				{
-					MessageBox.Show("获取用户信息失败", "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+					userId = await EnsureAddToPlaylistUserIdAsync();
+				}
+				if (userId <= 0)
+				{
+					MessageBox.Show(this, "获取用户信息失败，请重新登录后重试。", "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+					UpdateStatusBar("添加失败");
 					return;
 				}
-				using AddToPlaylistDialog dialog = new AddToPlaylistDialog(userId: long.Parse(userInfo.UserId), apiClient: _apiClient, songId: targetSongId);
-				if (dialog.ShowDialog(this) == DialogResult.OK && !string.IsNullOrEmpty(dialog.SelectedPlaylistId))
+				using AddToPlaylistDialog dialog = new AddToPlaylistDialog(userId: userId, apiClient: _apiClient, songId: targetSongId);
+				if (dialog.ShowDialog(this) != DialogResult.OK)
 				{
-					UpdateStatusBar("正在添加歌曲到歌单...");
-					string targetPlaylistId = dialog.SelectedPlaylistId;
-					if (await _apiClient.AddTracksToPlaylistAsync(targetPlaylistId, new string[1] { targetSongId }))
+					return;
+				}
+				List<string> targetPlaylistIds = dialog.SelectedPlaylistIds
+					.Where((string id) => !string.IsNullOrWhiteSpace(id))
+					.Distinct(StringComparer.Ordinal)
+					.ToList();
+				if (targetPlaylistIds.Count == 0)
+				{
+					return;
+				}
+				UpdateStatusBar("正在添加歌曲到歌单...");
+				(int successCount, int failCount) = await AddSongToPlaylistsAsync(targetSongId, targetPlaylistIds);
+				if (successCount > 0 && failCount == 0)
+				{
+					if (targetPlaylistIds.Count == 1)
 					{
-						MessageBox.Show("已将歌曲 \"" + song.Name + "\" 添加到歌单", "成功", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+						MessageBox.Show(this, "已将歌曲 \"" + song.Name + "\" 添加到歌单", "成功", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
 						UpdateStatusBar("添加成功");
 					}
 					else
 					{
-						MessageBox.Show("添加歌曲到歌单失败，请稍后重试。", "失败", MessageBoxButtons.OK, MessageBoxIcon.Hand);
-						UpdateStatusBar("添加失败");
+						MessageBox.Show(this, "已将歌曲 \"" + song.Name + "\" 添加到 " + successCount + " 个歌单", "成功", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+						UpdateStatusBar("批量添加成功");
 					}
+				}
+				else if (successCount > 0)
+				{
+					MessageBox.Show(this, "歌曲已添加到 " + successCount + " 个歌单，另有 " + failCount + " 个歌单添加失败。", "部分成功", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
+					UpdateStatusBar("部分添加成功");
+				}
+				else
+				{
+					MessageBox.Show(this, "添加歌曲到歌单失败，请稍后重试。", "失败", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+					UpdateStatusBar("添加失败");
 				}
 			}
 			catch (Exception ex)
 			{
 				Exception ex2 = ex;
-				MessageBox.Show("添加歌曲到歌单失败: " + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+				MessageBox.Show(this, "添加歌曲到歌单失败: " + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 				UpdateStatusBar("添加失败");
 			}
 		}
+	}
+
+	private long ResolveAddToPlaylistUserId()
+	{
+		long userId = GetCurrentUserId();
+		if (userId > 0)
+		{
+			return userId;
+		}
+
+		try
+		{
+			AccountState state = _apiClient?.GetAccountStateSnapshot();
+			if (state != null && long.TryParse(state.UserId, out var parsed) && parsed > 0)
+			{
+				CacheLoggedInUserId(parsed);
+				return parsed;
+			}
+		}
+		catch
+		{
+		}
+
+		return 0L;
+	}
+
+	private async Task<long> EnsureAddToPlaylistUserIdAsync()
+	{
+		long cached = ResolveAddToPlaylistUserId();
+		if (cached > 0)
+		{
+			return cached;
+		}
+
+		try
+		{
+			UserAccountInfo profile = await _apiClient.GetUserAccountAsync();
+			if (profile != null && profile.UserId > 0)
+			{
+				CacheLoggedInUserId(profile.UserId);
+				return profile.UserId;
+			}
+		}
+		catch
+		{
+		}
+
+		return 0L;
+	}
+
+	private async Task<(int successCount, int failCount)> AddSongToPlaylistsAsync(string songId, IReadOnlyList<string> playlistIds)
+	{
+		if (string.IsNullOrWhiteSpace(songId) || playlistIds == null || playlistIds.Count == 0)
+		{
+			return (0, 0);
+		}
+
+		int success = 0;
+		int fail = 0;
+		using SemaphoreSlim semaphore = new SemaphoreSlim(4);
+
+		List<Task> tasks = playlistIds.Select(async delegate(string playlistId)
+		{
+			await semaphore.WaitAsync();
+			try
+			{
+				bool ok = await _apiClient.AddTracksToPlaylistAsync(playlistId, new string[1] { songId });
+				if (ok)
+				{
+					Interlocked.Increment(ref success);
+				}
+				else
+				{
+					Interlocked.Increment(ref fail);
+				}
+			}
+			catch
+			{
+				Interlocked.Increment(ref fail);
+			}
+			finally
+			{
+				semaphore.Release();
+			}
+		}).ToList();
+
+		await Task.WhenAll(tasks);
+		return (success, fail);
 	}
 
 	private bool TryResolveSongIdForLibraryActions(SongInfo? song, string actionDescription, out string resolvedSongId)
@@ -16697,6 +16831,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		this.toolStripSeparatorDownload3 = new System.Windows.Forms.ToolStripSeparator();
 		this.downloadSongMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.downloadLyricsMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+		this.lyricsLanguageMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.downloadPlaylistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.downloadAlbumMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.downloadPodcastMenuItem = new System.Windows.Forms.ToolStripMenuItem();
@@ -16747,6 +16882,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		this.fileMenuItem.Size = new System.Drawing.Size(98, 24);
 		this.fileMenuItem.Text = "文件/操作(&F)";
 		this.fileMenuItem.DropDownItems.AddRange(this.homeMenuItem, this.loginMenuItem, this.currentPlayingMenuItem, this.toolStripSeparatorDownload1, this.openDownloadDirMenuItem, this.changeDownloadDirMenuItem, this.downloadManagerMenuItem, this.refreshMenuItem, this.toolStripSeparatorDownload2, this.hideMenuItem, this.exitMenuItem);
+		this.fileMenuItem.DropDownOpening += new System.EventHandler(fileMenuItem_DropDownOpening);
 		this.homeMenuItem.Name = "homeMenuItem";
 		this.homeMenuItem.Size = new System.Drawing.Size(178, 26);
 		this.homeMenuItem.Text = "主页(&H)";
@@ -17192,7 +17328,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
         this.toolStripStatusLabel1.AccessibleRole = System.Windows.Forms.AccessibleRole.StaticText;
         this.toolStripStatusLabel1.AccessibleName = "";
 		this.songContextMenu.ImageScalingSize = new System.Drawing.Size(20, 20);
-		this.songContextMenu.Items.AddRange(this.viewSourceMenuItem, this.insertPlayMenuItem, this.likeSongMenuItem, this.unlikeSongMenuItem, this.addToPlaylistMenuItem, this.removeFromPlaylistMenuItem, this.cloudMenuSeparator, this.uploadToCloudMenuItem, this.deleteFromCloudMenuItem, this.toolStripSeparatorCollection, this.subscribePlaylistMenuItem, this.unsubscribePlaylistMenuItem, this.deletePlaylistMenuItem, this.createPlaylistMenuItem, this.subscribeAlbumMenuItem, this.unsubscribeAlbumMenuItem, this.subscribePodcastMenuItem, this.unsubscribePodcastMenuItem, this.toolStripSeparatorView, this.viewSongArtistMenuItem, this.viewSongAlbumMenuItem, this.subscribeSongArtistMenuItem, this.subscribeSongAlbumMenuItem, this.viewPodcastMenuItem, this.shareSongMenuItem, this.sharePlaylistMenuItem, this.shareAlbumMenuItem, this.sharePodcastMenuItem, this.sharePodcastEpisodeMenuItem, this.artistSongsSortMenuItem, this.artistAlbumsSortMenuItem, this.podcastSortMenuItem, this.commentMenuSeparator, this.commentMenuItem, this.toolStripSeparatorArtist, this.shareArtistMenuItem, this.subscribeArtistMenuItem, this.unsubscribeArtistMenuItem, this.toolStripSeparatorDownload3, this.downloadSongMenuItem, this.downloadLyricsMenuItem, this.downloadPlaylistMenuItem, this.downloadAlbumMenuItem, this.downloadPodcastMenuItem, this.batchDownloadMenuItem, this.downloadCategoryMenuItem, this.batchDownloadPlaylistsMenuItem);
+		this.songContextMenu.Items.AddRange(this.viewSourceMenuItem, this.insertPlayMenuItem, this.likeSongMenuItem, this.unlikeSongMenuItem, this.addToPlaylistMenuItem, this.removeFromPlaylistMenuItem, this.cloudMenuSeparator, this.uploadToCloudMenuItem, this.deleteFromCloudMenuItem, this.toolStripSeparatorCollection, this.subscribePlaylistMenuItem, this.unsubscribePlaylistMenuItem, this.deletePlaylistMenuItem, this.createPlaylistMenuItem, this.subscribeAlbumMenuItem, this.unsubscribeAlbumMenuItem, this.subscribePodcastMenuItem, this.unsubscribePodcastMenuItem, this.toolStripSeparatorView, this.viewSongArtistMenuItem, this.viewSongAlbumMenuItem, this.subscribeSongArtistMenuItem, this.subscribeSongAlbumMenuItem, this.viewPodcastMenuItem, this.shareSongMenuItem, this.sharePlaylistMenuItem, this.shareAlbumMenuItem, this.sharePodcastMenuItem, this.sharePodcastEpisodeMenuItem, this.artistSongsSortMenuItem, this.artistAlbumsSortMenuItem, this.podcastSortMenuItem, this.commentMenuSeparator, this.commentMenuItem, this.toolStripSeparatorArtist, this.shareArtistMenuItem, this.subscribeArtistMenuItem, this.unsubscribeArtistMenuItem, this.toolStripSeparatorDownload3, this.downloadSongMenuItem, this.downloadLyricsMenuItem, this.lyricsLanguageMenuItem, this.downloadPlaylistMenuItem, this.downloadAlbumMenuItem, this.downloadPodcastMenuItem, this.batchDownloadMenuItem, this.downloadCategoryMenuItem, this.batchDownloadPlaylistsMenuItem);
 		this.songContextMenu.Name = "songContextMenu";
 		this.songContextMenu.Size = new System.Drawing.Size(211, 320);
 		this.songContextMenu.Opening += new System.ComponentModel.CancelEventHandler(songContextMenu_Opening);
@@ -17200,7 +17336,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		this.currentPlayingMenuItem.DropDown = this.songContextMenu;
 		this.viewSourceMenuItem.Name = "viewSourceMenuItem";
 		this.viewSourceMenuItem.Size = new System.Drawing.Size(210, 24);
-		this.viewSourceMenuItem.Text = "查看来源(&S)";
+		this.viewSourceMenuItem.Text = "查看来源";
 		this.viewSourceMenuItem.Visible = false;
 		this.viewSourceMenuItem.Click += new System.EventHandler(viewSourceMenuItem_Click);
 		this.insertPlayMenuItem.Name = "insertPlayMenuItem";
@@ -17460,6 +17596,10 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		this.downloadLyricsMenuItem.Size = new System.Drawing.Size(210, 24);
 		this.downloadLyricsMenuItem.Text = "下载歌词(&L)";
 		this.downloadLyricsMenuItem.Click += new System.EventHandler(DownloadLyrics_Click);
+		this.lyricsLanguageMenuItem.Name = "lyricsLanguageMenuItem";
+		this.lyricsLanguageMenuItem.Size = new System.Drawing.Size(210, 24);
+		this.lyricsLanguageMenuItem.Text = "歌词翻译";
+		this.lyricsLanguageMenuItem.Visible = false;
 		this.downloadPlaylistMenuItem.Name = "downloadPlaylistMenuItem";
 		this.downloadPlaylistMenuItem.Size = new System.Drawing.Size(210, 24);
 		this.downloadPlaylistMenuItem.ShortcutKeys = System.Windows.Forms.Keys.Control | System.Windows.Forms.Keys.Return;

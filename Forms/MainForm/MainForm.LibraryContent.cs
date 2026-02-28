@@ -32,10 +32,6 @@ public partial class MainForm
 			ViewLoadResult<(PlaylistInfo Playlist, List<SongInfo> Songs, string StatusText)?> loadResult = await RunViewLoadAsync(request, (CancellationToken token) => BuildPlaylistSkeletonViewDataAsync(async delegate(CancellationToken ct)
 			{
 				ct.ThrowIfCancellationRequested();
-				if (_userLikedPlaylist != null && _userLikedPlaylist.Songs != null && _userLikedPlaylist.Songs.Count > 0)
-				{
-					return _userLikedPlaylist;
-				}
 				UserAccountInfo userInfo = await _apiClient.GetUserAccountAsync().ConfigureAwait(continueOnCapturedContext: false);
 				ct.ThrowIfCancellationRequested();
 				if (userInfo == null || userInfo.UserId <= 0)

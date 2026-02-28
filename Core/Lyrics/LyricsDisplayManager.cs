@@ -191,6 +191,13 @@ namespace YTPlayer.Core.Lyrics
                 return "暂无歌词";
             }
 
+            var selectedKeys = _cacheManager.CurrentLyrics?.SelectedLanguageKeys;
+            var languageTexts = LyricLanguagePipeline.GetOrderedLineTexts(line, selectedKeys);
+            if (languageTexts.Count > 0)
+            {
+                return string.Join(" | ", languageTexts);
+            }
+
             var parts = new System.Collections.Generic.List<string>();
 
             switch (DisplayMode)
@@ -233,6 +240,12 @@ namespace YTPlayer.Core.Lyrics
             }
 
             return string.Join(" | ", parts);
+        }
+
+        public System.Collections.Generic.List<string> GetSpeechSegments(EnhancedLyricLine? line)
+        {
+            var selectedKeys = _cacheManager.CurrentLyrics?.SelectedLanguageKeys;
+            return LyricLanguagePipeline.GetOrderedLineTexts(line, selectedKeys);
         }
 
         public void Dispose()

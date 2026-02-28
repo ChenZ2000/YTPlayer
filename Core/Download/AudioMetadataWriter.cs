@@ -279,13 +279,15 @@ namespace YTPlayer.Core.Download
                     "AudioMetadataWriter",
                     $"开始获取歌词: songId={song.Id}");
 
-                // 从API获取歌词
-                var lyricInfo = await _apiClient.GetLyricsAsync(song.Id).ConfigureAwait(false);
+                // 从统一歌词链路获取：拉取 + 多语言选择 + 输出
+                var lyricContext = await _apiClient
+                    .GetResolvedLyricsAsync(song.Id, cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
 
                 // 检查取消
                 cancellationToken.ThrowIfCancellationRequested();
 
-                if (lyricInfo == null)
+                if (lyricContext == null)
                 {
                     DebugLogger.Log(
                         DebugLogger.LogLevel.Info,
@@ -294,10 +296,7 @@ namespace YTPlayer.Core.Download
                     return;
                 }
 
-                // 优先使用 Lyric（标准 LRC 格式），如果没有则使用 YrcLyric
-                string lyricsText = !string.IsNullOrWhiteSpace(lyricInfo.Lyric)
-                    ? lyricInfo.Lyric
-                    : lyricInfo.YrcLyric;
+                string lyricsText = lyricContext.ExportLyricContent;
 
                 if (string.IsNullOrWhiteSpace(lyricsText))
                 {
@@ -308,25 +307,15 @@ namespace YTPlayer.Core.Download
                     return;
                 }
 
-                // 如果有翻译，附加到歌词末尾
-                if (!string.IsNullOrWhiteSpace(lyricInfo.TLyric))
-                {
-                    lyricsText += "\n\n=== 翻译 ===\n" + lyricInfo.TLyric;
-                }
-
-                // 如果有罗马音，附加到歌词末尾
-                if (!string.IsNullOrWhiteSpace(lyricInfo.RomaLyric))
-                {
-                    lyricsText += "\n\n=== 罗马音 ===\n" + lyricInfo.RomaLyric;
-                }
-
                 // 写入歌词到 Lyrics 标签（ID3v2 USLT 或 FLAC Vorbis Comment）
                 file.Tag.Lyrics = lyricsText;
+
+                string selectedLanguages = string.Join("/", lyricContext.SelectedLanguageKeys);
 
                 DebugLogger.Log(
                     DebugLogger.LogLevel.Info,
                     "AudioMetadataWriter",
-                    $"✓ 歌词写入成功: {lyricsText.Length} 字符, 翻译={!string.IsNullOrWhiteSpace(lyricInfo.TLyric)}, 罗马音={!string.IsNullOrWhiteSpace(lyricInfo.RomaLyric)}");
+                    $"✓ 歌词写入成功: {lyricsText.Length} 字符, 语言={selectedLanguages}");
             }
             catch (OperationCanceledException)
             {

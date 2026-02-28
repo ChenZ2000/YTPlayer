@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using YTPlayer.Utils;
@@ -22,7 +23,7 @@ namespace YTPlayer.Core.Lyrics
         /// 异步加载并解析歌词数据
         /// 此方法设计为与 chunk 0 下载并行执行，不阻塞播放启动
         /// </summary>
-        public async Task<LyricsData?> LoadLyricsAsync(string songId, CancellationToken cancellationToken = default)
+        public async Task<LoadedLyricsContext?> LoadLyricsAsync(string songId, CancellationToken cancellationToken = default)
         {
             if (string.IsNullOrEmpty(songId))
             {
@@ -39,61 +40,14 @@ namespace YTPlayer.Core.Lyrics
                     "LyricsLoader",
                     $"⭐ 开始加载歌词: songId={songId}");
 
-                // 从API获取歌词
-                var lyricInfo = await _apiClient.GetLyricsAsync(songId).ConfigureAwait(false);
+                // 统一歌词链路：拉取 + 语言选择 + 解析 + 输出构建
+                var loadedContext = await _apiClient
+                    .GetResolvedLyricsAsync(songId, cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
 
                 stopwatch.Stop();
 
-                if (lyricInfo == null)
-                {
-                    DebugLogger.Log(
-                        DebugLogger.LogLevel.Warning,
-                        "LyricsLoader",
-                        $"API返回空歌词信息，耗时 {stopwatch.ElapsedMilliseconds}ms");
-                    return null;
-                }
-
-                // 检查取消
-                cancellationToken.ThrowIfCancellationRequested();
-
-                // 优先尝试逐字歌词（YRC），解析失败时自动回退到标准 LRC
-                LyricsData? lyricsData = null;
-                bool usedYrcSource = false;
-
-                if (!string.IsNullOrWhiteSpace(lyricInfo.YrcLyric))
-                {
-                    lyricsData = EnhancedLyricsParser.ParseLyricsData(
-                        songId,
-                        lyricInfo.YrcLyric,
-                        lyricInfo.TLyric,
-                        lyricInfo.RomaLyric
-                    );
-
-                    if (lyricsData.IsEmpty)
-                    {
-                        DebugLogger.Log(
-                            DebugLogger.LogLevel.Warning,
-                            "LyricsLoader",
-                            "逐字歌词解析为空，已自动回退到标准歌词");
-                        lyricsData = null;
-                    }
-                    else
-                    {
-                        usedYrcSource = true;
-                    }
-                }
-
-                if (lyricsData == null && !string.IsNullOrWhiteSpace(lyricInfo.Lyric))
-                {
-                    lyricsData = EnhancedLyricsParser.ParseLyricsData(
-                        songId,
-                        lyricInfo.Lyric,
-                        lyricInfo.TLyric,
-                        lyricInfo.RomaLyric
-                    );
-                }
-
-                if (lyricsData == null || lyricsData.IsEmpty)
+                if (loadedContext == null || loadedContext.LyricsData == null || loadedContext.LyricsData.IsEmpty)
                 {
                     DebugLogger.Log(
                         DebugLogger.LogLevel.Warning,
@@ -102,16 +56,24 @@ namespace YTPlayer.Core.Lyrics
                     return null;
                 }
 
+                // 检查取消
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var lyricsData = loadedContext.LyricsData;
+                string selectedLanguages = string.Join("/", loadedContext.SelectedLanguageKeys);
+                string availableLanguages = string.Join("/", loadedContext.LanguageProfile.Tracks.Select(track => track.DisplayName));
+
                 DebugLogger.Log(
                     DebugLogger.LogLevel.Info,
                     "LyricsLoader",
-                    $"✓ 歌词加载成功(来源={(usedYrcSource ? "YRC" : "LRC")}): {lyricsData.Lines.Count} 行, " +
+                    $"✓ 歌词加载成功: {lyricsData.Lines.Count} 行, " +
                     $"逐字={lyricsData.HasWordTimings}, " +
                     $"翻译={lyricsData.HasTranslation}, " +
                     $"罗马音={lyricsData.HasRomaLyric}, " +
+                    $"可选语言={availableLanguages}, 已选={selectedLanguages}, " +
                     $"耗时 {stopwatch.ElapsedMilliseconds}ms");
 
-                return lyricsData;
+                return loadedContext;
             }
             catch (OperationCanceledException)
             {

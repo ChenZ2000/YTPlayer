@@ -335,9 +335,9 @@ namespace YTPlayer.Core.Download
                 return null;
             }
 
-            var lyricInfo = await _apiClient.GetLyricsAsync(task.Song.Id!).ConfigureAwait(false);
+            var lyricContext = await _apiClient.GetResolvedLyricsAsync(task.Song.Id!, cancellationToken: cancellationToken).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
-            return lyricInfo?.Lyric;
+            return lyricContext?.ExportLyricContent;
         }
 
         /// <summary>

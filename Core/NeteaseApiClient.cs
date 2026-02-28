@@ -533,6 +533,12 @@ namespace YTPlayer.Core
         public string RomaLyric { get; set; } = string.Empty;
         /// <summary>逐字歌词（yrc格式，包含每个字的时间信息）</summary>
         public string YrcLyric { get; set; } = string.Empty;
+        /// <summary>逐字翻译歌词（ytlrc/ytlyric）</summary>
+        public string YTLyric { get; set; } = string.Empty;
+        /// <summary>逐字罗马音歌词（yromalrc）</summary>
+        public string YRomaLyric { get; set; } = string.Empty;
+        /// <summary>KRC/卡拉OK歌词（部分接口返回）</summary>
+        public string KLyric { get; set; } = string.Empty;
     }
 
     /// <summary>

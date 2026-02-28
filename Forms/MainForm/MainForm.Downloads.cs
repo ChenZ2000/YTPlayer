@@ -162,15 +162,16 @@ public partial class MainForm
 		}
 		try
 		{
-			LyricInfo lyricInfo = await _apiClient.GetLyricsAsync(song.Id);
-			if (lyricInfo == null || string.IsNullOrWhiteSpace(lyricInfo.Lyric))
+			var lyricContext = await _apiClient.GetResolvedLyricsAsync(song.Id);
+			if (lyricContext == null || string.IsNullOrWhiteSpace(lyricContext.ExportLyricContent))
 			{
 				MessageBox.Show("该歌曲没有歌词", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
 				return;
 			}
+			CacheLoadedLyricsContext(lyricContext);
 			string sourceList = GetCurrentViewName();
 			NotifyTransferTaskAdded("正在添加歌词下载任务...");
-			if (await _downloadManager.AddLyricDownloadAsync(song, sourceList, lyricInfo.Lyric) != null)
+			if (await _downloadManager.AddLyricDownloadAsync(song, sourceList, lyricContext.ExportLyricContent) != null)
 			{
 				NotifyTransferTaskAdded("已添加歌词下载任务：" + song.Name + " - " + song.Artist);
 			}

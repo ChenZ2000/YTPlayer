@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net;
 using YTPlayer.Models.Auth;
 using YTPlayer.Models;
@@ -110,6 +111,7 @@ namespace YTPlayer.Core
             };
 
             clone.Cookies = CloneCookieItems(source.Cookies);
+            clone.SongLyricLanguagePreferences = CloneSongLyricLanguagePreferences(source.SongLyricLanguagePreferences);
             return clone;
         }
 
@@ -138,6 +140,67 @@ namespace YTPlayer.Core
             }
 
             return clone;
+        }
+
+        private static Dictionary<string, SongLyricLanguagePreference> CloneSongLyricLanguagePreferences(
+            IDictionary<string, SongLyricLanguagePreference>? source)
+        {
+            var clone = new Dictionary<string, SongLyricLanguagePreference>(StringComparer.OrdinalIgnoreCase);
+            if (source == null)
+            {
+                return clone;
+            }
+
+            foreach (var pair in source)
+            {
+                string songId = pair.Key?.Trim() ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(songId) || pair.Value == null)
+                {
+                    continue;
+                }
+
+                var selectedKeys = (pair.Value.SelectedLanguageKeys ?? new List<string>())
+                    .Where(key => !string.IsNullOrWhiteSpace(key))
+                    .Select(key => key.Trim())
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                if (selectedKeys.Count == 0)
+                {
+                    continue;
+                }
+
+                clone[songId] = new SongLyricLanguagePreference
+                {
+                    SongId = songId,
+                    SelectedLanguageKeys = selectedKeys
+                };
+            }
+
+            return clone;
+        }
+
+        public IReadOnlyList<string> GetSongLyricLanguagePreference(string songId)
+        {
+            if (_authContext == null || string.IsNullOrWhiteSpace(songId))
+            {
+                return Array.Empty<string>();
+            }
+
+            return _authContext.GetSongLyricLanguagePreference(songId);
+        }
+
+        public void SetSongLyricLanguagePreference(
+            string songId,
+            IReadOnlyCollection<string> selectedLanguageKeys,
+            IReadOnlyCollection<string> defaultLanguageKeys)
+        {
+            if (_authContext == null || string.IsNullOrWhiteSpace(songId))
+            {
+                return;
+            }
+
+            _authContext.SetSongLyricLanguagePreference(songId, selectedLanguageKeys, defaultLanguageKeys);
         }
 
         /// <summary>

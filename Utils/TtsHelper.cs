@@ -18,6 +18,7 @@ namespace YTPlayer.Utils
         private static bool _isBoyRunningCached = false;
         private const int BoyCheckIntervalMs = 1000;
         private const string BoyCtrlDllName = "BoyCtrl.dll";
+        private const string NvdaControllerDllName64 = "nvdaControllerClient64.dll";
 
         public static Func<string, bool, bool>? NarratorFallbackSpeaker { get; set; }
 
@@ -26,6 +27,12 @@ namespace YTPlayer.Utils
 
         [DllImport("BoyCtrl.dll", CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode)]
         private static extern int BoyCtrlSpeak(string text, bool async, bool purge, bool spell, IntPtr reserved);
+
+        [DllImport("nvdaControllerClient64.dll", EntryPoint = "nvdaController_cancelSpeech")]
+        private static extern int NvdaControllerCancelSpeech();
+
+        [DllImport("nvdaControllerClient64.dll", EntryPoint = "nvdaController_testIfRunning")]
+        private static extern int NvdaControllerTestIfRunning();
 
         /// <summary>
         /// Speak text using BoyPCReader when running, otherwise UIA announcements.
@@ -71,7 +78,7 @@ namespace YTPlayer.Utils
         }
 
         /// <summary>
-        /// Stop speaking (BoyCtrl only; UIA cannot force stop).
+        /// Stop speaking. Prefer NVDA controller cancel when available, then BoyCtrl purge.
         /// </summary>
         public static void StopSpeaking()
         {
@@ -81,6 +88,8 @@ namespace YTPlayer.Utils
                 {
                     return;
                 }
+
+                TryNvdaControllerCancelSpeech();
 
                 if (IsBoyPcReaderRunningCached() && DllExists(BoyCtrlDllName))
                 {
@@ -178,6 +187,28 @@ namespace YTPlayer.Utils
 
                 int speakResult = BoyCtrlSpeak(text, async: asyncMode, purge: interrupt, spell: true, IntPtr.Zero);
                 return speakResult == 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool TryNvdaControllerCancelSpeech()
+        {
+            if (!DllExists(NvdaControllerDllName64))
+            {
+                return false;
+            }
+
+            try
+            {
+                if (NvdaControllerTestIfRunning() != 0)
+                {
+                    return false;
+                }
+
+                return NvdaControllerCancelSpeech() == 0;
             }
             catch
             {

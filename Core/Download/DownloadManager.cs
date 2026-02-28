@@ -355,18 +355,18 @@ namespace YTPlayer.Core.Download
                         return null;
                     }
 
-                var lyricInfo = await _apiClient.GetLyricsAsync(song.Id!);
-                if (lyricInfo == null || string.IsNullOrWhiteSpace(lyricInfo.Lyric))
-                {
-                    DebugLogger.Log(
-                        DebugLogger.LogLevel.Info,
-                        "DownloadManager",
-                        $"歌曲 {song.Name} 未找到歌词，跳过歌词下载任务。");
-                    task.Dispose();
-                    return null;
-                }
+                    var lyricContext = await _apiClient.GetResolvedLyricsAsync(song.Id!).ConfigureAwait(false);
+                    if (lyricContext == null || string.IsNullOrWhiteSpace(lyricContext.ExportLyricContent))
+                    {
+                        DebugLogger.Log(
+                            DebugLogger.LogLevel.Info,
+                            "DownloadManager",
+                            $"歌曲 {song.Name} 未找到歌词，跳过歌词下载任务。");
+                        task.Dispose();
+                        return null;
+                    }
 
-                    task.LyricContent = lyricInfo.Lyric;
+                    task.LyricContent = lyricContext.ExportLyricContent;
                 }
 
                 lock (_queueLock)

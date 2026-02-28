@@ -1454,6 +1454,14 @@ namespace YTPlayer
 
 		}
 
+		if (MessageBox.IsThemedModalDialogActive)
+
+		{
+
+			return;
+
+		}
+
 		if (_focusedRefreshAnnouncementQueued && _pendingFocusedRefreshAnnouncementIndex == expectedIndex)
 
 		{
@@ -1480,7 +1488,7 @@ namespace YTPlayer
 
 			{
 
-				if (resultListView == null || !resultListView.IsHandleCreated || !resultListView.ContainsFocus)
+				if (resultListView == null || !resultListView.IsHandleCreated || !resultListView.ContainsFocus || MessageBox.IsThemedModalDialogActive)
 
 				{
 
@@ -1554,6 +1562,14 @@ namespace YTPlayer
 
 	{
 
+		if (MessageBox.IsThemedModalDialogActive)
+
+		{
+
+			return;
+
+		}
+
 		if (item != null && _accessibilityAnnouncementLabel != null)
 
 		{
@@ -1615,6 +1631,14 @@ namespace YTPlayer
         private void RaiseAccessibilityAnnouncement(string text, bool preferInterrupt = false)
 
         {
+
+                if (MessageBox.IsThemedModalDialogActive)
+
+                {
+
+                        return;
+
+                }
 
                 if (_accessibilityAnnouncementLabel == null)
 
@@ -1727,6 +1751,14 @@ namespace YTPlayer
         private void RaiseAccessibilityAnnouncementUiOnly(string text, AutomationNotificationProcessing processing, AutomationLiveSetting liveSetting)
 
         {
+
+                if (MessageBox.IsThemedModalDialogActive)
+
+                {
+
+                        return;
+
+                }
 
                 if (_accessibilityAnnouncementLabel == null)
 
@@ -5290,6 +5322,14 @@ namespace YTPlayer
 
                 }
 
+                if (MessageBox.IsThemedModalDialogActive)
+
+                {
+
+                        return;
+
+                }
+
                 if (!allowNvda && IsNvdaRunningCached())
 
                 {
@@ -5319,6 +5359,14 @@ namespace YTPlayer
         {
 
                 if (string.IsNullOrWhiteSpace(text))
+
+                {
+
+                        return;
+
+                }
+
+                if (MessageBox.IsThemedModalDialogActive)
 
                 {
 

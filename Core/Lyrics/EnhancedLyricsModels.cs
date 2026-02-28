@@ -4,6 +4,21 @@ using System.Collections.Generic;
 namespace YTPlayer.Core.Lyrics
 {
     /// <summary>
+    /// 歌词语言选项
+    /// </summary>
+    public sealed class LyricLanguageOption
+    {
+        public string Key { get; }
+        public string DisplayName { get; }
+
+        public LyricLanguageOption(string key, string displayName)
+        {
+            Key = key ?? string.Empty;
+            DisplayName = displayName ?? string.Empty;
+        }
+    }
+
+    /// <summary>
     /// 逐字歌词中的单个字/词
     /// </summary>
     public class LyricWord
@@ -68,6 +83,11 @@ namespace YTPlayer.Core.Lyrics
         public string? RomaLyric { get; set; }
 
         /// <summary>
+        /// 按语言键存储的歌词文本（用于多语言选择）
+        /// </summary>
+        public Dictionary<string, string> LanguageTexts { get; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
         /// 是否有逐字时间信息
         /// </summary>
         public bool HasWordTimings => Words != null && Words.Count > 0;
@@ -108,6 +128,21 @@ namespace YTPlayer.Core.Lyrics
         /// 是否有罗马音
         /// </summary>
         public bool HasRomaLyric { get; set; }
+
+        /// <summary>
+        /// 可用歌词语言（按展示顺序）
+        /// </summary>
+        public List<LyricLanguageOption> AvailableLanguages { get; set; } = new List<LyricLanguageOption>();
+
+        /// <summary>
+        /// 当前生效的歌词语言选择（按输出顺序）
+        /// </summary>
+        public List<string> SelectedLanguageKeys { get; set; } = new List<string>();
+
+        /// <summary>
+        /// 默认歌词语言选择（通常仅首选语言）
+        /// </summary>
+        public List<string> DefaultLanguageKeys { get; set; } = new List<string>();
 
         /// <summary>
         /// 是否为空（没有任何歌词）

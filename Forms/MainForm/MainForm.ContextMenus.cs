@@ -1,17 +1,1423 @@
 #nullable disable
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using YTPlayer.Core;
+using YTPlayer.Core.Playback;
 using YTPlayer.Models;
+using YTPlayer.Utils;
 #pragma warning disable CS8632
 
 namespace YTPlayer
 {
 public partial class MainForm
 {
+	private const string CurrentPlayingMenuCaptionBaseText = "当前播放";
+	private const string ViewSourceMenuCaptionBaseText = "查看来源";
+
+	private readonly ConcurrentDictionary<string, string> _currentPlayingMenuCaptionCache = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+	private readonly ConcurrentDictionary<string, string> _viewSourceMenuCaptionCache = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+	private int _currentPlayingMenuCaptionRequestToken;
+	private int _viewSourceMenuCaptionRequestToken;
+	private CancellationTokenSource? _currentPlayingMenuCaptionCts;
+	private CancellationTokenSource? _viewSourceMenuCaptionCts;
+	private CancellationTokenSource? _viewSourceMenuCaptionPrefetchCts;
+
+	private static string BuildCurrentPlayingMenuCaption(string payload)
+	{
+		return string.IsNullOrWhiteSpace(payload) ? CurrentPlayingMenuCaptionBaseText : (CurrentPlayingMenuCaptionBaseText + "：" + payload.Trim());
+	}
+
+	private static string BuildViewSourceMenuCaption(string payload)
+	{
+		return string.IsNullOrWhiteSpace(payload) ? ViewSourceMenuCaptionBaseText : (ViewSourceMenuCaptionBaseText + "：" + payload.Trim());
+	}
+
+	private void InvalidateCurrentPlayingMenuCaptionRequests()
+	{
+		Interlocked.Increment(ref _currentPlayingMenuCaptionRequestToken);
+		CancelCurrentPlayingMenuCaptionRequest();
+	}
+
+	private void InvalidateViewSourceMenuCaptionRequests()
+	{
+		Interlocked.Increment(ref _viewSourceMenuCaptionRequestToken);
+		CancelViewSourceMenuCaptionRequest();
+	}
+
+	private CancellationToken ReplaceCurrentPlayingMenuCaptionRequest()
+	{
+		CancellationTokenSource next = new CancellationTokenSource();
+		CancellationTokenSource previous = Interlocked.Exchange(ref _currentPlayingMenuCaptionCts, next);
+		try
+		{
+			previous?.Cancel();
+		}
+		catch (ObjectDisposedException)
+		{
+		}
+		finally
+		{
+			previous?.Dispose();
+		}
+		return next.Token;
+	}
+
+	private CancellationToken ReplaceViewSourceMenuCaptionRequest()
+	{
+		CancellationTokenSource next = new CancellationTokenSource();
+		CancellationTokenSource previous = Interlocked.Exchange(ref _viewSourceMenuCaptionCts, next);
+		try
+		{
+			previous?.Cancel();
+		}
+		catch (ObjectDisposedException)
+		{
+		}
+		finally
+		{
+			previous?.Dispose();
+		}
+		return next.Token;
+	}
+
+	private CancellationToken ReplaceViewSourceMenuCaptionPrefetchRequest()
+	{
+		CancellationTokenSource next = new CancellationTokenSource();
+		CancellationTokenSource previous = Interlocked.Exchange(ref _viewSourceMenuCaptionPrefetchCts, next);
+		try
+		{
+			previous?.Cancel();
+		}
+		catch (ObjectDisposedException)
+		{
+		}
+		finally
+		{
+			previous?.Dispose();
+		}
+		return next.Token;
+	}
+
+	private void CancelCurrentPlayingMenuCaptionRequest()
+	{
+		CancellationTokenSource previous = Interlocked.Exchange(ref _currentPlayingMenuCaptionCts, null);
+		if (previous == null)
+		{
+			return;
+		}
+		try
+		{
+			previous.Cancel();
+		}
+		catch (ObjectDisposedException)
+		{
+		}
+		finally
+		{
+			previous.Dispose();
+		}
+	}
+
+	private void CancelViewSourceMenuCaptionRequest()
+	{
+		CancellationTokenSource previous = Interlocked.Exchange(ref _viewSourceMenuCaptionCts, null);
+		if (previous == null)
+		{
+			return;
+		}
+		try
+		{
+			previous.Cancel();
+		}
+		catch (ObjectDisposedException)
+		{
+		}
+		finally
+		{
+			previous.Dispose();
+		}
+	}
+
+	private void CancelViewSourceMenuCaptionPrefetchRequest()
+	{
+		CancellationTokenSource previous = Interlocked.Exchange(ref _viewSourceMenuCaptionPrefetchCts, null);
+		if (previous == null)
+		{
+			return;
+		}
+		try
+		{
+			previous.Cancel();
+		}
+		catch (ObjectDisposedException)
+		{
+		}
+		finally
+		{
+			previous.Dispose();
+		}
+	}
+
+	private async Task<string?> ResolveFirstNonEmptyCaptionAsync(IEnumerable<Func<CancellationToken, Task<string?>>> providers, CancellationToken cancellationToken)
+	{
+		if (providers == null)
+		{
+			return null;
+		}
+		using CancellationTokenSource linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+		List<Task<string?>> runningTasks = new List<Task<string?>>();
+		foreach (Func<CancellationToken, Task<string?>> provider in providers)
+		{
+			if (provider != null)
+			{
+				runningTasks.Add(InvokeCaptionProviderSafeAsync(provider, linkedCts.Token));
+			}
+		}
+		while (runningTasks.Count > 0)
+		{
+			Task<string?> completed = await Task.WhenAny(runningTasks).ConfigureAwait(false);
+			runningTasks.Remove(completed);
+			if (cancellationToken.IsCancellationRequested)
+			{
+				return null;
+			}
+			string? result = null;
+			try
+			{
+				result = await completed.ConfigureAwait(false);
+			}
+			catch (OperationCanceledException)
+			{
+				continue;
+			}
+			if (!string.IsNullOrWhiteSpace(result))
+			{
+				try
+				{
+					linkedCts.Cancel();
+				}
+				catch (ObjectDisposedException)
+				{
+				}
+				return result.Trim();
+			}
+		}
+		return null;
+	}
+
+	private async Task<string?> InvokeCaptionProviderSafeAsync(Func<CancellationToken, Task<string?>> provider, CancellationToken cancellationToken)
+	{
+		if (provider == null || cancellationToken.IsCancellationRequested)
+		{
+			return null;
+		}
+		try
+		{
+			return await provider(cancellationToken).ConfigureAwait(false);
+		}
+		catch (OperationCanceledException)
+		{
+			return null;
+		}
+		catch (Exception ex)
+		{
+			Debug.WriteLine($"[MenuCaption] 来源提供器执行失败: {ex.Message}");
+			return null;
+		}
+	}
+
+	private void ResetCurrentPlayingMenuCaptionToBase()
+	{
+		if (currentPlayingMenuItem != null)
+		{
+			currentPlayingMenuItem.Text = CurrentPlayingMenuCaptionBaseText;
+		}
+	}
+
+	private void ResetViewSourceMenuCaptionToBase(bool invalidatePendingRequest)
+	{
+		if (invalidatePendingRequest)
+		{
+			InvalidateViewSourceMenuCaptionRequests();
+		}
+		if (viewSourceMenuItem != null)
+		{
+			viewSourceMenuItem.Text = ViewSourceMenuCaptionBaseText;
+		}
+	}
+
+	private void PrefetchCurrentPlayingContextMenuCaptions(SongInfo? song)
+	{
+		if (song == null)
+		{
+			CancelViewSourceMenuCaptionPrefetchRequest();
+			return;
+		}
+		CancellationToken cancellationToken = ReplaceViewSourceMenuCaptionPrefetchRequest();
+		_ = PrefetchCurrentPlayingViewSourceCaptionAsync(song, cancellationToken);
+	}
+
+	private async Task PrefetchCurrentPlayingViewSourceCaptionAsync(SongInfo song, CancellationToken cancellationToken)
+	{
+		if (song == null || cancellationToken.IsCancellationRequested)
+		{
+			return;
+		}
+		SongInfo effectiveSong = song;
+		string? viewSource = ResolveCurrentPlayingViewSource(effectiveSong);
+		if (string.IsNullOrWhiteSpace(viewSource))
+		{
+			try
+			{
+				await Task.Delay(350, cancellationToken).ConfigureAwait(false);
+			}
+			catch (OperationCanceledException)
+			{
+				return;
+			}
+			if (cancellationToken.IsCancellationRequested)
+			{
+				return;
+			}
+			SongInfo currentSong = _audioEngine?.CurrentSong;
+			if (currentSong != null && AreSameSongForMenuCaption(currentSong, song))
+			{
+				effectiveSong = currentSong;
+			}
+			viewSource = ResolveCurrentPlayingViewSource(effectiveSong);
+			if (string.IsNullOrWhiteSpace(viewSource))
+			{
+				return;
+			}
+		}
+		string cacheKey = NormalizeViewSourceCaptionCacheKey(viewSource);
+		if (!string.IsNullOrWhiteSpace(cacheKey) && _viewSourceMenuCaptionCache.ContainsKey(cacheKey))
+		{
+			return;
+		}
+		await EnsureViewSourceMenuCaptionPrefetchedAsync(viewSource, effectiveSong, cacheKey, cancellationToken).ConfigureAwait(false);
+	}
+
+	private async Task EnsureViewSourceMenuCaptionPrefetchedAsync(string viewSource, SongInfo song, string? cacheKey, CancellationToken cancellationToken)
+	{
+		if (string.IsNullOrWhiteSpace(viewSource) || cancellationToken.IsCancellationRequested)
+		{
+			return;
+		}
+		string resolvedTitle = null;
+		try
+		{
+			resolvedTitle = await ResolveViewSourceCaptionAsync(viewSource, song, cancellationToken).ConfigureAwait(false);
+		}
+		catch (OperationCanceledException)
+		{
+			return;
+		}
+		catch (Exception ex)
+		{
+			Debug.WriteLine($"[MenuCaption] 预热来源视图标题失败: source={viewSource}, error={ex.Message}");
+		}
+		if (cancellationToken.IsCancellationRequested || string.IsNullOrWhiteSpace(resolvedTitle))
+		{
+			return;
+		}
+		if (!string.IsNullOrWhiteSpace(cacheKey))
+		{
+			_viewSourceMenuCaptionCache[cacheKey] = resolvedTitle;
+		}
+	}
+
+	private void RefreshCurrentPlayingMenuCaption(SongInfo? song)
+	{
+		ResetCurrentPlayingMenuCaptionToBase();
+		int requestToken = Interlocked.Increment(ref _currentPlayingMenuCaptionRequestToken);
+		if (song == null)
+		{
+			CancelCurrentPlayingMenuCaptionRequest();
+			return;
+		}
+		string songKey = ResolveSongFocusKey(song) ?? string.Empty;
+		if (!string.IsNullOrWhiteSpace(songKey) && _currentPlayingMenuCaptionCache.TryGetValue(songKey, out var cachedPayload) && !string.IsNullOrWhiteSpace(cachedPayload))
+		{
+			CancelCurrentPlayingMenuCaptionRequest();
+			currentPlayingMenuItem.Text = BuildCurrentPlayingMenuCaption(cachedPayload);
+			return;
+		}
+		CancellationToken cancellationToken = ReplaceCurrentPlayingMenuCaptionRequest();
+		_ = EnsureCurrentPlayingMenuCaptionLoadedAsync(song, requestToken, songKey, cancellationToken);
+	}
+
+	private async Task EnsureCurrentPlayingMenuCaptionLoadedAsync(SongInfo song, int requestToken, string songKey, CancellationToken cancellationToken)
+	{
+		string payload = null;
+		try
+		{
+			payload = await ResolveCurrentPlayingMenuPayloadAsync(song, cancellationToken).ConfigureAwait(false);
+		}
+		catch (OperationCanceledException)
+		{
+			return;
+		}
+		catch (Exception ex)
+		{
+			Debug.WriteLine($"[MenuCaption] 拉取当前播放标题失败: {ex.Message}");
+		}
+		if (cancellationToken.IsCancellationRequested || string.IsNullOrWhiteSpace(payload))
+		{
+			return;
+		}
+		if (!string.IsNullOrWhiteSpace(songKey))
+		{
+			_currentPlayingMenuCaptionCache[songKey] = payload;
+		}
+		SafeInvoke(delegate
+		{
+			if (cancellationToken.IsCancellationRequested || currentPlayingMenuItem == null || requestToken != _currentPlayingMenuCaptionRequestToken)
+			{
+				return;
+			}
+			if (!AreSameSongForMenuCaption(song, _audioEngine?.CurrentSong))
+			{
+				return;
+			}
+			currentPlayingMenuItem.Text = BuildCurrentPlayingMenuCaption(payload);
+			currentPlayingMenuItem.Owner?.PerformLayout();
+		});
+	}
+
+	private async Task<string?> ResolveCurrentPlayingMenuPayloadAsync(SongInfo song, CancellationToken cancellationToken)
+	{
+		if (song == null || cancellationToken.IsCancellationRequested)
+		{
+			return null;
+		}
+		List<Func<CancellationToken, Task<string?>>> providers = new List<Func<CancellationToken, Task<string?>>>
+		{
+			(ct => Task.FromResult(TryBuildCurrentPlayingPayloadFromSong(song))),
+			(ct => Task.FromResult(TryBuildCurrentPlayingPayloadFromSong(_audioEngine?.CurrentSong))),
+			(ct => Task.FromResult(TryBuildCurrentPlayingPayloadFromPlaybackQueue(song))),
+			(ct => Task.FromResult(TryBuildCurrentPlayingPayloadFromCurrentView(song))),
+			(ct => Task.FromResult(TryBuildCurrentPlayingPayloadFromPlaybackTextSources())),
+			(ct => ResolveCurrentPlayingPayloadFromApiAsync(song, ct))
+		};
+		string resolved = await ResolveFirstNonEmptyCaptionAsync(providers, cancellationToken).ConfigureAwait(false);
+		if (!string.IsNullOrWhiteSpace(resolved))
+		{
+			return resolved;
+		}
+		return TryBuildCurrentPlayingPayloadFromSong(song);
+	}
+
+	private string TryBuildCurrentPlayingPayloadFromPlaybackQueue(SongInfo song)
+	{
+		if (song == null)
+		{
+			return string.Empty;
+		}
+		PlaybackSnapshot snapshot = _playbackQueue?.CaptureSnapshot();
+		if (snapshot == null)
+		{
+			return string.Empty;
+		}
+		SongInfo candidate = null;
+		if (snapshot.Queue != null && snapshot.QueueIndex >= 0 && snapshot.QueueIndex < snapshot.Queue.Count)
+		{
+			candidate = snapshot.Queue[snapshot.QueueIndex];
+		}
+		if (candidate == null && snapshot.Queue != null)
+		{
+			int queueIndex = FindSongIndexInList(snapshot.Queue, song);
+			if (queueIndex >= 0 && queueIndex < snapshot.Queue.Count)
+			{
+				candidate = snapshot.Queue[queueIndex];
+			}
+		}
+		if (candidate == null && snapshot.InjectionChain != null && snapshot.InjectionIndex >= 0 && snapshot.InjectionIndex < snapshot.InjectionChain.Count)
+		{
+			candidate = snapshot.InjectionChain[snapshot.InjectionIndex];
+		}
+		if (candidate == null && snapshot.InjectionChain != null)
+		{
+			int injectionIndex = FindSongIndexInList(snapshot.InjectionChain, song);
+			if (injectionIndex >= 0 && injectionIndex < snapshot.InjectionChain.Count)
+			{
+				candidate = snapshot.InjectionChain[injectionIndex];
+			}
+		}
+		if (candidate == null && snapshot.PendingInjection != null && AreSameSongForMenuCaption(song, snapshot.PendingInjection))
+		{
+			candidate = snapshot.PendingInjection;
+		}
+		return TryBuildCurrentPlayingPayloadFromSong(candidate);
+	}
+
+	private string TryBuildCurrentPlayingPayloadFromCurrentView(SongInfo song)
+	{
+		if (song == null || _currentSongs == null || _currentSongs.Count == 0)
+		{
+			return string.Empty;
+		}
+		int index = FindSongIndexInList(_currentSongs, song);
+		if (index < 0 || index >= _currentSongs.Count)
+		{
+			return string.Empty;
+		}
+		return TryBuildCurrentPlayingPayloadFromSong(_currentSongs[index]);
+	}
+
+	private string TryBuildCurrentPlayingPayloadFromPlaybackTextSources()
+	{
+		if (base.IsDisposed || base.InvokeRequired)
+		{
+			return string.Empty;
+		}
+		string[] candidates = new string[4]
+		{
+			playPauseButton?.AccessibleDescription,
+			playPauseButton?.AccessibleName,
+			Text,
+			base.AccessibleName
+		};
+		for (int i = 0; i < candidates.Length; i++)
+		{
+			string payload = NormalizePlaybackPayloadCandidate(candidates[i]);
+			if (!string.IsNullOrWhiteSpace(payload))
+			{
+				return payload;
+			}
+		}
+		return string.Empty;
+	}
+
+	private string TryBuildCurrentPlayingPayloadFromSong(SongInfo? song)
+	{
+		if (song == null)
+		{
+			return string.Empty;
+		}
+		return BuildCurrentPlaybackPayload(song.Name, ResolveCurrentPlaybackOwnerName(song));
+	}
+
+	private static string NormalizePlaybackPayloadCandidate(string? rawText)
+	{
+		if (string.IsNullOrWhiteSpace(rawText))
+		{
+			return string.Empty;
+		}
+		string text = rawText.Trim();
+		if (string.Equals(text, BaseWindowTitle, StringComparison.OrdinalIgnoreCase) || string.Equals(text, "播放/暂停", StringComparison.OrdinalIgnoreCase))
+		{
+			return string.Empty;
+		}
+		string basePrefix = BaseWindowTitle + " - ";
+		if (text.StartsWith(basePrefix, StringComparison.OrdinalIgnoreCase))
+		{
+			text = text.Substring(basePrefix.Length).Trim();
+		}
+		int commaIndex = text.IndexOf('，');
+		if (commaIndex >= 0 && commaIndex < text.Length - 1)
+		{
+			text = text.Substring(commaIndex + 1).Trim();
+		}
+		int qualitySeparator = text.IndexOf(" | ", StringComparison.Ordinal);
+		if (qualitySeparator > 0)
+		{
+			text = text.Substring(0, qualitySeparator).Trim();
+		}
+		if (text.EndsWith("]", StringComparison.Ordinal))
+		{
+			int albumSeparator = text.LastIndexOf(" [", StringComparison.Ordinal);
+			if (albumSeparator > 0)
+			{
+				text = text.Substring(0, albumSeparator).Trim();
+			}
+		}
+		if (string.Equals(text, BaseWindowTitle, StringComparison.OrdinalIgnoreCase) || string.Equals(text, "播放/暂停", StringComparison.OrdinalIgnoreCase))
+		{
+			return string.Empty;
+		}
+		return text;
+	}
+
+	private async Task<string?> ResolveCurrentPlayingPayloadFromApiAsync(SongInfo song, CancellationToken cancellationToken)
+	{
+		if (_apiClient == null || song == null || cancellationToken.IsCancellationRequested)
+		{
+			return null;
+		}
+		if (song.IsPodcastEpisode)
+		{
+			long programId = song.PodcastProgramId;
+			if (programId <= 0 && long.TryParse(song.Id, out var parsedProgramId))
+			{
+				programId = parsedProgramId;
+			}
+			if (programId <= 0)
+			{
+				return null;
+			}
+			PodcastEpisodeInfo detail = await _apiClient.GetPodcastEpisodeDetailAsync(programId).ConfigureAwait(false);
+			if (cancellationToken.IsCancellationRequested)
+			{
+				return null;
+			}
+			if (detail == null)
+			{
+				return null;
+			}
+			string payload = BuildCurrentPlaybackPayload(detail.Name, ResolvePodcastOwnerName(detail, song));
+			return string.IsNullOrWhiteSpace(payload) ? null : payload.Trim();
+		}
+		string resolvedSongId = ResolveSongIdForLibraryState(song) ?? song.Id;
+		if (string.IsNullOrWhiteSpace(resolvedSongId))
+		{
+			return null;
+		}
+		SongInfo detailSong = (await _apiClient.GetSongDetailAsync(new string[1] { resolvedSongId }).ConfigureAwait(false))?.FirstOrDefault();
+		if (cancellationToken.IsCancellationRequested || detailSong == null)
+		{
+			return null;
+		}
+		string payload2 = TryBuildCurrentPlayingPayloadFromSong(detailSong);
+		return string.IsNullOrWhiteSpace(payload2) ? null : payload2.Trim();
+	}
+
+	private static string ResolveCurrentPlaybackOwnerName(SongInfo? song)
+	{
+		if (song == null)
+		{
+			return string.Empty;
+		}
+		if (song.IsPodcastEpisode)
+		{
+			if (!string.IsNullOrWhiteSpace(song.PodcastRadioName))
+			{
+				return song.PodcastRadioName.Trim();
+			}
+			if (!string.IsNullOrWhiteSpace(song.PodcastDjName))
+			{
+				return song.PodcastDjName.Trim();
+			}
+		}
+		if (!string.IsNullOrWhiteSpace(song.Artist))
+		{
+			return song.Artist.Trim();
+		}
+		if (!string.IsNullOrWhiteSpace(song.PrimaryArtistName))
+		{
+			return song.PrimaryArtistName.Trim();
+		}
+		return string.Empty;
+	}
+
+	private static string ResolvePodcastOwnerName(PodcastEpisodeInfo episode, SongInfo fallbackSong)
+	{
+		if (episode != null)
+		{
+			if (!string.IsNullOrWhiteSpace(episode.RadioName))
+			{
+				return episode.RadioName.Trim();
+			}
+			if (!string.IsNullOrWhiteSpace(episode.DjName))
+			{
+				return episode.DjName.Trim();
+			}
+		}
+		return ResolveCurrentPlaybackOwnerName(fallbackSong);
+	}
+
+	private static string BuildCurrentPlaybackPayload(string title, string owner)
+	{
+		string safeTitle = (title ?? string.Empty).Trim();
+		string safeOwner = (owner ?? string.Empty).Trim();
+		if (string.IsNullOrWhiteSpace(safeTitle) && string.IsNullOrWhiteSpace(safeOwner))
+		{
+			return string.Empty;
+		}
+		if (string.IsNullOrWhiteSpace(safeTitle))
+		{
+			return safeOwner;
+		}
+		if (string.IsNullOrWhiteSpace(safeOwner))
+		{
+			return safeTitle;
+		}
+		return safeTitle + " - " + safeOwner;
+	}
+
+	private static bool AreSameSongForMenuCaption(SongInfo? first, SongInfo? second)
+	{
+		string firstKey = ResolveSongFocusKey(first);
+		string secondKey = ResolveSongFocusKey(second);
+		if (!string.IsNullOrWhiteSpace(firstKey) && !string.IsNullOrWhiteSpace(secondKey))
+		{
+			return string.Equals(firstKey, secondKey, StringComparison.OrdinalIgnoreCase);
+		}
+		if (first?.IsCloudSong == true && second?.IsCloudSong == true && !string.IsNullOrWhiteSpace(first.CloudSongId) && !string.IsNullOrWhiteSpace(second.CloudSongId))
+		{
+			return string.Equals(first.CloudSongId, second.CloudSongId, StringComparison.OrdinalIgnoreCase);
+		}
+		return false;
+	}
+
+	private void PrimeCurrentPlayingSourceMenuCaptionForFileMenu(SongInfo? song)
+	{
+		if (viewSourceMenuItem == null)
+		{
+			return;
+		}
+		if (song == null)
+		{
+			viewSourceMenuItem.Tag = null;
+			viewSourceMenuItem.Enabled = false;
+			ResetViewSourceMenuCaptionToBase(invalidatePendingRequest: true);
+			return;
+		}
+		string viewSource = ResolveCurrentPlayingViewSource(song);
+		viewSourceMenuItem.Tag = viewSource;
+		viewSourceMenuItem.Enabled = !string.IsNullOrWhiteSpace(viewSource);
+		RefreshViewSourceMenuCaption(viewSource, song);
+	}
+
+	private void RefreshViewSourceMenuCaption(string? viewSource, SongInfo? song)
+	{
+		ResetViewSourceMenuCaptionToBase(invalidatePendingRequest: false);
+		int requestToken = Interlocked.Increment(ref _viewSourceMenuCaptionRequestToken);
+		if (string.IsNullOrWhiteSpace(viewSource))
+		{
+			CancelViewSourceMenuCaptionRequest();
+			return;
+		}
+		string cacheKey = NormalizeViewSourceCaptionCacheKey(viewSource);
+		if (!string.IsNullOrWhiteSpace(cacheKey) && _viewSourceMenuCaptionCache.TryGetValue(cacheKey, out var cachedCaption) && !string.IsNullOrWhiteSpace(cachedCaption))
+		{
+			CancelViewSourceMenuCaptionRequest();
+			viewSourceMenuItem.Text = BuildViewSourceMenuCaption(cachedCaption);
+			return;
+		}
+		CancellationToken cancellationToken = ReplaceViewSourceMenuCaptionRequest();
+		_ = EnsureViewSourceMenuCaptionLoadedAsync(viewSource, song, requestToken, cacheKey, cancellationToken);
+	}
+
+	private async Task EnsureViewSourceMenuCaptionLoadedAsync(string viewSource, SongInfo? song, int requestToken, string? cacheKey, CancellationToken cancellationToken)
+	{
+		string resolvedTitle = null;
+		try
+		{
+			resolvedTitle = await ResolveViewSourceCaptionAsync(viewSource, song, cancellationToken).ConfigureAwait(false);
+		}
+		catch (OperationCanceledException)
+		{
+			return;
+		}
+		catch (Exception ex)
+		{
+			Debug.WriteLine($"[MenuCaption] 拉取来源视图标题失败: source={viewSource}, error={ex.Message}");
+		}
+		if (cancellationToken.IsCancellationRequested || string.IsNullOrWhiteSpace(resolvedTitle))
+		{
+			return;
+		}
+		if (!string.IsNullOrWhiteSpace(cacheKey))
+		{
+			_viewSourceMenuCaptionCache[cacheKey] = resolvedTitle;
+		}
+		SafeInvoke(delegate
+		{
+			if (cancellationToken.IsCancellationRequested || viewSourceMenuItem == null || requestToken != _viewSourceMenuCaptionRequestToken)
+			{
+				return;
+			}
+			string currentTagViewSource = viewSourceMenuItem.Tag as string;
+			if (!string.Equals(currentTagViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
+			{
+				return;
+			}
+			viewSourceMenuItem.Text = BuildViewSourceMenuCaption(resolvedTitle);
+			viewSourceMenuItem.Owner?.PerformLayout();
+		});
+	}
+
+	private string TryResolveViewSourceMenuCaptionFast(string viewSource)
+	{
+		if (string.IsNullOrWhiteSpace(viewSource))
+		{
+			return string.Empty;
+		}
+		if (!string.IsNullOrWhiteSpace(_currentViewSource) && IsSameViewSourceForFocus(_currentViewSource, viewSource))
+		{
+			string currentViewTitle = resultListView?.AccessibleName;
+			if (!string.IsNullOrWhiteSpace(currentViewTitle))
+			{
+				return currentViewTitle.Trim();
+			}
+		}
+		foreach (NavigationHistoryItem item in _navigationHistory)
+		{
+			if (item != null && !string.IsNullOrWhiteSpace(item.ViewSource) && !string.IsNullOrWhiteSpace(item.ViewName) && IsSameViewSourceForFocus(item.ViewSource, viewSource))
+			{
+				return item.ViewName.Trim();
+			}
+		}
+		return string.Empty;
+	}
+
+	private async Task<string?> ResolveViewSourceCaptionAsync(string viewSource, SongInfo? song, CancellationToken cancellationToken)
+	{
+		if (string.IsNullOrWhiteSpace(viewSource) || cancellationToken.IsCancellationRequested)
+		{
+			return null;
+		}
+		List<Func<CancellationToken, Task<string?>>> providers = new List<Func<CancellationToken, Task<string?>>>
+		{
+			(ct => Task.FromResult(TryResolveViewSourceCaptionFromContextState(viewSource, song))),
+			(ct => Task.FromResult(TryResolveViewSourceCaptionFromStaticRules(viewSource, song))),
+			(ct => ResolveViewSourceCaptionFromApiAsync(viewSource, song, ct))
+		};
+		string resolved = await ResolveFirstNonEmptyCaptionAsync(providers, cancellationToken).ConfigureAwait(false);
+		if (!string.IsNullOrWhiteSpace(resolved))
+		{
+			return resolved;
+		}
+		return ResolveViewSourceCaptionFallback(viewSource, song);
+	}
+
+	private string? TryResolveViewSourceCaptionFromContextState(string viewSource, SongInfo? song)
+	{
+		if (string.IsNullOrWhiteSpace(viewSource))
+		{
+			return null;
+		}
+		string fastTitle = TryResolveViewSourceMenuCaptionFast(viewSource);
+		if (!string.IsNullOrWhiteSpace(fastTitle))
+		{
+			return fastTitle.Trim();
+		}
+		string normalized = StripOffsetSuffix(viewSource, out _);
+		if (normalized.StartsWith("playlist:", StringComparison.OrdinalIgnoreCase))
+		{
+			string playlistId = ExtractPrimaryIdFromViewSource(normalized, "playlist:");
+			string playlistName = TryResolvePlaylistNameFromCurrentState(playlistId);
+			return string.IsNullOrWhiteSpace(playlistName) ? null : playlistName;
+		}
+		if (normalized.StartsWith("album:", StringComparison.OrdinalIgnoreCase))
+		{
+			string albumId = ExtractPrimaryIdFromViewSource(normalized, "album:");
+			string albumName = TryResolveAlbumNameFromCurrentState(albumId);
+			return string.IsNullOrWhiteSpace(albumName) ? null : albumName;
+		}
+		if (normalized.StartsWith("podcast:", StringComparison.OrdinalIgnoreCase))
+		{
+			ParsePodcastViewSource(normalized, out var radioId, out var _, out var _);
+			string podcastName = TryResolvePodcastNameFromCurrentState(radioId, song);
+			return string.IsNullOrWhiteSpace(podcastName) ? null : podcastName;
+		}
+		if (normalized.StartsWith("artist_entries:", StringComparison.OrdinalIgnoreCase))
+		{
+			long artistId = ParseArtistIdFromViewSource(normalized, "artist_entries:");
+			string artistName = ResolveArtistNameForViewSourceFromState(artistId, song?.Artist);
+			return string.IsNullOrWhiteSpace(artistName) ? null : artistName;
+		}
+		if (normalized.StartsWith("artist_songs_top:", StringComparison.OrdinalIgnoreCase) || normalized.StartsWith("artist_top:", StringComparison.OrdinalIgnoreCase))
+		{
+			string prefix = normalized.StartsWith("artist_top:", StringComparison.OrdinalIgnoreCase) ? "artist_top:" : "artist_songs_top:";
+			long artistId2 = ParseArtistIdFromViewSource(normalized, prefix);
+			string artistName2 = ResolveArtistNameForViewSourceFromState(artistId2, song?.Artist);
+			return string.IsNullOrWhiteSpace(artistName2) ? null : (artistName2 + " 热门 50 首");
+		}
+		if (normalized.StartsWith("artist_songs:", StringComparison.OrdinalIgnoreCase))
+		{
+			ParseArtistListViewSource(normalized, out var artistId3, out var _, out var _);
+			string artistName3 = ResolveArtistNameForViewSourceFromState(artistId3, song?.Artist);
+			return string.IsNullOrWhiteSpace(artistName3) ? null : (artistName3 + " 的歌曲");
+		}
+		if (normalized.StartsWith("artist_albums:", StringComparison.OrdinalIgnoreCase))
+		{
+			ParseArtistListViewSource(normalized, out var artistId4, out var _, out var _, "latest");
+			string artistName4 = ResolveArtistNameForViewSourceFromState(artistId4, song?.Artist);
+			return string.IsNullOrWhiteSpace(artistName4) ? null : (artistName4 + " 的专辑");
+		}
+		if (normalized.StartsWith("artist_top_", StringComparison.OrdinalIgnoreCase))
+		{
+			long artistId5 = ParseArtistIdFromSuffix(normalized, "artist_top_");
+			string artistName5 = ResolveArtistNameForViewSourceFromState(artistId5, song?.Artist);
+			return string.IsNullOrWhiteSpace(artistName5) ? null : (artistName5 + " 热门 50 首");
+		}
+		if (normalized.StartsWith("artist_songs_", StringComparison.OrdinalIgnoreCase))
+		{
+			long artistId6 = ParseArtistIdFromSuffix(normalized, "artist_songs_");
+			string artistName6 = ResolveArtistNameForViewSourceFromState(artistId6, song?.Artist);
+			return string.IsNullOrWhiteSpace(artistName6) ? null : (artistName6 + " 的歌曲");
+		}
+		if (normalized.StartsWith("artist_albums_", StringComparison.OrdinalIgnoreCase))
+		{
+			long artistId7 = ParseArtistIdFromSuffix(normalized, "artist_albums_");
+			string artistName7 = ResolveArtistNameForViewSourceFromState(artistId7, song?.Artist);
+			return string.IsNullOrWhiteSpace(artistName7) ? null : (artistName7 + " 的专辑");
+		}
+		if (normalized.StartsWith("url:song:", StringComparison.OrdinalIgnoreCase))
+		{
+			string songIdFromUrl = ExtractPrimaryIdFromViewSource(normalized, "url:song:");
+			string payload = TryResolveViewSourceSongPayloadFromState(songIdFromUrl, song);
+			return string.IsNullOrWhiteSpace(payload) ? null : payload;
+		}
+		return null;
+	}
+
+	private string TryResolvePlaylistNameFromCurrentState(string playlistId)
+	{
+		if (string.IsNullOrWhiteSpace(playlistId))
+		{
+			return string.Empty;
+		}
+		if (_currentPlaylist != null && string.Equals(_currentPlaylist.Id, playlistId, StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(_currentPlaylist.Name))
+		{
+			return _currentPlaylist.Name.Trim();
+		}
+		PlaylistInfo matched = _currentPlaylists?.FirstOrDefault(p => p != null && string.Equals(p.Id, playlistId, StringComparison.OrdinalIgnoreCase));
+		if (!string.IsNullOrWhiteSpace(matched?.Name))
+		{
+			return matched.Name.Trim();
+		}
+		return string.Empty;
+	}
+
+	private string TryResolveAlbumNameFromCurrentState(string albumId)
+	{
+		if (string.IsNullOrWhiteSpace(albumId))
+		{
+			return string.Empty;
+		}
+		AlbumInfo matched = _currentAlbums?.FirstOrDefault(a => a != null && string.Equals(a.Id, albumId, StringComparison.OrdinalIgnoreCase));
+		if (!string.IsNullOrWhiteSpace(matched?.Name))
+		{
+			return matched.Name.Trim();
+		}
+		return string.Empty;
+	}
+
+	private string TryResolvePodcastNameFromCurrentState(long radioId, SongInfo? song)
+	{
+		if (radioId <= 0)
+		{
+			return string.Empty;
+		}
+		if (_currentPodcast != null && _currentPodcast.Id == radioId && !string.IsNullOrWhiteSpace(_currentPodcast.Name))
+		{
+			return _currentPodcast.Name.Trim();
+		}
+		PodcastRadioInfo matched = _currentPodcasts?.FirstOrDefault(p => p != null && p.Id == radioId);
+		if (!string.IsNullOrWhiteSpace(matched?.Name))
+		{
+			return matched.Name.Trim();
+		}
+		if (song != null && song.IsPodcastEpisode && song.PodcastRadioId == radioId)
+		{
+			if (!string.IsNullOrWhiteSpace(song.PodcastRadioName))
+			{
+				return song.PodcastRadioName.Trim();
+			}
+			if (!string.IsNullOrWhiteSpace(song.PodcastDjName))
+			{
+				return song.PodcastDjName.Trim();
+			}
+		}
+		return string.Empty;
+	}
+
+	private string ResolveArtistNameForViewSourceFromState(long artistId, string? fallbackName)
+	{
+		if (artistId > 0)
+		{
+			if (_currentArtist != null && _currentArtist.Id == artistId && !string.IsNullOrWhiteSpace(_currentArtist.Name))
+			{
+				return _currentArtist.Name.Trim();
+			}
+			if (_currentArtistDetail != null && _currentArtistDetail.Id == artistId && !string.IsNullOrWhiteSpace(_currentArtistDetail.Name))
+			{
+				return _currentArtistDetail.Name.Trim();
+			}
+			ArtistInfo matched = _currentArtists?.FirstOrDefault(a => a != null && a.Id == artistId && !string.IsNullOrWhiteSpace(a.Name));
+			if (!string.IsNullOrWhiteSpace(matched?.Name))
+			{
+				return matched.Name.Trim();
+			}
+		}
+		return (fallbackName ?? string.Empty).Trim();
+	}
+
+	private string TryResolveViewSourceSongPayloadFromState(string songId, SongInfo? contextSong)
+	{
+		if (string.IsNullOrWhiteSpace(songId))
+		{
+			return string.Empty;
+		}
+		if (contextSong != null)
+		{
+			string contextSongId = ResolveSongIdForLibraryState(contextSong) ?? contextSong.Id;
+			if (!string.IsNullOrWhiteSpace(contextSongId) && string.Equals(contextSongId, songId, StringComparison.OrdinalIgnoreCase))
+			{
+				return TryBuildCurrentPlayingPayloadFromSong(contextSong);
+			}
+		}
+		SongInfo engineSong = _audioEngine?.CurrentSong;
+		if (engineSong != null)
+		{
+			string engineSongId = ResolveSongIdForLibraryState(engineSong) ?? engineSong.Id;
+			if (!string.IsNullOrWhiteSpace(engineSongId) && string.Equals(engineSongId, songId, StringComparison.OrdinalIgnoreCase))
+			{
+				return TryBuildCurrentPlayingPayloadFromSong(engineSong);
+			}
+		}
+		if (_currentSongs != null)
+		{
+			for (int i = 0; i < _currentSongs.Count; i++)
+			{
+				SongInfo item = _currentSongs[i];
+				if (item != null)
+				{
+					string itemId = ResolveSongIdForLibraryState(item) ?? item.Id;
+					if (!string.IsNullOrWhiteSpace(itemId) && string.Equals(itemId, songId, StringComparison.OrdinalIgnoreCase))
+					{
+						return TryBuildCurrentPlayingPayloadFromSong(item);
+					}
+				}
+			}
+		}
+		PlaybackSnapshot snapshot = _playbackQueue?.CaptureSnapshot();
+		if (snapshot?.Queue != null)
+		{
+			for (int j = 0; j < snapshot.Queue.Count; j++)
+			{
+				SongInfo queueSong = snapshot.Queue[j];
+				if (queueSong != null)
+				{
+					string queueSongId = ResolveSongIdForLibraryState(queueSong) ?? queueSong.Id;
+					if (!string.IsNullOrWhiteSpace(queueSongId) && string.Equals(queueSongId, songId, StringComparison.OrdinalIgnoreCase))
+					{
+						return TryBuildCurrentPlayingPayloadFromSong(queueSong);
+					}
+				}
+			}
+		}
+		if (snapshot?.InjectionChain != null)
+		{
+			for (int k = 0; k < snapshot.InjectionChain.Count; k++)
+			{
+				SongInfo injectionSong = snapshot.InjectionChain[k];
+				if (injectionSong != null)
+				{
+					string injectionSongId = ResolveSongIdForLibraryState(injectionSong) ?? injectionSong.Id;
+					if (!string.IsNullOrWhiteSpace(injectionSongId) && string.Equals(injectionSongId, songId, StringComparison.OrdinalIgnoreCase))
+					{
+						return TryBuildCurrentPlayingPayloadFromSong(injectionSong);
+					}
+				}
+			}
+		}
+		return string.Empty;
+	}
+
+	private string? TryResolveViewSourceCaptionFromStaticRules(string viewSource, SongInfo? song)
+	{
+		if (string.IsNullOrWhiteSpace(viewSource))
+		{
+			return null;
+		}
+		string normalized = StripOffsetSuffix(viewSource, out _);
+		if (normalized.StartsWith("search:", StringComparison.OrdinalIgnoreCase))
+		{
+			ParseSearchViewSource(normalized, out var searchType, out var keyword, out var _);
+			if (string.IsNullOrWhiteSpace(keyword))
+			{
+				return "搜索";
+			}
+			if (string.Equals(searchType, "歌曲", StringComparison.OrdinalIgnoreCase))
+			{
+				return "搜索: " + keyword;
+			}
+			return "搜索" + searchType + ": " + keyword;
+		}
+		if (normalized.StartsWith("playlist_cat_", StringComparison.OrdinalIgnoreCase))
+		{
+			ParsePlaylistCategoryViewSource(normalized, out var catName, out var _);
+			return string.IsNullOrWhiteSpace(catName) ? "歌单分类" : (catName + "歌单");
+		}
+		if (normalized.StartsWith("podcast_cat_", StringComparison.OrdinalIgnoreCase))
+		{
+			ParsePodcastCategoryViewSource(normalized, out var categoryId, out var _);
+			string categoryName = ResolvePodcastCategoryName(categoryId);
+			return string.IsNullOrWhiteSpace(categoryName) ? "播客列表" : (categoryName + " 播客");
+		}
+		if (normalized.StartsWith("artist_type_", StringComparison.OrdinalIgnoreCase))
+		{
+			return "歌手地区筛选";
+		}
+		if (normalized.StartsWith("artist_area_", StringComparison.OrdinalIgnoreCase))
+		{
+			return "歌手分类列表";
+		}
+		if (normalized.StartsWith("new_album_period_", StringComparison.OrdinalIgnoreCase))
+		{
+			return "新碟地区筛选";
+		}
+		if (normalized.StartsWith("new_album_area_", StringComparison.OrdinalIgnoreCase))
+		{
+			return "新碟分类列表";
+		}
+		if (normalized.StartsWith("new_album_category_period:", StringComparison.OrdinalIgnoreCase))
+		{
+			return "新碟地区筛选";
+		}
+		if (normalized.StartsWith("new_album_category_list:", StringComparison.OrdinalIgnoreCase))
+		{
+			return "新碟分类列表";
+		}
+		if (normalized.StartsWith("url:mixed:", StringComparison.OrdinalIgnoreCase))
+		{
+			return "聚合链接";
+		}
+		if (TryParseNewSongsViewSource(normalized, out var _, out var areaName, out var _, out var _))
+		{
+			return string.IsNullOrWhiteSpace(areaName) ? "新歌速递" : (areaName + "新歌速递");
+		}
+		string staticTitle = ResolveStaticViewSourceCaption(normalized);
+		return string.IsNullOrWhiteSpace(staticTitle) ? null : staticTitle.Trim();
+	}
+
+	private string? ResolveViewSourceCaptionFallback(string viewSource, SongInfo? song)
+	{
+		if (string.IsNullOrWhiteSpace(viewSource))
+		{
+			return null;
+		}
+		string normalized = StripOffsetSuffix(viewSource, out _);
+		if (normalized.StartsWith("playlist:", StringComparison.OrdinalIgnoreCase))
+		{
+			string playlistId = ExtractPrimaryIdFromViewSource(normalized, "playlist:");
+			return string.IsNullOrWhiteSpace(playlistId) ? "歌单" : ("歌单 " + playlistId);
+		}
+		if (normalized.StartsWith("album:", StringComparison.OrdinalIgnoreCase))
+		{
+			string albumId = ExtractPrimaryIdFromViewSource(normalized, "album:");
+			return string.IsNullOrWhiteSpace(albumId) ? "专辑" : ("专辑 " + albumId);
+		}
+		if (normalized.StartsWith("podcast:", StringComparison.OrdinalIgnoreCase))
+		{
+			ParsePodcastViewSource(normalized, out var radioId, out var _, out var _);
+			return (radioId > 0) ? $"播客 {radioId}" : "播客";
+		}
+		if (normalized.StartsWith("artist_entries:", StringComparison.OrdinalIgnoreCase))
+		{
+			long artistId = ParseArtistIdFromViewSource(normalized, "artist_entries:");
+			string artistName = ResolveArtistNameForViewSourceFromState(artistId, song?.Artist);
+			return string.IsNullOrWhiteSpace(artistName) ? "歌手主页" : artistName;
+		}
+		if (normalized.StartsWith("artist_songs_top:", StringComparison.OrdinalIgnoreCase) || normalized.StartsWith("artist_top:", StringComparison.OrdinalIgnoreCase))
+		{
+			string prefix = normalized.StartsWith("artist_top:", StringComparison.OrdinalIgnoreCase) ? "artist_top:" : "artist_songs_top:";
+			long artistId2 = ParseArtistIdFromViewSource(normalized, prefix);
+			string artistName2 = ResolveArtistNameForViewSourceFromState(artistId2, song?.Artist);
+			return string.IsNullOrWhiteSpace(artistName2) ? "热门 50 首" : (artistName2 + " 热门 50 首");
+		}
+		if (normalized.StartsWith("artist_songs:", StringComparison.OrdinalIgnoreCase))
+		{
+			ParseArtistListViewSource(normalized, out var artistId3, out var _, out var _);
+			string artistName3 = ResolveArtistNameForViewSourceFromState(artistId3, song?.Artist);
+			return string.IsNullOrWhiteSpace(artistName3) ? "歌手歌曲" : (artistName3 + " 的歌曲");
+		}
+		if (normalized.StartsWith("artist_albums:", StringComparison.OrdinalIgnoreCase))
+		{
+			ParseArtistListViewSource(normalized, out var artistId4, out var _, out var _, "latest");
+			string artistName4 = ResolveArtistNameForViewSourceFromState(artistId4, song?.Artist);
+			return string.IsNullOrWhiteSpace(artistName4) ? "歌手专辑" : (artistName4 + " 的专辑");
+		}
+		if (normalized.StartsWith("artist_top_", StringComparison.OrdinalIgnoreCase))
+		{
+			long artistId5 = ParseArtistIdFromSuffix(normalized, "artist_top_");
+			string artistName5 = ResolveArtistNameForViewSourceFromState(artistId5, song?.Artist);
+			return string.IsNullOrWhiteSpace(artistName5) ? "热门 50 首" : (artistName5 + " 热门 50 首");
+		}
+		if (normalized.StartsWith("artist_songs_", StringComparison.OrdinalIgnoreCase))
+		{
+			long artistId6 = ParseArtistIdFromSuffix(normalized, "artist_songs_");
+			string artistName6 = ResolveArtistNameForViewSourceFromState(artistId6, song?.Artist);
+			return string.IsNullOrWhiteSpace(artistName6) ? "歌手歌曲" : (artistName6 + " 的歌曲");
+		}
+		if (normalized.StartsWith("artist_albums_", StringComparison.OrdinalIgnoreCase))
+		{
+			long artistId7 = ParseArtistIdFromSuffix(normalized, "artist_albums_");
+			string artistName7 = ResolveArtistNameForViewSourceFromState(artistId7, song?.Artist);
+			return string.IsNullOrWhiteSpace(artistName7) ? "歌手专辑" : (artistName7 + " 的专辑");
+		}
+		if (normalized.StartsWith("url:song:", StringComparison.OrdinalIgnoreCase))
+		{
+			string songIdFromUrl = ExtractPrimaryIdFromViewSource(normalized, "url:song:");
+			string payload = TryResolveViewSourceSongPayloadFromState(songIdFromUrl, song);
+			return string.IsNullOrWhiteSpace(payload) ? "歌曲" : payload;
+		}
+		return null;
+	}
+
+	private async Task<string?> ResolveViewSourceCaptionFromApiAsync(string viewSource, SongInfo? song, CancellationToken cancellationToken)
+	{
+		if (string.IsNullOrWhiteSpace(viewSource) || _apiClient == null || cancellationToken.IsCancellationRequested)
+		{
+			return null;
+		}
+		string normalized = StripOffsetSuffix(viewSource, out _);
+		if (normalized.StartsWith("playlist:", StringComparison.OrdinalIgnoreCase))
+		{
+			string playlistId = ExtractPrimaryIdFromViewSource(normalized, "playlist:");
+			if (string.IsNullOrWhiteSpace(playlistId))
+			{
+				return null;
+			}
+			PlaylistInfo detail = await _apiClient.GetPlaylistDetailAsync(playlistId).ConfigureAwait(false);
+			if (cancellationToken.IsCancellationRequested || string.IsNullOrWhiteSpace(detail?.Name))
+			{
+				return null;
+			}
+			return detail.Name.Trim();
+		}
+		if (normalized.StartsWith("album:", StringComparison.OrdinalIgnoreCase))
+		{
+			string albumId = ExtractPrimaryIdFromViewSource(normalized, "album:");
+			if (string.IsNullOrWhiteSpace(albumId))
+			{
+				return null;
+			}
+			AlbumInfo detail2 = await _apiClient.GetAlbumDetailAsync(albumId).ConfigureAwait(false);
+			if (cancellationToken.IsCancellationRequested || string.IsNullOrWhiteSpace(detail2?.Name))
+			{
+				return null;
+			}
+			return detail2.Name.Trim();
+		}
+		if (normalized.StartsWith("podcast:", StringComparison.OrdinalIgnoreCase))
+		{
+			ParsePodcastViewSource(normalized, out var radioId, out var _, out var _);
+			if (radioId <= 0)
+			{
+				return null;
+			}
+			PodcastRadioInfo detail3 = await _apiClient.GetPodcastRadioDetailAsync(radioId).ConfigureAwait(false);
+			if (cancellationToken.IsCancellationRequested || string.IsNullOrWhiteSpace(detail3?.Name))
+			{
+				return null;
+			}
+			return detail3.Name.Trim();
+		}
+		if (normalized.StartsWith("artist_entries:", StringComparison.OrdinalIgnoreCase))
+		{
+			long artistId = ParseArtistIdFromViewSource(normalized, "artist_entries:");
+			string artistName = await ResolveArtistNameForViewSourceAsync(artistId, song?.Artist).ConfigureAwait(false);
+			if (cancellationToken.IsCancellationRequested || string.IsNullOrWhiteSpace(artistName))
+			{
+				return null;
+			}
+			return artistName.Trim();
+		}
+		if (normalized.StartsWith("artist_songs_top:", StringComparison.OrdinalIgnoreCase) || normalized.StartsWith("artist_top:", StringComparison.OrdinalIgnoreCase))
+		{
+			string prefix = normalized.StartsWith("artist_top:", StringComparison.OrdinalIgnoreCase) ? "artist_top:" : "artist_songs_top:";
+			long artistId2 = ParseArtistIdFromViewSource(normalized, prefix);
+			string artistName2 = await ResolveArtistNameForViewSourceAsync(artistId2, song?.Artist).ConfigureAwait(false);
+			if (cancellationToken.IsCancellationRequested || string.IsNullOrWhiteSpace(artistName2))
+			{
+				return null;
+			}
+			return artistName2.Trim() + " 热门 50 首";
+		}
+		if (normalized.StartsWith("artist_songs:", StringComparison.OrdinalIgnoreCase))
+		{
+			ParseArtistListViewSource(normalized, out var artistId3, out var _, out var _);
+			string artistName3 = await ResolveArtistNameForViewSourceAsync(artistId3, song?.Artist).ConfigureAwait(false);
+			if (cancellationToken.IsCancellationRequested || string.IsNullOrWhiteSpace(artistName3))
+			{
+				return null;
+			}
+			return artistName3.Trim() + " 的歌曲";
+		}
+		if (normalized.StartsWith("artist_albums:", StringComparison.OrdinalIgnoreCase))
+		{
+			ParseArtistListViewSource(normalized, out var artistId4, out var _, out var _, "latest");
+			string artistName4 = await ResolveArtistNameForViewSourceAsync(artistId4, song?.Artist).ConfigureAwait(false);
+			if (cancellationToken.IsCancellationRequested || string.IsNullOrWhiteSpace(artistName4))
+			{
+				return null;
+			}
+			return artistName4.Trim() + " 的专辑";
+		}
+		if (normalized.StartsWith("artist_top_", StringComparison.OrdinalIgnoreCase))
+		{
+			long artistId5 = ParseArtistIdFromSuffix(normalized, "artist_top_");
+			string artistName5 = await ResolveArtistNameForViewSourceAsync(artistId5, song?.Artist).ConfigureAwait(false);
+			if (cancellationToken.IsCancellationRequested || string.IsNullOrWhiteSpace(artistName5))
+			{
+				return null;
+			}
+			return artistName5.Trim() + " 热门 50 首";
+		}
+		if (normalized.StartsWith("artist_songs_", StringComparison.OrdinalIgnoreCase))
+		{
+			long artistId6 = ParseArtistIdFromSuffix(normalized, "artist_songs_");
+			string artistName6 = await ResolveArtistNameForViewSourceAsync(artistId6, song?.Artist).ConfigureAwait(false);
+			if (cancellationToken.IsCancellationRequested || string.IsNullOrWhiteSpace(artistName6))
+			{
+				return null;
+			}
+			return artistName6.Trim() + " 的歌曲";
+		}
+		if (normalized.StartsWith("artist_albums_", StringComparison.OrdinalIgnoreCase))
+		{
+			long artistId7 = ParseArtistIdFromSuffix(normalized, "artist_albums_");
+			string artistName7 = await ResolveArtistNameForViewSourceAsync(artistId7, song?.Artist).ConfigureAwait(false);
+			if (cancellationToken.IsCancellationRequested || string.IsNullOrWhiteSpace(artistName7))
+			{
+				return null;
+			}
+			return artistName7.Trim() + " 的专辑";
+		}
+		if (normalized.StartsWith("url:song:", StringComparison.OrdinalIgnoreCase))
+		{
+			string songIdFromUrl = ExtractPrimaryIdFromViewSource(normalized, "url:song:");
+			if (string.IsNullOrWhiteSpace(songIdFromUrl))
+			{
+				return null;
+			}
+			SongInfo detailSong = (await _apiClient.GetSongDetailAsync(new string[1] { songIdFromUrl }).ConfigureAwait(false))?.FirstOrDefault();
+			if (cancellationToken.IsCancellationRequested || detailSong == null)
+			{
+				return null;
+			}
+			string payload = TryBuildCurrentPlayingPayloadFromSong(detailSong);
+			return string.IsNullOrWhiteSpace(payload) ? null : payload.Trim();
+		}
+		return null;
+	}
+
+	private async Task<string> ResolveArtistNameForViewSourceAsync(long artistId, string? fallbackName)
+	{
+		if (artistId <= 0)
+		{
+			return (fallbackName ?? string.Empty).Trim();
+		}
+		string localName = ResolveArtistNameForViewSourceFromState(artistId, fallbackName);
+		if (!string.IsNullOrWhiteSpace(localName))
+		{
+			return localName;
+		}
+		if (_apiClient != null)
+		{
+			ArtistDetail detail = await _apiClient.GetArtistDetailAsync(artistId, includeIntroduction: false).ConfigureAwait(false);
+			if (!string.IsNullOrWhiteSpace(detail?.Name))
+			{
+				return detail.Name.Trim();
+			}
+		}
+		return (fallbackName ?? string.Empty).Trim();
+	}
+
+	private static string NormalizeViewSourceCaptionCacheKey(string viewSource)
+	{
+		if (string.IsNullOrWhiteSpace(viewSource))
+		{
+			return string.Empty;
+		}
+		string normalized = StripOffsetSuffix(viewSource, out _);
+		return string.IsNullOrWhiteSpace(normalized) ? viewSource.Trim() : normalized.Trim();
+	}
+
+	private static string ExtractPrimaryIdFromViewSource(string viewSource, string prefix)
+	{
+		if (string.IsNullOrWhiteSpace(viewSource) || string.IsNullOrWhiteSpace(prefix) || !viewSource.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+		{
+			return string.Empty;
+		}
+		string suffix = viewSource.Substring(prefix.Length);
+		int separatorIndex = suffix.IndexOf(':');
+		if (separatorIndex >= 0)
+		{
+			suffix = suffix.Substring(0, separatorIndex);
+		}
+		return (suffix ?? string.Empty).Trim();
+	}
+
+	private static long ParseArtistIdFromSuffix(string source, string prefix)
+	{
+		if (string.IsNullOrWhiteSpace(source) || string.IsNullOrWhiteSpace(prefix) || !source.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+		{
+			return 0L;
+		}
+		string suffix = source.Substring(prefix.Length);
+		int separatorIndex = suffix.IndexOf(':');
+		if (separatorIndex >= 0)
+		{
+			suffix = suffix.Substring(0, separatorIndex);
+		}
+		return long.TryParse(suffix, out var parsed) ? parsed : 0L;
+	}
+
+	private static string ResolveStaticViewSourceCaption(string normalizedViewSource)
+	{
+		if (string.IsNullOrWhiteSpace(normalizedViewSource))
+		{
+			return string.Empty;
+		}
+		if (normalizedViewSource.StartsWith("listen-match", StringComparison.OrdinalIgnoreCase))
+		{
+			return "听歌识曲";
+		}
+		return normalizedViewSource switch
+		{
+			"homepage" => "首页",
+			"user_liked_songs" => "喜欢的音乐",
+			"user_playlists" => "创建和收藏的歌单",
+			"user_albums" => "收藏的专辑",
+			"user_podcasts" => "收藏的播客",
+			"user_cloud" => "云盘歌曲",
+			"recent_play" => "最近播放",
+			"recent_listened" => "最近听过",
+			"recent_playlists" => "最近歌单",
+			"recent_albums" => "最近专辑",
+			"recent_podcasts" => "最近播客",
+			"daily_recommend" => "每日推荐",
+			"daily_recommend_songs" => "每日推荐歌曲",
+			"daily_recommend_playlists" => "每日推荐歌单",
+			"personalized" => "个性推荐",
+			"personalized_playlists" => "推荐歌单",
+			"personalized_newsongs" => "推荐新歌",
+			"personalized_newsong" => "推荐新歌",
+			"toplist" => "官方排行榜",
+			"highquality_playlists" => "精品歌单",
+			"playlist_category" => "歌单分类",
+			"podcast_categories" => "播客分类",
+			"new_songs" => "新歌速递",
+			"new_songs_all" => "全部新歌速递",
+			"new_songs_chinese" => "华语新歌速递",
+			"new_songs_western" => "欧美新歌速递",
+			"new_songs_japan" => "日本新歌速递",
+			"new_songs_korea" => "韩国新歌速递",
+			"new_albums" => "新碟上架",
+			"artist_favorites" => "收藏的歌手",
+			"artist_categories" => "歌手类型分类",
+			"artist_category_types" => "歌手类型分类",
+			"new_album_categories" => "新碟时间筛选",
+			"new_album_category_periods" => "新碟时间筛选",
+			PersonalFmCategoryId => PersonalFmAccessibleName,
+			_ => string.Empty,
+		};
+	}
+
 	private SongInfo? GetSelectedSongFromContextMenu(object? sender = null)
 	{
 		if (_isCurrentPlayingMenuActive && _currentPlayingMenuSong != null)
@@ -726,6 +2132,13 @@ public partial class MainForm
 		downloadPodcastMenuItem.Tag = null;
 		downloadLyricsMenuItem.Visible = false;
 		downloadLyricsMenuItem.Tag = null;
+		if (lyricsLanguageMenuItem != null)
+		{
+			lyricsLanguageMenuItem.Visible = false;
+			lyricsLanguageMenuItem.Tag = null;
+			lyricsLanguageMenuItem.DropDownItems.Clear();
+			lyricsLanguageMenuItem.Text = "歌词翻译";
+		}
 		cloudMenuSeparator.Visible = false;
 		uploadToCloudMenuItem.Visible = false;
 		deleteFromCloudMenuItem.Visible = false;
@@ -1208,8 +2621,7 @@ public partial class MainForm
 		downloadSongMenuItem.Tag = songInfo;
 		downloadSongMenuItem.Text = (isPodcastEpisodeContext ? "下载声音(&D)" : "下载歌曲(&D)");
 		bool flag9 = !flag8 && !isPodcastEpisodeContext;
-		downloadLyricsMenuItem.Visible = flag9;
-		downloadLyricsMenuItem.Tag = (flag9 ? songInfo : null);
+		ConfigureLyricsLanguageMenuForSong(songInfo, flag9);
 		batchDownloadMenuItem.Visible = !flag8 && !snapshot.IsCurrentPlayback;
 		bool flag10 = !isPodcastEpisodeContext && ConfigureSongArtistMenu(songInfo, canSubscribeSongArtist);
 		bool flag11 = false;

@@ -57,6 +57,60 @@ jobs:
           "tag=$tagName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "version=$displayVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
+      - name: Resolve release metadata from changelog
+        id: changelog
+        shell: pwsh
+        run: |
+          $changelogPath = Join-Path $pwd "changelog.md"
+          if (-not (Test-Path $changelogPath)) {
+              throw "未找到 changelog.md，无法生成 Release 标题和正文。"
+          }
+
+          $lines = Get-Content -Path $changelogPath -Encoding UTF8
+          if (-not $lines -or $lines.Count -eq 0) {
+              throw "changelog.md 为空，无法生成 Release 内容。"
+          }
+
+          $headingIndexes = @()
+          for ($i = 0; $i -lt $lines.Count; $i++) {
+              if ($lines[$i] -match '^\s*#\s+(.+?)\s*$') {
+                  $headingIndexes += $i
+              }
+          }
+
+          if ($headingIndexes.Count -eq 0) {
+              throw "changelog.md 未找到标题（以 # 开头）。"
+          }
+
+          $firstHeadingIndex = $headingIndexes[0]
+          if ($lines[$firstHeadingIndex] -notmatch '^\s*#\s+(.+?)\s*$') {
+              throw "无法解析 changelog.md 的第一个标题。"
+          }
+
+          $sectionTitle = $Matches[1].Trim()
+          if ([string]::IsNullOrWhiteSpace($sectionTitle)) {
+              throw "changelog.md 的第一个标题为空。"
+          }
+
+          $secondHeadingIndex = if ($headingIndexes.Count -ge 2) { $headingIndexes[1] } else { $lines.Count }
+          $bodyLines = @()
+          if ($secondHeadingIndex -gt ($firstHeadingIndex + 1)) {
+              $bodyLines = $lines[($firstHeadingIndex + 1)..($secondHeadingIndex - 1)]
+          }
+
+          $sectionBody = ($bodyLines -join "`n").Trim()
+          if ([string]::IsNullOrWhiteSpace($sectionBody)) {
+              $sectionBody = "- 无更新说明。"
+          }
+
+          $releaseName = "YTPlayer v${{ steps.version.outputs.version }} - $sectionTitle"
+
+          "title=$sectionTitle" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "release_name=$releaseName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "body<<EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          $sectionBody | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
       - name: Setup NuGet
         uses: nuget/setup-nuget@v1
 
@@ -117,8 +171,9 @@ jobs:
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          name: YTPlayer v${{ steps.version.outputs.version }}
+          name: ${{ steps.changelog.outputs.release_name }}
+          body: ${{ steps.changelog.outputs.body }}
           files: ${{ steps.package.outputs.zip_path }}
           draft: false
           prerelease: false
-          generate_release_notes: true
+          generate_release_notes: false

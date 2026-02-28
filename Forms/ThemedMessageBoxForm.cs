@@ -1,5 +1,6 @@
 using System;
 using System.Drawing;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using YTPlayer.Utils;
 namespace YTPlayer.Forms
@@ -9,10 +10,26 @@ namespace YTPlayer.Forms
         private const int MessageMinWidth = 360;
         private const int MessageMaxWidth = 520;
         private const int MessageMaxVisibleLines = 12;
+        private const int FocusRetryIntervalMs = 45;
+        private const int MaxFocusRetryCount = 6;
+        private const uint EventSystemDialogStart = 0x0010;
+        private const uint EventObjectShow = 0x8002;
+        private const uint EventObjectFocus = 0x8005;
+        private const int ObjIdWindow = 0;
+        private const int ObjIdClient = unchecked((int)0xFFFFFFFC);
+        private const int ChildIdSelf = 0;
         private readonly Label _iconLabel;
         private readonly TextBox _messageTextBox;
         private readonly FlowLayoutPanel _buttonPanel;
         private readonly ColumnStyle _messageColumnStyle;
+        private readonly Timer _focusRetryTimer;
+        private int _remainingFocusRetries;
+        private bool _dialogStartRaised;
+        private bool _focusEventRaised;
+
+        [DllImport("user32.dll")]
+        private static extern void NotifyWinEvent(uint eventId, IntPtr hwnd, int idObject, int idChild);
+
         public ThemedMessageBoxForm(string text, string caption, MessageBoxButtons buttons, MessageBoxIcon icon, MessageBoxDefaultButton defaultButton)
         {
             string messageText = text ?? string.Empty;
@@ -20,6 +37,7 @@ namespace YTPlayer.Forms
             Text = titleText;
             AccessibleName = titleText;
             AccessibleDescription = string.IsNullOrWhiteSpace(messageText) ? titleText : messageText;
+            AccessibleRole = AccessibleRole.Alert;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             StartPosition = FormStartPosition.CenterParent;
             MaximizeBox = false;
@@ -102,6 +120,11 @@ namespace YTPlayer.Forms
             ThemeManager.ApplyTheme(this);
             ApplyMessageTextBoxTheme(palette);
             UpdateMessageLayout();
+            _focusRetryTimer = new Timer
+            {
+                Interval = FocusRetryIntervalMs
+            };
+            _focusRetryTimer.Tick += FocusRetryTimer_Tick;
             Shown += ThemedMessageBoxForm_Shown;
         }
         private void UpdateMessageLayout()
@@ -113,20 +136,161 @@ namespace YTPlayer.Forms
         }
         private void ThemedMessageBoxForm_Shown(object? sender, EventArgs e)
         {
-            if (_messageTextBox.CanFocus)
+            PromoteAndFocusMessageText(notifyAccessibility: true);
+            _remainingFocusRetries = MaxFocusRetryCount;
+            _focusRetryTimer.Start();
+            BeginInvoke(new Action(() =>
             {
-                _messageTextBox.Focus();
-                _messageTextBox.SelectionStart = 0;
-                _messageTextBox.SelectionLength = 0;
+                EnsureMessageTextBoxFocused(notifyAccessibility: false);
+            }));
+        }
+
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            _focusRetryTimer.Stop();
+            _focusRetryTimer.Tick -= FocusRetryTimer_Tick;
+            _focusRetryTimer.Dispose();
+            base.OnFormClosed(e);
+        }
+
+        private void FocusRetryTimer_Tick(object? sender, EventArgs e)
+        {
+            if (IsDisposed || !Visible)
+            {
+                _focusRetryTimer.Stop();
+                return;
             }
+
+            if (EnsureMessageTextBoxFocused(notifyAccessibility: false))
+            {
+                _focusRetryTimer.Stop();
+                return;
+            }
+
+            _remainingFocusRetries--;
+            if (_remainingFocusRetries <= 0)
+            {
+                _focusRetryTimer.Stop();
+                if (AcceptButton is Control button && button.CanFocus)
+                {
+                    button.Focus();
+                }
+            }
+        }
+
+        private bool EnsureMessageTextBoxFocused(bool notifyAccessibility)
+        {
+            try
+            {
+                if (_messageTextBox.CanFocus)
+                {
+                    _messageTextBox.Focus();
+                    _messageTextBox.SelectionStart = 0;
+                    _messageTextBox.SelectionLength = 0;
+                    if (_messageTextBox.Focused && notifyAccessibility)
+                    {
+                        RaiseFocusAccessibilityEvents(_messageTextBox);
+                    }
+                    return _messageTextBox.Focused;
+                }
+            }
+            catch
+            {
+            }
+
+            return false;
+        }
+
+        private void PromoteAndFocusMessageText(bool notifyAccessibility)
+        {
+            try
+            {
+                TopMost = true;
+                Activate();
+                BringToFront();
+                TopMost = false;
+                RaiseDialogStartAccessibilityEvents();
+            }
+            catch
+            {
+            }
+            EnsureMessageTextBoxFocused(notifyAccessibility);
         }
         private void MessageTextBox_KeyDown(object? sender, KeyEventArgs e)
         {
-            if (e.KeyCode == Keys.Enter && AcceptButton is IButtonControl accept)
+            if ((e.KeyCode == Keys.Enter || e.KeyCode == Keys.Space) && AcceptButton is IButtonControl accept)
             {
                 e.SuppressKeyPress = true;
                 e.Handled = true;
                 accept.PerformClick();
+            }
+        }
+
+        private void RaiseDialogStartAccessibilityEvents()
+        {
+            if (_dialogStartRaised)
+            {
+                return;
+            }
+
+            _dialogStartRaised = true;
+
+            try
+            {
+                AccessibilityNotifyClients(AccessibleEvents.SystemDialogStart, ChildIdSelf);
+                AccessibilityNotifyClients(AccessibleEvents.Show, ChildIdSelf);
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                if (IsHandleCreated && Handle != IntPtr.Zero)
+                {
+                    NotifyWinEvent(EventSystemDialogStart, Handle, ObjIdWindow, ChildIdSelf);
+                    NotifyWinEvent(EventObjectShow, Handle, ObjIdClient, ChildIdSelf);
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        private void RaiseFocusAccessibilityEvents(Control focusedControl)
+        {
+            if (_focusEventRaised || focusedControl == null || focusedControl.IsDisposed || !focusedControl.IsHandleCreated)
+            {
+                return;
+            }
+
+            _focusEventRaised = true;
+
+            try
+            {
+                AccessibilityNotifyClients(AccessibleEvents.Focus, ChildIdSelf);
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                if (IsHandleCreated && Handle != IntPtr.Zero)
+                {
+                    NotifyWinEvent(EventObjectFocus, Handle, ObjIdClient, ChildIdSelf);
+                }
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                NotifyWinEvent(EventObjectFocus, focusedControl.Handle, ObjIdClient, ChildIdSelf);
+            }
+            catch
+            {
             }
         }
         private static Size MeasureMessageSize(TextBox textBox, int minWidth, int maxWidth, int maxVisibleLines)

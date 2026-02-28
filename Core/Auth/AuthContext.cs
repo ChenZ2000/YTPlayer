@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
 using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -383,6 +384,79 @@ namespace YTPlayer.Core.Auth
             }
         }
 
+        internal IReadOnlyList<string> GetSongLyricLanguagePreference(string songId)
+        {
+            if (string.IsNullOrWhiteSpace(songId))
+            {
+                return Array.Empty<string>();
+            }
+
+            lock (_syncRoot)
+            {
+                _accountState ??= new AccountState { IsLoggedIn = false };
+                _accountState.SongLyricLanguagePreferences ??=
+                    new Dictionary<string, SongLyricLanguagePreference>(StringComparer.OrdinalIgnoreCase);
+
+                if (!_accountState.SongLyricLanguagePreferences.TryGetValue(songId, out var preference) ||
+                    preference == null)
+                {
+                    return Array.Empty<string>();
+                }
+
+                return (preference.SelectedLanguageKeys ?? new List<string>())
+                    .Where(key => !string.IsNullOrWhiteSpace(key))
+                    .Select(key => key.Trim())
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+            }
+        }
+
+        internal void SetSongLyricLanguagePreference(
+            string songId,
+            IReadOnlyCollection<string> selectedLanguageKeys,
+            IReadOnlyCollection<string> defaultLanguageKeys)
+        {
+            if (string.IsNullOrWhiteSpace(songId))
+            {
+                return;
+            }
+
+            lock (_syncRoot)
+            {
+                _accountState ??= new AccountState { IsLoggedIn = false };
+                _accountState.SongLyricLanguagePreferences ??=
+                    new Dictionary<string, SongLyricLanguagePreference>(StringComparer.OrdinalIgnoreCase);
+
+                var selected = NormalizeLyricLanguageKeys(selectedLanguageKeys);
+                var defaults = NormalizeLyricLanguageKeys(defaultLanguageKeys);
+
+                bool equalsDefault = selected.Count == defaults.Count &&
+                                     selected.All(key => defaults.Contains(key, StringComparer.OrdinalIgnoreCase));
+
+                if (selected.Count == 0 || equalsDefault)
+                {
+                    _accountState.SongLyricLanguagePreferences.Remove(songId);
+                }
+                else
+                {
+                    _accountState.SongLyricLanguagePreferences[songId] = new SongLyricLanguagePreference
+                    {
+                        SongId = songId,
+                        SelectedLanguageKeys = selected
+                    };
+                }
+
+                try
+                {
+                    _accountStore.Save(_accountState);
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[AuthContext] 保存歌词语言偏好失败: {ex.Message}");
+                }
+            }
+        }
+
         /// <summary>
         /// 清空登录资料。
         /// 清理 account.json 中的登录信息，但保留设备指纹。
@@ -462,7 +536,10 @@ namespace YTPlayer.Core.Auth
 
                     // 元数据
                     LastUpdated = DateTimeOffset.UtcNow,
-                    FingerprintLastUpdated = _accountState?.FingerprintLastUpdated ?? DateTimeOffset.UtcNow
+                    FingerprintLastUpdated = _accountState?.FingerprintLastUpdated ?? DateTimeOffset.UtcNow,
+
+                    // 歌词语言偏好（仅存储与默认不一致的用户选择）
+                    SongLyricLanguagePreferences = CloneSongLyricLanguagePreferences(_accountState?.SongLyricLanguagePreferences)
                 };
 
                 // 如果提供了 profile，使用 profile 中的信息覆盖
@@ -1128,6 +1205,53 @@ namespace YTPlayer.Core.Auth
                     }
                 }
             }
+        }
+
+        private static List<string> NormalizeLyricLanguageKeys(IEnumerable<string>? keys)
+        {
+            if (keys == null)
+            {
+                return new List<string>();
+            }
+
+            return keys
+                .Where(key => !string.IsNullOrWhiteSpace(key))
+                .Select(key => key.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        private static Dictionary<string, SongLyricLanguagePreference> CloneSongLyricLanguagePreferences(
+            IDictionary<string, SongLyricLanguagePreference>? source)
+        {
+            var cloned = new Dictionary<string, SongLyricLanguagePreference>(StringComparer.OrdinalIgnoreCase);
+            if (source == null)
+            {
+                return cloned;
+            }
+
+            foreach (var pair in source)
+            {
+                string songId = pair.Key?.Trim() ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(songId) || pair.Value == null)
+                {
+                    continue;
+                }
+
+                var selectedKeys = NormalizeLyricLanguageKeys(pair.Value.SelectedLanguageKeys);
+                if (selectedKeys.Count == 0)
+                {
+                    continue;
+                }
+
+                cloned[songId] = new SongLyricLanguagePreference
+                {
+                    SongId = songId,
+                    SelectedLanguageKeys = selectedKeys
+                };
+            }
+
+            return cloned;
         }
     }
 

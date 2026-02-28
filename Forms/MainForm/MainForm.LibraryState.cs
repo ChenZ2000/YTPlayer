@@ -109,10 +109,11 @@ public partial class MainForm
 			NotifyLibraryStateUpdated(entity);
 			return;
 		}
+		bool refreshSucceeded = true;
 		switch (entity)
 		{
 		case LibraryEntityType.Songs:
-			await RefreshLikedSongsCacheAsync(cancellationToken);
+			refreshSucceeded = await RefreshLikedSongsCacheAsync(cancellationToken);
 			break;
 		case LibraryEntityType.Playlists:
 			await RefreshPlaylistSubscriptionCacheAsync(cancellationToken);
@@ -129,7 +130,7 @@ public partial class MainForm
 		}
 		lock (_libraryStateLock)
 		{
-			_libraryCacheTimestamps[entity] = DateTime.UtcNow;
+			_libraryCacheTimestamps[entity] = (refreshSucceeded ? DateTime.UtcNow : DateTime.MinValue);
 		}
 		NotifyLibraryStateUpdated(entity);
 	}
@@ -203,12 +204,37 @@ public partial class MainForm
 		}
 	}
 
-	private async Task RefreshLikedSongsCacheAsync(CancellationToken cancellationToken = default(CancellationToken))
+	private async Task<bool> RefreshLikedSongsCacheAsync(CancellationToken cancellationToken = default(CancellationToken))
 	{
 		long userId = GetCurrentUserId();
 		if (userId <= 0)
 		{
-			return;
+			try
+			{
+				UserAccountInfo userInfo = await _apiClient.GetUserAccountAsync();
+				cancellationToken.ThrowIfCancellationRequested();
+				if (userInfo != null && userInfo.UserId > 0)
+				{
+					userId = userInfo.UserId;
+					CacheLoggedInUserId(userId);
+				}
+			}
+			catch (OperationCanceledException)
+			{
+				throw;
+			}
+			catch (Exception value)
+			{
+				Debug.WriteLine($"[LibraryCache] 获取用户信息失败，无法刷新喜欢的歌曲缓存: {value}");
+			}
+		}
+		if (userId <= 0)
+		{
+			lock (_libraryStateLock)
+			{
+				_likedSongsCacheValid = false;
+			}
+			return false;
 		}
 		try
 		{
@@ -226,10 +252,16 @@ public partial class MainForm
 				}
 				_likedSongsCacheValid = true;
 			}
+			return true;
+		}
+		catch (OperationCanceledException)
+		{
+			throw;
 		}
 		catch (Exception value)
 		{
 			Debug.WriteLine($"[LibraryCache] 刷新喜欢的歌曲失败: {value}");
+			return false;
 		}
 	}
 
@@ -422,7 +454,7 @@ public partial class MainForm
 		}
 		lock (_libraryStateLock)
 		{
-			if (_likedSongIds.Count == 0 && !_likedSongsCacheValid)
+			if (!_likedSongsCacheValid)
 			{
 				return;
 			}
@@ -431,9 +463,13 @@ public partial class MainForm
 				if (song != null)
 				{
 					string text = ResolveSongIdForLibraryState(song);
-					if (!string.IsNullOrEmpty(text) && _likedSongIds.Contains(text))
+					if (!string.IsNullOrEmpty(text))
 					{
-						song.IsLiked = true;
+						song.IsLiked = _likedSongIds.Contains(text);
+					}
+					else
+					{
+						song.IsLiked = false;
 					}
 				}
 			}
@@ -547,23 +583,28 @@ public partial class MainForm
 		{
 			return false;
 		}
+		string text = ResolveSongIdForLibraryState(song);
+		if (string.IsNullOrEmpty(text))
+		{
+			return song.IsLiked;
+		}
+		bool cacheValid;
+		bool isLikedByCache;
+		lock (_libraryStateLock)
+		{
+			cacheValid = _likedSongsCacheValid;
+			isLikedByCache = _likedSongIds.Contains(text);
+		}
+		if (cacheValid)
+		{
+			song.IsLiked = isLikedByCache;
+			return isLikedByCache;
+		}
 		if (song.IsLiked)
 		{
 			return true;
 		}
-		string text = ResolveSongIdForLibraryState(song);
-		if (string.IsNullOrEmpty(text))
-		{
-			return false;
-		}
-		lock (_libraryStateLock)
-		{
-			if (_likedSongIds.Contains(text))
-			{
-				song.IsLiked = true;
-				return true;
-			}
-		}
+		RequestLibraryRefresh(LibraryEntityType.Songs);
 		return false;
 	}
 
@@ -692,7 +733,9 @@ public partial class MainForm
 			{
 				_likedSongIds.Remove(text);
 			}
+			_libraryCacheTimestamps[LibraryEntityType.Songs] = DateTime.MinValue;
 		}
+		_userLikedPlaylist = null;
 	}
 
 	private void UpdatePlaylistSubscriptionState(string? playlistId, bool isSubscribed)
