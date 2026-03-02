@@ -7,6 +7,12 @@
 
 - Windows 10/11 64 位
 
+## 快速开始
+
+1. 访问 [Releases 页面](https://github.com/ChenZ2000/YTPlayer/releases) 并下载最新构建版压缩包。
+2. 解压并运行 `YTPlayer.exe`。
+3. 享受音乐吧！
+
 ## 项目概述
 
 - **技术栈**：.NET 10、Windows Forms、BASS 2.4、Newtonsoft.Json、QRCoder、WebView2、ClearScript
@@ -17,7 +23,7 @@
 - 🛋️ 极简设计与直观的用户体验：根据登录状态、会员种类和账号数据自动调整 UI 和隐藏不可用功能，操作如风
 - 🦅 自由畅听：支持完善的解封和解灰能力，能无会员畅听绝大部分歌曲
 - 🎧 自动协调最高音质：根据当前用户会员权限、歌曲可用音质选项和用户选择动态决定
-- 高度自定义：⚙️ 支持显示或隐藏序号、播放控制栏和各种屏幕阅读器提示，支持每一首歌曲的歌词翻译输出选项单独控制
+- 高度自定义：⚙️ 控件支持随意拖拽拉伸，支持显示或隐藏序号、播放控制栏和各种屏幕阅读器提示，支持每一首歌曲的独立歌词翻译输出控制
 
 ## 功能总览
 
@@ -108,13 +114,7 @@ powershell -ExecutionPolicy Bypass -File .\Build-Debug.ps1
 ## 文档
 
 - `Docs/KeyboardShortcuts.md`：集中维护快捷键说明，构建时会被嵌入到快捷键参考对话框。
-- `Docs/About.md`：维护关于对话框文案与按钮信息，文件顶部的 `--- ... ---` 元数据块可配置 `ProjectUrl`、`AuthorName`、`AuthorUrl`、`ContributorName`、`ContributorUrl` 等键，正文中继续支持 `{{Version}}` 等占位符。
-
-## 快速开始
-
-1. 访问 [Releases 页面](https://github.com/ChenZ2000/YTPlayer/releases) 并下载最新构建版压缩包。
-2. 解压并运行 `YTPlayer.exe`。
-3. 享受音乐吧！
+- `Docs/About.md`：维护关于对话框的文案与按钮信息，文件顶部的 `--- ... ---` 元数据块可配置 `ProjectUrl`、`AuthorName`、`AuthorUrl`、`ContributorName`、`ContributorUrl` 等键，正文中支持 `{{Version}}` 等占位符。
 
 ## 鸣谢
 
