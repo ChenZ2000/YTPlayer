@@ -252,13 +252,8 @@ public partial class MainForm
 
 	internal async void DownloadPlaylist_Click(object? sender, EventArgs e)
 	{
-		ListViewItem selectedItem = GetSelectedListViewItemSafe();
-		if (selectedItem == null)
-		{
-			return;
-		}
-		object tag = selectedItem.Tag;
-		if (!(tag is PlaylistInfo playlist))
+		PlaylistInfo playlist = GetSelectedPlaylistFromContextMenu(sender);
+		if (playlist == null)
 		{
 			return;
 		}
@@ -361,13 +356,8 @@ public partial class MainForm
 
 	internal async void DownloadAlbum_Click(object? sender, EventArgs e)
 	{
-		ListViewItem selectedItem = GetSelectedListViewItemSafe();
-		if (selectedItem == null)
-		{
-			return;
-		}
-		object tag = selectedItem.Tag;
-		if (!(tag is AlbumInfo album))
+		AlbumInfo album = GetSelectedAlbumFromContextMenu(sender);
+		if (album == null)
 		{
 			return;
 		}

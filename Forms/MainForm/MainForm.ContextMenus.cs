@@ -1424,9 +1424,43 @@ public partial class MainForm
 		{
 			return _currentPlayingMenuSong;
 		}
+		if (sender is SongInfo directSong)
+		{
+			return directSong;
+		}
+		if (sender is PodcastEpisodeInfo directEpisode)
+		{
+			return directEpisode.Song;
+		}
+		if (sender is ListItemInfo directListItem)
+		{
+			if (directListItem.Type == ListItemType.Song)
+			{
+				return directListItem.Song;
+			}
+			if (directListItem.Type == ListItemType.PodcastEpisode)
+			{
+				return directListItem.PodcastEpisode?.Song;
+			}
+		}
 		if (sender is ToolStripItem { Tag: SongInfo tag })
 		{
 			return tag;
+		}
+		if (sender is ToolStripItem { Tag: PodcastEpisodeInfo taggedEpisode })
+		{
+			return taggedEpisode.Song;
+		}
+		if (sender is ToolStripItem { Tag: ListItemInfo taggedListItem })
+		{
+			if (taggedListItem.Type == ListItemType.Song)
+			{
+				return taggedListItem.Song;
+			}
+			if (taggedListItem.Type == ListItemType.PodcastEpisode)
+			{
+				return taggedListItem.PodcastEpisode?.Song;
+			}
 		}
 		ListViewItem selectedListViewItemSafe = GetSelectedListViewItemSafe();
 		if (selectedListViewItemSafe == null)
@@ -1467,9 +1501,21 @@ public partial class MainForm
 
 	private PlaylistInfo? GetSelectedPlaylistFromContextMenu(object? sender = null)
 	{
+		if (sender is PlaylistInfo directPlaylist)
+		{
+			return directPlaylist;
+		}
+		if (sender is ListItemInfo { Type: ListItemType.Playlist } directListItem)
+		{
+			return directListItem.Playlist;
+		}
 		if (sender is ToolStripItem { Tag: PlaylistInfo tag })
 		{
 			return tag;
+		}
+		if (sender is ToolStripItem { Tag: ListItemInfo { Type: ListItemType.Playlist } taggedListItem })
+		{
+			return taggedListItem.Playlist;
 		}
 		ListViewItem selectedListViewItemSafe = GetSelectedListViewItemSafe();
 		if (selectedListViewItemSafe == null)
@@ -1489,9 +1535,21 @@ public partial class MainForm
 
 	private AlbumInfo? GetSelectedAlbumFromContextMenu(object? sender = null)
 	{
+		if (sender is AlbumInfo directAlbum)
+		{
+			return directAlbum;
+		}
+		if (sender is ListItemInfo { Type: ListItemType.Album } directListItem)
+		{
+			return directListItem.Album;
+		}
 		if (sender is ToolStripItem { Tag: AlbumInfo tag })
 		{
 			return tag;
+		}
+		if (sender is ToolStripItem { Tag: ListItemInfo { Type: ListItemType.Album } taggedListItem })
+		{
+			return taggedListItem.Album;
 		}
 		ListViewItem selectedListViewItemSafe = GetSelectedListViewItemSafe();
 		if (selectedListViewItemSafe == null)
@@ -1511,9 +1569,75 @@ public partial class MainForm
 
 	private PodcastRadioInfo? GetSelectedPodcastFromContextMenu(object? sender = null)
 	{
+		if (sender is PodcastRadioInfo directPodcast)
+		{
+			return directPodcast;
+		}
+		if (sender is PodcastEpisodeInfo directEpisode)
+		{
+			PodcastRadioInfo? podcastFromEpisode = ResolvePodcastFromEpisode(directEpisode);
+			if (podcastFromEpisode != null)
+			{
+				return podcastFromEpisode;
+			}
+		}
+		if (sender is SongInfo { IsPodcastEpisode: not false } directSong)
+		{
+			PodcastRadioInfo? podcastFromSong = ResolvePodcastFromSong(directSong);
+			if (podcastFromSong != null)
+			{
+				return podcastFromSong;
+			}
+		}
+		if (sender is ListItemInfo directListItem)
+		{
+			if (directListItem.Type == ListItemType.Podcast && directListItem.Podcast != null)
+			{
+				return directListItem.Podcast;
+			}
+			if (directListItem.Type == ListItemType.PodcastEpisode && directListItem.PodcastEpisode != null)
+			{
+				PodcastRadioInfo? podcastFromListEpisode = ResolvePodcastFromEpisode(directListItem.PodcastEpisode);
+				if (podcastFromListEpisode != null)
+				{
+					return podcastFromListEpisode;
+				}
+			}
+		}
 		if (sender is ToolStripItem { Tag: PodcastRadioInfo tag })
 		{
 			return tag;
+		}
+		if (sender is ToolStripItem { Tag: PodcastEpisodeInfo taggedEpisode })
+		{
+			PodcastRadioInfo? podcastFromTaggedEpisode = ResolvePodcastFromEpisode(taggedEpisode);
+			if (podcastFromTaggedEpisode != null)
+			{
+				return podcastFromTaggedEpisode;
+			}
+		}
+		if (sender is ToolStripItem { Tag: SongInfo { IsPodcastEpisode: not false } taggedSong })
+		{
+			PodcastRadioInfo? podcastFromTaggedSong = ResolvePodcastFromSong(taggedSong);
+			if (podcastFromTaggedSong != null)
+			{
+				return podcastFromTaggedSong;
+			}
+		}
+		if (sender is ToolStripItem { Tag: ListItemInfo taggedListItem })
+		{
+			if (taggedListItem.Type == ListItemType.Podcast && taggedListItem.Podcast != null)
+			{
+				return taggedListItem.Podcast;
+			}
+			if (taggedListItem.Type == ListItemType.PodcastEpisode && taggedListItem.PodcastEpisode != null)
+			{
+				PodcastRadioInfo? podcastFromTaggedListEpisode = ResolvePodcastFromEpisode(taggedListItem.PodcastEpisode);
+				if (podcastFromTaggedListEpisode != null)
+				{
+					return podcastFromTaggedListEpisode;
+				}
+			}
 		}
 		if (_isCurrentPlayingMenuActive)
 		{
@@ -2126,7 +2250,7 @@ public partial class MainForm
 		downloadAlbumMenuItem.Visible = false;
 		batchDownloadMenuItem.Visible = false;
 		downloadCategoryMenuItem.Visible = false;
-		downloadCategoryMenuItem.Text = "下载分类(&C)...";
+		downloadCategoryMenuItem.Text = "下载分类(&D)...";
 		batchDownloadPlaylistsMenuItem.Visible = false;
 		downloadPodcastMenuItem.Visible = false;
 		downloadPodcastMenuItem.Tag = null;
@@ -2173,7 +2297,7 @@ public partial class MainForm
 		shareSongMenuItem.Visible = false;
 		shareSongMenuItem.Tag = null;
 		shareSongWebMenuItem.Text = "复制歌曲网页链接(&W)";
-		shareSongDirectMenuItem.Text = "复制歌曲直链(&L)";
+		shareSongDirectMenuItem.Text = "复制歌曲直链(&D)";
 		shareSongWebMenuItem.Tag = null;
 		shareSongDirectMenuItem.Tag = null;
 		shareSongOpenWebMenuItem.Tag = null;
@@ -2256,7 +2380,7 @@ public partial class MainForm
 		{
 			return;
 		}
-		downloadCategoryMenuItem.Text = "下载歌单(&C)...";
+		downloadCategoryMenuItem.Text = "下载歌单(&D)...";
 		PlaylistInfo playlistInfo = _userLikedPlaylist;
 		if (playlistInfo == null || string.IsNullOrWhiteSpace(playlistInfo.Id))
 		{
@@ -2645,7 +2769,7 @@ public partial class MainForm
 			shareSongOpenWebMenuItem.Tag = songInfo;
 			bool flag13 = songInfo != null && songInfo.IsCloudSong;
 			shareSongWebMenuItem.Text = (flag13 ? "复制音乐网页链接(&W)" : "复制歌曲网页链接(&W)");
-			shareSongDirectMenuItem.Text = (flag13 ? "复制音乐直链(&L)" : "复制歌曲直链(&L)");
+			shareSongDirectMenuItem.Text = (flag13 ? "复制音乐直链(&D)" : "复制歌曲直链(&D)");
 		}
 		else
 		{

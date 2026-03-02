@@ -727,6 +727,7 @@ public partial class MainForm : Form
 	private NotifyIcon? _trayIcon;
 
 	private ContextMenuHost? _contextMenuHost;
+	private ToolStripMenuItem? _pendingShareShortcutRootMenuItem;
 
 	private bool _isApplicationExitRequested = false;
 
@@ -6212,6 +6213,61 @@ public partial class MainForm : Form
 
 	protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
 	{
+		if (keyData == (Keys.Control | Keys.Shift | Keys.L))
+		{
+			StartSongRecognitionAsync().SafeFireAndForget("Shortcut ListenRecognition");
+			return true;
+		}
+		if (keyData == (Keys.Control | Keys.L))
+		{
+			if (TryHandleCollectShortcut())
+			{
+				return true;
+			}
+		}
+		if (keyData == (Keys.Control | Keys.U))
+		{
+			if (TryHandleUncollectShortcut())
+			{
+				return true;
+			}
+		}
+		if (keyData == (Keys.Control | Keys.A))
+		{
+			if (TryHandleAddToPlaylistShortcut())
+			{
+				return true;
+			}
+		}
+		if (keyData == (Keys.Control | Keys.I))
+		{
+			if (TryHandleInsertPlayShortcut())
+			{
+				return true;
+			}
+		}
+		if (keyData == (Keys.Control | Keys.S))
+		{
+			if (TryHandleShareShortcut())
+			{
+				return true;
+			}
+		}
+		if (keyData == (Keys.Control | Keys.C))
+		{
+			if (resultListView != null && resultListView.ContainsFocus)
+			{
+				TryHandleCommentShortcut();
+				return true;
+			}
+		}
+		if (keyData == (Keys.Control | Keys.R))
+		{
+			if (TryHandleCyclePlaybackOrderShortcut())
+			{
+				return true;
+			}
+		}
 		if (keyData == (Keys.Control | Keys.Alt | Keys.Up))
 		{
 			if (TryHandleReorderShortcut(moveUp: true))
@@ -8628,11 +8684,67 @@ private void searchTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
 
 	private bool TryHandleDownloadShortcut()
 	{
-		if (_isCurrentPlayingMenuActive)
+		if (!TryBuildListShortcutSnapshot(out MenuContextSnapshot menuContextSnapshot))
 		{
 			return false;
 		}
-		if (resultListView == null)
+		switch (menuContextSnapshot.PrimaryEntity)
+		{
+		case MenuEntityKind.Song:
+		case MenuEntityKind.PodcastEpisode:
+			if (menuContextSnapshot.IsCloudView && menuContextSnapshot.Song != null && menuContextSnapshot.Song.IsCloudSong)
+			{
+				return false;
+			}
+			if (menuContextSnapshot.Song == null)
+			{
+				return false;
+			}
+			DownloadSong_Click(menuContextSnapshot.Song, EventArgs.Empty);
+			return true;
+		case MenuEntityKind.Playlist:
+			if (menuContextSnapshot.Playlist == null)
+			{
+				return false;
+			}
+			DownloadPlaylist_Click(menuContextSnapshot.Playlist, EventArgs.Empty);
+			return true;
+		case MenuEntityKind.Album:
+			if (menuContextSnapshot.Album == null)
+			{
+				return false;
+			}
+			DownloadAlbum_Click(menuContextSnapshot.Album, EventArgs.Empty);
+			return true;
+		case MenuEntityKind.Podcast:
+			if (menuContextSnapshot.Podcast == null || menuContextSnapshot.Podcast.Id <= 0)
+			{
+				return false;
+			}
+			DownloadPodcast_Click(menuContextSnapshot.Podcast, EventArgs.Empty);
+			return true;
+		case MenuEntityKind.Category:
+			DownloadCategory_Click(downloadCategoryMenuItem, EventArgs.Empty);
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	private bool TryBuildListShortcutSnapshot(out MenuContextSnapshot snapshot, bool requireListFocus = false)
+	{
+		snapshot = new MenuContextSnapshot
+		{
+			IsValid = false,
+			InvocationSource = MenuInvocationSource.ViewSelection,
+			PrimaryEntity = MenuEntityKind.None,
+			ViewSource = _currentViewSource ?? string.Empty
+		};
+		if (_isCurrentPlayingMenuActive || resultListView == null)
+		{
+			return false;
+		}
+		if (requireListFocus && !resultListView.ContainsFocus)
 		{
 			return false;
 		}
@@ -8645,39 +8757,565 @@ private void searchTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
 		{
 			return false;
 		}
-		switch (menuContextSnapshot.PrimaryEntity)
+		snapshot = menuContextSnapshot;
+		return true;
+	}
+
+	private SongInfo ResolveSongFromShortcutSnapshot(MenuContextSnapshot snapshot)
+	{
+		if (snapshot == null)
+		{
+			return null;
+		}
+		if (snapshot.Song != null)
+		{
+			return snapshot.Song;
+		}
+		if (snapshot.PodcastEpisode != null)
+		{
+			return EnsurePodcastEpisodeSong(snapshot.PodcastEpisode);
+		}
+		return null;
+	}
+
+	private bool TryHandleCollectShortcut()
+	{
+		if (!TryBuildListShortcutSnapshot(out MenuContextSnapshot snapshot, requireListFocus: true) || !snapshot.IsLoggedIn)
+		{
+			return false;
+		}
+		switch (snapshot.PrimaryEntity)
+		{
+		case MenuEntityKind.Song:
+		{
+			SongInfo song = ResolveSongFromShortcutSnapshot(snapshot);
+			if (song == null || song.IsPodcastEpisode || !CanSongUseLibraryFeatures(song) || IsCurrentLikedSongsView() || IsSongLiked(song))
+			{
+				return false;
+			}
+			likeSongMenuItem_Click(song, EventArgs.Empty);
+			return true;
+		}
+		case MenuEntityKind.Playlist:
+		{
+			PlaylistInfo playlist = snapshot.Playlist;
+			if (playlist == null || string.IsNullOrWhiteSpace(playlist.Id) || IsPlaylistCreatedByCurrentUser(playlist) || IsPlaylistSubscribed(playlist))
+			{
+				return false;
+			}
+			subscribePlaylistMenuItem_Click(playlist, EventArgs.Empty);
+			return true;
+		}
+		case MenuEntityKind.Album:
+		{
+			AlbumInfo album = snapshot.Album;
+			if (album == null || string.IsNullOrWhiteSpace(album.Id) || IsAlbumSubscribed(album))
+			{
+				return false;
+			}
+			subscribeAlbumMenuItem_Click(album, EventArgs.Empty);
+			return true;
+		}
+		case MenuEntityKind.Podcast:
+		{
+			PodcastRadioInfo podcast = snapshot.Podcast;
+			if (podcast == null || podcast.Id <= 0 || ResolvePodcastSubscriptionState(podcast))
+			{
+				return false;
+			}
+			subscribePodcastMenuItem_Click(podcast, EventArgs.Empty);
+			return true;
+		}
+		case MenuEntityKind.Artist:
+		{
+			ArtistInfo artist = snapshot.Artist;
+			if (artist == null || artist.Id <= 0 || IsArtistSubscribed(artist))
+			{
+				return false;
+			}
+			subscribeArtistMenuItem_Click(artist, EventArgs.Empty);
+			return true;
+		}
+		default:
+			return false;
+		}
+	}
+
+	private bool TryHandleUncollectShortcut()
+	{
+		if (!TryBuildListShortcutSnapshot(out MenuContextSnapshot snapshot, requireListFocus: true) || !snapshot.IsLoggedIn)
+		{
+			return false;
+		}
+		switch (snapshot.PrimaryEntity)
+		{
+		case MenuEntityKind.Song:
+		{
+			SongInfo song = ResolveSongFromShortcutSnapshot(snapshot);
+			if (song == null || song.IsPodcastEpisode || !CanSongUseLibraryFeatures(song))
+			{
+				return false;
+			}
+			if (!IsCurrentLikedSongsView() && !IsSongLiked(song))
+			{
+				return false;
+			}
+			unlikeSongMenuItem_Click(song, EventArgs.Empty);
+			return true;
+		}
+		case MenuEntityKind.Playlist:
+		{
+			PlaylistInfo playlist = snapshot.Playlist;
+			if (playlist == null || string.IsNullOrWhiteSpace(playlist.Id) || IsPlaylistCreatedByCurrentUser(playlist) || !IsPlaylistSubscribed(playlist))
+			{
+				return false;
+			}
+			unsubscribePlaylistMenuItem_Click(playlist, EventArgs.Empty);
+			return true;
+		}
+		case MenuEntityKind.Album:
+		{
+			AlbumInfo album = snapshot.Album;
+			if (album == null || string.IsNullOrWhiteSpace(album.Id) || !IsAlbumSubscribed(album))
+			{
+				return false;
+			}
+			unsubscribeAlbumMenuItem_Click(album, EventArgs.Empty);
+			return true;
+		}
+		case MenuEntityKind.Podcast:
+		{
+			PodcastRadioInfo podcast = snapshot.Podcast;
+			if (podcast == null || podcast.Id <= 0 || !ResolvePodcastSubscriptionState(podcast))
+			{
+				return false;
+			}
+			unsubscribePodcastMenuItem_Click(podcast, EventArgs.Empty);
+			return true;
+		}
+		case MenuEntityKind.Artist:
+		{
+			ArtistInfo artist = snapshot.Artist;
+			if (artist == null || artist.Id <= 0 || !IsArtistSubscribed(artist))
+			{
+				return false;
+			}
+			unsubscribeArtistMenuItem_Click(artist, EventArgs.Empty);
+			return true;
+		}
+		default:
+			return false;
+		}
+	}
+
+	private bool TryHandleAddToPlaylistShortcut()
+	{
+		if (!TryBuildListShortcutSnapshot(out MenuContextSnapshot snapshot, requireListFocus: true) || !snapshot.IsLoggedIn)
+		{
+			return false;
+		}
+		SongInfo song = ResolveSongFromShortcutSnapshot(snapshot);
+		if (song == null || song.IsPodcastEpisode || !CanSongUseLibraryFeatures(song))
+		{
+			return false;
+		}
+		addToPlaylistMenuItem_Click(song, EventArgs.Empty);
+		return true;
+	}
+
+	private bool TryHandleInsertPlayShortcut()
+	{
+		if (!TryBuildListShortcutSnapshot(out MenuContextSnapshot snapshot, requireListFocus: true))
+		{
+			return false;
+		}
+		switch (snapshot.PrimaryEntity)
 		{
 		case MenuEntityKind.Song:
 		case MenuEntityKind.PodcastEpisode:
-			if (menuContextSnapshot.IsCloudView && menuContextSnapshot.Song != null && menuContextSnapshot.Song.IsCloudSong)
+		{
+			SongInfo song = ResolveSongFromShortcutSnapshot(snapshot);
+			if (song == null)
 			{
 				return false;
 			}
-			DownloadSong_Click(downloadSongMenuItem, EventArgs.Empty);
+			insertPlayMenuItem_Click(song, EventArgs.Empty);
 			return true;
+		}
+		default:
+			return false;
+		}
+	}
+
+	private bool TryResolveShareRootMenuForShortcut(MenuContextSnapshot snapshot, out ToolStripMenuItem shareRootMenuItem)
+	{
+		shareRootMenuItem = null;
+		if (snapshot == null || !snapshot.IsValid)
+		{
+			return false;
+		}
+		switch (snapshot.PrimaryEntity)
+		{
+		case MenuEntityKind.Song:
+		{
+			SongInfo song = ResolveSongFromShortcutSnapshot(snapshot);
+			if (song == null)
+			{
+				return false;
+			}
+			if (song.IsPodcastEpisode)
+			{
+				PodcastEpisodeInfo podcastEpisode = snapshot.PodcastEpisode ?? ResolvePodcastEpisodeFromSong(song);
+				if (podcastEpisode == null || podcastEpisode.ProgramId <= 0)
+				{
+					return false;
+				}
+				shareRootMenuItem = sharePodcastEpisodeMenuItem;
+				return shareRootMenuItem != null;
+			}
+			if (!CanSongUseLibraryFeatures(song))
+			{
+				return false;
+			}
+			shareRootMenuItem = shareSongMenuItem;
+			return shareRootMenuItem != null;
+		}
+		case MenuEntityKind.PodcastEpisode:
+		{
+			PodcastEpisodeInfo podcastEpisode2 = snapshot.PodcastEpisode ?? ResolvePodcastEpisodeFromSong(snapshot.Song);
+			if (podcastEpisode2 == null || podcastEpisode2.ProgramId <= 0)
+			{
+				return false;
+			}
+			shareRootMenuItem = sharePodcastEpisodeMenuItem;
+			return shareRootMenuItem != null;
+		}
 		case MenuEntityKind.Playlist:
-			DownloadPlaylist_Click(downloadPlaylistMenuItem, EventArgs.Empty);
-			return true;
-		case MenuEntityKind.Album:
-			DownloadAlbum_Click(downloadAlbumMenuItem, EventArgs.Empty);
-			return true;
-		case MenuEntityKind.Podcast:
-			if (menuContextSnapshot.Podcast == null || menuContextSnapshot.Podcast.Id <= 0)
+		{
+			PlaylistInfo playlist = snapshot.Playlist;
+			if (playlist == null || string.IsNullOrWhiteSpace(playlist.Id))
 			{
 				return false;
 			}
-			DownloadPodcast_Click(downloadPodcastMenuItem, EventArgs.Empty);
-			return true;
+			shareRootMenuItem = sharePlaylistMenuItem;
+			return shareRootMenuItem != null;
+		}
+		case MenuEntityKind.Album:
+		{
+			AlbumInfo album = snapshot.Album;
+			if (album == null || string.IsNullOrWhiteSpace(album.Id))
+			{
+				return false;
+			}
+			shareRootMenuItem = shareAlbumMenuItem;
+			return shareRootMenuItem != null;
+		}
+		case MenuEntityKind.Podcast:
+		{
+			PodcastRadioInfo podcast = snapshot.Podcast;
+			if (podcast == null || podcast.Id <= 0)
+			{
+				return false;
+			}
+			shareRootMenuItem = sharePodcastMenuItem;
+			return shareRootMenuItem != null;
+		}
+		case MenuEntityKind.Artist:
+		{
+			ArtistInfo artist = snapshot.Artist;
+			if (artist == null || artist.Id <= 0)
+			{
+				return false;
+			}
+			shareRootMenuItem = shareArtistMenuItem;
+			return shareRootMenuItem != null;
+		}
 		case MenuEntityKind.Category:
-			DownloadCategory_Click(downloadCategoryMenuItem, EventArgs.Empty);
+			if (snapshot.ListItem != null && string.Equals(snapshot.ListItem.CategoryId, "user_liked_songs", StringComparison.OrdinalIgnoreCase))
+			{
+				PlaylistInfo playlistInfo = _userLikedPlaylist;
+				if ((playlistInfo != null && !string.IsNullOrWhiteSpace(playlistInfo.Id)) || GetCurrentUserId() > 0)
+				{
+					shareRootMenuItem = sharePlaylistMenuItem;
+					return shareRootMenuItem != null;
+				}
+			}
+			return false;
+		default:
+			return false;
+		}
+	}
+
+	private ToolStripMenuItem ResolveVisibleShareRootMenuForShortcut(ToolStripMenuItem preferredRoot)
+	{
+		if (preferredRoot != null && preferredRoot.Visible && preferredRoot.Enabled && preferredRoot.DropDownItems.Count > 0)
+		{
+			return preferredRoot;
+		}
+		return new ToolStripMenuItem[6] { shareSongMenuItem, sharePlaylistMenuItem, shareAlbumMenuItem, sharePodcastMenuItem, sharePodcastEpisodeMenuItem, shareArtistMenuItem }.FirstOrDefault((ToolStripMenuItem menu) => menu != null && menu.Visible && menu.Enabled && menu.DropDownItems.Count > 0);
+	}
+
+	private void OpenShareSubMenuFromVisibleContextMenu(ToolStripMenuItem preferredRoot)
+	{
+		if (songContextMenu == null || !songContextMenu.Visible)
+		{
+			return;
+		}
+		ToolStripMenuItem toolStripMenuItem = ResolveVisibleShareRootMenuForShortcut(preferredRoot);
+		if (toolStripMenuItem == null || !toolStripMenuItem.Visible || !toolStripMenuItem.Enabled || toolStripMenuItem.DropDownItems.Count == 0)
+		{
+			return;
+		}
+		try
+		{
+			toolStripMenuItem.Select();
+			toolStripMenuItem.ShowDropDown();
+			ToolStripItem toolStripItem = toolStripMenuItem.DropDownItems.Cast<ToolStripItem>().FirstOrDefault((ToolStripItem item) => item != null && item.Available && item.Enabled);
+			toolStripItem?.Select();
+		}
+		catch (Exception ex)
+		{
+			Debug.WriteLine("[Shortcut] 展开分享子菜单失败: " + ex.Message);
+		}
+	}
+
+	private bool TryOpenShareSubMenuByShortcut(ToolStripMenuItem preferredRoot)
+	{
+		if (preferredRoot == null || songContextMenu == null || resultListView == null)
+		{
+			return false;
+		}
+		if (songContextMenu.Visible)
+		{
+			BeginInvoke(new Action<ToolStripMenuItem>(OpenShareSubMenuFromVisibleContextMenu), preferredRoot);
+			return true;
+		}
+		ListViewItem selectedListViewItemSafe = GetSelectedListViewItemSafe();
+		if (selectedListViewItemSafe == null)
+		{
+			return false;
+		}
+		Rectangle bounds = selectedListViewItemSafe.Bounds;
+		Point point = new Point(Math.Max(0, bounds.Left + Math.Max(4, Math.Min(24, bounds.Width / 3))), Math.Max(0, bounds.Top + Math.Max(4, Math.Min(12, bounds.Height / 2))));
+		try
+		{
+			_pendingShareShortcutRootMenuItem = preferredRoot;
+			songContextMenu.Show(resultListView, point);
+		}
+		catch (Exception ex)
+		{
+			_pendingShareShortcutRootMenuItem = null;
+			Debug.WriteLine("[Shortcut] 打开上下文菜单失败: " + ex.Message);
+			return false;
+		}
+		return true;
+	}
+
+	private bool TryHandleShareShortcut()
+	{
+		if (!TryBuildListShortcutSnapshot(out MenuContextSnapshot snapshot, requireListFocus: true))
+		{
+			return false;
+		}
+		if (!TryResolveShareRootMenuForShortcut(snapshot, out ToolStripMenuItem shareRootMenuItem))
+		{
+			return false;
+		}
+		return TryOpenShareSubMenuByShortcut(shareRootMenuItem);
+	}
+
+	private bool TryResolveCommentTargetForShortcut(MenuContextSnapshot snapshot, out CommentTarget commentTarget)
+	{
+		commentTarget = null;
+		if (snapshot == null || !snapshot.IsValid)
+		{
+			return false;
+		}
+		switch (snapshot.PrimaryEntity)
+		{
+		case MenuEntityKind.Song:
+		case MenuEntityKind.PodcastEpisode:
+		{
+			SongInfo song = ResolveSongFromShortcutSnapshot(snapshot);
+			if (song == null || song.IsPodcastEpisode || song.IsCloudSong || string.IsNullOrWhiteSpace(song.Id))
+			{
+				return false;
+			}
+			commentTarget = new CommentTarget(song.Id, CommentType.Song, string.IsNullOrWhiteSpace(song.Name) ? "歌曲" : song.Name, song.Artist);
+			return true;
+		}
+		case MenuEntityKind.Playlist:
+		{
+			PlaylistInfo playlist = snapshot.Playlist;
+			if (playlist == null || string.IsNullOrWhiteSpace(playlist.Id))
+			{
+				return false;
+			}
+			commentTarget = new CommentTarget(playlist.Id, CommentType.Playlist, string.IsNullOrWhiteSpace(playlist.Name) ? "歌单" : playlist.Name, playlist.Creator);
+			return true;
+		}
+		case MenuEntityKind.Album:
+		{
+			AlbumInfo album = snapshot.Album;
+			if (album == null || string.IsNullOrWhiteSpace(album.Id))
+			{
+				return false;
+			}
+			commentTarget = new CommentTarget(album.Id, CommentType.Album, string.IsNullOrWhiteSpace(album.Name) ? "专辑" : album.Name, album.Artist);
+			return true;
+		}
+		case MenuEntityKind.Category:
+			if (snapshot.ListItem == null || !string.Equals(snapshot.ListItem.CategoryId, "user_liked_songs", StringComparison.OrdinalIgnoreCase))
+			{
+				return false;
+			}
+			PlaylistInfo playlistInfo = _userLikedPlaylist;
+			if (playlistInfo == null || string.IsNullOrWhiteSpace(playlistInfo.Id))
+			{
+				long currentUserId = GetCurrentUserId();
+				if (currentUserId <= 0)
+				{
+					return false;
+				}
+				playlistInfo = new PlaylistInfo
+				{
+					Id = currentUserId.ToString(CultureInfo.InvariantCulture),
+					Name = "喜欢的音乐"
+				};
+			}
+			commentTarget = new CommentTarget(playlistInfo.Id, CommentType.Playlist, string.IsNullOrWhiteSpace(playlistInfo.Name) ? "喜欢的音乐" : playlistInfo.Name, playlistInfo.Creator);
 			return true;
 		default:
 			return false;
 		}
 	}
 
+	private bool TryHandleCommentShortcut()
+	{
+		if (!TryBuildListShortcutSnapshot(out MenuContextSnapshot snapshot, requireListFocus: true))
+		{
+			return false;
+		}
+		if (!TryResolveCommentTargetForShortcut(snapshot, out CommentTarget commentTarget))
+		{
+			return false;
+		}
+		ShowCommentsDialog(commentTarget);
+		return true;
+	}
+
+	private bool TryHandleCyclePlaybackOrderShortcut()
+	{
+		if (_audioEngine == null || _config == null)
+		{
+			return false;
+		}
+		switch (_audioEngine.PlayMode)
+		{
+		case PlayMode.Sequential:
+			_audioEngine.PlayMode = PlayMode.Loop;
+			_config.PlaybackOrder = "列表循环";
+			break;
+		case PlayMode.Loop:
+			_audioEngine.PlayMode = PlayMode.LoopOne;
+			_config.PlaybackOrder = "单曲循环";
+			break;
+		case PlayMode.LoopOne:
+			_audioEngine.PlayMode = PlayMode.Random;
+			_config.PlaybackOrder = "随机播放";
+			break;
+		default:
+			_audioEngine.PlayMode = PlayMode.Sequential;
+			_config.PlaybackOrder = "顺序播放";
+			break;
+		}
+		SaveConfig();
+		UpdatePlaybackOrderMenuCheck();
+		RefreshNextSongPreload();
+		string text = _config.PlaybackOrder;
+		AnnounceUiMessage(text, interrupt: true);
+		UpdateStatusBar(text);
+		return true;
+	}
+
 	private void UpdateDownloadMenuShortcutDisplay(bool showShortcuts)
 	{
+		if (insertPlayMenuItem != null)
+		{
+			insertPlayMenuItem.ShowShortcutKeys = showShortcuts;
+		}
+		if (likeSongMenuItem != null)
+		{
+			likeSongMenuItem.ShowShortcutKeys = showShortcuts;
+		}
+		if (unlikeSongMenuItem != null)
+		{
+			unlikeSongMenuItem.ShowShortcutKeys = showShortcuts;
+		}
+		if (addToPlaylistMenuItem != null)
+		{
+			addToPlaylistMenuItem.ShowShortcutKeys = showShortcuts;
+		}
+		if (subscribePlaylistMenuItem != null)
+		{
+			subscribePlaylistMenuItem.ShowShortcutKeys = showShortcuts;
+		}
+		if (unsubscribePlaylistMenuItem != null)
+		{
+			unsubscribePlaylistMenuItem.ShowShortcutKeys = showShortcuts;
+		}
+		if (subscribeAlbumMenuItem != null)
+		{
+			subscribeAlbumMenuItem.ShowShortcutKeys = showShortcuts;
+		}
+		if (unsubscribeAlbumMenuItem != null)
+		{
+			unsubscribeAlbumMenuItem.ShowShortcutKeys = showShortcuts;
+		}
+		if (subscribePodcastMenuItem != null)
+		{
+			subscribePodcastMenuItem.ShowShortcutKeys = showShortcuts;
+		}
+		if (unsubscribePodcastMenuItem != null)
+		{
+			unsubscribePodcastMenuItem.ShowShortcutKeys = showShortcuts;
+		}
+		if (subscribeArtistMenuItem != null)
+		{
+			subscribeArtistMenuItem.ShowShortcutKeys = showShortcuts;
+		}
+		if (unsubscribeArtistMenuItem != null)
+		{
+			unsubscribeArtistMenuItem.ShowShortcutKeys = showShortcuts;
+		}
+		if (shareSongMenuItem != null)
+		{
+			shareSongMenuItem.ShowShortcutKeys = showShortcuts;
+		}
+		if (sharePlaylistMenuItem != null)
+		{
+			sharePlaylistMenuItem.ShowShortcutKeys = showShortcuts;
+		}
+		if (shareAlbumMenuItem != null)
+		{
+			shareAlbumMenuItem.ShowShortcutKeys = showShortcuts;
+		}
+		if (sharePodcastMenuItem != null)
+		{
+			sharePodcastMenuItem.ShowShortcutKeys = showShortcuts;
+		}
+		if (sharePodcastEpisodeMenuItem != null)
+		{
+			sharePodcastEpisodeMenuItem.ShowShortcutKeys = showShortcuts;
+		}
+		if (shareArtistMenuItem != null)
+		{
+			shareArtistMenuItem.ShowShortcutKeys = showShortcuts;
+		}
+		if (commentMenuItem != null)
+		{
+			commentMenuItem.ShowShortcutKeys = showShortcuts;
+		}
 		if (downloadSongMenuItem != null)
 		{
 			downloadSongMenuItem.ShowShortcutKeys = showShortcuts;
@@ -9266,6 +9904,13 @@ private void searchTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
 
         private void SongContextMenu_Opened(object sender, EventArgs e)
         {
+                if (_pendingShareShortcutRootMenuItem != null)
+                {
+                        ToolStripMenuItem pendingShareRoot = _pendingShareShortcutRootMenuItem;
+                        _pendingShareShortcutRootMenuItem = null;
+                        OpenShareSubMenuFromVisibleContextMenu(pendingShareRoot);
+                        return;
+                }
                 FocusFirstContextMenuItemDeferred(songContextMenu, "SongContextMenu");
         }
 
@@ -10194,6 +10839,8 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		}
 		_playbackQueue.SetPendingInjection(selectedSongFromContextMenu, _currentViewSource);
 		UpdateStatusBar("已设置下一首插播：" + selectedSongFromContextMenu.Name + " - " + selectedSongFromContextMenu.Artist);
+		string text = (string.IsNullOrWhiteSpace(selectedSongFromContextMenu.Name) ? "未知歌曲" : selectedSongFromContextMenu.Name.Trim());
+		AnnounceUiMessage("以插播：" + text, interrupt: true);
 		Debug.WriteLine("[MainForm] 设置插播歌曲: " + selectedSongFromContextMenu.Name);
 		RefreshNextSongPreload();
 	}
@@ -11479,6 +12126,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 	{
 		_isCurrentPlayingMenuActive = false;
 		_currentPlayingMenuSong = null;
+		_pendingShareShortcutRootMenuItem = null;
 		if (songContextMenu != null && string.Equals(songContextMenu.Tag as string, "current_playing_context", StringComparison.Ordinal))
 		{
 			songContextMenu.Tag = null;
@@ -15940,7 +16588,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
                                 {
                                         Text = "听歌识曲(&L)",
                                         Name = "listenRecognitionMenuItem",
-                                        ShortcutKeys = (Keys.L | Keys.Control)
+                                        ShortcutKeys = (Keys.Control | Keys.Shift | Keys.L)
                                 };
 				_listenRecognitionMenuItem.Click += async delegate
 				{
@@ -17341,18 +17989,22 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		this.viewSourceMenuItem.Click += new System.EventHandler(viewSourceMenuItem_Click);
 		this.insertPlayMenuItem.Name = "insertPlayMenuItem";
 		this.insertPlayMenuItem.Size = new System.Drawing.Size(210, 24);
+		this.insertPlayMenuItem.ShortcutKeyDisplayString = "Ctrl+I";
 		this.insertPlayMenuItem.Text = "插播(&I)";
 		this.insertPlayMenuItem.Click += new System.EventHandler(insertPlayMenuItem_Click);
 		this.likeSongMenuItem.Name = "likeSongMenuItem";
 		this.likeSongMenuItem.Size = new System.Drawing.Size(210, 24);
+		this.likeSongMenuItem.ShortcutKeyDisplayString = "Ctrl+L";
 		this.likeSongMenuItem.Text = "收藏歌曲(&L)";
 		this.likeSongMenuItem.Click += new System.EventHandler(likeSongMenuItem_Click);
 		this.unlikeSongMenuItem.Name = "unlikeSongMenuItem";
 		this.unlikeSongMenuItem.Size = new System.Drawing.Size(210, 24);
+		this.unlikeSongMenuItem.ShortcutKeyDisplayString = "Ctrl+U";
 		this.unlikeSongMenuItem.Text = "取消收藏歌曲(&U)";
 		this.unlikeSongMenuItem.Click += new System.EventHandler(unlikeSongMenuItem_Click);
 		this.addToPlaylistMenuItem.Name = "addToPlaylistMenuItem";
 		this.addToPlaylistMenuItem.Size = new System.Drawing.Size(210, 24);
+		this.addToPlaylistMenuItem.ShortcutKeyDisplayString = "Ctrl+A";
 		this.addToPlaylistMenuItem.Text = "添加到歌单(&A)...";
 		this.addToPlaylistMenuItem.Click += new System.EventHandler(addToPlaylistMenuItem_Click);
 		this.removeFromPlaylistMenuItem.Name = "removeFromPlaylistMenuItem";
@@ -17376,10 +18028,12 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		this.toolStripSeparatorCollection.Size = new System.Drawing.Size(207, 6);
 		this.subscribePlaylistMenuItem.Name = "subscribePlaylistMenuItem";
 		this.subscribePlaylistMenuItem.Size = new System.Drawing.Size(210, 24);
+		this.subscribePlaylistMenuItem.ShortcutKeyDisplayString = "Ctrl+L";
 		this.subscribePlaylistMenuItem.Text = "收藏歌单(&S)";
 		this.subscribePlaylistMenuItem.Click += new System.EventHandler(subscribePlaylistMenuItem_Click);
 		this.unsubscribePlaylistMenuItem.Name = "unsubscribePlaylistMenuItem";
 		this.unsubscribePlaylistMenuItem.Size = new System.Drawing.Size(210, 24);
+		this.unsubscribePlaylistMenuItem.ShortcutKeyDisplayString = "Ctrl+U";
 		this.unsubscribePlaylistMenuItem.Text = "取消收藏歌单(&U)";
 		this.unsubscribePlaylistMenuItem.Click += new System.EventHandler(unsubscribePlaylistMenuItem_Click);
 		this.deletePlaylistMenuItem.Name = "deletePlaylistMenuItem";
@@ -17398,18 +18052,22 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		this.subscribeSongAlbumMenuItem.Click += new System.EventHandler(subscribeSongAlbumMenuItem_Click);
 		this.subscribeAlbumMenuItem.Name = "subscribeAlbumMenuItem";
 		this.subscribeAlbumMenuItem.Size = new System.Drawing.Size(210, 24);
+		this.subscribeAlbumMenuItem.ShortcutKeyDisplayString = "Ctrl+L";
 		this.subscribeAlbumMenuItem.Text = "收藏专辑(&A)";
 		this.subscribeAlbumMenuItem.Click += new System.EventHandler(subscribeAlbumMenuItem_Click);
 		this.unsubscribeAlbumMenuItem.Name = "unsubscribeAlbumMenuItem";
 		this.unsubscribeAlbumMenuItem.Size = new System.Drawing.Size(210, 24);
+		this.unsubscribeAlbumMenuItem.ShortcutKeyDisplayString = "Ctrl+U";
 		this.unsubscribeAlbumMenuItem.Text = "取消收藏专辑(&R)";
 		this.unsubscribeAlbumMenuItem.Click += new System.EventHandler(unsubscribeAlbumMenuItem_Click);
 		this.subscribePodcastMenuItem.Name = "subscribePodcastMenuItem";
 		this.subscribePodcastMenuItem.Size = new System.Drawing.Size(210, 24);
+		this.subscribePodcastMenuItem.ShortcutKeyDisplayString = "Ctrl+L";
 		this.subscribePodcastMenuItem.Text = "收藏播客(&O)";
 		this.subscribePodcastMenuItem.Click += new System.EventHandler(subscribePodcastMenuItem_Click);
 		this.unsubscribePodcastMenuItem.Name = "unsubscribePodcastMenuItem";
 		this.unsubscribePodcastMenuItem.Size = new System.Drawing.Size(210, 24);
+		this.unsubscribePodcastMenuItem.ShortcutKeyDisplayString = "Ctrl+U";
 		this.unsubscribePodcastMenuItem.Text = "取消收藏播客(&C)";
 		this.unsubscribePodcastMenuItem.Click += new System.EventHandler(unsubscribePodcastMenuItem_Click);
 		this.toolStripSeparatorView.Name = "toolStripSeparatorView";
@@ -17439,7 +18097,8 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		this.shareSongMenuItem.DropDownItems.AddRange(this.shareSongWebMenuItem, this.shareSongDirectMenuItem, this.shareSongOpenWebMenuItem);
 		this.shareSongMenuItem.Name = "shareSongMenuItem";
 		this.shareSongMenuItem.Size = new System.Drawing.Size(210, 24);
-		this.shareSongMenuItem.Text = "分享歌曲(&H)";
+		this.shareSongMenuItem.ShortcutKeyDisplayString = "Ctrl+S";
+		this.shareSongMenuItem.Text = "分享歌曲(&S)";
 		this.shareSongMenuItem.Visible = false;
 		this.shareSongWebMenuItem.Name = "shareSongWebMenuItem";
 		this.shareSongWebMenuItem.Size = new System.Drawing.Size(210, 26);
@@ -17447,55 +18106,59 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		this.shareSongWebMenuItem.Click += new System.EventHandler(shareSongWebMenuItem_Click);
 		this.shareSongDirectMenuItem.Name = "shareSongDirectMenuItem";
 		this.shareSongDirectMenuItem.Size = new System.Drawing.Size(210, 26);
-		this.shareSongDirectMenuItem.Text = "复制歌曲直链(&L)";
+		this.shareSongDirectMenuItem.Text = "复制歌曲直链(&D)";
 		this.shareSongDirectMenuItem.Click += new System.EventHandler(shareSongDirectMenuItem_Click);
 		this.shareSongOpenWebMenuItem.Name = "shareSongOpenWebMenuItem";
 		this.shareSongOpenWebMenuItem.Size = new System.Drawing.Size(210, 26);
-		this.shareSongOpenWebMenuItem.Text = "用默认浏览器打开(&B)";
+		this.shareSongOpenWebMenuItem.Text = "用默认浏览器打开(&O)";
 		this.shareSongOpenWebMenuItem.Click += new System.EventHandler(shareSongOpenWebMenuItem_Click);
 		this.sharePlaylistMenuItem.DropDownItems.AddRange(this.sharePlaylistCopyWebMenuItem, this.sharePlaylistOpenWebMenuItem);
 		this.sharePlaylistMenuItem.Name = "sharePlaylistMenuItem";
 		this.sharePlaylistMenuItem.Size = new System.Drawing.Size(210, 24);
-		this.sharePlaylistMenuItem.Text = "分享歌单(&J)";
+		this.sharePlaylistMenuItem.ShortcutKeyDisplayString = "Ctrl+S";
+		this.sharePlaylistMenuItem.Text = "分享歌单(&S)";
 		this.sharePlaylistMenuItem.Visible = false;
 		this.sharePlaylistCopyWebMenuItem.Name = "sharePlaylistCopyWebMenuItem";
 		this.sharePlaylistCopyWebMenuItem.Size = new System.Drawing.Size(210, 26);
-		this.sharePlaylistCopyWebMenuItem.Text = "复制歌单网页链接(&C)";
+		this.sharePlaylistCopyWebMenuItem.Text = "复制歌单网页链接(&W)";
 		this.sharePlaylistCopyWebMenuItem.Click += new System.EventHandler(sharePlaylistMenuItem_Click);
 		this.sharePlaylistOpenWebMenuItem.Name = "sharePlaylistOpenWebMenuItem";
 		this.sharePlaylistOpenWebMenuItem.Size = new System.Drawing.Size(210, 26);
-		this.sharePlaylistOpenWebMenuItem.Text = "用默认浏览器打开(&B)";
+		this.sharePlaylistOpenWebMenuItem.Text = "用默认浏览器打开(&O)";
 		this.sharePlaylistOpenWebMenuItem.Click += new System.EventHandler(sharePlaylistOpenWebMenuItem_Click);
 		this.shareAlbumMenuItem.DropDownItems.AddRange(this.shareAlbumCopyWebMenuItem, this.shareAlbumOpenWebMenuItem);
 		this.shareAlbumMenuItem.Name = "shareAlbumMenuItem";
 		this.shareAlbumMenuItem.Size = new System.Drawing.Size(210, 24);
-		this.shareAlbumMenuItem.Text = "分享专辑(&K)";
+		this.shareAlbumMenuItem.ShortcutKeyDisplayString = "Ctrl+S";
+		this.shareAlbumMenuItem.Text = "分享专辑(&S)";
 		this.shareAlbumMenuItem.Visible = false;
 		this.shareAlbumCopyWebMenuItem.Name = "shareAlbumCopyWebMenuItem";
 		this.shareAlbumCopyWebMenuItem.Size = new System.Drawing.Size(210, 26);
-		this.shareAlbumCopyWebMenuItem.Text = "复制专辑网页链接(&C)";
+		this.shareAlbumCopyWebMenuItem.Text = "复制专辑网页链接(&W)";
 		this.shareAlbumCopyWebMenuItem.Click += new System.EventHandler(shareAlbumMenuItem_Click);
 		this.shareAlbumOpenWebMenuItem.Name = "shareAlbumOpenWebMenuItem";
 		this.shareAlbumOpenWebMenuItem.Size = new System.Drawing.Size(210, 26);
-		this.shareAlbumOpenWebMenuItem.Text = "用默认浏览器打开(&B)";
+		this.shareAlbumOpenWebMenuItem.Text = "用默认浏览器打开(&O)";
 		this.shareAlbumOpenWebMenuItem.Click += new System.EventHandler(shareAlbumOpenWebMenuItem_Click);
 		this.sharePodcastMenuItem.DropDownItems.AddRange(this.sharePodcastCopyWebMenuItem, this.sharePodcastOpenWebMenuItem);
 		this.sharePodcastMenuItem.Name = "sharePodcastMenuItem";
 		this.sharePodcastMenuItem.Size = new System.Drawing.Size(210, 24);
-		this.sharePodcastMenuItem.Text = "分享播客(&P)";
+		this.sharePodcastMenuItem.ShortcutKeyDisplayString = "Ctrl+S";
+		this.sharePodcastMenuItem.Text = "分享播客(&S)";
 		this.sharePodcastMenuItem.Visible = false;
 		this.sharePodcastCopyWebMenuItem.Name = "sharePodcastCopyWebMenuItem";
 		this.sharePodcastCopyWebMenuItem.Size = new System.Drawing.Size(210, 26);
-		this.sharePodcastCopyWebMenuItem.Text = "复制播客网页链接(&C)";
+		this.sharePodcastCopyWebMenuItem.Text = "复制播客网页链接(&W)";
 		this.sharePodcastCopyWebMenuItem.Click += new System.EventHandler(sharePodcastMenuItem_Click);
 		this.sharePodcastOpenWebMenuItem.Name = "sharePodcastOpenWebMenuItem";
 		this.sharePodcastOpenWebMenuItem.Size = new System.Drawing.Size(210, 26);
-		this.sharePodcastOpenWebMenuItem.Text = "用默认浏览器打开(&B)";
+		this.sharePodcastOpenWebMenuItem.Text = "用默认浏览器打开(&O)";
 		this.sharePodcastOpenWebMenuItem.Click += new System.EventHandler(sharePodcastOpenWebMenuItem_Click);
 		this.sharePodcastEpisodeMenuItem.DropDownItems.AddRange(this.sharePodcastEpisodeWebMenuItem, this.sharePodcastEpisodeDirectMenuItem, this.sharePodcastEpisodeOpenWebMenuItem);
 		this.sharePodcastEpisodeMenuItem.Name = "sharePodcastEpisodeMenuItem";
 		this.sharePodcastEpisodeMenuItem.Size = new System.Drawing.Size(210, 24);
-		this.sharePodcastEpisodeMenuItem.Text = "分享节目(&E)";
+		this.sharePodcastEpisodeMenuItem.ShortcutKeyDisplayString = "Ctrl+S";
+		this.sharePodcastEpisodeMenuItem.Text = "分享节目(&S)";
 		this.sharePodcastEpisodeMenuItem.Visible = false;
 		this.sharePodcastEpisodeWebMenuItem.Name = "sharePodcastEpisodeWebMenuItem";
 		this.sharePodcastEpisodeWebMenuItem.Size = new System.Drawing.Size(210, 26);
@@ -17503,11 +18166,11 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		this.sharePodcastEpisodeWebMenuItem.Click += new System.EventHandler(sharePodcastEpisodeWebMenuItem_Click);
 		this.sharePodcastEpisodeDirectMenuItem.Name = "sharePodcastEpisodeDirectMenuItem";
 		this.sharePodcastEpisodeDirectMenuItem.Size = new System.Drawing.Size(210, 26);
-		this.sharePodcastEpisodeDirectMenuItem.Text = "复制节目直链(&L)";
+		this.sharePodcastEpisodeDirectMenuItem.Text = "复制节目直链(&D)";
 		this.sharePodcastEpisodeDirectMenuItem.Click += new System.EventHandler(sharePodcastEpisodeDirectMenuItem_Click);
 		this.sharePodcastEpisodeOpenWebMenuItem.Name = "sharePodcastEpisodeOpenWebMenuItem";
 		this.sharePodcastEpisodeOpenWebMenuItem.Size = new System.Drawing.Size(210, 26);
-		this.sharePodcastEpisodeOpenWebMenuItem.Text = "用默认浏览器打开(&B)";
+		this.sharePodcastEpisodeOpenWebMenuItem.Text = "用默认浏览器打开(&O)";
 		this.sharePodcastEpisodeOpenWebMenuItem.Click += new System.EventHandler(sharePodcastEpisodeOpenWebMenuItem_Click);
 		this.artistSongsSortMenuItem.DropDownItems.AddRange(this.artistSongsSortHotMenuItem, this.artistSongsSortTimeMenuItem);
 		this.artistSongsSortMenuItem.Name = "artistSongsSortMenuItem";
@@ -17559,29 +18222,33 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		this.commentMenuSeparator.Visible = false;
 		this.commentMenuItem.Name = "commentMenuItem";
 		this.commentMenuItem.Size = new System.Drawing.Size(210, 24);
+		this.commentMenuItem.ShortcutKeyDisplayString = "Ctrl+C";
 		this.commentMenuItem.Text = "评论(&C)";
 		this.commentMenuItem.Visible = false;
 		this.commentMenuItem.Click += new System.EventHandler(commentMenuItem_Click);
 		this.shareArtistMenuItem.DropDownItems.AddRange(this.shareArtistCopyWebMenuItem, this.shareArtistOpenWebMenuItem);
 		this.shareArtistMenuItem.Name = "shareArtistMenuItem";
 		this.shareArtistMenuItem.Size = new System.Drawing.Size(210, 24);
+		this.shareArtistMenuItem.ShortcutKeyDisplayString = "Ctrl+S";
 		this.shareArtistMenuItem.Text = "分享歌手(&S)";
 		this.shareArtistMenuItem.Visible = false;
 		this.shareArtistCopyWebMenuItem.Name = "shareArtistCopyWebMenuItem";
 		this.shareArtistCopyWebMenuItem.Size = new System.Drawing.Size(210, 26);
-		this.shareArtistCopyWebMenuItem.Text = "复制歌手网页链接(&C)";
+		this.shareArtistCopyWebMenuItem.Text = "复制歌手网页链接(&W)";
 		this.shareArtistCopyWebMenuItem.Click += new System.EventHandler(shareArtistMenuItem_Click);
 		this.shareArtistOpenWebMenuItem.Name = "shareArtistOpenWebMenuItem";
 		this.shareArtistOpenWebMenuItem.Size = new System.Drawing.Size(210, 26);
-		this.shareArtistOpenWebMenuItem.Text = "用默认浏览器打开(&B)";
+		this.shareArtistOpenWebMenuItem.Text = "用默认浏览器打开(&O)";
 		this.shareArtistOpenWebMenuItem.Click += new System.EventHandler(shareArtistOpenWebMenuItem_Click);
 		this.subscribeArtistMenuItem.Name = "subscribeArtistMenuItem";
 		this.subscribeArtistMenuItem.Size = new System.Drawing.Size(210, 24);
+		this.subscribeArtistMenuItem.ShortcutKeyDisplayString = "Ctrl+L";
 		this.subscribeArtistMenuItem.Text = "收藏歌手(&C)";
 		this.subscribeArtistMenuItem.Visible = false;
 		this.subscribeArtistMenuItem.Click += new System.EventHandler(subscribeArtistMenuItem_Click);
 		this.unsubscribeArtistMenuItem.Name = "unsubscribeArtistMenuItem";
 		this.unsubscribeArtistMenuItem.Size = new System.Drawing.Size(210, 24);
+		this.unsubscribeArtistMenuItem.ShortcutKeyDisplayString = "Ctrl+U";
 		this.unsubscribeArtistMenuItem.Text = "取消收藏歌手(&Z)";
 		this.unsubscribeArtistMenuItem.Visible = false;
 		this.unsubscribeArtistMenuItem.Click += new System.EventHandler(unsubscribeArtistMenuItem_Click);
@@ -17594,7 +18261,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		this.downloadSongMenuItem.Click += new System.EventHandler(DownloadSong_Click);
 		this.downloadLyricsMenuItem.Name = "downloadLyricsMenuItem";
 		this.downloadLyricsMenuItem.Size = new System.Drawing.Size(210, 24);
-		this.downloadLyricsMenuItem.Text = "下载歌词(&L)";
+		this.downloadLyricsMenuItem.Text = "下载歌词(&D)";
 		this.downloadLyricsMenuItem.Click += new System.EventHandler(DownloadLyrics_Click);
 		this.lyricsLanguageMenuItem.Name = "lyricsLanguageMenuItem";
 		this.lyricsLanguageMenuItem.Size = new System.Drawing.Size(210, 24);
@@ -17613,7 +18280,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		this.downloadPodcastMenuItem.Name = "downloadPodcastMenuItem";
 		this.downloadPodcastMenuItem.Size = new System.Drawing.Size(210, 24);
 		this.downloadPodcastMenuItem.ShortcutKeys = System.Windows.Forms.Keys.Control | System.Windows.Forms.Keys.Return;
-		this.downloadPodcastMenuItem.Text = "下载播客全部节目(&R)...";
+		this.downloadPodcastMenuItem.Text = "下载播客全部节目(&D)...";
 		this.downloadPodcastMenuItem.Click += new System.EventHandler(DownloadPodcast_Click);
 		this.batchDownloadMenuItem.Name = "batchDownloadMenuItem";
 		this.batchDownloadMenuItem.Size = new System.Drawing.Size(210, 24);
@@ -17622,7 +18289,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		this.downloadCategoryMenuItem.Name = "downloadCategoryMenuItem";
 		this.downloadCategoryMenuItem.Size = new System.Drawing.Size(210, 24);
 		this.downloadCategoryMenuItem.ShortcutKeys = System.Windows.Forms.Keys.Control | System.Windows.Forms.Keys.Return;
-		this.downloadCategoryMenuItem.Text = "下载分类(&C)...";
+		this.downloadCategoryMenuItem.Text = "下载分类(&D)...";
 		this.downloadCategoryMenuItem.Click += new System.EventHandler(DownloadCategory_Click);
 		this.batchDownloadPlaylistsMenuItem.Name = "batchDownloadPlaylistsMenuItem";
 		this.batchDownloadPlaylistsMenuItem.Size = new System.Drawing.Size(210, 24);
