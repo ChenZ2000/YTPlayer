@@ -17,6 +17,11 @@ namespace YTPlayer.Launcher
         private const string MainDllName = "YTPlayer.App.dll";
         private const string RootEnvVar = "YTPLAYER_ROOT";
         private static readonly Version FallbackDesktopRuntime = new Version(10, 0, 0);
+        private static readonly string LauncherLogPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "YTPlayer",
+            "logs",
+            "launcher.log");
 
         [STAThread]
         private static void Main(string[] args)
@@ -55,10 +60,26 @@ namespace YTPlayer.Launcher
                     startInfo.EnvironmentVariables["DOTNET_ROOT(x64)"] = dotNetRoot;
                 }
 
-                Process.Start(startInfo);
+                ForegroundWindowHelper.MarkForegroundRequest(startInfo);
+                Process? launchedProcess = Process.Start(startInfo);
+                if (launchedProcess == null)
+                {
+                    ShowError("启动主程序失败：Process.Start 返回空实例。");
+                    WriteLauncherLog("主程序启动失败：Process.Start 返回 null。");
+                    return;
+                }
+
+                bool activated = ForegroundWindowHelper.TryBringProcessToForeground(
+                    launchedProcess,
+                    WriteLauncherLog,
+                    timeoutMs: 9000);
+                WriteLauncherLog(activated
+                    ? $"主程序前台激活成功，PID={launchedProcess.Id}。"
+                    : $"主程序前台激活失败，PID={launchedProcess.Id}，请检查系统前台限制策略。");
             }
             catch (Exception ex)
             {
+                WriteLauncherLog($"启动异常：{ex}");
                 ShowError("Failed to launch YTPlayer.\r\n\r\n" + ex.Message);
             }
         }
@@ -70,23 +91,19 @@ namespace YTPlayer.Launcher
             Version required = DependencyInstaller.TryGetRequiredDesktopRuntimeVersion(runtimeConfigPath) ?? FallbackDesktopRuntime;
             string localRoot = DependencyInstaller.GetLocalDotNetRoot();
 
-            string? preferredRoot = null;
-            Version? installed = DependencyInstaller.TryGetInstalledDesktopRuntimeVersion(out string? installRoot, localRoot);
-            if (installed != null && installed >= required)
+            if (DependencyInstaller.TryResolveDotNetHostForDesktopRuntime(
+                    required,
+                    out string? resolvedDotNetExe,
+                    out string? resolvedDotNetRoot,
+                    out _,
+                    localRoot))
             {
-                preferredRoot = installRoot;
-            }
-
-            string? detectedExe = DependencyInstaller.FindDotNetExecutable(preferredRoot);
-            if (!string.IsNullOrWhiteSpace(detectedExe) &&
-                DependencyInstaller.IsDesktopRuntimeAvailable(detectedExe!, required, out _))
-            {
-                string resolvedExe = detectedExe!;
-                dotNetExe = resolvedExe;
-                dotNetRoot = Path.GetDirectoryName(resolvedExe);
+                dotNetExe = resolvedDotNetExe;
+                dotNetRoot = resolvedDotNetRoot;
                 if (!string.IsNullOrWhiteSpace(dotNetRoot))
                 {
-                    DependencyInstaller.ApplyDotNetRootToProcess(dotNetRoot);
+                    string resolvedRoot = dotNetRoot!;
+                    DependencyInstaller.ApplyDotNetRootToProcess(resolvedRoot);
                 }
                 return true;
             }
@@ -99,7 +116,7 @@ namespace YTPlayer.Launcher
                     try
                     {
                         var progress = new Progress<DependencyInstallProgress>(dialog.UpdateProgress);
-                        result = await DependencyInstaller.InstallDotNetDesktopRuntimeAsync(required, null, progress, CancellationToken.None);
+                        result = await DependencyInstaller.InstallDotNetDesktopRuntimeAsync(required, localRoot, progress, CancellationToken.None);
                     }
                     catch (Exception ex)
                     {
@@ -122,33 +139,28 @@ namespace YTPlayer.Launcher
                 return false;
             }
 
-            dotNetExe = DependencyInstaller.FindDotNetExecutable(null);
-            if (!string.IsNullOrWhiteSpace(dotNetExe))
+            string preferredRoot = string.IsNullOrWhiteSpace(result.InstallRoot) ? localRoot : result.InstallRoot!;
+            if (DependencyInstaller.TryResolveDotNetHostForDesktopRuntime(
+                    required,
+                    out string? installedDotNetExe,
+                    out string? installedDotNetRoot,
+                    out Version? foundVersion,
+                    preferredRoot,
+                    localRoot))
             {
-                dotNetRoot = Path.GetDirectoryName(dotNetExe);
+                dotNetExe = installedDotNetExe;
+                dotNetRoot = installedDotNetRoot;
                 if (!string.IsNullOrWhiteSpace(dotNetRoot))
                 {
-                    DependencyInstaller.ApplyDotNetRootToProcess(dotNetRoot);
+                    string resolvedRoot = dotNetRoot!;
+                    DependencyInstaller.ApplyDotNetRootToProcess(resolvedRoot);
                 }
+                return true;
             }
-            else if (!string.IsNullOrWhiteSpace(result.InstallRoot))
-            {
-                dotNetExe = DependencyInstaller.FindDotNetExecutable(result.InstallRoot);
-                if (!string.IsNullOrWhiteSpace(dotNetExe))
-                {
-                    dotNetRoot = Path.GetDirectoryName(dotNetExe);
-                    if (!string.IsNullOrWhiteSpace(dotNetRoot))
-                    {
-                        DependencyInstaller.ApplyDotNetRootToProcess(dotNetRoot);
-                    }
-                }
-            }
-            if (string.IsNullOrWhiteSpace(dotNetExe))
-            {
-                ShowError("安装完成后未能找到 dotnet.exe，应用无法启动。");
-                return false;
-            }
-            return true;
+
+            string detected = foundVersion == null ? "未检测到有效桌面运行时" : $"检测到版本 {foundVersion}";
+            ShowError($"安装完成后未能解析可用的 dotnet 运行时主机（需求版本 >= {required}，{detected}）。应用无法启动。");
+            return false;
         }
 
         private static ProcessStartInfo BuildLaunchInfo(
@@ -169,9 +181,7 @@ namespace YTPlayer.Launcher
                     FileName = appExe,
                     Arguments = BuildArgumentString(args),
                     WorkingDirectory = rootDir,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    WindowStyle = ProcessWindowStyle.Hidden
+                    UseShellExecute = false
                 };
             }
 
@@ -185,8 +195,7 @@ namespace YTPlayer.Launcher
                     Arguments = execArgs.Trim(),
                     WorkingDirectory = rootDir,
                     UseShellExecute = false,
-                    CreateNoWindow = true,
-                    WindowStyle = ProcessWindowStyle.Hidden
+                    CreateNoWindow = true
                 };
             }
 
@@ -221,6 +230,25 @@ namespace YTPlayer.Launcher
         private static void ShowError(string message)
         {
             MessageBox.Show(message, "YTPlayer", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+
+        private static void WriteLauncherLog(string message)
+        {
+            try
+            {
+                string? dir = Path.GetDirectoryName(LauncherLogPath);
+                if (!string.IsNullOrWhiteSpace(dir))
+                {
+                    Directory.CreateDirectory(dir);
+                }
+
+                string line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {message}";
+                File.AppendAllText(LauncherLogPath, line + Environment.NewLine);
+            }
+            catch
+            {
+                // 忽略日志写入失败，避免影响启动流程
+            }
         }
     }
 }

@@ -335,7 +335,27 @@ namespace YTPlayer.Updater
                     startInfo.EnvironmentVariables["YTPLAYER_LAUNCH_ARGS"] = BuildArgumentString(_options.MainArguments);
                 }
 
-                Process.Start(startInfo);
+                ForegroundWindowHelper.MarkForegroundRequest(startInfo);
+                Process? launched = Process.Start(startInfo);
+                if (launched == null)
+                {
+                    throw new InvalidOperationException("主程序启动返回空进程对象。");
+                }
+
+                if (launchingLauncher)
+                {
+                    ForegroundWindowHelper.TryGrantForegroundPermission(launched, AppendLog);
+                    AppendLog("已向启动链路授予前台激活权限，主程序窗口将由启动器接管激活。");
+                }
+                else
+                {
+                    bool activated = ForegroundWindowHelper.TryBringProcessToForeground(
+                        launched,
+                        AppendLog,
+                        timeoutMs: 6000);
+                    AppendLog(activated ? "已激活主程序窗口。" : "主程序窗口未能前台激活，更新流程将继续结束。");
+                }
+
                 _mainRestarted = true;
                 if (reason == "legacy")
                 {

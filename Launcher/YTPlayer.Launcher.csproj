@@ -67,6 +67,9 @@
     <Compile Include="..\Utils\DependencyInstaller.cs">
       <Link>Utils\DependencyInstaller.cs</Link>
     </Compile>
+    <Compile Include="..\Utils\ForegroundWindowHelper.cs">
+      <Link>Utils\ForegroundWindowHelper.cs</Link>
+    </Compile>
     <Compile Include="..\Utils\MessageBox.cs">
       <Link>Utils\MessageBox.cs</Link>
     </Compile>
@@ -78,7 +81,9 @@
     </Compile>
   </ItemGroup>
 
-  <ItemGroup />
+  <ItemGroup>
+    <Reference Include="System.Net.Http" />
+  </ItemGroup>
 
   <ItemGroup>
     <Content Include="..\Icon.png">

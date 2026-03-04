@@ -79,6 +79,9 @@
     <Compile Include="..\Utils\ThemedProgressBar.cs">
       <Link>Utils\ThemedProgressBar.cs</Link>
     </Compile>
+    <Compile Include="..\Utils\ForegroundWindowHelper.cs">
+      <Link>Utils\ForegroundWindowHelper.cs</Link>
+    </Compile>
     <Compile Include="..\Utils\MessageBox.cs">
       <Link>Utils\MessageBox.cs</Link>
     </Compile>

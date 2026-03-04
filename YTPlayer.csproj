@@ -235,6 +235,7 @@
     <Compile Include="Utils\TtsHelper.cs" />
     <Compile Include="Utils\AccessibilityPropertyService.cs" />
     <Compile Include="Utils\DependencyInstaller.cs" />
+    <Compile Include="Utils\ForegroundWindowHelper.cs" />
     <Compile Include="Utils\ThemeManager.cs" />
     <Compile Include="Utils\ThemedProgressBar.cs" />
     <Compile Include="Utils\MessageBox.cs" />

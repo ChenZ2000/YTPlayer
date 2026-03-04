@@ -64,7 +64,29 @@ namespace YTPlayer
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
                 ThemeManager.Initialize();
-                Application.Run(new MainForm());
+
+                bool shouldForceForeground = ForegroundWindowHelper.ConsumeForegroundRequestFlag();
+                using var mainForm = new MainForm();
+                if (shouldForceForeground)
+                {
+                    mainForm.Shown += (_, __) =>
+                    {
+                        mainForm.BeginInvoke(new Action(() =>
+                        {
+                            bool activated = ForegroundWindowHelper.TryActivateWindow(
+                                mainForm.Handle,
+                                message => DebugLogger.Log(DebugLogger.LogLevel.Info, "Foreground", message),
+                                attempts: 10,
+                                delayMs: 80);
+                            if (!activated)
+                            {
+                                DebugLogger.Log(DebugLogger.LogLevel.Warning, "Foreground", "启动时主窗口前台激活失败。");
+                            }
+                        }));
+                    };
+                }
+
+                Application.Run(mainForm);
             }
             catch (Exception ex)
             {
