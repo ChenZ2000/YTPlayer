@@ -59,6 +59,7 @@ namespace YTPlayer.Utils
         };
         private const string WebView2BootstrapperUrl = "https://go.microsoft.com/fwlink/p/?LinkId=2124703";
         private const string DesktopRuntimeName = "Microsoft.WindowsDesktop.App";
+        private const string CoreRuntimeName = "Microsoft.NETCore.App";
         private static readonly string[] AllowedDownloadHostSuffixes =
         {
             "microsoft.com",
@@ -128,7 +129,7 @@ namespace YTPlayer.Utils
                     continue;
                 }
 
-                Version? version = GetDesktopRuntimeVersionFromRoot(root);
+                Version? version = GetSharedFrameworkVersionFromRoot(root, DesktopRuntimeName);
                 if (version != null && (bestVersion == null || version > bestVersion))
                 {
                     bestVersion = version;
@@ -160,8 +161,8 @@ namespace YTPlayer.Utils
                 {
                     continue;
                 }
-                string candidate = Path.Combine(root, "dotnet.exe");
-                if (File.Exists(candidate))
+                string? candidate = FindDotNetExecutableInRoot(root);
+                if (!string.IsNullOrWhiteSpace(candidate))
                 {
                     return candidate;
                 }
@@ -170,7 +171,7 @@ namespace YTPlayer.Utils
             return null;
         }
 
-        public static bool TryResolveDotNetHostForDesktopRuntime(
+        public static bool TryResolveDesktopRuntime(
             Version requiredVersion,
             out string? dotNetExe,
             out string? dotNetRoot,
@@ -181,6 +182,27 @@ namespace YTPlayer.Utils
             dotNetRoot = null;
             foundVersion = null;
 
+            foreach (string root in BuildDotNetRootCandidates(includePathEntries: false, preferredRoots))
+            {
+                if (IsLikelyX86Path(root))
+                {
+                    continue;
+                }
+
+                if (TryResolveDesktopRuntimeFromRoot(root, requiredVersion, out string? candidateDotNetExe, out Version? candidateVersion))
+                {
+                    dotNetExe = candidateDotNetExe;
+                    dotNetRoot = root;
+                    foundVersion = candidateVersion;
+                    return true;
+                }
+
+                if (candidateVersion != null && (foundVersion == null || candidateVersion > foundVersion))
+                {
+                    foundVersion = candidateVersion;
+                }
+            }
+
             foreach (string root in BuildDotNetRootCandidates(includePathEntries: true, preferredRoots))
             {
                 if (IsLikelyX86Path(root))
@@ -188,13 +210,13 @@ namespace YTPlayer.Utils
                     continue;
                 }
 
-                string candidate = Path.Combine(root, "dotnet.exe");
-                if (!File.Exists(candidate))
+                string? candidate = FindDotNetExecutableInRoot(root);
+                if (string.IsNullOrWhiteSpace(candidate))
                 {
                     continue;
                 }
 
-                if (IsDesktopRuntimeAvailable(candidate, requiredVersion, out Version? candidateVersion))
+                if (IsDesktopRuntimeAvailable(candidate!, requiredVersion, out Version? candidateVersion, root))
                 {
                     dotNetExe = candidate;
                     dotNetRoot = root;
@@ -276,6 +298,15 @@ namespace YTPlayer.Utils
 
         public static bool IsDesktopRuntimeAvailable(string dotnetExe, Version requiredVersion, out Version? foundVersion)
         {
+            return IsDesktopRuntimeAvailable(dotnetExe, requiredVersion, out foundVersion, null);
+        }
+
+        public static bool IsDesktopRuntimeAvailable(
+            string dotnetExe,
+            Version requiredVersion,
+            out Version? foundVersion,
+            string? dotNetRoot)
+        {
             foundVersion = null;
             if (string.IsNullOrWhiteSpace(dotnetExe) || !File.Exists(dotnetExe))
             {
@@ -298,6 +329,7 @@ namespace YTPlayer.Utils
                     RedirectStandardOutput = true,
                     RedirectStandardError = true
                 };
+                ApplyDotNetRootToStartInfo(startInfo, dotNetRoot);
 
                 using (var process = Process.Start(startInfo))
                 {
@@ -395,6 +427,7 @@ namespace YTPlayer.Utils
 
             Environment.SetEnvironmentVariable("DOTNET_ROOT", dotnetRoot);
             Environment.SetEnvironmentVariable("DOTNET_ROOT(x64)", dotnetRoot);
+            Environment.SetEnvironmentVariable("DOTNET_MULTILEVEL_LOOKUP", "0");
         }
 
         public static async Task<DependencyInstallResult> InstallDotNetDesktopRuntimeAsync(
@@ -422,9 +455,15 @@ namespace YTPlayer.Utils
                 WriteInstallerLog("安装脚本下载成功。");
 
                 bool requiresRestart = false;
-                string? localDotNet = FindDotNetExecutable(effectiveInstallRoot);
+                string? localDotNet = FindDotNetExecutableInRoot(effectiveInstallRoot);
                 if (string.IsNullOrWhiteSpace(localDotNet))
                 {
+                    string? reusableDotNet = FindDotNetExecutable();
+                    if (!string.IsNullOrWhiteSpace(reusableDotNet))
+                    {
+                        WriteInstallerLog($"目标目录缺少 dotnet host，将继续安装到本地目录；检测到外部 host={reusableDotNet}");
+                    }
+
                     var dotNetInstall = await InstallDotNetComponentWithFeedFallbackAsync(
                         scriptPath,
                         channel,
@@ -443,10 +482,10 @@ namespace YTPlayer.Utils
                 }
                 else
                 {
-                    WriteInstallerLog($"检测到本地已有 dotnet host：{localDotNet}");
+                    WriteInstallerLog($"检测到目标目录已有 dotnet host：{localDotNet}");
                 }
 
-                Version? existingDesktop = GetDesktopRuntimeVersionFromRoot(effectiveInstallRoot);
+                Version? existingDesktop = GetSharedFrameworkVersionFromRoot(effectiveInstallRoot, DesktopRuntimeName);
                 if (existingDesktop == null || existingDesktop < requiredVersion)
                 {
                     var desktopInstall = await InstallDotNetComponentWithFeedFallbackAsync(
@@ -470,22 +509,29 @@ namespace YTPlayer.Utils
                     WriteInstallerLog($"检测到本地已有 Desktop Runtime 版本：{existingDesktop}");
                 }
 
-                string? installedDotNet = FindDotNetExecutable(effectiveInstallRoot);
-                if (string.IsNullOrWhiteSpace(installedDotNet))
+                string? installedDotNet = FindDotNetExecutableInRoot(effectiveInstallRoot);
+                if (!string.IsNullOrWhiteSpace(installedDotNet))
                 {
-                    WriteInstallerLog("安装结束校验失败：未找到 dotnet.exe。");
-                    return new DependencyInstallResult(false, AddInstallerLogHint("安装后未找到 dotnet.exe。"));
+                    string resolvedDotNet = installedDotNet!;
+                    if (!IsDesktopRuntimeAvailable(resolvedDotNet, requiredVersion, out Version? foundVersion, effectiveInstallRoot))
+                    {
+                        string found = foundVersion == null ? "未检测到 Desktop Runtime" : $"检测到 {foundVersion}";
+                        WriteInstallerLog($"安装结束校验失败：{found}，需求>={requiredVersion}，dotnet={resolvedDotNet}，state={DescribeDotNetRootState(effectiveInstallRoot)}");
+                        return new DependencyInstallResult(false, AddInstallerLogHint($"安装后运行时校验失败（{found}，需求 >= {requiredVersion}）。"));
+                    }
+
+                    WriteInstallerLog($"安装成功，dotnet={resolvedDotNet}，desktopVersion={foundVersion}，state={DescribeDotNetRootState(effectiveInstallRoot)}");
+                    return new DependencyInstallResult(true, null, requiresRestart ? 3010 : 0, requiresRestart, effectiveInstallRoot);
                 }
 
-                string resolvedDotNet = installedDotNet!;
-                if (!IsDesktopRuntimeAvailable(resolvedDotNet, requiredVersion, out Version? foundVersion))
+                if (!TryResolveDesktopRuntimeFromRoot(effectiveInstallRoot, requiredVersion, out _, out Version? rootVersion))
                 {
-                    string found = foundVersion == null ? "未检测到 Desktop Runtime" : $"检测到 {foundVersion}";
-                    WriteInstallerLog($"安装结束校验失败：{found}，需求>={requiredVersion}，dotnet={resolvedDotNet}");
+                    string found = rootVersion == null ? "未检测到 Desktop Runtime" : $"检测到 {rootVersion}";
+                    WriteInstallerLog($"安装结束校验失败：目标目录缺少可用 dotnet host，且运行时布局不完整；{found}，需求>={requiredVersion}，state={DescribeDotNetRootState(effectiveInstallRoot)}");
                     return new DependencyInstallResult(false, AddInstallerLogHint($"安装后运行时校验失败（{found}，需求 >= {requiredVersion}）。"));
                 }
 
-                WriteInstallerLog($"安装成功，dotnet={resolvedDotNet}，desktopVersion={foundVersion}");
+                WriteInstallerLog($"安装成功，dotnet=<apphost-only>，desktopVersion={rootVersion}，state={DescribeDotNetRootState(effectiveInstallRoot)}");
                 return new DependencyInstallResult(true, null, requiresRestart ? 3010 : 0, requiresRestart, effectiveInstallRoot);
             }
             catch (OperationCanceledException)
@@ -581,14 +627,14 @@ namespace YTPlayer.Utils
             }
         }
 
-        private static Version? GetDesktopRuntimeVersionFromRoot(string root)
+        private static Version? GetSharedFrameworkVersionFromRoot(string root, string frameworkName)
         {
-            if (string.IsNullOrWhiteSpace(root))
+            if (string.IsNullOrWhiteSpace(root) || string.IsNullOrWhiteSpace(frameworkName))
             {
                 return null;
             }
 
-            string sharedFxRoot = Path.Combine(root, "shared", DesktopRuntimeName);
+            string sharedFxRoot = Path.Combine(root, "shared", frameworkName);
             if (!Directory.Exists(sharedFxRoot))
             {
                 return null;
@@ -608,6 +654,119 @@ namespace YTPlayer.Utils
             }
 
             return best;
+        }
+
+        private static Version? GetDesktopRuntimeVersionFromRoot(string root)
+        {
+            return GetSharedFrameworkVersionFromRoot(root, DesktopRuntimeName);
+        }
+
+        private static Version? GetHostFxrVersionFromRoot(string root)
+        {
+            if (string.IsNullOrWhiteSpace(root))
+            {
+                return null;
+            }
+
+            string hostFxrRoot = Path.Combine(root, "host", "fxr");
+            if (!Directory.Exists(hostFxrRoot))
+            {
+                return null;
+            }
+
+            Version? best = null;
+            foreach (string dir in Directory.GetDirectories(hostFxrRoot))
+            {
+                string name = Path.GetFileName(dir);
+                if (!Version.TryParse(name, out Version? version))
+                {
+                    continue;
+                }
+
+                if (!File.Exists(Path.Combine(dir, "hostfxr.dll")))
+                {
+                    continue;
+                }
+
+                if (best == null || version > best)
+                {
+                    best = version;
+                }
+            }
+
+            return best;
+        }
+
+        private static bool TryResolveDesktopRuntimeFromRoot(
+            string root,
+            Version requiredVersion,
+            out string? dotNetExe,
+            out Version? foundVersion)
+        {
+            dotNetExe = FindDotNetExecutableInRoot(root);
+            Version? desktopVersion = GetSharedFrameworkVersionFromRoot(root, DesktopRuntimeName);
+            foundVersion = desktopVersion;
+            if (desktopVersion == null || desktopVersion < requiredVersion)
+            {
+                return false;
+            }
+
+            Version? coreVersion = GetSharedFrameworkVersionFromRoot(root, CoreRuntimeName);
+            if (coreVersion == null || coreVersion < requiredVersion)
+            {
+                return false;
+            }
+
+            Version? hostFxrVersion = GetHostFxrVersionFromRoot(root);
+            if (hostFxrVersion == null || hostFxrVersion < requiredVersion)
+            {
+                return false;
+            }
+
+            if (!string.IsNullOrWhiteSpace(dotNetExe))
+            {
+                return IsDesktopRuntimeAvailable(dotNetExe!, requiredVersion, out foundVersion, root);
+            }
+
+            foundVersion = desktopVersion;
+            return true;
+        }
+
+        private static string? FindDotNetExecutableInRoot(string? root)
+        {
+            if (string.IsNullOrWhiteSpace(root))
+            {
+                return null;
+            }
+
+            string candidate = Path.Combine(root!.Trim().Trim('"'), "dotnet.exe");
+            return File.Exists(candidate) ? candidate : null;
+        }
+
+        private static void ApplyDotNetRootToStartInfo(ProcessStartInfo startInfo, string? dotNetRoot)
+        {
+            if (startInfo == null || string.IsNullOrWhiteSpace(dotNetRoot))
+            {
+                return;
+            }
+
+            startInfo.EnvironmentVariables["DOTNET_ROOT"] = dotNetRoot;
+            startInfo.EnvironmentVariables["DOTNET_ROOT(x64)"] = dotNetRoot;
+            startInfo.EnvironmentVariables["DOTNET_MULTILEVEL_LOOKUP"] = "0";
+        }
+
+        private static string DescribeDotNetRootState(string root)
+        {
+            string host = FindDotNetExecutableInRoot(root) ?? "<missing>";
+            Version? desktop = GetSharedFrameworkVersionFromRoot(root, DesktopRuntimeName);
+            Version? core = GetSharedFrameworkVersionFromRoot(root, CoreRuntimeName);
+            Version? hostFxr = GetHostFxrVersionFromRoot(root);
+            return $"root={root}, dotnet={host}, desktop={FormatVersion(desktop)}, core={FormatVersion(core)}, hostfxr={FormatVersion(hostFxr)}";
+        }
+
+        private static string FormatVersion(Version? version)
+        {
+            return version?.ToString() ?? "<missing>";
         }
 
         private static async Task<ComponentInstallResult> InstallDotNetComponentWithFeedFallbackAsync(

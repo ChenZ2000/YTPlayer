@@ -58,6 +58,7 @@ namespace YTPlayer.Launcher
                 {
                     startInfo.EnvironmentVariables["DOTNET_ROOT"] = dotNetRoot;
                     startInfo.EnvironmentVariables["DOTNET_ROOT(x64)"] = dotNetRoot;
+                    startInfo.EnvironmentVariables["DOTNET_MULTILEVEL_LOOKUP"] = "0";
                 }
 
                 ForegroundWindowHelper.MarkForegroundRequest(startInfo);
@@ -91,7 +92,7 @@ namespace YTPlayer.Launcher
             Version required = DependencyInstaller.TryGetRequiredDesktopRuntimeVersion(runtimeConfigPath) ?? FallbackDesktopRuntime;
             string localRoot = DependencyInstaller.GetLocalDotNetRoot();
 
-            if (DependencyInstaller.TryResolveDotNetHostForDesktopRuntime(
+            if (DependencyInstaller.TryResolveDesktopRuntime(
                     required,
                     out string? resolvedDotNetExe,
                     out string? resolvedDotNetRoot,
@@ -140,7 +141,7 @@ namespace YTPlayer.Launcher
             }
 
             string preferredRoot = string.IsNullOrWhiteSpace(result.InstallRoot) ? localRoot : result.InstallRoot!;
-            if (DependencyInstaller.TryResolveDotNetHostForDesktopRuntime(
+            if (DependencyInstaller.TryResolveDesktopRuntime(
                     required,
                     out string? installedDotNetExe,
                     out string? installedDotNetRoot,
@@ -159,7 +160,7 @@ namespace YTPlayer.Launcher
             }
 
             string detected = foundVersion == null ? "未检测到有效桌面运行时" : $"检测到版本 {foundVersion}";
-            ShowError($"安装完成后未能解析可用的 dotnet 运行时主机（需求版本 >= {required}，{detected}）。应用无法启动。");
+            ShowError($"安装完成后仍未能解析可用的 .NET 运行环境（需求版本 >= {required}，{detected}）。应用无法启动。");
             return false;
         }
 
