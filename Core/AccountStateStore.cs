@@ -15,12 +15,12 @@ namespace YTPlayer.Core
     /// </summary>
     public class AccountStateStore
     {
-        private readonly string _accountFilePath;
+        private static readonly object _storageLock = ApplicationStorage.SyncRoot;
+
+        private static string AccountFilePath => ApplicationStorage.AccountFilePath;
 
         public AccountStateStore()
         {
-            string applicationDirectory = GetApplicationDirectory();
-            _accountFilePath = Path.Combine(applicationDirectory, "account.json");
         }
 
         /// <summary>
@@ -30,60 +30,64 @@ namespace YTPlayer.Core
         /// </summary>
         public AccountState Load()
         {
-            try
+            lock (_storageLock)
             {
-                if (!File.Exists(_accountFilePath))
+                try
                 {
-                    System.Diagnostics.Debug.WriteLine("[AccountStateStore] account.json 不存在，返回未登录状态");
+                    string accountFilePath = AccountFilePath;
+                    if (!File.Exists(accountFilePath))
+                    {
+                        System.Diagnostics.Debug.WriteLine("[AccountStateStore] account.json 不存在，返回未登录状态");
+                        return CreateEmptyState();
+                    }
+
+                    string json = File.ReadAllText(accountFilePath);
+                    if (string.IsNullOrWhiteSpace(json))
+                    {
+                        System.Diagnostics.Debug.WriteLine("[AccountStateStore] account.json 为空，返回未登录状态");
+                        return CreateEmptyState();
+                    }
+
+                    var state = JsonConvert.DeserializeObject<AccountState>(json);
+                    if (state == null)
+                    {
+                        System.Diagnostics.Debug.WriteLine("[AccountStateStore] account.json 反序列化失败，返回未登录状态");
+                        return CreateEmptyState();
+                    }
+
+                    // 确保集合不为空
+                    state.Cookies = state.Cookies ?? new List<CookieItem>();
+                    state.SongLyricLanguagePreferences = state.SongLyricLanguagePreferences ??
+                                                        new Dictionary<string, SongLyricLanguagePreference>(StringComparer.OrdinalIgnoreCase);
+                    NormalizeSongLyricLanguagePreferences(state);
+
+                    // 如果 IsLoggedIn=false，清空敏感数据（允许用户手动设置此标志来测试）
+                    if (!state.IsLoggedIn)
+                    {
+                        System.Diagnostics.Debug.WriteLine("[AccountStateStore] IsLoggedIn=false，忽略账号数据");
+                        // 保留设备指纹，但清空用户和认证信息
+                        state.UserId = null;
+                        state.Nickname = null;
+                        state.AvatarUrl = null;
+                        state.VipType = 0;
+                        state.Cookie = null;
+                        state.MusicU = null;
+                        state.CsrfToken = null;
+                        state.Cookies.Clear();
+                        state.SongLyricLanguagePreferences.Clear();
+                    }
+                    else
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[AccountStateStore] 加载登录状态成功：用户={state.Nickname}, ID={state.UserId}, VipType={state.VipType}");
+                    }
+
+                    return state;
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[AccountStateStore] 读取 account.json 失败: {ex.Message}");
                     return CreateEmptyState();
                 }
-
-                string json = File.ReadAllText(_accountFilePath);
-                if (string.IsNullOrWhiteSpace(json))
-                {
-                    System.Diagnostics.Debug.WriteLine("[AccountStateStore] account.json 为空，返回未登录状态");
-                    return CreateEmptyState();
-                }
-
-                var state = JsonConvert.DeserializeObject<AccountState>(json);
-                if (state == null)
-                {
-                    System.Diagnostics.Debug.WriteLine("[AccountStateStore] account.json 反序列化失败，返回未登录状态");
-                    return CreateEmptyState();
-                }
-
-                // 确保集合不为空
-                state.Cookies = state.Cookies ?? new List<CookieItem>();
-                state.SongLyricLanguagePreferences = state.SongLyricLanguagePreferences ??
-                                                    new Dictionary<string, SongLyricLanguagePreference>(StringComparer.OrdinalIgnoreCase);
-                NormalizeSongLyricLanguagePreferences(state);
-
-                // 如果 IsLoggedIn=false，清空敏感数据（允许用户手动设置此标志来测试）
-                if (!state.IsLoggedIn)
-                {
-                    System.Diagnostics.Debug.WriteLine("[AccountStateStore] IsLoggedIn=false，忽略账号数据");
-                    // 保留设备指纹，但清空用户和认证信息
-                    state.UserId = null;
-                    state.Nickname = null;
-                    state.AvatarUrl = null;
-                    state.VipType = 0;
-                    state.Cookie = null;
-                    state.MusicU = null;
-                    state.CsrfToken = null;
-                    state.Cookies.Clear();
-                    state.SongLyricLanguagePreferences.Clear();
-                }
-                else
-                {
-                    System.Diagnostics.Debug.WriteLine($"[AccountStateStore] 加载登录状态成功：用户={state.Nickname}, ID={state.UserId}, VipType={state.VipType}");
-                }
-
-                return state;
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[AccountStateStore] 读取 account.json 失败: {ex.Message}");
-                return CreateEmptyState();
             }
         }
 
@@ -98,55 +102,60 @@ namespace YTPlayer.Core
                 throw new ArgumentNullException(nameof(state));
             }
 
-            try
+            lock (_storageLock)
             {
-                // 更新时间戳
-                state.LastUpdated = DateTimeOffset.UtcNow;
-                state.Cookies = state.Cookies ?? new List<CookieItem>();
-
-                // 确保目录存在
-                string? directory = Path.GetDirectoryName(_accountFilePath);
-                if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+                try
                 {
-                    Directory.CreateDirectory(directory);
+                    string accountFilePath = AccountFilePath;
+
+                    // 更新时间戳
+                    state.LastUpdated = DateTimeOffset.UtcNow;
+                    state.Cookies = state.Cookies ?? new List<CookieItem>();
+
+                    // 确保目录存在
+                    string? directory = Path.GetDirectoryName(accountFilePath);
+                    if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+                    {
+                        Directory.CreateDirectory(directory);
+                    }
+
+                    // 序列化配置
+                    var settings = new JsonSerializerSettings
+                    {
+                        Formatting = Formatting.Indented,
+                        NullValueHandling = NullValueHandling.Include  // 包含 null 值，以便用户清楚看到字段结构
+                    };
+
+                    string json = JsonConvert.SerializeObject(state, settings);
+
+                    // 原子写入：先写临时文件，再覆盖，取消 .bak 生成以精简目录
+                    string tempFile = accountFilePath + ".tmp";
+                    File.WriteAllText(tempFile, json);
+
+                    File.Copy(tempFile, accountFilePath, true);
+                    File.Delete(tempFile);
+
+                    // 确保不存在历史 .bak 残留
+                    string bakFile = accountFilePath + ".bak";
+                    if (File.Exists(bakFile))
+                    {
+                        File.Delete(bakFile);
+                    }
+
+                    if (state.IsLoggedIn)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[AccountStateStore] 保存登录状态成功：用户={state.Nickname}");
+                    }
+                    else
+                    {
+                        System.Diagnostics.Debug.WriteLine("[AccountStateStore] 保存未登录状态");
+                    }
                 }
-
-                // 序列化配置
-                var settings = new JsonSerializerSettings
+                catch (Exception ex)
                 {
-                    Formatting = Formatting.Indented,
-                    NullValueHandling = NullValueHandling.Include  // 包含 null 值，以便用户清楚看到字段结构
-                };
-
-                string json = JsonConvert.SerializeObject(state, settings);
-
-                // 原子写入：先写临时文件，再覆盖，取消 .bak 生成以精简目录
-                string tempFile = _accountFilePath + ".tmp";
-                File.WriteAllText(tempFile, json);
-
-                File.Copy(tempFile, _accountFilePath, true);
-                File.Delete(tempFile);
-
-                // 确保不存在历史 .bak 残留
-                string bakFile = _accountFilePath + ".bak";
-                if (File.Exists(bakFile))
-                {
-                    File.Delete(bakFile);
+                    System.Diagnostics.Debug.WriteLine($"[AccountStateStore] 保存 account.json 失败: {ex.Message}");
+                    throw;  // 抛出异常，让调用者知道保存失败
                 }
-
-                if (state.IsLoggedIn)
-                {
-                    System.Diagnostics.Debug.WriteLine($"[AccountStateStore] 保存登录状态成功：用户={state.Nickname}");
-                }
-                else
-                {
-                    System.Diagnostics.Debug.WriteLine("[AccountStateStore] 保存未登录状态");
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[AccountStateStore] 保存 account.json 失败: {ex.Message}");
-                throw;  // 抛出异常，让调用者知道保存失败
             }
         }
 
@@ -158,52 +167,57 @@ namespace YTPlayer.Core
         public void Clear()
         {
             System.Diagnostics.Debug.WriteLine("[AccountStateStore] 清空登录状态");
-            try
+            lock (_storageLock)
             {
-                // 尝试加载现有状态以保留设备指纹
-                AccountState state;
-                if (File.Exists(_accountFilePath))
+                try
                 {
-                    try
+                    string accountFilePath = AccountFilePath;
+
+                    // 尝试加载现有状态以保留设备指纹
+                    AccountState state;
+                    if (File.Exists(accountFilePath))
                     {
-                        string json = File.ReadAllText(_accountFilePath);
-                        state = JsonConvert.DeserializeObject<AccountState>(json) ?? CreateEmptyState();
+                        try
+                        {
+                            string json = File.ReadAllText(accountFilePath);
+                            state = JsonConvert.DeserializeObject<AccountState>(json) ?? CreateEmptyState();
+                        }
+                        catch
+                        {
+                            state = CreateEmptyState();
+                        }
                     }
-                    catch
+                    else
                     {
                         state = CreateEmptyState();
                     }
+
+                    // 清空登录状态和用户信息，但保留设备指纹
+                    state.IsLoggedIn = false;
+                    state.UserId = null;
+                    state.Nickname = null;
+                    state.AvatarUrl = null;
+                    state.VipType = 0;
+                    state.Cookie = null;
+                    state.MusicU = null;
+                    state.CsrfToken = null;
+                    state.Cookies?.Clear();
+                    state.SongLyricLanguagePreferences?.Clear();
+
+                    // 保留设备指纹字段：
+                    // DeviceId, SDeviceId, DeviceMachineId, DeviceOs, DeviceOsVersion,
+                    // DeviceAppVersion, DeviceBuildVersion, DeviceVersionCode, DeviceUserAgent,
+                    // DeviceResolution, DeviceChannel, DeviceMobileName, DesktopUserAgent,
+                    // DeviceMark, DeviceMConfigInfo, MusicA, NmtId, NtesNuid, WnmCid,
+                    // AntiCheatToken, AntiCheatTokenGeneratedAt, AntiCheatTokenExpiresAt
+
+                    Save(state);
+                    System.Diagnostics.Debug.WriteLine("[AccountStateStore] 登录状态已清空，设备指纹已保留");
                 }
-                else
+                catch (Exception ex)
                 {
-                    state = CreateEmptyState();
+                    System.Diagnostics.Debug.WriteLine($"[AccountStateStore] 清空登录状态失败: {ex.Message}");
                 }
-
-                // 清空登录状态和用户信息，但保留设备指纹
-                state.IsLoggedIn = false;
-                state.UserId = null;
-                state.Nickname = null;
-                state.AvatarUrl = null;
-                state.VipType = 0;
-                state.Cookie = null;
-                state.MusicU = null;
-                state.CsrfToken = null;
-                state.Cookies?.Clear();
-                state.SongLyricLanguagePreferences?.Clear();
-
-                // 保留设备指纹字段：
-                // DeviceId, SDeviceId, DeviceMachineId, DeviceOs, DeviceOsVersion,
-                // DeviceAppVersion, DeviceBuildVersion, DeviceVersionCode, DeviceUserAgent,
-                // DeviceResolution, DeviceChannel, DeviceMobileName, DesktopUserAgent,
-                // DeviceMark, DeviceMConfigInfo, MusicA, NmtId, NtesNuid, WnmCid,
-                // AntiCheatToken, AntiCheatTokenGeneratedAt, AntiCheatTokenExpiresAt
-
-                Save(state);
-                System.Diagnostics.Debug.WriteLine("[AccountStateStore] 登录状态已清空，设备指纹已保留");
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[AccountStateStore] 清空登录状态失败: {ex.Message}");
             }
         }
 
@@ -212,7 +226,10 @@ namespace YTPlayer.Core
         /// </summary>
         public bool Exists()
         {
-            return File.Exists(_accountFilePath);
+            lock (_storageLock)
+            {
+                return File.Exists(AccountFilePath);
+            }
         }
 
         /// <summary>
@@ -220,7 +237,7 @@ namespace YTPlayer.Core
         /// </summary>
         public string GetFilePath()
         {
-            return _accountFilePath;
+            return AccountFilePath;
         }
 
         /// <summary>
@@ -280,22 +297,6 @@ namespace YTPlayer.Core
             }
 
             state.SongLyricLanguagePreferences = normalized;
-        }
-
-        /// <summary>
-        /// 获取应用程序目录。
-        /// 使用启动器传入的根目录，确保 account.json 与程序放置在同一目录。
-        /// </summary>
-        private static string GetApplicationDirectory()
-        {
-            try
-            {
-                return Utils.PathHelper.ApplicationRootDirectory;
-            }
-            catch
-            {
-                return Directory.GetCurrentDirectory();
-            }
         }
     }
 }

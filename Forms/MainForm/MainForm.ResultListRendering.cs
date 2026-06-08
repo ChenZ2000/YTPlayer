@@ -265,15 +265,12 @@ public partial class MainForm
                         {
                                 suppressFocus = true;
                         }
-                        else if (deferPlaybackFocus && flag5)
-                        {
-                                _deferredPlaybackFocusViewSource = null;
-                        }
-                        bool flag6 = _pendingSongFocusSatisfied && !string.IsNullOrWhiteSpace(_pendingSongFocusSatisfiedViewSource) && IsSameViewSourceForFocus(_pendingSongFocusSatisfiedViewSource, viewSource ?? _currentViewSource);
+                        bool flag6 = IsPlaybackFocusSatisfiedForView(viewSource ?? _currentViewSource);
 			if (allowSelection && resultListView.Items.Count > 0 && unchecked(!suppressFocus || flag5) && !IsListAutoFocusSuppressed && !flag6)
 			{
 				int num5 = -1;
 				bool flag7 = flag5;
+				bool focusControlAfterPendingPlaybackListFocus = HasPendingListFocusForView(viewSource ?? _currentViewSource, fromPlaybackOnly: true);
 				if (flag5)
 				{
 					num5 = num4;
@@ -288,10 +285,7 @@ public partial class MainForm
 				EnsureListSelectionWithoutFocus(num5);
 				if (flag7)
 				{
-					_pendingSongFocusId = null;
-					_pendingSongFocusViewSource = null;
-					_pendingSongFocusSatisfied = true;
-					_pendingSongFocusSatisfiedViewSource = viewSource ?? _currentViewSource;
+					MarkPlaybackFocusSatisfied(viewSource ?? _currentViewSource);
 					if (string.Equals(viewSource, "user_cloud", StringComparison.OrdinalIgnoreCase))
 					{
 						_skipCloudRestoreOnce = true;
@@ -309,6 +303,10 @@ public partial class MainForm
 					{
 						resultListView.Focus();
 					}
+				}
+				else if (focusControlAfterPendingPlaybackListFocus && resultListView != null && resultListView.CanFocus)
+				{
+					resultListView.Focus();
 				}
 			}
 			DebugLogListFocusState("DisplaySongs: after selection", viewSource);
@@ -404,14 +402,14 @@ public partial class MainForm
 		if (resolvedIndex < 0)
 		{
 			Debug.WriteLine("[MainForm] Placeholder playback queued but index resolution failed");
-			UpdateStatusBar("Song is still loading, please wait...");
+			UpdateStatusBar("歌曲仍在加载中，请稍候...");
 			return true;
 		}
 
 		_pendingPlaceholderPlaybackIndex = resolvedIndex;
 		_pendingPlaceholderPlaybackViewSource = string.IsNullOrWhiteSpace(pendingViewSource) ? _currentViewSource : pendingViewSource;
 		Debug.WriteLine($"[MainForm] Queued placeholder playback: index={resolvedIndex}, view={_pendingPlaceholderPlaybackViewSource ?? "unknown"}");
-		UpdateStatusBar("Song is still loading, please wait...");
+		UpdateStatusBar("歌曲仍在加载中，请稍候...");
 		return true;
 	}
 
@@ -502,8 +500,39 @@ public partial class MainForm
 
 		if (!TryResolveSongIdFromCache(effectiveViewSource, songIndex, out string songId))
 		{
-			Debug.WriteLine($"[MainForm] Placeholder resolve cache miss: source={effectiveViewSource}, index={songIndex}");
-			return null;
+			SongInfo? resolvedBySource = await ResolveSongFromPlaybackSourceByIndexAsync(effectiveViewSource, songIndex, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+			if (resolvedBySource == null || IsPlaceholderSong(resolvedBySource))
+			{
+				Debug.WriteLine($"[MainForm] Placeholder resolve cache/source miss: source={effectiveViewSource}, index={songIndex}");
+				return null;
+			}
+
+			ApplySongLikeStates(new SongInfo[] { resolvedBySource });
+			string resolvedSource = string.IsNullOrWhiteSpace(resolvedBySource.ViewSource) ? NormalizePlaybackSourceForPersistence(effectiveViewSource) : resolvedBySource.ViewSource;
+			SongInfo mergedFromSource = MergeSongFields(resolvedBySource, resolvedBySource, resolvedSource);
+
+			await ExecuteOnUiThreadAsync(delegate
+			{
+				if (string.Equals(NormalizePlaybackSourceForPersistence(_currentViewSource), resolvedSource, StringComparison.OrdinalIgnoreCase) && _currentSongs != null && songIndex >= 0 && songIndex < _currentSongs.Count)
+				{
+					SongInfo skeleton = _currentSongs[songIndex];
+					mergedFromSource = MergeSongFields(skeleton, resolvedBySource, resolvedSource);
+					_currentSongs[songIndex] = mergedFromSource;
+					Dictionary<int, SongInfo> sourcePatched = new Dictionary<int, SongInfo>
+					{
+						[songIndex] = mergedFromSource
+					};
+					PatchSongItemsInPlace(sourcePatched);
+					TryDispatchPendingPlaceholderPlayback(sourcePatched);
+				}
+			}).ConfigureAwait(continueOnCapturedContext: false);
+
+			UpdatePlaybackQueueSongs(new Dictionary<int, SongInfo>
+			{
+				[songIndex] = mergedFromSource
+			}, resolvedSource);
+
+			return mergedFromSource;
 		}
 
 		List<SongInfo> fetchedSongs = await FetchPlaylistSongsByIdsBatchAsync(new List<string> { songId }, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
@@ -725,6 +754,10 @@ public partial class MainForm
 		if (_currentArtists != null && _currentArtists.Count > 0 && _currentSongs.Count == 0 && _currentPlaylists.Count == 0 && _currentAlbums.Count == 0 && _currentPodcasts.Count == 0 && _currentPodcastSounds.Count == 0 && _currentListItems.Count == 0)
 		{
 			string viewSource = _currentViewSource ?? string.Empty;
+			if (string.Equals(viewSource, "artist_favorites", StringComparison.OrdinalIgnoreCase))
+			{
+				return false;
+			}
 			if (viewSource.StartsWith("artist_category_list:", StringComparison.OrdinalIgnoreCase))
 			{
 				return false;
@@ -946,6 +979,7 @@ public partial class MainForm
 			{
 				int num4 = -1;
 				bool flag3 = false;
+				bool focusControlAfterPendingPlaybackListFocus = HasPendingListFocusForView(_currentViewSource, fromPlaybackOnly: true);
 				if (CanApplyPendingSongFocusForView(_currentViewSource))
 				{
 					num4 = _currentSongs.FindIndex((SongInfo s) => s != null && string.Equals(s.Id, _pendingSongFocusId, StringComparison.OrdinalIgnoreCase));
@@ -968,10 +1002,7 @@ public partial class MainForm
 				EnsureListSelectionWithoutFocus(num4);
 				if (flag3)
 				{
-					_pendingSongFocusId = null;
-					_pendingSongFocusViewSource = null;
-					_pendingSongFocusSatisfied = true;
-					_pendingSongFocusSatisfiedViewSource = _currentViewSource;
+					MarkPlaybackFocusSatisfied(_currentViewSource);
 					if (string.Equals(_currentViewSource, "user_cloud", StringComparison.OrdinalIgnoreCase) && num4 >= 0 && num4 < _currentSongs.Count)
 					{
 						SongInfo songInfo = _currentSongs[num4];
@@ -986,6 +1017,10 @@ public partial class MainForm
 					{
 						resultListView.Focus();
 					}
+				}
+				else if (focusControlAfterPendingPlaybackListFocus && resultListView != null && resultListView.CanFocus && !IsListAutoFocusSuppressed)
+				{
+					resultListView.Focus();
 				}
 			}
 			TryAnnounceLoadingPlaceholderReplacement();
@@ -1008,9 +1043,16 @@ public partial class MainForm
                 {
                         string? previousViewSource = _currentViewSource;
                         CapturePersonalFmSnapshotOnViewLeave(viewSource);
-                        CapturePlaybackFocusBeforeViewChanged(previousViewSource, viewSource);
                         _pendingSongFocusSatisfied = false;
                         _pendingSongFocusSatisfiedViewSource = null;
+                        if (!string.IsNullOrWhiteSpace(_deferredPlaybackFocusViewSource) && !IsSameViewSourceForFocus(_deferredPlaybackFocusViewSource, viewSource))
+                        {
+                                _deferredPlaybackFocusViewSource = null;
+                        }
+                        if (!string.IsNullOrWhiteSpace(_pendingNavigationRestoreFocusViewSource) && !IsSameViewSourceForFocus(_pendingNavigationRestoreFocusViewSource, viewSource))
+                        {
+                                ClearPendingNavigationRestoreFocus();
+                        }
                         _lastAnnouncedViewSource = null;
                         _lastAnnouncedHeader = null;
                         CancelPendingPlaceholderPlayback("view changed");

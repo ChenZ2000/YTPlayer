@@ -17,7 +17,12 @@ namespace UnblockNCM.Core.Services
 {
     public class ProviderManager
     {
-        public static readonly string[] DefaultSources = new[] { "kugou", "kuwo", "qq", "bodian", "migu", "joox", "bilibili", "bilivideo", "pyncmd" };
+        public static readonly string[] DefaultSources = new[]
+        {
+            "byfuns", "gdmusic", "baka", "bikonoo", "msls", "qijieya",
+            "pyncmd", "bodian", "qq",
+            "kugou", "kuwo", "migu", "joox", "bilibili", "bilivideo"
+        };
 
         private readonly Dictionary<string, IProvider> _providers;
         private readonly FindService _find;
@@ -79,7 +84,7 @@ namespace UnblockNCM.Core.Services
             long targetDur = info.Duration;
             double Score(AudioResult r)
             {
-                var dur = r.DurationMs ?? targetDur;
+                var dur = (r.DurationMs.HasValue && r.DurationMs.Value > 0) ? r.DurationMs.Value : targetDur;
                 var durDiff = targetDur > 0 ? Math.Abs(dur - targetDur) : 0;
                 var titleScore = Similarity(info.Name, r.Title) * 0.6 + Similarity(string.Join(" / ", info.Artists.Select(a => a.Name)), r.Artists) * 0.4;
                 // Smaller score is better: duration diff minus bonus for similarity
@@ -125,8 +130,13 @@ namespace UnblockNCM.Core.Services
                     return r;
                 Log.Debug(_scope, $"{r.Source} url validation failed, try next.");
             }
-            // if none validate, fall back to first to keep behavior consistent with node
-            return ordered.First();
+
+            if (_options.AllowUnvalidatedFallback)
+            {
+                return ordered.First();
+            }
+
+            throw new InvalidOperationException("all provider urls failed validation");
         }
 
         private async Task<bool> ValidateAsync(AudioResult result, CancellationToken ct)
@@ -135,7 +145,32 @@ namespace UnblockNCM.Core.Services
             {
                 using var req = new HttpRequestMessage(HttpMethod.Get, result.Url);
                 req.Headers.Range = new RangeHeaderValue(0, 0);
-                req.Headers.UserAgent.ParseAdd("Mozilla/5.0");
+                bool hasUserAgent = false;
+                if (result.Headers != null)
+                {
+                    foreach (var header in result.Headers)
+                    {
+                        if (string.Equals(header.Key, "Range", StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(header.Key, "Accept-Encoding", StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+
+                        if (string.Equals(header.Key, "User-Agent", StringComparison.OrdinalIgnoreCase))
+                        {
+                            req.Headers.UserAgent.ParseAdd(header.Value);
+                            hasUserAgent = true;
+                            continue;
+                        }
+
+                        req.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                    }
+                }
+
+                if (!hasUserAgent)
+                {
+                    req.Headers.UserAgent.ParseAdd("Mozilla/5.0");
+                }
                 using var resp = await ValidateHttp.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
                 if (!resp.IsSuccessStatusCode) return false;
                 var ctType = resp.Content.Headers.ContentType?.MediaType?.ToLowerInvariant();

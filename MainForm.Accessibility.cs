@@ -112,6 +112,26 @@ namespace YTPlayer
 
                 public const uint PM_REMOVE = 0x0001;
 
+                public const int ICC_BAR_CLASSES = 0x00000004;
+
+                public const int WM_USER = 0x0400;
+
+                public const int SB_SETTEXTW = WM_USER + 11;
+
+                public const int SB_SIMPLE = WM_USER + 9;
+
+                public const int SB_SIMPLEID = 0x00FF;
+
+                public const int WS_CHILD = 0x40000000;
+
+                public const int WS_VISIBLE = 0x10000000;
+
+                public const int WS_CLIPSIBLINGS = 0x04000000;
+
+                public const uint SWP_NOACTIVATE = 0x0010;
+
+                public const uint SWP_SHOWWINDOW = 0x0040;
+
 
 
                 [StructLayout(LayoutKind.Sequential)]
@@ -134,6 +154,18 @@ namespace YTPlayer
 
                 }
 
+                [StructLayout(LayoutKind.Sequential)]
+
+                public struct INITCOMMONCONTROLSEX
+
+                {
+
+                        public int dwSize;
+
+                        public int dwICC;
+
+                }
+
 
 
                 [DllImport("user32.dll")]
@@ -146,17 +178,45 @@ namespace YTPlayer
 
                 public static extern bool SetWindowText(nint hWnd, string lpString);
 
+                [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+
+                public static extern nint CreateWindowEx(int dwExStyle, string lpClassName, string lpWindowName, int dwStyle, int x, int y, int nWidth, int nHeight, nint hWndParent, nint hMenu, nint hInstance, nint lpParam);
+
+                [DllImport("user32.dll", SetLastError = true)]
+
+                public static extern bool DestroyWindow(nint hWnd);
+
+                [DllImport("user32.dll", SetLastError = true)]
+
+                public static extern bool SetWindowPos(nint hWnd, nint hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
+
+                [DllImport("user32.dll")]
+
+                public static extern bool IsWindow(nint hWnd);
+
 
 
                 [DllImport("user32.dll", CharSet = CharSet.Auto)]
 
                 public static extern nint SendMessage(nint hWnd, int msg, nint wParam, ref LVITEM lParam);
 
+                [DllImport("user32.dll")]
+
+                public static extern nint SendMessage(nint hWnd, int msg, nint wParam, nint lParam);
+
+                [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+
+                public static extern nint SendMessage(nint hWnd, int msg, nint wParam, string lParam);
+
 
 
                 [DllImport("user32.dll")]
 
                 public static extern bool PeekMessage(out MSG lpMsg, nint hWnd, uint wMsgFilterMin, uint wMsgFilterMax, uint wRemoveMsg);
+
+                [DllImport("comctl32.dll", SetLastError = true)]
+
+                public static extern bool InitCommonControlsEx(ref INITCOMMONCONTROLSEX lpInitCtrls);
 
         }
 
@@ -187,6 +247,12 @@ namespace YTPlayer
         private bool _listViewFocusChangedPending;
 
         private int _nvdaBufferedNavigationDelta;
+
+        private nint _nvdaStatusBarProxyHandle;
+
+        private string _statusBarAccessibleText = "就绪";
+
+        private const int NvdaStatusBarProxyHeight = 1;
 
         private static readonly MethodInfo _accessibilityNotifyClientsMethod = typeof(Control).GetMethod("AccessibilityNotifyClients", BindingFlags.Instance | BindingFlags.NonPublic, null, new Type[2]
 
@@ -558,6 +624,14 @@ namespace YTPlayer
 
                 targetIndex = Math.Max(0, Math.Min(targetIndex, checked(resultListView.Items.Count - 1)));
 
+                if (IsListSelectionAndFocusAt(targetIndex))
+
+                {
+
+                        return;
+
+                }
+
                 resultListView.BeginUpdate();
 
                 try
@@ -587,6 +661,46 @@ namespace YTPlayer
                         EndListViewUpdateAndRefreshAccessibility();
 
                 }
+
+        }
+
+
+
+        private bool IsListSelectionAndFocusAt(int targetIndex)
+
+        {
+
+                if (resultListView == null || resultListView.Items.Count == 0 || targetIndex < 0)
+
+                {
+
+                        return false;
+
+                }
+
+                targetIndex = Math.Max(0, Math.Min(targetIndex, checked(resultListView.Items.Count - 1)));
+
+                int selectedIndex = GetSelectedListViewIndex();
+
+                if (selectedIndex != targetIndex)
+
+                {
+
+                        return false;
+
+                }
+
+                if (resultListView.VirtualMode)
+
+                {
+
+                        return true;
+
+                }
+
+                int focusedIndex = (resultListView.FocusedItem != null) ? resultListView.FocusedItem.Index : -1;
+
+                return focusedIndex == targetIndex;
 
         }
 
@@ -786,9 +900,15 @@ namespace YTPlayer
 
                 targetIndex = ResolvePendingListFocusIndex(targetIndex);
 
-                EnsureListSelectionWithoutFocus(targetIndex);
+                if (!IsListSelectionAndFocusAt(targetIndex))
 
-                if (resultListView.CanFocus)
+                {
+
+                        EnsureListSelectionWithoutFocus(targetIndex);
+
+                }
+
+                if (resultListView.CanFocus && !resultListView.Focused)
 
                 {
 
@@ -800,11 +920,30 @@ namespace YTPlayer
 
 
 
-        private void FocusListAfterEnrich(int pendingFocusIndex)
+        private void FocusListAfterEnrich(int pendingFocusIndex, string expectedViewSource = null)
 
         {
 
+            if (!string.IsNullOrWhiteSpace(expectedViewSource) &&
+                !IsSameViewSourceForFocus(expectedViewSource, _currentViewSource))
+            {
+
+#if DEBUG
+                Debug.WriteLine($"[MainForm] Skip enrich focus for stale view: expected={expectedViewSource}, current={_currentViewSource}");
+#endif
+                return;
+
+            }
+
             if (IsListAutoFocusSuppressed || resultListView == null || resultListView.Items.Count == 0)
+
+            {
+
+                return;
+
+            }
+
+            if (ApplyPendingNavigationRestoreFocus(_currentViewSource, consume: false))
 
             {
 
@@ -830,11 +969,7 @@ namespace YTPlayer
 
 
 
-            bool viewMatched = _pendingSongFocusSatisfied
-
-                && !string.IsNullOrWhiteSpace(_pendingSongFocusSatisfiedViewSource)
-
-                && string.Equals(_pendingSongFocusSatisfiedViewSource, _currentViewSource, StringComparison.OrdinalIgnoreCase);
+            bool viewMatched = IsPlaybackFocusSatisfiedForView(_currentViewSource);
 
             bool hasSelection = resultListView.SelectedIndices.Count > 0 || resultListView.FocusedItem != null;
 
@@ -1944,6 +2079,294 @@ namespace YTPlayer
 
         }
 
+        protected override void OnSizeChanged(EventArgs e)
+
+        {
+
+                base.OnSizeChanged(e);
+
+                PositionNvdaStatusBarProxy();
+
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+
+        {
+
+                base.OnHandleCreated(e);
+
+                EnsureNvdaStatusBarProxy();
+
+        }
+
+        protected override void OnHandleDestroyed(EventArgs e)
+
+        {
+
+                DestroyNvdaStatusBarProxy();
+
+                base.OnHandleDestroyed(e);
+
+        }
+
+        private void EnsureNvdaStatusBarProxy()
+
+        {
+
+                if (Disposing || IsDisposed || !IsHandleCreated)
+
+                {
+
+                        return;
+
+                }
+
+                if (_nvdaStatusBarProxyHandle != nint.Zero && NativeMethods.IsWindow(_nvdaStatusBarProxyHandle))
+
+                {
+
+                        PositionNvdaStatusBarProxy();
+
+                        return;
+
+                }
+
+                try
+
+                {
+
+                        NativeMethods.INITCOMMONCONTROLSEX initControls = new NativeMethods.INITCOMMONCONTROLSEX
+
+                        {
+
+                                dwSize = Marshal.SizeOf<NativeMethods.INITCOMMONCONTROLSEX>(),
+
+                                dwICC = NativeMethods.ICC_BAR_CLASSES
+
+                        };
+
+                        NativeMethods.InitCommonControlsEx(ref initControls);
+
+                        int width = Math.Max(1, ClientSize.Width);
+
+                        int y = Math.Max(0, ClientSize.Height - NvdaStatusBarProxyHeight);
+
+                        int style = NativeMethods.WS_CHILD | NativeMethods.WS_VISIBLE | NativeMethods.WS_CLIPSIBLINGS;
+
+                        _nvdaStatusBarProxyHandle = NativeMethods.CreateWindowEx(
+
+                                0,
+
+                                "msctls_statusbar32",
+
+                                _statusBarAccessibleText,
+
+                                style,
+
+                                0,
+
+                                y,
+
+                                width,
+
+                                NvdaStatusBarProxyHeight,
+
+                                Handle,
+
+                                nint.Zero,
+
+                                nint.Zero,
+
+                                nint.Zero);
+
+                        if (_nvdaStatusBarProxyHandle == nint.Zero)
+
+                        {
+
+                                Debug.WriteLine("[Accessibility] Failed to create native status bar proxy for NVDA. Win32 error: " + Marshal.GetLastWin32Error());
+
+                                return;
+
+                        }
+
+                        PositionNvdaStatusBarProxy();
+
+                        SetNvdaStatusBarProxyText(_statusBarAccessibleText);
+
+                }
+
+                catch (Exception ex)
+
+                {
+
+                        Debug.WriteLine("[Accessibility] Failed to create native status bar proxy for NVDA: " + ex.Message);
+
+                        _nvdaStatusBarProxyHandle = nint.Zero;
+
+                }
+
+        }
+
+        private void PositionNvdaStatusBarProxy()
+
+        {
+
+                if (_nvdaStatusBarProxyHandle == nint.Zero || !NativeMethods.IsWindow(_nvdaStatusBarProxyHandle))
+
+                {
+
+                        return;
+
+                }
+
+                try
+
+                {
+
+                        int width = Math.Max(1, ClientSize.Width);
+
+                        int y = Math.Max(0, ClientSize.Height - NvdaStatusBarProxyHeight);
+
+                        NativeMethods.SetWindowPos(_nvdaStatusBarProxyHandle, nint.Zero, 0, y, width, NvdaStatusBarProxyHeight, NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW);
+
+                }
+
+                catch
+
+                {
+
+                }
+
+        }
+
+        private void DestroyNvdaStatusBarProxy()
+
+        {
+
+                if (_nvdaStatusBarProxyHandle == nint.Zero)
+
+                {
+
+                        return;
+
+                }
+
+                try
+
+                {
+
+                        if (NativeMethods.IsWindow(_nvdaStatusBarProxyHandle))
+
+                        {
+
+                                NativeMethods.DestroyWindow(_nvdaStatusBarProxyHandle);
+
+                        }
+
+                }
+
+                catch
+
+                {
+
+                }
+
+                finally
+
+                {
+
+                        _nvdaStatusBarProxyHandle = nint.Zero;
+
+                }
+
+        }
+
+        private void SetNvdaStatusBarProxyText(string text)
+
+        {
+
+                if (_nvdaStatusBarProxyHandle == nint.Zero || !NativeMethods.IsWindow(_nvdaStatusBarProxyHandle))
+
+                {
+
+                        return;
+
+                }
+
+                try
+
+                {
+
+                        NativeMethods.SetWindowText(_nvdaStatusBarProxyHandle, text);
+
+                        NativeMethods.SendMessage(_nvdaStatusBarProxyHandle, NativeMethods.SB_SIMPLE, (nint)1, nint.Zero);
+
+                        NativeMethods.SendMessage(_nvdaStatusBarProxyHandle, NativeMethods.SB_SETTEXTW, (nint)NativeMethods.SB_SIMPLEID, text);
+
+                        NativeMethods.NotifyWinEvent(NativeMethods.EVENT_OBJECT_NAMECHANGE, _nvdaStatusBarProxyHandle, NativeMethods.OBJID_CLIENT, NativeMethods.CHILDID_SELF);
+
+                }
+
+                catch
+
+                {
+
+                }
+
+        }
+
+        private void UpdateNvdaStatusBarProxy(string text)
+
+        {
+
+                _statusBarAccessibleText = string.IsNullOrWhiteSpace(text) ? "\u6682\u65E0\u5185\u5BB9" : text;
+
+                EnsureNvdaStatusBarProxy();
+
+                try
+
+                {
+
+                        SetNvdaStatusBarProxyText(_statusBarAccessibleText);
+
+                }
+
+                catch
+
+                {
+
+                }
+
+        }
+
+        private void AnnounceNvdaStatusBarProxy(string text)
+
+        {
+
+                UpdateNvdaStatusBarProxy(text);
+
+                try
+
+                {
+
+                        if (_nvdaStatusBarProxyHandle != nint.Zero && NativeMethods.IsWindow(_nvdaStatusBarProxyHandle))
+
+                        {
+
+                                NativeMethods.NotifyWinEvent(NativeMethods.EVENT_OBJECT_NAMECHANGE, _nvdaStatusBarProxyHandle, NativeMethods.OBJID_CLIENT, NativeMethods.CHILDID_SELF);
+
+                        }
+
+                }
+
+                catch
+
+                {
+
+                }
+
+        }
+
 
 
         private void UpdateStatusStripAccessibility(string message)
@@ -1966,11 +2389,15 @@ namespace YTPlayer
 
                         statusStrip1.AccessibleRole = AccessibleRole.StatusBar;
 
-                        statusStrip1.AccessibleName = string.Empty;
+                        string statusBarText = string.IsNullOrWhiteSpace(text) ? "\u6682\u65E0\u5185\u5BB9" : text;
 
-                        statusStrip1.AccessibleDescription = string.Empty;
+                        UpdateNvdaStatusBarProxy(statusBarText);
 
-                        statusStrip1.Text = string.Empty;
+                        statusStrip1.AccessibleName = statusBarText;
+
+                        statusStrip1.AccessibleDescription = statusBarText;
+
+                        statusStrip1.Text = statusBarText;
 
                         if (toolStripStatusLabel1 != null)
 
@@ -2055,6 +2482,8 @@ namespace YTPlayer
                 {
 
                 }
+
+                AnnounceNvdaStatusBarProxy(text);
 
                 try
 
@@ -3984,14 +4413,6 @@ namespace YTPlayer
                                 NotifyListViewFocusChanged();
 
                         }
-
-                }
-
-                if (!string.IsNullOrWhiteSpace(_deferredPlaybackFocusViewSource) && string.Equals(_deferredPlaybackFocusViewSource, _currentViewSource, StringComparison.OrdinalIgnoreCase))
-
-                {
-
-                        _deferredPlaybackFocusViewSource = null;
 
                 }
 

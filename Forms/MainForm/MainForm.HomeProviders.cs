@@ -223,14 +223,8 @@ public partial class MainForm
 				return false;
 			}
 			_loggedInUserId = userInfo.UserId;
-			var (playlists, totalCount) = await _apiClient.GetUserPlaylistsAsync(userInfo.UserId);
+			var (liked, playlistCount) = await FetchUserPlaylistSummaryAsync(userInfo.UserId, token);
 			token.ThrowIfCancellationRequested();
-			PlaylistInfo liked = playlists?.FirstOrDefault((PlaylistInfo p) => !string.IsNullOrEmpty(p.Name) && p.Name.IndexOf("喜欢的音乐", StringComparison.OrdinalIgnoreCase) >= 0);
-			int playlistCount = totalCount;
-			if (liked != null && playlistCount > 0)
-			{
-				playlistCount = Math.Max(0, checked(playlistCount - 1));
-			}
 			ApplyHomeItemUpdate("user_playlists", delegate(ListItemInfo info)
 			{
 				ApplyHomeCategoryCount(info, playlistCount);

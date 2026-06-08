@@ -546,8 +546,6 @@ public partial class MainForm : Form
 
 	private PodcastRadioInfo? _currentPodcast = null;
 
-	private int _currentPodcastSoundOffset = 0;
-
 	private bool _currentPodcastHasMore = false;
 
 	private int _currentPodcastCategoryId = 0;
@@ -1424,6 +1422,54 @@ public partial class MainForm : Form
 
 	private int _currentArtistCategoryTotalCount;
 
+	private int _currentArtistFavoritesNextOffset;
+
+	private bool _currentArtistFavoritesHasMore;
+
+	private int _currentArtistFavoritesTotalCount;
+
+	private bool _artistFavoritesLoadMoreInFlight;
+
+	private bool _artistFavoritesProactiveLoadRunning;
+
+	private int _artistFavoritesProactiveLoadGeneration;
+
+	private int _currentUserPlaylistsNextOffset;
+
+	private bool _currentUserPlaylistsHasMore;
+
+	private int _currentUserPlaylistsTotalCount;
+
+	private bool _userPlaylistsLoadMoreInFlight;
+
+	private bool _userPlaylistsProactiveLoadRunning;
+
+	private int _userPlaylistsProactiveLoadGeneration;
+
+	private int _currentUserAlbumsNextOffset;
+
+	private bool _currentUserAlbumsHasMore;
+
+	private int _currentUserAlbumsTotalCount;
+
+	private bool _userAlbumsLoadMoreInFlight;
+
+	private bool _userAlbumsProactiveLoadRunning;
+
+	private int _userAlbumsProactiveLoadGeneration;
+
+	private int _currentUserPodcastsNextOffset;
+
+	private bool _currentUserPodcastsHasMore;
+
+	private int _currentUserPodcastsTotalCount;
+
+	private bool _userPodcastsLoadMoreInFlight;
+
+	private bool _userPodcastsProactiveLoadRunning;
+
+	private int _userPodcastsProactiveLoadGeneration;
+
 	private int _currentAlbumTypeFilter = -1;
 
 	private int _currentAlbumAreaFilter = -1;
@@ -1443,6 +1489,8 @@ public partial class MainForm : Form
 	private const int ArtistSongsPageSize = 100;
 
 	private const int ArtistAlbumsPageSize = 100;
+
+	private const int ArtistFavoritesPageSize = 100;
 
 	private const int AlbumCategoryPageSize = 100;
 
@@ -1478,8 +1526,6 @@ public partial class MainForm : Form
 
 	private int _currentNewSongsTotalCount;
 
-	private int _currentNewSongsOffset;
-
 	private bool _currentNewSongsHasMore;
 
 	private int _currentNewSongsAreaType;
@@ -1487,8 +1533,6 @@ public partial class MainForm : Form
 	private string _currentNewSongsAreaName = string.Empty;
 
 	private int _currentToplistTotalCount;
-
-	private int _currentToplistOffset;
 
 	private bool _currentToplistHasMore;
 
@@ -1537,6 +1581,10 @@ public partial class MainForm : Form
         private bool _pendingSongFocusSatisfied = false;
 
         private string? _pendingSongFocusSatisfiedViewSource;
+
+        private string? _pendingNavigationRestoreFocusViewSource;
+
+        private int _pendingNavigationRestoreFocusIndex = -1;
 
         private int _pendingPlaceholderPlaybackIndex = -1;
 
@@ -5214,6 +5262,8 @@ public partial class MainForm : Form
 			InitializeDownload();
 			InitializePlaybackReportingService();
 			InitializeRecognitionFeature();
+			InitializeListenTogetherFeature();
+			InitializeUserInstallationFeature();
 			UpdateStatusBar("就绪");
 		}
 		catch (Exception ex)
@@ -5707,20 +5757,22 @@ public partial class MainForm : Form
 			{
 				return;
 			}
-                        configModel.LastPlayingSongId = currentSong.Id ?? string.Empty;
-                        configModel.LastPlayingSongName = currentSong.Name ?? string.Empty;
-                        configModel.LastPlayingDuration = currentSong.Duration;
-                        configModel.LastPlayingSource = string.Empty;
-                        configModel.LastPlayingSourceIndex = -1;
-                        if (includeQueue && _playbackQueue != null)
-                        {
-				PlaybackSnapshot playbackSnapshot = _playbackQueue.CaptureSnapshot();
+			PlaybackSnapshot playbackSnapshot = _playbackQueue?.CaptureSnapshot();
+			configModel.LastPlayingSongId = currentSong.Id ?? string.Empty;
+			configModel.LastPlayingSongName = currentSong.Name ?? string.Empty;
+			configModel.LastPlayingDuration = currentSong.Duration;
+			configModel.LastPlayingSource = string.Empty;
+			configModel.LastPlayingSourceIndex = -1;
+			if (includeQueue && playbackSnapshot != null)
+			{
 				if (playbackSnapshot != null && playbackSnapshot.Queue != null && playbackSnapshot.Queue.Count > 0)
 				{
 					configModel.LastPlayingQueue = (from s in playbackSnapshot.Queue
 						where s != null && !string.IsNullOrWhiteSpace(s.Id)
-						select s.Id).Take(300).ToList();
-					configModel.LastPlayingQueueIndex = Math.Max(0, Math.Min(playbackSnapshot.QueueIndex, checked(configModel.LastPlayingQueue.Count - 1)));
+						select s.Id).ToList();
+					configModel.LastPlayingQueueIndex = (configModel.LastPlayingQueue.Count > 0)
+						? Math.Max(0, Math.Min(playbackSnapshot.QueueIndex, checked(configModel.LastPlayingQueue.Count - 1)))
+						: -1;
 					if (string.IsNullOrWhiteSpace(configModel.LastPlayingSource))
 					{
 						configModel.LastPlayingSource = playbackSnapshot.QueueSource ?? string.Empty;
@@ -5748,24 +5800,19 @@ public partial class MainForm : Form
 			{
 				configModel.LastPlayingSource = currentSong.ViewSource ?? string.Empty;
 			}
-                        if (string.IsNullOrWhiteSpace(configModel.LastPlayingSource) && IsSongInCurrentView(currentSong))
-                        {
-                                configModel.LastPlayingSource = _currentViewSource ?? string.Empty;
-                        }
-                        int resolvedSourceIndex = -1;
-                        if (!string.IsNullOrWhiteSpace(configModel.LastPlayingSource))
-                        {
-                                resolvedSourceIndex = ResolveSongIndexFromCache(configModel.LastPlayingSource, currentSong);
-                                if (resolvedSourceIndex < 0 && !string.IsNullOrWhiteSpace(_currentViewSource) && string.Equals(_currentViewSource, configModel.LastPlayingSource, StringComparison.OrdinalIgnoreCase) && _currentSongs != null && _currentSongs.Count > 0)
-                                {
-                                        resolvedSourceIndex = FindSongIndexInList(_currentSongs, currentSong);
-                                }
-                        }
-                        configModel.LastPlayingSourceIndex = resolvedSourceIndex;
-                        if (persistToDisk)
-                        {
-                                _configManager?.Save(configModel);
-                        }
+			if (string.IsNullOrWhiteSpace(configModel.LastPlayingSource) && IsSongInCurrentView(currentSong))
+			{
+				configModel.LastPlayingSource = _currentViewSource ?? string.Empty;
+			}
+
+			string rawSource = configModel.LastPlayingSource ?? string.Empty;
+			string normalizedSource = NormalizePlaybackSourceForPersistence(rawSource);
+			configModel.LastPlayingSource = normalizedSource;
+			configModel.LastPlayingSourceIndex = ResolveCurrentPlaybackSourceIndex(normalizedSource, currentSong, playbackSnapshot);
+			if (persistToDisk)
+			{
+				_configManager?.Save(configModel);
+			}
 		}
 		catch (Exception ex)
 		{
@@ -5790,42 +5837,131 @@ public partial class MainForm : Form
 		}
 		try
 		{
+			PlaybackSourceQueueData sourceQueue = await BuildPlaybackQueueFromSavedSourceAsync(configModel, CancellationToken.None).ConfigureAwait(continueOnCapturedContext: false);
+			if (sourceQueue != null && sourceQueue.TargetSong != null && sourceQueue.Songs != null && sourceQueue.Songs.Count > 0 && sourceQueue.AnchorIndex >= 0)
+			{
+				bool sourceSynced = _playbackQueue.TrySyncQueueWithView(sourceQueue.Songs, sourceQueue.Source, sourceQueue.AnchorIndex);
+				if (!sourceSynced)
+				{
+					_playbackQueue.ManualSelect(sourceQueue.TargetSong, sourceQueue.Songs, sourceQueue.Source);
+				}
+				await PlaySongDirectWithCancellation(sourceQueue.TargetSong, isAutoPlayback: true, queueIndexHint: sourceQueue.AnchorIndex).ConfigureAwait(continueOnCapturedContext: false);
+				_lastPlaybackRestored = true;
+				return true;
+			}
+
 			List<string> queueIds = new List<string>();
+			int requestedQueueIndex = configModel.LastPlayingQueueIndex;
 			if (configModel.LastPlayingQueue != null && configModel.LastPlayingQueue.Count > 0)
 			{
 				queueIds.AddRange(configModel.LastPlayingQueue.Where((string value) => !string.IsNullOrWhiteSpace(value)));
 			}
 			if (!queueIds.Contains<string>(configModel.LastPlayingSongId, StringComparer.OrdinalIgnoreCase))
 			{
-				queueIds.Insert(Math.Max(0, Math.Min(configModel.LastPlayingQueueIndex, queueIds.Count)), configModel.LastPlayingSongId);
+				int insertIndex = Math.Max(0, Math.Min(configModel.LastPlayingQueueIndex, queueIds.Count));
+				queueIds.Insert(insertIndex, configModel.LastPlayingSongId);
+				requestedQueueIndex = insertIndex;
 			}
 			if (queueIds.Count == 0)
 			{
 				queueIds.Add(configModel.LastPlayingSongId);
+				requestedQueueIndex = 0;
 			}
-			List<SongInfo> songs = await _apiClient.GetSongDetailAsync(queueIds.ToArray());
+			List<string> detailIds = queueIds.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+			List<SongInfo> songs = await _apiClient.GetSongsByIdsAsync(detailIds, CancellationToken.None).ConfigureAwait(continueOnCapturedContext: false);
 			if (songs == null || songs.Count == 0)
 			{
-				return false;
+				songs = await _apiClient.GetSongDetailAsync(new string[1] { configModel.LastPlayingSongId }, CancellationToken.None).ConfigureAwait(continueOnCapturedContext: false);
+				if (songs == null || songs.Count == 0)
+				{
+					return false;
+				}
+				queueIds = new List<string> { configModel.LastPlayingSongId };
+				requestedQueueIndex = 0;
 			}
 			Dictionary<string, SongInfo> map = songs.Where((SongInfo songInfo) => songInfo != null && !string.IsNullOrWhiteSpace(songInfo.Id)).GroupBy<SongInfo, string>((SongInfo songInfo) => songInfo.Id, StringComparer.OrdinalIgnoreCase).ToDictionary<IGrouping<string, SongInfo>, string, SongInfo>((IGrouping<string, SongInfo> g) => g.Key, (IGrouping<string, SongInfo> g) => g.First(), StringComparer.OrdinalIgnoreCase);
 			List<SongInfo> ordered = new List<SongInfo>();
-			foreach (string id in queueIds)
+			List<int> orderedSourceIndices = new List<int>();
+			for (int i = 0; i < queueIds.Count; i++)
 			{
+				string id = queueIds[i];
 				if (map.TryGetValue(id, out var s))
 				{
 					ordered.Add(s);
+					orderedSourceIndices.Add(i);
 				}
 				s = null;
 			}
 			if (ordered.Count == 0)
 			{
 				ordered = songs;
+				orderedSourceIndices = Enumerable.Range(0, songs.Count).ToList();
+			}
+			if (!ordered.Any((SongInfo songInfo) => string.Equals(songInfo?.Id, configModel.LastPlayingSongId, StringComparison.OrdinalIgnoreCase)))
+			{
+				List<SongInfo> targetDetails = await _apiClient.GetSongDetailAsync(new string[1] { configModel.LastPlayingSongId }, CancellationToken.None).ConfigureAwait(continueOnCapturedContext: false);
+				SongInfo targetDetail = targetDetails?.FirstOrDefault((SongInfo songInfo) => songInfo != null && string.Equals(songInfo.Id, configModel.LastPlayingSongId, StringComparison.OrdinalIgnoreCase));
+				if (targetDetail != null)
+				{
+					int sourceIndex = -1;
+					if (requestedQueueIndex >= 0 && requestedQueueIndex < queueIds.Count && string.Equals(queueIds[requestedQueueIndex], configModel.LastPlayingSongId, StringComparison.OrdinalIgnoreCase))
+					{
+						sourceIndex = requestedQueueIndex;
+					}
+					if (sourceIndex < 0)
+					{
+						sourceIndex = queueIds.FindIndex((string id) => string.Equals(id, configModel.LastPlayingSongId, StringComparison.OrdinalIgnoreCase));
+					}
+					if (sourceIndex < 0)
+					{
+						sourceIndex = Math.Max(0, Math.Min(requestedQueueIndex, queueIds.Count));
+						queueIds.Insert(sourceIndex, configModel.LastPlayingSongId);
+					}
+					int insertIndex = 0;
+					while (insertIndex < orderedSourceIndices.Count && orderedSourceIndices[insertIndex] < sourceIndex)
+					{
+						insertIndex++;
+					}
+					insertIndex = Math.Max(0, Math.Min(insertIndex, ordered.Count));
+					ordered.Insert(insertIndex, targetDetail);
+					orderedSourceIndices.Insert(insertIndex, sourceIndex);
+				}
 			}
 			string resumeViewSource = (string.IsNullOrWhiteSpace(configModel.LastPlayingSource) ? "resume:last_playback" : configModel.LastPlayingSource);
-			SongInfo target = ordered.FirstOrDefault((SongInfo songInfo) => string.Equals(songInfo.Id, configModel.LastPlayingSongId, StringComparison.OrdinalIgnoreCase)) ?? ordered.First();
-			_playbackQueue.ManualSelect(target, ordered, resumeViewSource);
-			await PlaySongDirectWithCancellation(target, isAutoPlayback: true);
+			int targetOrderedIndex = -1;
+			if (requestedQueueIndex >= 0)
+			{
+				for (int i = 0; i < ordered.Count; i++)
+				{
+					if (orderedSourceIndices.Count > i && orderedSourceIndices[i] == requestedQueueIndex && string.Equals(ordered[i].Id, configModel.LastPlayingSongId, StringComparison.OrdinalIgnoreCase))
+					{
+						targetOrderedIndex = i;
+						break;
+					}
+				}
+			}
+			if (targetOrderedIndex < 0)
+			{
+				for (int i = 0; i < ordered.Count; i++)
+				{
+					if (string.Equals(ordered[i].Id, configModel.LastPlayingSongId, StringComparison.OrdinalIgnoreCase))
+					{
+						targetOrderedIndex = i;
+						break;
+					}
+				}
+			}
+			if (targetOrderedIndex < 0)
+			{
+				targetOrderedIndex = 0;
+			}
+			SongInfo target = ordered[targetOrderedIndex];
+			bool synced = _playbackQueue.TrySyncQueueWithView(ordered, resumeViewSource, targetOrderedIndex);
+			if (!synced)
+			{
+				_playbackQueue.ManualSelect(target, ordered, resumeViewSource);
+			}
+			await PlaySongDirectWithCancellation(target, isAutoPlayback: true, queueIndexHint: targetOrderedIndex).ConfigureAwait(continueOnCapturedContext: false);
 			_lastPlaybackRestored = true;
 			return true;
 		}
@@ -6985,6 +7121,8 @@ public partial class MainForm : Form
 	{
 		if (_audioEngine != null)
 		{
+			CancelActivePlaybackRequest("stop playback");
+			CancelPendingPlaceholderPlayback("stop playback");
 			_suppressAutoAdvance = true;
 			_audioEngine.Stop();
 			currentSongLabel.Text = "未播放";
@@ -8034,6 +8172,11 @@ public partial class MainForm : Form
 		if (e != null)
 		{
 			CompleteActivePlaybackSession(PlaybackEndReason.Completed, e.Id);
+		}
+		if (Interlocked.CompareExchange(ref _switchingTrackCount, 0, 0) > 0)
+		{
+			Debug.WriteLine("[MainForm] 播放切换中，忽略旧曲自然结束触发的自动下一首");
+			return;
 		}
 		if (playMode == PlayMode.LoopOne && e != null)
 		{
@@ -9803,7 +9946,7 @@ private void searchTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
 	{
 		if (await LoadHomePageAsync())
 		{
-			FocusListAfterEnrich(0);
+			FocusListAfterEnrich(0, "homepage");
 		}
 	}
 
@@ -10978,7 +11121,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 			throw new InvalidOperationException("专辑缺少有效的标识。");
 		}
 		string albumId = album.Id;
-		List<SongInfo> resolvedSongs = (await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.GetAlbumSongsAsync(albumId), string.IsNullOrWhiteSpace(operationName) ? ("album:" + albumId) : operationName, cancellationToken, delegate(int attempt, Exception _)
+		List<SongInfo> resolvedSongs = (await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.GetAlbumSongsAsync(albumId, ct), string.IsNullOrWhiteSpace(operationName) ? ("album:" + albumId) : operationName, cancellationToken, delegate(int attempt, Exception _)
 		{
 			SafeInvoke(delegate
 			{
@@ -11337,7 +11480,11 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 												int pendingFocusIndexFromIds = -1;
 												if (CanApplyPendingSongFocusForView(viewSource))
 												{
-													idIndexMap.TryGetValue(_pendingSongFocusId, out pendingFocusIndexFromIds);
+													string? pendingSongFocusId = _pendingSongFocusId;
+													if (!string.IsNullOrWhiteSpace(pendingSongFocusId) && idIndexMap.TryGetValue(pendingSongFocusId, out int resolvedPendingFocusIndex))
+													{
+														pendingFocusIndexFromIds = resolvedPendingFocusIndex;
+													}
 												}
 												List<SongInfo> placeholders = BuildPlaylistPlaceholderSongs(totalCount, skeleton?.FirstOrDefault()?.ViewSource ?? viewSource);
 							if (skeleton != null && skeleton.Count > 0)
@@ -11360,9 +11507,17 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 								else
 								{
 									ApplyPlaceholderSongsToCurrentPlaylist(playlist, placeholders);
+									bool hasPendingNavigationRestoreFocus = HasPendingNavigationRestoreFocus(viewSource);
 									if (!TryApplyLongPlaylistPlaceholdersInPlace(playlist, placeholders))
 									{
-										RequestListFocus(null, -1);
+										if (pendingFocusIndexFromIds >= 0)
+										{
+											RequestListFocus(viewSource, pendingFocusIndexFromIds, fromPlayback: true);
+										}
+										else if (!hasPendingNavigationRestoreFocus)
+										{
+											RequestListFocus(null, -1);
+										}
 										DisplaySongs(placeholders, showPagination: false, hasNextPage: false, 1, preserveSelection: true, viewSource, accessibleName, skipAvailabilityCheck: true, announceHeader: false);
 									}
 																if (playlist.Songs != _currentSongs)
@@ -11370,22 +11525,19 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 																	playlist.Songs = _currentSongs;
 																}
 																EnsurePlaybackQueueCoversCurrentView();
-																if (pendingFocusIndexFromIds >= 0 && resultListView != null && !IsListAutoFocusSuppressed && pendingFocusIndexFromIds < resultListView.Items.Count)
+																bool restoredNavigationFocus = ApplyPendingNavigationRestoreFocus(viewSource);
+																if (!restoredNavigationFocus && pendingFocusIndexFromIds >= 0 && resultListView != null && !IsListAutoFocusSuppressed && pendingFocusIndexFromIds < resultListView.Items.Count)
 																{
 																	int focusedIndex = GetFocusedListViewIndex();
 																	if (focusedIndex != pendingFocusIndexFromIds)
 																	{
 																		EnsureListSelectionWithoutFocus(pendingFocusIndexFromIds);
-																		if (resultListView.CanFocus)
-																		{
-																			resultListView.Focus();
-																		}
 																	}
-																	_pendingSongFocusId = null;
-																	_pendingSongFocusViewSource = null;
-																	_pendingSongFocusSatisfied = true;
-                                                                                _pendingSongFocusSatisfiedViewSource = viewSource;
-                                                                                _deferredPlaybackFocusViewSource = null;
+																	if (resultListView.CanFocus && !resultListView.Focused)
+																	{
+																		resultListView.Focus();
+																	}
+																	MarkPlaybackFocusSatisfied(viewSource);
 																}
 															}
 														}).ConfigureAwait(continueOnCapturedContext: false);
@@ -11587,6 +11739,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 						{
 							DisplaySongs(merged, showPagination: false, hasNextPage: false, 1, preserveSelection: true, viewSource, accessibleName, skipAvailabilityCheck: true);
 						}
+						ApplyPendingNavigationRestoreFocus(viewSource);
 						UpdateStatusBar(BuildPlaylistStatusText(playlist, merged.Count, enriched: true));
 						ScheduleAvailabilityCheck(merged);
 					}
@@ -11609,7 +11762,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		CancellationToken viewToken = GetCurrentViewContentToken();
 		try
 		{
-			List<SongInfo> songs = await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.GetAlbumSongsAsync(album.Id), viewSource, viewToken, delegate(int attempt, Exception _)
+			List<SongInfo> songs = await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.GetAlbumSongsAsync(album.Id, ct), viewSource, viewToken, delegate(int attempt, Exception _)
 			{
 				SafeInvoke(delegate
 				{
@@ -11743,7 +11896,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 			ViewLoadRequest request = new ViewLoadRequest(viewSource, accessibleName, "正在加载专辑: " + accessibleName + "...", !skipSave);
 			ViewLoadResult<(AlbumInfo Album, List<SongInfo> Songs, string StatusText)?> loadResult = await RunViewLoadAsync(request, (CancellationToken token) => BuildAlbumSkeletonViewDataAsync(async delegate(CancellationToken ct)
 			{
-				AlbumInfo detail = await _apiClient.GetAlbumDetailAsync(albumId).ConfigureAwait(continueOnCapturedContext: false);
+				AlbumInfo detail = await _apiClient.GetAlbumDetailAsync(albumId, ct).ConfigureAwait(continueOnCapturedContext: false);
 				ct.ThrowIfCancellationRequested();
 				return detail ?? album;
 			}, viewSource, token), "打开专辑已取消").ConfigureAwait(continueOnCapturedContext: true);
@@ -11853,7 +12006,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 			ViewLoadRequest request = new ViewLoadRequest(viewSource, "专辑 " + albumId, "正在加载专辑...", !skipSave);
 			ViewLoadResult<(AlbumInfo Album, List<SongInfo> Songs, string StatusText)?> loadResult = await RunViewLoadAsync(request, (CancellationToken token) => BuildAlbumSkeletonViewDataAsync(async delegate(CancellationToken ct)
 			{
-				AlbumInfo detail = await _apiClient.GetAlbumDetailAsync(albumId).ConfigureAwait(continueOnCapturedContext: false);
+				AlbumInfo detail = await _apiClient.GetAlbumDetailAsync(albumId, ct).ConfigureAwait(continueOnCapturedContext: false);
 				ct.ThrowIfCancellationRequested();
 				return detail;
 			}, viewSource, token), "打开专辑已取消").ConfigureAwait(continueOnCapturedContext: true);
@@ -12496,6 +12649,15 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
                 {
                         return index;
                 }
+                string normalizedViewSource = NormalizePlaybackSourceForPersistence(viewSource);
+                if (!string.Equals(normalizedViewSource, viewSource, StringComparison.OrdinalIgnoreCase) &&
+                        !string.IsNullOrWhiteSpace(song.Id) &&
+                        _playlistTrackIndexMapCache.TryGetValue(normalizedViewSource, out map) &&
+                        map != null &&
+                        map.TryGetValue(song.Id, out index))
+                {
+                        return index;
+                }
                 return -1;
         }
 
@@ -12513,6 +12675,15 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
                 }
 
                 string normalizedViewSource = StripOffsetSuffix(viewSource, out _);
+                if (!string.Equals(normalizedViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
+                {
+                        if (TryResolveSongIdFromCacheCore(normalizedViewSource, songIndex, out songId))
+                        {
+                                return true;
+                        }
+                }
+
+                normalizedViewSource = NormalizePlaybackSourceForPersistence(viewSource);
                 if (!string.Equals(normalizedViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
                 {
                         return TryResolveSongIdFromCacheCore(normalizedViewSource, songIndex, out songId);
@@ -13225,6 +13396,148 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
                 return IsSameViewSourceForFocus(_pendingSongFocusViewSource, viewSource ?? _currentViewSource);
         }
 
+        private bool IsDeferredPlaybackFocusForView(string? viewSource)
+        {
+                return !string.IsNullOrWhiteSpace(_deferredPlaybackFocusViewSource)
+                        && IsSameViewSourceForFocus(_deferredPlaybackFocusViewSource, viewSource ?? _currentViewSource);
+        }
+
+        private bool HasActivePlaybackFocusRequestForView(string? viewSource)
+        {
+                if (!IsFocusFollowPlaybackEnabled() || string.IsNullOrWhiteSpace(viewSource))
+                {
+                        return false;
+                }
+
+                if (CanApplyPendingSongFocusForView(viewSource) || IsDeferredPlaybackFocusForView(viewSource))
+                {
+                        return true;
+                }
+
+                return _pendingListFocusFromPlayback
+                        && _pendingListFocusIndex >= 0
+                        && !string.IsNullOrWhiteSpace(_pendingListFocusViewSource)
+                        && IsSameViewSourceForFocus(_pendingListFocusViewSource, viewSource);
+        }
+
+        private bool HasPendingListFocusForView(string? viewSource, bool fromPlaybackOnly = false)
+        {
+                if (string.IsNullOrWhiteSpace(viewSource) ||
+                        _pendingListFocusIndex < 0 ||
+                        string.IsNullOrWhiteSpace(_pendingListFocusViewSource) ||
+                        !IsSameViewSourceForFocus(_pendingListFocusViewSource, viewSource))
+                {
+                        return false;
+                }
+
+                return !fromPlaybackOnly || _pendingListFocusFromPlayback;
+        }
+
+        private bool IsPlaybackFocusSatisfiedForView(string? viewSource)
+        {
+                return _pendingSongFocusSatisfied
+                        && !string.IsNullOrWhiteSpace(_pendingSongFocusSatisfiedViewSource)
+                        && IsSameViewSourceForFocus(_pendingSongFocusSatisfiedViewSource, viewSource ?? _currentViewSource);
+        }
+
+        private void MarkPlaybackFocusSatisfied(string? viewSource, bool clearPendingList = true)
+        {
+                string? resolvedViewSource = string.IsNullOrWhiteSpace(viewSource) ? _currentViewSource : viewSource;
+                _pendingSongFocusId = null;
+                _pendingSongFocusViewSource = null;
+                _pendingSongFocusSatisfied = true;
+                _pendingSongFocusSatisfiedViewSource = resolvedViewSource;
+
+                if (!string.IsNullOrWhiteSpace(_deferredPlaybackFocusViewSource)
+                        && !string.IsNullOrWhiteSpace(resolvedViewSource)
+                        && IsSameViewSourceForFocus(_deferredPlaybackFocusViewSource, resolvedViewSource))
+                {
+                        _deferredPlaybackFocusViewSource = null;
+                }
+
+                if (clearPendingList
+                        && (_pendingListFocusFromPlayback || _pendingListFocusIndex >= 0)
+                        && (string.IsNullOrWhiteSpace(_pendingListFocusViewSource)
+                                || string.IsNullOrWhiteSpace(resolvedViewSource)
+                                || IsSameViewSourceForFocus(_pendingListFocusViewSource, resolvedViewSource)))
+                {
+                        _pendingListFocusIndex = -1;
+                        _pendingListFocusViewSource = null;
+                        _pendingListFocusFromPlayback = false;
+                }
+        }
+
+        private void SetPendingNavigationRestoreFocus(string? viewSource, int index)
+        {
+                if (string.IsNullOrWhiteSpace(viewSource) || index < 0)
+                {
+                        ClearPendingNavigationRestoreFocus();
+                        return;
+                }
+
+                _pendingNavigationRestoreFocusViewSource = viewSource;
+                _pendingNavigationRestoreFocusIndex = index;
+        }
+
+        private bool HasPendingNavigationRestoreFocus(string? viewSource)
+        {
+                return TryGetPendingNavigationRestoreFocus(viewSource, out _);
+        }
+
+        private bool TryGetPendingNavigationRestoreFocus(string? viewSource, out int index)
+        {
+                index = -1;
+                if (string.IsNullOrWhiteSpace(viewSource) ||
+                        string.IsNullOrWhiteSpace(_pendingNavigationRestoreFocusViewSource) ||
+                        _pendingNavigationRestoreFocusIndex < 0 ||
+                        !IsSameViewSourceForFocus(_pendingNavigationRestoreFocusViewSource, viewSource))
+                {
+                        return false;
+                }
+
+                index = _pendingNavigationRestoreFocusIndex;
+                return true;
+        }
+
+        private void ClearPendingNavigationRestoreFocus(string? viewSource = null)
+        {
+                if (string.IsNullOrWhiteSpace(viewSource) ||
+                        string.IsNullOrWhiteSpace(_pendingNavigationRestoreFocusViewSource) ||
+                        IsSameViewSourceForFocus(_pendingNavigationRestoreFocusViewSource, viewSource))
+                {
+                        _pendingNavigationRestoreFocusViewSource = null;
+                        _pendingNavigationRestoreFocusIndex = -1;
+                }
+        }
+
+        private bool ApplyPendingNavigationRestoreFocus(string? viewSource, bool consume = true)
+        {
+                if (!TryGetPendingNavigationRestoreFocus(viewSource, out int index) ||
+                        resultListView == null ||
+                        resultListView.Items.Count == 0)
+                {
+                        return false;
+                }
+
+                int targetIndex = Math.Max(0, Math.Min(index, resultListView.Items.Count - 1));
+                if (!IsListSelectionAndFocusAt(targetIndex))
+                {
+                        EnsureListSelectionWithoutFocus(targetIndex);
+                }
+                _lastListViewFocusedIndex = targetIndex;
+                if (!IsListAutoFocusSuppressed && resultListView.CanFocus && !resultListView.Focused)
+                {
+                        resultListView.Focus();
+                }
+
+                if (consume)
+                {
+                        ClearPendingNavigationRestoreFocus(viewSource);
+                }
+
+                return true;
+        }
+
         private void RememberPlaybackFocusForSource(string? sourceView, SongInfo? song, int listIndexHint = -1)
         {
                 if (!IsFocusFollowPlaybackEnabled())
@@ -13565,7 +13878,15 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 
 	private void FocusSongInCurrentView(SongInfo song)
 	{
-		if ((_pendingSongFocusSatisfied && !string.IsNullOrWhiteSpace(_currentViewSource) && IsSameViewSourceForFocus(_pendingSongFocusSatisfiedViewSource, _currentViewSource)) || song == null || resultListView == null || _currentSongs == null || _currentSongs.Count == 0)
+		if (IsPlaybackFocusSatisfiedForView(_currentViewSource))
+		{
+			if (resultListView != null && resultListView.CanFocus && !resultListView.Focused && !IsListAutoFocusSuppressed)
+			{
+				resultListView.Focus();
+			}
+			return;
+		}
+		if (song == null || resultListView == null || _currentSongs == null || _currentSongs.Count == 0)
 		{
 			return;
 		}
@@ -17095,9 +17416,17 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
                 return ExecuteOnUiThreadAsync(delegate
                 {
                         bool preserveExistingFocus = false;
+                        bool preservePlaybackFocus = false;
+                        bool preserveNavigationFocus = false;
                         if (request.PendingFocusIndex == 0 && !string.IsNullOrWhiteSpace(request.ViewSource))
                         {
-                                preserveExistingFocus = _pendingListFocusIndex >= 0 && !string.IsNullOrWhiteSpace(_pendingListFocusViewSource) && string.Equals(_pendingListFocusViewSource, request.ViewSource, StringComparison.OrdinalIgnoreCase);
+                                preservePlaybackFocus = HasActivePlaybackFocusRequestForView(request.ViewSource);
+                                preserveNavigationFocus = HasPendingNavigationRestoreFocus(request.ViewSource);
+                                preserveExistingFocus = preservePlaybackFocus
+                                        || preserveNavigationFocus
+                                        || (_pendingListFocusIndex >= 0
+                                                && !string.IsNullOrWhiteSpace(_pendingListFocusViewSource)
+                                                && IsSameViewSourceForFocus(_pendingListFocusViewSource, request.ViewSource));
                         }
                         if (!preserveExistingFocus)
                         {
@@ -17105,7 +17434,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
                         }
 			ResetCurrentViewDataForLoading(request.ViewSource);
                         ShowLoadingPlaceholderCore(request.ViewSource, request.AccessibleName, request.LoadingText);
-					if (resultListView != null && resultListView.Items.Count != 0)
+					if (resultListView != null && resultListView.Items.Count != 0 && !preservePlaybackFocus && !preserveNavigationFocus)
 					{
 						int targetIndex = ((request.PendingFocusIndex >= 0) ? Math.Max(0, Math.Min(request.PendingFocusIndex, checked(resultListView.Items.Count - 1))) : 0);
 						EnsureListSelectionWithoutFocus(targetIndex);
@@ -17141,24 +17470,20 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 
 	private int ResolvePendingListFocusIndex(int fallbackIndex)
 	{
-		if (_pendingSongFocusSatisfied && !string.IsNullOrWhiteSpace(_pendingSongFocusSatisfiedViewSource) && IsSameViewSourceForFocus(_pendingSongFocusSatisfiedViewSource, _currentViewSource))
+                if (TryGetPendingNavigationRestoreFocus(_currentViewSource, out int navigationRestoreFocusIndex))
+                {
+                        return navigationRestoreFocusIndex;
+                }
+		if (IsPlaybackFocusSatisfiedForView(_currentViewSource))
 		{
 			return fallbackIndex;
 		}
                 if (_pendingListFocusIndex >= 0 && !string.IsNullOrWhiteSpace(_pendingListFocusViewSource) && IsSameViewSourceForFocus(_pendingListFocusViewSource, _currentViewSource))
                 {
                         int pendingListFocusIndex = _pendingListFocusIndex;
-                        bool pendingFromPlayback = _pendingListFocusFromPlayback;
                         _pendingListFocusIndex = -1;
                         _pendingListFocusViewSource = null;
                         _pendingListFocusFromPlayback = false;
-                        if (pendingFromPlayback && CanApplyPendingSongFocusForView(_currentViewSource))
-                        {
-                                _pendingSongFocusId = null;
-                                _pendingSongFocusViewSource = null;
-                                _pendingSongFocusSatisfied = true;
-                                _pendingSongFocusSatisfiedViewSource = _currentViewSource;
-                        }
                         return pendingListFocusIndex;
                 }
                 return fallbackIndex;

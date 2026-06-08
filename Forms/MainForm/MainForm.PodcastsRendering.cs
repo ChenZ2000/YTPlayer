@@ -455,14 +455,131 @@ public partial class MainForm
 			EnsureListSelectionWithoutFocus(num3);
 			if (flag)
 			{
-				_pendingSongFocusId = null;
-				_pendingSongFocusViewSource = null;
-				_pendingSongFocusSatisfied = true;
-				_pendingSongFocusSatisfiedViewSource = viewSource ?? _currentViewSource;
+				MarkPlaybackFocusSatisfied(viewSource ?? _currentViewSource);
 				if (resultListView != null && resultListView.CanFocus)
 				{
 					resultListView.Focus();
 				}
+			}
+		}
+	}
+
+	private static (string CreatorLabel, string DetailLabel, string DescriptionLabel) BuildPodcastEpisodeDisplayLabels(PodcastEpisodeInfo? episode)
+	{
+		if (episode == null)
+		{
+			return (string.Empty, string.Empty, string.Empty);
+		}
+		string creator = string.Empty;
+		if (!string.IsNullOrWhiteSpace(episode.RadioName))
+		{
+			creator = episode.RadioName;
+		}
+		if (!string.IsNullOrWhiteSpace(episode.DjName))
+		{
+			creator = string.IsNullOrWhiteSpace(creator) ? episode.DjName : (creator + " / " + episode.DjName);
+		}
+		string detail = episode.PublishTime?.ToString("yyyy-MM-dd") ?? string.Empty;
+		if (episode.Duration > TimeSpan.Zero)
+		{
+			string duration = $"{episode.Duration:mm\\:ss}";
+			detail = string.IsNullOrEmpty(detail) ? duration : (detail + " | " + duration);
+		}
+		return (creator, detail, episode.Description ?? string.Empty);
+	}
+
+	private void FillListViewItemFromPodcastEpisodeInfo(ListViewItem item, PodcastEpisodeInfo? episode, int displayIndex)
+	{
+		EnsureSubItemCount(item, 6);
+		var labels = BuildPodcastEpisodeDisplayLabels(episode);
+		item.SubItems[1].Text = FormatIndex(displayIndex);
+		item.SubItems[2].Text = episode?.Name ?? "未知";
+		item.SubItems[3].Text = labels.CreatorLabel;
+		item.SubItems[4].Text = labels.DetailLabel;
+		item.SubItems[5].Text = labels.DescriptionLabel;
+		item.Tag = episode;
+		SetListViewItemPrimaryText(item, item.SubItems[2].Text);
+	}
+
+	private void PatchPodcastEpisodes(List<PodcastEpisodeInfo> episodes, int startIndex = 1, int pendingFocusIndex = -1, bool allowSelection = true)
+	{
+		MarkListViewLayoutDataChanged();
+		ConfigureListViewForPodcastEpisodes();
+		UpdateSequenceStartIndex(startIndex);
+		int selectedIndex = (resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : pendingFocusIndex;
+		List<PodcastEpisodeInfo> list = new List<PodcastEpisodeInfo>();
+		if (episodes != null)
+		{
+			foreach (PodcastEpisodeInfo episode in episodes)
+			{
+				if (episode != null)
+				{
+					EnsurePodcastEpisodeSong(episode);
+					list.Add(episode);
+				}
+			}
+		}
+		_currentPodcastSounds = list;
+		_currentSongs = _currentPodcastSounds.Select((PodcastEpisodeInfo e) => e.Song ?? new SongInfo()).ToList();
+		_currentPlaylists.Clear();
+		_currentAlbums.Clear();
+		_currentArtists.Clear();
+		_currentListItems.Clear();
+		_currentPodcasts.Clear();
+		if (_currentPodcastSounds.Count == 0)
+		{
+			ShowListRetryPlaceholderCore(_currentViewSource, resultListView?.AccessibleName, "播客节目", announceHeader: true, suppressFocus: IsSearchViewSource(_currentViewSource));
+			return;
+		}
+		int focusedListViewIndex = GetFocusedListViewIndex();
+		bool shouldAnnounceFocusedRefresh = false;
+		resultListView.BeginUpdate();
+		checked
+		{
+			int count = _currentPodcastSounds.Count;
+			int itemCount = resultListView.Items.Count;
+			int updateCount = Math.Min(count, itemCount);
+			for (int i = 0; i < updateCount; i++)
+			{
+				ListViewItem item = resultListView.Items[i];
+				string beforeSpeech = null;
+				bool trackFocusedChange = !allowSelection && i == focusedListViewIndex;
+				if (trackFocusedChange)
+				{
+					EnsureSubItemCount(item, 6);
+					beforeSpeech = BuildListViewItemSpeech(item);
+				}
+				FillListViewItemFromPodcastEpisodeInfo(item, _currentPodcastSounds[i], startIndex + i);
+				if (trackFocusedChange)
+				{
+					string afterSpeech = BuildListViewItemSpeech(item);
+					if (!string.Equals(beforeSpeech, afterSpeech, StringComparison.Ordinal))
+					{
+						shouldAnnounceFocusedRefresh = true;
+					}
+				}
+			}
+			for (int i = itemCount; i < count; i++)
+			{
+				ListViewItem item = new ListViewItem(new string[6]);
+				FillListViewItemFromPodcastEpisodeInfo(item, _currentPodcastSounds[i], startIndex + i);
+				resultListView.Items.Add(item);
+			}
+			for (int i = resultListView.Items.Count - 1; i >= count; i--)
+			{
+				resultListView.Items.RemoveAt(i);
+			}
+			EndListViewUpdateAndRefreshAccessibility();
+			if (allowSelection && resultListView.Items.Count > 0)
+			{
+				int fallbackIndex = (selectedIndex >= 0) ? Math.Min(selectedIndex, resultListView.Items.Count - 1) : 0;
+				fallbackIndex = ResolvePendingListFocusIndex(fallbackIndex);
+				EnsureListSelectionWithoutFocus(fallbackIndex);
+			}
+			TryAnnounceLoadingPlaceholderReplacement();
+			if (!allowSelection && shouldAnnounceFocusedRefresh)
+			{
+				QueueFocusedListViewItemRefreshAnnouncement(focusedListViewIndex);
 			}
 		}
 	}

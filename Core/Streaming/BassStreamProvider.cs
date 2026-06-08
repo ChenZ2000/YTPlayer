@@ -67,10 +67,18 @@ namespace YTPlayer.Core.Streaming
         private byte[]? _readBuffer;
         private const int READ_BUFFER_SIZE = 64 * 1024;  // 64KB
         private const int BaseReadTimeoutMs = 8000;       // 缓存等待基础超时
-        private const int NearEofReadTimeoutMs = 3000;    // 接近 EOF 的较短等待
-        private const int MaxStallWaitMs = 15000;         // 单次读取最大等待时间
+        private const int NearEofReadTimeoutMs = 12000;   // 接近 EOF 时给尾块补齐留出更长窗口
+        private const int MaxStallWaitMs = 15000;         // 常规单次读取最大等待时间
+        private const int NearEofMaxStallWaitMs = 45000;  // 长音频尾部 Range/顺序补块可能明显更慢
         private const int MaxConsecutiveStalls = 2;
+        private const int NearEofMaxConsecutiveStalls = 4;
         private const int StallBackoffDelayMs = 200;
+        private const int NearEofThresholdBytes = 2 * 1024 * 1024;
+        private const int TailPrefetchAheadChunks = 6;
+        private const int TailPrefetchIntervalMs = 1000;
+        private readonly object _tailPrefetchLock = new object();
+        private long _lastTailPrefetchPosition = -1;
+        private long _lastTailPrefetchTicks = 0;
 
         // 统计信息
         private int _totalReads = 0;
@@ -266,15 +274,21 @@ namespace YTPlayer.Core.Streaming
                         return 0;
                     }
 
-                    bool nearEof = remainingBytes <= 512 * 1024;
+                    bool nearEof = remainingBytes <= NearEofThresholdBytes;
                     int timeoutMs = nearEof ? NearEofReadTimeoutMs : BaseReadTimeoutMs;
+                    int readLength = (int)Math.Min(length, remainingBytes);
+
+                    if (nearEof)
+                    {
+                        TryRequestTailPrefetch(position);
+                    }
 
                     using (var timeoutCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(timeoutMs)))
                     using (var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(timeoutCts.Token, _cacheManager.LifecycleToken, _abortReadCts.Token))
                     {
                         try
                         {
-                            bytesRead = _cacheManager.ReadAsync(position, _readBuffer, 0, length, linkedCts.Token, waitIfNotReady: true)
+                            bytesRead = _cacheManager.ReadAsync(position, _readBuffer, 0, readLength, linkedCts.Token, waitIfNotReady: true)
                                 .GetAwaiter()
                                 .GetResult();
                         }
@@ -310,13 +324,16 @@ namespace YTPlayer.Core.Streaming
                     }
 
                     totalWaitMs += timeoutMs;
-                    if (totalWaitMs >= MaxStallWaitMs)
+                    int maxStallWaitMs = nearEof ? NearEofMaxStallWaitMs : MaxStallWaitMs;
+                    int maxConsecutiveStalls = nearEof ? NearEofMaxConsecutiveStalls : MaxConsecutiveStalls;
+
+                    if (totalWaitMs >= maxStallWaitMs)
                     {
                         _consecutiveStallCount++;
 
                         Debug.WriteLine($"[BassStreamProvider] Stall detected (#{_consecutiveStallCount}) at {position}/{_cacheManager.TotalSize}");
 
-                        if (_consecutiveStallCount >= MaxConsecutiveStalls)
+                        if (_consecutiveStallCount >= maxConsecutiveStalls)
                         {
                             string reason = $"Consecutive cache stalls exceeded threshold ({_consecutiveStallCount})";
                             NotifyReadFailure(position, length, reason);
@@ -365,6 +382,39 @@ namespace YTPlayer.Core.Streaming
                 NotifyReadFailure(CurrentPosition, length, ex.Message);
                 return -1;
             }
+        }
+
+        private void TryRequestTailPrefetch(long position)
+        {
+            if (_disposed || _cacheManager.IsDisposed)
+            {
+                return;
+            }
+
+            long nowTicks = Environment.TickCount64;
+            lock (_tailPrefetchLock)
+            {
+                if (nowTicks - _lastTailPrefetchTicks < TailPrefetchIntervalMs &&
+                    Math.Abs(position - _lastTailPrefetchPosition) < READ_BUFFER_SIZE * 2)
+                {
+                    return;
+                }
+
+                _lastTailPrefetchTicks = nowTicks;
+                _lastTailPrefetchPosition = position;
+            }
+
+            Task prefetchTask = _cacheManager.PrefetchAroundAsync(
+                position,
+                TailPrefetchAheadChunks,
+                _cacheManager.LifecycleToken,
+                allowRangeRescue: true);
+
+            _ = prefetchTask.ContinueWith(
+                task => Debug.WriteLine($"[BassStreamProvider] Tail prefetch failed at {position}: {task.Exception?.GetBaseException().Message}"),
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted,
+                TaskScheduler.Default);
         }
 
         private void ResetStallTracking()

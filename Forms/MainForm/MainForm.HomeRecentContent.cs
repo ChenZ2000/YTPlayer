@@ -38,7 +38,7 @@ public partial class MainForm
 					DisplayListItems(data.Items, request.ViewSource, request.AccessibleName, preserveSelection: true, announceHeader: false);
 				}
 				UpdateStatusBar(data.StatusText);
-				FocusListAfterEnrich(request.PendingFocusIndex);
+				FocusListAfterEnrich(request.PendingFocusIndex, request.ViewSource);
 				EnrichRecentListenedAsync(request.ViewSource, request.AccessibleName);
 			}
 		}
@@ -208,27 +208,44 @@ public partial class MainForm
 		{
 			await EnsureLibraryStateFreshAsync(LibraryEntityType.Podcasts);
 			int pendingIndex = ((preserveSelection && resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : 0);
+			_currentUserPodcastsNextOffset = 0;
+			_currentUserPodcastsHasMore = false;
+			_currentUserPodcastsTotalCount = 0;
+			_userPodcastsLoadMoreInFlight = false;
+			_userPodcastsProactiveLoadRunning = false;
+			int proactiveGeneration = ++_userPodcastsProactiveLoadGeneration;
 			ViewLoadRequest request = new ViewLoadRequest("user_podcasts", "收藏的播客", "正在加载收藏的播客...", cancelActiveNavigation: true, pendingIndex);
-			ViewLoadResult<(List<PodcastRadioInfo> Items, string StatusText)?> loadResult = await RunViewLoadAsync(request, (Func<CancellationToken, Task<(List<PodcastRadioInfo>, string)?>>)async delegate(CancellationToken token)
+			ViewLoadResult<(List<PodcastRadioInfo> Items, int NextOffset, int TotalCount, bool HasMore)?> loadResult = await RunViewLoadAsync(request, (Func<CancellationToken, Task<(List<PodcastRadioInfo>, int, int, bool)?>>)async delegate(CancellationToken token)
 			{
-				var (podcasts, totalCount) = await _apiClient.GetSubscribedPodcastsAsync(300).ConfigureAwait(continueOnCapturedContext: false);
-				token.ThrowIfCancellationRequested();
-				List<PodcastRadioInfo> normalized = podcasts ?? new List<PodcastRadioInfo>();
-				string status = ((normalized.Count == 0) ? "暂无收藏的播客" : $"加载完成，共 {totalCount} 个播客");
-				return (normalized, status);
+				return await FetchUserPodcastsPageAsync(0, token).ConfigureAwait(continueOnCapturedContext: false);
 			}, "加载收藏的播客已取消").ConfigureAwait(continueOnCapturedContext: true);
 			if (!loadResult.IsCanceled)
 			{
-				(List<PodcastRadioInfo> Items, string StatusText)? data = loadResult.Value;
+				(List<PodcastRadioInfo> Items, int NextOffset, int TotalCount, bool HasMore)? data = loadResult.Value;
+				if (data.HasValue)
+				{
+					_currentUserPodcastsNextOffset = data.Value.NextOffset;
+					_currentUserPodcastsHasMore = data.Value.HasMore;
+					_currentUserPodcastsTotalCount = Math.Max(data.Value.TotalCount, data.Value.Items.Count);
+				}
 				if (!data.HasValue || data.Value.Items.Count == 0)
 				{
-					MessageBox.Show("您还没有收藏播客。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
-					UpdateStatusBar("暂无收藏的播客");
+					if (!data.HasValue || !data.Value.HasMore)
+					{
+						MessageBox.Show("您还没有收藏播客。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+						UpdateStatusBar("暂无收藏的播客");
+					}
+					else
+					{
+						UpdateStatusBar(BuildUserPodcastsStatusText(0, _currentUserPodcastsTotalCount, _currentUserPodcastsHasMore));
+						StartUserPodcastsProactiveExpansion(proactiveGeneration);
+					}
 				}
 				else
 				{
 					DisplayPodcasts(data.Value.Items, showPagination: false, hasNextPage: false, 1, preserveSelection, request.ViewSource, request.AccessibleName);
-					UpdateStatusBar(data.Value.StatusText);
+					UpdateStatusBar(BuildUserPodcastsStatusText(_currentPodcasts.Count, _currentUserPodcastsTotalCount, _currentUserPodcastsHasMore));
+					StartUserPodcastsProactiveExpansion(proactiveGeneration);
 				}
 			}
 		}
@@ -242,6 +259,143 @@ public partial class MainForm
 			}
 			Debug.WriteLine($"[LoadUserPodcasts] 异常: {ex3}");
 			throw;
+		}
+	}
+
+	private async Task<(List<PodcastRadioInfo> Items, int NextOffset, int TotalCount, bool HasMore)> FetchUserPodcastsPageAsync(int offset, CancellationToken token)
+	{
+		const int pageSize = 100;
+		var (podcasts, totalCount) = await _apiClient.GetSubscribedPodcastsAsync(pageSize, offset).ConfigureAwait(continueOnCapturedContext: false);
+		token.ThrowIfCancellationRequested();
+		List<PodcastRadioInfo> currentPage = podcasts ?? new List<PodcastRadioInfo>();
+		int nextOffset = checked(offset + currentPage.Count);
+		bool hasMore = currentPage.Count >= pageSize && (totalCount <= 0 || nextOffset < totalCount);
+		int displayTotal = Math.Max(totalCount, nextOffset);
+		return (currentPage, nextOffset, displayTotal, hasMore);
+	}
+
+	private static string BuildUserPodcastsStatusText(int loadedCount, int totalCount, bool hasMore)
+	{
+		if (loadedCount <= 0)
+		{
+			return hasMore ? "正在加载收藏的播客..." : "暂无收藏的播客";
+		}
+		if (totalCount > loadedCount)
+		{
+			return $"收藏的播客：已加载 {loadedCount}/{totalCount} 个";
+		}
+		if (hasMore)
+		{
+			return $"收藏的播客：已加载 {loadedCount} 个，正在自动加载更多";
+		}
+		return $"收藏的播客：{loadedCount} 个";
+	}
+
+	private void StartUserPodcastsProactiveExpansion(int generation)
+	{
+		if (!string.Equals(_currentViewSource, "user_podcasts", StringComparison.OrdinalIgnoreCase))
+		{
+			return;
+		}
+		if (!_currentUserPodcastsHasMore || _userPodcastsProactiveLoadRunning)
+		{
+			return;
+		}
+		_userPodcastsProactiveLoadRunning = true;
+		LoadRemainingUserPodcastsAsync(generation).SafeFireAndForget("user podcasts proactive load");
+	}
+
+	private async Task LoadRemainingUserPodcastsAsync(int generation)
+	{
+		try
+		{
+			while (generation == _userPodcastsProactiveLoadGeneration &&
+				string.Equals(_currentViewSource, "user_podcasts", StringComparison.OrdinalIgnoreCase) &&
+				_currentUserPodcastsHasMore)
+			{
+				int beforeOffset = _currentUserPodcastsNextOffset;
+				bool loaded = await LoadMoreUserPodcastsAsync().ConfigureAwait(continueOnCapturedContext: false);
+				if (!loaded ||
+					generation != _userPodcastsProactiveLoadGeneration ||
+					!string.Equals(_currentViewSource, "user_podcasts", StringComparison.OrdinalIgnoreCase) ||
+					!_currentUserPodcastsHasMore ||
+					_currentUserPodcastsNextOffset <= beforeOffset)
+				{
+					break;
+				}
+				await Task.Yield();
+			}
+		}
+		finally
+		{
+			if (generation == _userPodcastsProactiveLoadGeneration)
+			{
+				_userPodcastsProactiveLoadRunning = false;
+			}
+		}
+	}
+
+	private async Task<bool> LoadMoreUserPodcastsAsync()
+	{
+		if (_userPodcastsLoadMoreInFlight || !_currentUserPodcastsHasMore)
+		{
+			return false;
+		}
+		_userPodcastsLoadMoreInFlight = true;
+		CancellationToken viewToken = GetCurrentViewContentToken();
+		int offset = Math.Max(0, _currentUserPodcastsNextOffset);
+		bool applied = false;
+		try
+		{
+			UpdateStatusBar("正在自动加载更多收藏播客...");
+			var page = await FetchUserPodcastsPageAsync(offset, viewToken).ConfigureAwait(continueOnCapturedContext: false);
+			List<PodcastRadioInfo> merged = CloneList(_currentPodcasts);
+			HashSet<long> seen = new HashSet<long>(merged.Where((PodcastRadioInfo p) => p != null && p.Id > 0).Select((PodcastRadioInfo p) => p.Id));
+			foreach (PodcastRadioInfo podcast in page.Items)
+			{
+				if (podcast == null)
+				{
+					continue;
+				}
+				if (podcast.Id > 0 && !seen.Add(podcast.Id))
+				{
+					continue;
+				}
+				merged.Add(podcast);
+			}
+			await ExecuteOnUiThreadAsync(delegate
+			{
+				if (!string.Equals(_currentViewSource, "user_podcasts", StringComparison.OrdinalIgnoreCase))
+				{
+					return;
+				}
+				_currentUserPodcastsNextOffset = page.NextOffset;
+				_currentUserPodcastsHasMore = page.HasMore;
+				_currentUserPodcastsTotalCount = Math.Max(page.TotalCount, merged.Count);
+				PatchPodcasts(merged, 1, showPagination: false, hasPreviousPage: false, hasNextPage: false, pendingFocusIndex: -1, allowSelection: false);
+				UpdateStatusBar(BuildUserPodcastsStatusText(_currentPodcasts.Count, _currentUserPodcastsTotalCount, _currentUserPodcastsHasMore));
+				applied = true;
+			}).ConfigureAwait(continueOnCapturedContext: false);
+			return applied;
+		}
+		catch (Exception ex)
+		{
+			if (!TryHandleOperationCancelled(ex, "加载收藏的播客已取消"))
+			{
+				Debug.WriteLine($"[LoadUserPodcasts] 自动加载更多失败: {ex}");
+				await ExecuteOnUiThreadAsync(delegate
+				{
+					if (string.Equals(_currentViewSource, "user_podcasts", StringComparison.OrdinalIgnoreCase))
+					{
+						UpdateStatusBar("加载更多收藏播客失败，请稍后刷新重试");
+					}
+				}).ConfigureAwait(continueOnCapturedContext: false);
+			}
+			return false;
+		}
+		finally
+		{
+			_userPodcastsLoadMoreInFlight = false;
 		}
 	}
 
@@ -359,6 +513,7 @@ public partial class MainForm
 			MessageBox.Show("无法加载播客节目，缺少播客标识。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
 			return;
 		}
+		CancellationToken token = GetCurrentViewContentToken();
 		checked
 		{
 			try
@@ -375,7 +530,7 @@ public partial class MainForm
 				}
 				else if (_currentPodcast == null || _currentPodcast.Id != radioId)
 				{
-					PodcastRadioInfo detail = await _apiClient.GetPodcastRadioDetailAsync(radioId);
+					PodcastRadioInfo detail = await _apiClient.GetPodcastRadioDetailAsync(radioId, token);
 					if (detail != null)
 					{
 						_currentPodcast = detail;
@@ -399,12 +554,19 @@ public partial class MainForm
 				UpdateStatusBar($"页码过大，已跳到第 {page} 页");
 			}
 			offset = normalizedOffset;
-			(List<PodcastEpisodeInfo> Episodes, bool HasMore, int TotalCount) tuple = await _apiClient.GetPodcastEpisodesAsync(radioId, 50, Math.Max(0, offset), isAscending);
+			offset = 0;
+			(List<PodcastEpisodeInfo> Episodes, bool HasMore, int TotalCount) tuple = await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.GetPodcastEpisodesAsync(radioId, PodcastSoundPageSize, 0, isAscending, ct), $"podcast:{radioId}:offset0:{(isAscending ? "asc" : "desc")}", token, delegate(int attempt, Exception _)
+			{
+				SafeInvoke(delegate
+				{
+					UpdateStatusBar($"加载播客节目失败，正在重试（第 {attempt} 次）...");
+				});
+			}).ConfigureAwait(continueOnCapturedContext: true);
 			List<PodcastEpisodeInfo> episodes = tuple.Episodes;
 			bool hasMore = tuple.HasMore;
 			int totalCount = tuple.TotalCount;
 			string accessibleName = _currentPodcast?.Name ?? "播客节目";
-			string viewSource = $"podcast:{radioId}:offset{Math.Max(0, offset)}";
+			string viewSource = $"podcast:{radioId}:offset0";
 			if (isAscending)
 			{
 				viewSource += ":asc1";
@@ -413,19 +575,21 @@ public partial class MainForm
 			{
 				return;
 			}
-			_currentPodcastSoundOffset = Math.Max(0, offset);
-				_currentPodcastHasMore = hasMore;
+				_currentPodcastHasMore = false;
 				_currentPodcastEpisodeTotalCount = Math.Max(totalCount, offset + (episodes?.Count ?? 0));
-				DisplayPodcastEpisodes(episodes, unchecked(_currentPodcastSoundOffset > 0 || hasMore), hasMore, _currentPodcastSoundOffset + 1, preserveSelection: false, viewSource, accessibleName);
+				DisplayPodcastEpisodes(episodes, showPagination: false, hasNextPage: false, 1, preserveSelection: false, viewSource, accessibleName);
 				UpdatePodcastSortMenuChecks();
 				if (episodes == null || episodes.Count == 0)
 				{
 					UpdateStatusBar(accessibleName + "，暂无节目");
 					return;
 				}
-				int currentPage = unchecked(_currentPodcastSoundOffset / 50) + 1;
-				int totalPages = Math.Max(1, (int)Math.Ceiling((double)totalCount / 50.0));
-				UpdateStatusBar($"{accessibleName}：第 {currentPage}/{totalPages} 页，本页 {episodes.Count} 个节目");
+				bool hasMoreFinal = hasMore || (totalCount > episodes.Count);
+				UpdateStatusBar(BuildPodcastEpisodesAutoStatus(accessibleName, episodes.Count, totalCount, hasMoreFinal));
+				if (hasMoreFinal)
+				{
+					LoadRemainingPodcastEpisodesAsync(radioId, isAscending, viewSource, accessibleName, episodes, episodes.Count, totalCount).SafeFireAndForget("podcast episodes proactive load");
+				}
 			}
 			catch (Exception ex)
 			{
@@ -446,6 +610,94 @@ public partial class MainForm
 				UpdateStatusBar("加载播客失败");
 			}
 		}
+	}
+
+	private async Task LoadRemainingPodcastEpisodesAsync(long radioId, bool isAscending, string viewSource, string accessibleName, List<PodcastEpisodeInfo> seedEpisodes, int nextOffset, int totalCount)
+	{
+		CancellationToken token = GetCurrentViewContentToken();
+		List<PodcastEpisodeInfo> allEpisodes = CloneList(seedEpisodes ?? new List<PodcastEpisodeInfo>());
+		int offset = Math.Max(0, nextOffset);
+		int knownTotal = Math.Max(totalCount, allEpisodes.Count);
+		bool hasMore = true;
+		int safety = 0;
+		try
+		{
+			checked
+			{
+				while (hasMore && safety < 200)
+				{
+					if (!string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
+					{
+						return;
+					}
+					int fetchOffset = offset;
+					(List<PodcastEpisodeInfo> Episodes, bool HasMore, int TotalCount) page = await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.GetPodcastEpisodesAsync(radioId, PodcastSoundPageSize, fetchOffset, isAscending, ct), $"podcast:{radioId}:offset{fetchOffset}:{(isAscending ? "asc" : "desc")}", token, delegate(int attempt, Exception _)
+					{
+						SafeInvoke(delegate
+						{
+							UpdateStatusBar($"加载播客节目失败，正在重试（第 {attempt} 次）...");
+						});
+					}).ConfigureAwait(continueOnCapturedContext: false);
+					List<PodcastEpisodeInfo> pageEpisodes = page.Episodes ?? new List<PodcastEpisodeInfo>();
+					if (pageEpisodes.Count == 0)
+					{
+						break;
+					}
+					allEpisodes.AddRange(pageEpisodes);
+					offset = Math.Max(fetchOffset + PodcastSoundPageSize, fetchOffset + pageEpisodes.Count);
+					knownTotal = Math.Max(knownTotal, page.TotalCount);
+					hasMore = page.HasMore || (knownTotal > offset);
+					int loadedCount = allEpisodes.Count;
+					int totalForStatus = Math.Max(knownTotal, loadedCount);
+					bool currentHasMore = hasMore;
+					await ExecuteOnUiThreadAsync(delegate
+					{
+						if (string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
+						{
+							_currentPodcastHasMore = false;
+							_currentPodcastEpisodeTotalCount = totalForStatus;
+							PatchPodcastEpisodes(allEpisodes, 1, pendingFocusIndex: -1, allowSelection: false);
+							UpdateStatusBar(BuildPodcastEpisodesAutoStatus(accessibleName, loadedCount, totalForStatus, currentHasMore));
+						}
+					}).ConfigureAwait(continueOnCapturedContext: false);
+					safety++;
+					await Task.Yield();
+				}
+			}
+		}
+		catch (Exception ex)
+		{
+			if (!TryHandleOperationCancelled(ex, "加载播客已取消"))
+			{
+				Debug.WriteLine($"[Podcast] 自动加载更多节目失败: {ex}");
+				await ExecuteOnUiThreadAsync(delegate
+				{
+					if (string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
+					{
+						UpdateStatusBar("加载更多播客节目失败，请稍后刷新重试");
+					}
+				}).ConfigureAwait(continueOnCapturedContext: false);
+			}
+		}
+	}
+
+	private static string BuildPodcastEpisodesAutoStatus(string accessibleName, int loadedCount, int totalCount, bool hasMore)
+	{
+		int safeLoaded = Math.Max(0, loadedCount);
+		int safeTotal = Math.Max(0, totalCount);
+		if (safeLoaded <= 0)
+		{
+			return accessibleName + "，暂无节目";
+		}
+		if (hasMore)
+		{
+			if (safeTotal > safeLoaded)
+			{
+				return $"{accessibleName}：已加载 {safeLoaded} / {safeTotal} 个节目，正在自动加载更多";
+			}
+			return $"{accessibleName}：已加载 {safeLoaded} 个节目，正在自动加载更多";
+		}
+		return $"{accessibleName}：{safeLoaded} 个节目";
 	}
 
 	private static void ParsePodcastViewSource(string? viewSource, out long radioId, out int offset, out bool ascending)

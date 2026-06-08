@@ -27,7 +27,7 @@ public partial class MainForm
 		{
 			return (Songs: _dailyRecommendSongsCache, Playlists: _dailyRecommendPlaylistsCache);
 		}
-                Task<List<SongInfo>> songsTask = _apiClient.GetDailyRecommendSongsAsync();
+                Task<List<SongInfo>> songsTask = _apiClient.GetDailyRecommendSongsAsync(token);
                 Task<List<PlaylistInfo>> playlistsTask = _apiClient.GetDailyRecommendPlaylistsAsync();
                 await Task.WhenAll(songsTask, playlistsTask).ConfigureAwait(continueOnCapturedContext: false);
                 token.ThrowIfCancellationRequested();
@@ -99,7 +99,7 @@ public partial class MainForm
 				(List<ListItemInfo> Items, string StatusText) data = loadResult.Value;
 				DisplayListItems(data.Items, request.ViewSource, request.AccessibleName, preserveSelection: true);
 				UpdateStatusBar(data.StatusText);
-				FocusListAfterEnrich(request.PendingFocusIndex);
+				FocusListAfterEnrich(request.PendingFocusIndex, request.ViewSource);
 			}
 		}
 		catch (Exception ex)
@@ -152,7 +152,7 @@ public partial class MainForm
 				(List<ListItemInfo> Items, string StatusText) data = loadResult.Value;
 				DisplayListItems(data.Items, request.ViewSource, request.AccessibleName, preserveSelection: true);
 				UpdateStatusBar(data.StatusText);
-				FocusListAfterEnrich(request.PendingFocusIndex);
+				FocusListAfterEnrich(request.PendingFocusIndex, request.ViewSource);
 			}
 		}
 		catch (Exception ex)
@@ -210,7 +210,7 @@ public partial class MainForm
 			DisplaySongs(songs, showPagination: false, hasNextPage: false, 1, preserveSelection: false, PersonalFmCategoryId, PersonalFmAccessibleName, skipAvailabilityCheck: false, announceHeader: true, suppressFocus: false);
 			ResetPersonalFmCache(songs, effectiveFocusIndex);
 			UpdateStatusBar($"私人 FM，共 {songs.Count} 首");
-			FocusListAfterEnrich(effectiveFocusIndex);
+			FocusListAfterEnrich(effectiveFocusIndex, PersonalFmCategoryId);
 		}
 		catch (Exception ex)
 		{
@@ -245,14 +245,14 @@ public partial class MainForm
 					int page = (normalizedOffset / ToplistPageSize) + 1;
 					UpdateStatusBar($"页码过大，已跳到第 {page} 页");
 				}
-				offset = normalizedOffset;
 			}
+			offset = 0;
 			if (!skipSave)
 			{
 				SaveNavigationState();
 			}
 			string viewSource = BuildToplistViewSource(offset);
-			int page2 = (Math.Max(0, offset) / ToplistPageSize) + 1;
+			const int page2 = 1;
 			ViewLoadRequest request = new ViewLoadRequest(viewSource, "官方排行榜", "正在加载官方排行榜...", cancelActiveNavigation: true, pendingFocusIndex);
 			ViewLoadResult<SearchViewData<PlaylistInfo>> loadResult = await RunViewLoadAsync(request, delegate
 			{
@@ -313,15 +313,9 @@ public partial class MainForm
 					}
 				}
 				int totalCount = playlists.Count;
-				bool offsetClamped;
-				int normalizedOffset = NormalizeOffsetWithTotal(totalCount, ToplistPageSize, offset, out offsetClamped);
-				if (offsetClamped)
-				{
-					int page = (normalizedOffset / ToplistPageSize) + 1;
-					UpdateStatusBar($"页码过大，已跳到第 {page} 页");
-				}
-				List<PlaylistInfo> pageItems = playlists.Skip(normalizedOffset).Take(ToplistPageSize).ToList();
-				bool hasMore = normalizedOffset + ToplistPageSize < totalCount;
+				int normalizedOffset = 0;
+				List<PlaylistInfo> pageItems = playlists;
+				bool hasMore = false;
 				string paginationKey = BuildToplistPaginationKey();
 				if (TryHandlePaginationEmptyResult(paginationKey, normalizedOffset, ToplistPageSize, totalCount, pageItems.Count, hasMore, viewSource, accessibleName))
 				{
@@ -336,12 +330,10 @@ public partial class MainForm
 					if (!ShouldAbortViewRender(viewToken, "加载排行榜"))
 					{
 						_currentPlaylists = CloneList(pageItems);
-						_currentToplistHasMore = hasMore;
-						_currentToplistTotalCount = Math.Max(totalCount, normalizedOffset + _currentPlaylists.Count);
-						_currentToplistOffset = normalizedOffset;
-						bool showPagination = normalizedOffset > 0 || hasMore;
-						PatchPlaylists(_currentPlaylists, normalizedOffset + 1, showPagination: showPagination, hasPreviousPage: normalizedOffset > 0, hasNextPage: hasMore, pendingFocusIndex);
-						FocusListAfterEnrich((pendingFocusIndex >= 0) ? pendingFocusIndex : (-1));
+						_currentToplistHasMore = false;
+						_currentToplistTotalCount = Math.Max(totalCount, _currentPlaylists.Count);
+						PatchPlaylists(_currentPlaylists, 1, showPagination: false, hasPreviousPage: false, hasNextPage: false, pendingFocusIndex);
+						FocusListAfterEnrich((pendingFocusIndex >= 0) ? pendingFocusIndex : (-1), viewSource);
 						if (_currentPlaylists.Count == 0)
 						{
 							MessageBox.Show("暂无排行榜数据。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
@@ -349,9 +341,7 @@ public partial class MainForm
 						}
 						else if (totalCount > 0)
 						{
-							int page = (normalizedOffset / ToplistPageSize) + 1;
-							int maxPage = Math.Max(1, (int)Math.Ceiling((double)totalCount / ToplistPageSize));
-							UpdateStatusBar($"第 {page}/{maxPage} 页，本页 {_currentPlaylists.Count} 个 / 总 {totalCount} 个");
+							UpdateStatusBar($"官方排行榜：{_currentPlaylists.Count} 个");
 						}
 						else
 						{
@@ -400,7 +390,7 @@ public partial class MainForm
 				{
 					DisplaySongs(cachedSongs, showPagination: false, hasNextPage: false, 1, preserveSelection: true, request.ViewSource, request.AccessibleName, skipAvailabilityCheck: true);
 					UpdateStatusBar($"每日推荐歌曲（缓存）共 {cachedSongs.Count} 首，正在刷新...");
-					FocusListAfterEnrich(request.PendingFocusIndex);
+					FocusListAfterEnrich(request.PendingFocusIndex, request.ViewSource);
 				}
 				else
 				{
@@ -437,13 +427,13 @@ public partial class MainForm
 						if (!ShouldAbortViewRender(viewToken, "每日推荐歌曲"))
 						{
 							DisplaySongs(cachedSongs, showPagination: false, hasNextPage: false, 1, preserveSelection: true, viewSource, accessibleName, skipAvailabilityCheck: false, announceHeader: false);
-							FocusListAfterEnrich(pendingFocusIndex);
+							FocusListAfterEnrich(pendingFocusIndex, viewSource);
 							UpdateStatusBar((cachedSongs.Count == 0) ? "暂无每日推荐歌曲" : $"每日推荐歌曲（缓存）共 {cachedSongs.Count} 首");
 						}
 					}).ConfigureAwait(continueOnCapturedContext: false);
 					return;
 				}
-				List<SongInfo> songsResult = (await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.GetDailyRecommendSongsAsync(), "daily_recommend:songs", viewToken, delegate(int attempt, Exception _)
+                List<SongInfo> songsResult = (await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.GetDailyRecommendSongsAsync(ct), "daily_recommend:songs", viewToken, delegate(int attempt, Exception _)
 				{
 					SafeInvoke(delegate
 					{
@@ -461,7 +451,7 @@ public partial class MainForm
 					if (!ShouldAbortViewRender(viewToken, "每日推荐歌曲"))
 					{
 						DisplaySongs(songsResult, showPagination: false, hasNextPage: false, 1, preserveSelection: true, viewSource, accessibleName, skipAvailabilityCheck: false, announceHeader: false);
-						FocusListAfterEnrich(pendingFocusIndex);
+						FocusListAfterEnrich(pendingFocusIndex, viewSource);
 						if (songsResult.Count == 0)
 						{
 							MessageBox.Show("今日暂无推荐歌曲。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
@@ -514,7 +504,7 @@ public partial class MainForm
 				{
 					DisplayPlaylists(cachedPlaylists, preserveSelection: true, request.ViewSource, request.AccessibleName, 1, showPagination: false, hasNextPage: false, announceHeader: false);
 					UpdateStatusBar($"每日推荐歌单（缓存）共 {cachedPlaylists.Count} 个，正在刷新...");
-					FocusListAfterEnrich(request.PendingFocusIndex);
+					FocusListAfterEnrich(request.PendingFocusIndex, request.ViewSource);
 				}
 				else
 				{
@@ -551,7 +541,7 @@ public partial class MainForm
 						if (!ShouldAbortViewRender(viewToken, "每日推荐歌单"))
 						{
 							DisplayPlaylists(cachedPlaylists, preserveSelection: true, viewSource, accessibleName, 1, showPagination: false, hasNextPage: false, announceHeader: false);
-							FocusListAfterEnrich(pendingFocusIndex);
+							FocusListAfterEnrich(pendingFocusIndex, viewSource);
 							UpdateStatusBar((cachedPlaylists.Count == 0) ? "暂无每日推荐歌单" : $"每日推荐歌单（缓存）共 {cachedPlaylists.Count} 个");
 						}
 					}).ConfigureAwait(continueOnCapturedContext: false);
@@ -575,7 +565,7 @@ public partial class MainForm
 					if (!ShouldAbortViewRender(viewToken, "每日推荐歌单"))
 					{
 						DisplayPlaylists(playlistsResult, preserveSelection: true, viewSource, accessibleName, 1, showPagination: false, hasNextPage: false, announceHeader: false);
-						FocusListAfterEnrich(pendingFocusIndex);
+						FocusListAfterEnrich(pendingFocusIndex, viewSource);
 						if (playlistsResult.Count == 0)
 						{
 							MessageBox.Show("今日暂无推荐歌单。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
@@ -628,7 +618,7 @@ public partial class MainForm
 				{
 					DisplayPlaylists(cachedPlaylists, preserveSelection: true, request.ViewSource, request.AccessibleName, 1, showPagination: false, hasNextPage: false, announceHeader: false);
 					UpdateStatusBar($"推荐歌单（缓存）共 {cachedPlaylists.Count} 个，正在刷新...");
-					FocusListAfterEnrich(request.PendingFocusIndex);
+					FocusListAfterEnrich(request.PendingFocusIndex, request.ViewSource);
 				}
 				else
 				{
@@ -665,7 +655,7 @@ public partial class MainForm
 						if (!ShouldAbortViewRender(viewToken, "推荐歌单"))
 						{
 							DisplayPlaylists(cachedPlaylists, preserveSelection: true, viewSource, accessibleName, 1, showPagination: false, hasNextPage: false, announceHeader: false);
-							FocusListAfterEnrich(pendingFocusIndex);
+							FocusListAfterEnrich(pendingFocusIndex, viewSource);
 							UpdateStatusBar((cachedPlaylists.Count == 0) ? "暂无推荐歌单" : $"推荐歌单（缓存）共 {cachedPlaylists.Count} 个");
 						}
 					}).ConfigureAwait(continueOnCapturedContext: false);
@@ -689,7 +679,7 @@ public partial class MainForm
 					if (!ShouldAbortViewRender(viewToken, "推荐歌单"))
 					{
 						DisplayPlaylists(playlistsResult, preserveSelection: true, viewSource, accessibleName, 1, showPagination: false, hasNextPage: false, announceHeader: false);
-						FocusListAfterEnrich(pendingFocusIndex);
+						FocusListAfterEnrich(pendingFocusIndex, viewSource);
 						if (playlistsResult.Count == 0)
 						{
 							MessageBox.Show("暂无推荐歌单。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
@@ -742,7 +732,7 @@ public partial class MainForm
 				{
 					DisplaySongs(cachedSongs, showPagination: false, hasNextPage: false, 1, preserveSelection: true, request.ViewSource, request.AccessibleName, skipAvailabilityCheck: false, announceHeader: false);
 					UpdateStatusBar($"推荐新歌（缓存）共 {cachedSongs.Count} 首，正在刷新...");
-					FocusListAfterEnrich(request.PendingFocusIndex);
+					FocusListAfterEnrich(request.PendingFocusIndex, request.ViewSource);
 				}
 				else
 				{
@@ -779,7 +769,7 @@ public partial class MainForm
 						if (!ShouldAbortViewRender(viewToken, "推荐新歌"))
 						{
 							DisplaySongs(cachedSongs, showPagination: false, hasNextPage: false, 1, preserveSelection: true, viewSource, accessibleName, skipAvailabilityCheck: false, announceHeader: false);
-							FocusListAfterEnrich(pendingFocusIndex);
+							FocusListAfterEnrich(pendingFocusIndex, viewSource);
 							UpdateStatusBar((cachedSongs.Count == 0) ? "暂无推荐新歌" : $"推荐新歌（缓存）共 {cachedSongs.Count} 首");
 						}
 					}).ConfigureAwait(continueOnCapturedContext: false);
@@ -803,7 +793,7 @@ public partial class MainForm
 					if (!ShouldAbortViewRender(viewToken, "推荐新歌"))
 					{
 						DisplaySongs(songsResult, showPagination: false, hasNextPage: false, 1, preserveSelection: true, viewSource, accessibleName, skipAvailabilityCheck: false, announceHeader: false);
-						FocusListAfterEnrich(pendingFocusIndex);
+						FocusListAfterEnrich(pendingFocusIndex, viewSource);
 						if (songsResult.Count == 0)
 						{
 							MessageBox.Show("暂无推荐新歌。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);

@@ -133,7 +133,7 @@ public partial class MainForm
 		int resolvedTotal = cachedTotal;
 		try
 		{
-			(List<SongInfo> Songs, bool HasMore, int TotalCount) result = await _apiClient.GetArtistSongsAsync(artistId, 1, 0, orderToken).ConfigureAwait(continueOnCapturedContext: false);
+			(List<SongInfo> Songs, bool HasMore, int TotalCount) result = await _apiClient.GetArtistSongsAsync(artistId, 1, 0, orderToken, token).ConfigureAwait(continueOnCapturedContext: false);
 			token.ThrowIfCancellationRequested();
 			if (result.TotalCount > 0)
 			{
@@ -206,7 +206,7 @@ public partial class MainForm
 			List<SongInfo> songs = new List<SongInfo>();
 			try
 			{
-				songs = await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.GetAlbumSongsAsync(albumId), $"album_songs:{albumId}", token, maxAttempts: 3).ConfigureAwait(continueOnCapturedContext: false);
+				songs = await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.GetAlbumSongsAsync(albumId, ct), $"album_songs:{albumId}", token, maxAttempts: 3).ConfigureAwait(continueOnCapturedContext: false);
 			}
 			catch (Exception ex)
 			{

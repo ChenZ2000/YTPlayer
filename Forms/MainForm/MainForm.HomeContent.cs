@@ -131,17 +131,10 @@ public partial class MainForm
 					if (userInfo != null && userInfo.UserId > 0)
 					{
 						_loggedInUserId = userInfo.UserId;
-						var (playlists, totalCount) = await _apiClient.GetUserPlaylistsAsync(userInfo.UserId);
+						var (summaryLikedPlaylist, summaryPlaylistCount) = await FetchUserPlaylistSummaryAsync(userInfo.UserId, cancellationToken);
 						ThrowIfHomeLoadCancelled();
-						if (playlists != null && playlists.Count > 0)
-						{
-							likedPlaylist = playlists.FirstOrDefault((PlaylistInfo p) => !string.IsNullOrEmpty(p.Name) && p.Name.IndexOf("喜欢的音乐", StringComparison.OrdinalIgnoreCase) >= 0);
-							userPlaylistCount = totalCount;
-							if (likedPlaylist != null && userPlaylistCount > 0)
-							{
-								userPlaylistCount = Math.Max(0, userPlaylistCount - 1);
-							}
-						}
+						likedPlaylist = summaryLikedPlaylist;
+						userPlaylistCount = summaryPlaylistCount;
 						try
 						{
 							int albumCount = (await _apiClient.GetUserAlbumsAsync(1)).Item2;
@@ -825,68 +818,75 @@ public partial class MainForm
 		{
 			try
 			{
-			List<PlaylistInfo> all = new List<PlaylistInfo>();
-			long before = 0;
-			bool hasMore = true;
-			int safety = 0;
-			while (hasMore && safety < 200)
-			{
-				viewToken.ThrowIfCancellationRequested();
-				(List<PlaylistInfo> Items, long LastTime, bool HasMore) result = await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.GetHighQualityPlaylistsAsync("全部", pageSize, before), $"highquality:all:before{before}:page{(safety + 1)}", viewToken, delegate(int attempt, Exception _)
+				List<PlaylistInfo> all = new List<PlaylistInfo>();
+				long before = 0;
+				bool hasMore = true;
+				bool firstApplied = false;
+				int safety = 0;
+				while (hasMore && safety < 200)
 				{
-					SafeInvoke(delegate
+					viewToken.ThrowIfCancellationRequested();
+					(List<PlaylistInfo> Items, long LastTime, bool HasMore) result = await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.GetHighQualityPlaylistsAsync("全部", pageSize, before), $"highquality:all:before{before}:page{(safety + 1)}", viewToken, delegate(int attempt, Exception _)
 					{
-						UpdateStatusBar($"加载精品歌单失败，正在重试（第 {attempt} 次）...");
-					});
-				}).ConfigureAwait(continueOnCapturedContext: false);
-				List<PlaylistInfo> pageItems = result.Items ?? new List<PlaylistInfo>();
-				if (pageItems.Count == 0)
-				{
-					hasMore = false;
-					break;
-				}
-				all.AddRange(pageItems);
-				long nextBefore = result.LastTime;
-				hasMore = result.HasMore;
-				if (pageItems.Count < pageSize || nextBefore <= 0 || nextBefore == before)
-				{
-					hasMore = false;
-				}
-				before = nextBefore;
-				safety++;
-				SafeInvoke(delegate
-				{
-					UpdateStatusBar($"正在加载精品歌单... 已获取 {all.Count} 个");
-				});
-			}
-			if (viewToken.IsCancellationRequested)
-			{
-				return;
-			}
-			await ExecuteOnUiThreadAsync(delegate
-			{
-				if (!ShouldAbortViewRender(viewToken, "加载精品歌单"))
-				{
-					_currentPlaylists = CloneList(all);
-					_currentHighQualityLoadedAll = true;
-					_currentHighQualityHasMore = false;
-					_currentHighQualityOffset = 0;
-					_currentHighQualityTotalCount = _currentPlaylists.Count;
-					_homeCachedHighQualityCount = _currentHighQualityTotalCount;
-					_highQualityCountFetchedUtc = DateTime.UtcNow;
-					PatchPlaylists(_currentPlaylists, 1, showPagination: false, hasPreviousPage: false, hasNextPage: false, pendingFocusIndex);
-					FocusListAfterEnrich(pendingFocusIndex);
-					if (_currentPlaylists.Count == 0)
+						SafeInvoke(delegate
+						{
+							UpdateStatusBar($"加载精品歌单失败，正在重试（第 {attempt} 次）...");
+						});
+					}).ConfigureAwait(continueOnCapturedContext: false);
+					List<PlaylistInfo> pageItems = result.Items ?? new List<PlaylistInfo>();
+					if (pageItems.Count == 0)
 					{
-						MessageBox.Show("暂无精品歌单", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
-						UpdateStatusBar("暂无精品歌单");
+						hasMore = false;
+						break;
 					}
-					else
+					all.AddRange(pageItems);
+					long nextBefore = result.LastTime;
+					hasMore = result.HasMore;
+					if (pageItems.Count < pageSize || nextBefore <= 0 || nextBefore == before)
 					{
-						UpdateStatusBar($"已加载 {_currentPlaylists.Count} 个精品歌单");
+						hasMore = false;
 					}
+					before = nextBefore;
+					safety++;
+					bool currentHasMore = hasMore;
+					bool allowSelection = !firstApplied;
+					await ExecuteOnUiThreadAsync(delegate
+					{
+						if (!ShouldAbortViewRender(viewToken, "加载精品歌单"))
+						{
+							_currentPlaylists = CloneList(all);
+							_currentHighQualityLoadedAll = !currentHasMore;
+							_currentHighQualityHasMore = false;
+							_currentHighQualityOffset = 0;
+							_currentHighQualityTotalCount = _currentPlaylists.Count + (currentHasMore ? 1 : 0);
+							_homeCachedHighQualityCount = _currentPlaylists.Count;
+							_highQualityCountFetchedUtc = DateTime.UtcNow;
+							PatchPlaylists(_currentPlaylists, 1, showPagination: false, hasPreviousPage: false, hasNextPage: false, pendingFocusIndex, allowSelection);
+							if (allowSelection)
+							{
+								FocusListAfterEnrich(pendingFocusIndex, viewSource);
+							}
+							UpdateStatusBar(currentHasMore ? $"精品歌单：已加载 {_currentPlaylists.Count} 个，正在自动加载更多" : $"精品歌单：{_currentPlaylists.Count} 个");
+						}
+					}).ConfigureAwait(continueOnCapturedContext: false);
+					firstApplied = true;
+					await Task.Yield();
 				}
-				}).ConfigureAwait(continueOnCapturedContext: false);
+				if (viewToken.IsCancellationRequested)
+				{
+					return;
+				}
+				if (all.Count == 0)
+				{
+					await ExecuteOnUiThreadAsync(delegate
+					{
+						if (!ShouldAbortViewRender(viewToken, "加载精品歌单"))
+						{
+							MessageBox.Show("暂无精品歌单", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+							UpdateStatusBar("暂无精品歌单");
+						}
+					}).ConfigureAwait(continueOnCapturedContext: false);
+				}
 				await EnsureLibraryStateFreshAsync(LibraryEntityType.Playlists);
 			}
 			catch (Exception ex)
@@ -977,15 +977,14 @@ public partial class MainForm
 					if (!ShouldAbortViewRender(viewToken, "加载精品歌单"))
 					{
 						_currentPlaylists = CloneList(playlists);
-						_currentHighQualityHasMore = hasMore;
+						_currentHighQualityHasMore = false;
 						_currentHighQualityOffset = offset;
 						if (!hasMore)
 						{
 							_currentHighQualityTotalCount = Math.Max(totalCount, offset + _currentPlaylists.Count);
 						}
-						bool showPagination = offset > 0 || hasMore;
-						PatchPlaylists(_currentPlaylists, offset + 1, showPagination: showPagination, hasPreviousPage: offset > 0, hasNextPage: hasMore, pendingFocusIndex);
-						FocusListAfterEnrich(pendingFocusIndex);
+						PatchPlaylists(_currentPlaylists, offset + 1, showPagination: false, hasPreviousPage: false, hasNextPage: false, pendingFocusIndex);
+						FocusListAfterEnrich(pendingFocusIndex, viewSource);
 						if (_currentPlaylists.Count == 0)
 						{
 							MessageBox.Show("暂无精品歌单", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
@@ -994,15 +993,8 @@ public partial class MainForm
 						else
 						{
 							int page = (offset / pageSize) + 1;
-							if (!hasMore && _currentHighQualityTotalCount > 0)
-							{
-								int maxPage = Math.Max(1, (int)Math.Ceiling((double)_currentHighQualityTotalCount / pageSize));
-								UpdateStatusBar($"第 {page}/{maxPage} 页，本页 {_currentPlaylists.Count} 个 / 总 {_currentHighQualityTotalCount} 个");
-							}
-							else
-							{
-								UpdateStatusBar($"第 {page} 页，本页 {_currentPlaylists.Count} 个{(hasMore ? "，还有更多" : string.Empty)}");
-							}
+							int loadedCount = offset + _currentPlaylists.Count;
+							UpdateStatusBar(hasMore ? $"精品歌单：已加载 {loadedCount} 个，还有更多" : $"精品歌单：已加载 {loadedCount} 个");
 						}
 					}
 				}).ConfigureAwait(continueOnCapturedContext: false);
@@ -1238,14 +1230,14 @@ public partial class MainForm
 					int page = (normalizedOffset / NewSongsPageSize) + 1;
 					UpdateStatusBar($"页码过大，已跳到第 {page} 页");
 				}
-				offset = normalizedOffset;
 			}
+			offset = 0;
 			if (!skipSave)
 			{
 				SaveNavigationState();
 			}
 			string requestViewSource = BuildNewSongsViewSource(areaType, offset);
-			int page2 = (Math.Max(0, offset) / NewSongsPageSize) + 1;
+			const int page2 = 1;
 			int requestFocusIndex = (pendingFocusIndex >= 0) ? pendingFocusIndex : 0;
 			ViewLoadRequest request = new ViewLoadRequest(requestViewSource, areaName + "新歌速递", "正在加载" + areaName + "新歌...", !skipSave, requestFocusIndex);
 			ViewLoadResult<SearchViewData<SongInfo>> loadResult = await RunViewLoadAsync(request, delegate
@@ -1309,15 +1301,9 @@ public partial class MainForm
 					}
 				}
 				int totalCount = songs.Count;
-				bool offsetClamped;
-				int normalizedOffset = NormalizeOffsetWithTotal(totalCount, pageSize, offset, out offsetClamped);
-				if (offsetClamped)
-				{
-					int page = (normalizedOffset / pageSize) + 1;
-					UpdateStatusBar($"页码过大，已跳到第 {page} 页");
-				}
-				List<SongInfo> pageItems = songs.Skip(normalizedOffset).Take(pageSize).ToList();
-				bool hasMore = normalizedOffset + pageSize < totalCount;
+				int normalizedOffset = 0;
+				List<SongInfo> pageItems = songs;
+				bool hasMore = false;
 				string paginationKey = BuildNewSongsPaginationKey(areaType);
 				if (TryHandlePaginationEmptyResult(paginationKey, normalizedOffset, pageSize, totalCount, pageItems.Count, hasMore, viewSource, accessibleName))
 				{
@@ -1335,30 +1321,24 @@ public partial class MainForm
 					{
 						_currentPlaylist = null;
 						_currentSongs = CloneList(pageItems);
-						_currentNewSongsHasMore = hasMore;
-						_currentNewSongsTotalCount = Math.Max(totalCount, normalizedOffset + _currentSongs.Count);
-						_currentNewSongsOffset = normalizedOffset;
+						_currentNewSongsHasMore = false;
+						_currentNewSongsTotalCount = Math.Max(totalCount, _currentSongs.Count);
 						_currentNewSongsAreaType = areaType;
 						_currentNewSongsAreaName = areaName;
-						bool showPagination = normalizedOffset > 0 || hasMore;
-						PatchSongs(_currentSongs, normalizedOffset + 1, skipAvailabilityCheck: false, showPagination: showPagination, hasPreviousPage: normalizedOffset > 0, hasNextPage: hasMore, pendingFocusIndex);
-						FocusListAfterEnrich(pendingFocusIndex);
+						PatchSongs(_currentSongs, 1, skipAvailabilityCheck: false, showPagination: false, hasPreviousPage: false, hasNextPage: false, pendingFocusIndex);
+						FocusListAfterEnrich(pendingFocusIndex, viewSource);
 						if (_currentSongs.Count == 0)
 						{
 							UpdateStatusBar(areaName + "新歌速递");
 						}
-						else if (totalCount > 0)
-						{
-							UpdateStatusBar($"第 {page2}/{maxPage} 页，本页 {_currentSongs.Count} 首 / 总 {totalCount} 首");
-						}
 						else
 						{
-							UpdateStatusBar($"第 {page2} 页，本页 {_currentSongs.Count} 首{(hasMore ? "，还有更多" : string.Empty)}");
+							UpdateStatusBar($"{areaName}新歌速递：{_currentSongs.Count} 首");
 						}
 					}
 				}).ConfigureAwait(continueOnCapturedContext: false);
 				await EnsureLibraryStateFreshAsync(LibraryEntityType.Songs);
-				Debug.WriteLine($"[LoadNewSongs] 成功加载 {pageItems.Count} 首{areaName}新歌 offset={normalizedOffset}");
+				Debug.WriteLine($"[LoadNewSongs] 成功加载 {pageItems.Count} 首{areaName}新歌");
 			}
 			catch (Exception ex)
 			{
@@ -1437,7 +1417,7 @@ public partial class MainForm
 					{
 						DisplaySongs(songsResult, showPagination: false, hasNextPage: false, 1, preserveSelection: true, viewSource, accessibleName, skipAvailabilityCheck: false, announceHeader: false);
 						_currentPlaylist = null;
-						FocusListAfterEnrich(pendingFocusIndex);
+						FocusListAfterEnrich(pendingFocusIndex, viewSource);
 						if (songsResult.Count == 0)
 						{
 							MessageBox.Show("暂无推荐新歌", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
@@ -1555,53 +1535,74 @@ public partial class MainForm
 		{
 			try
 			{
-				(List<PlaylistInfo> Items, long TotalCount, bool HasMore) result = await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.GetPlaylistsByCategoryAsync(cat, "hot", pageSize, offset), $"playlist_cat:{cat}:offset{offset}", viewToken, delegate(int attempt, Exception _)
+				List<PlaylistInfo> all = new List<PlaylistInfo>();
+				int fetchOffset = Math.Max(0, offset);
+				int totalCount = 0;
+				bool hasMore = true;
+				bool firstApplied = false;
+				int safety = 0;
+				while (hasMore && safety < 200)
 				{
-					SafeInvoke(delegate
+					viewToken.ThrowIfCancellationRequested();
+					int currentOffset = fetchOffset;
+					(List<PlaylistInfo> Items, long TotalCount, bool HasMore) result = await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.GetPlaylistsByCategoryAsync(cat, "hot", pageSize, currentOffset), $"playlist_cat:{cat}:offset{currentOffset}", viewToken, delegate(int attempt, Exception _)
 					{
-						UpdateStatusBar($"加载歌单分类失败，正在重试（第 {attempt} 次）...");
-					});
-				}).ConfigureAwait(continueOnCapturedContext: true);
-				List<PlaylistInfo> playlists = result.Items ?? new List<PlaylistInfo>();
-				int totalCount = (result.TotalCount > int.MaxValue) ? int.MaxValue : (int)result.TotalCount;
-				bool hasMore = result.HasMore;
-				string paginationKey = BuildPlaylistCategoryPaginationKey(cat);
-				if (TryHandlePaginationEmptyResult(paginationKey, offset, pageSize, totalCount, playlists.Count, hasMore, viewSource, accessibleName))
-				{
-					return;
+						SafeInvoke(delegate
+						{
+							UpdateStatusBar($"加载歌单分类失败，正在重试（第 {attempt} 次）...");
+						});
+					}).ConfigureAwait(continueOnCapturedContext: false);
+					List<PlaylistInfo> pageItems = result.Items ?? new List<PlaylistInfo>();
+					totalCount = Math.Max(totalCount, (result.TotalCount > int.MaxValue) ? int.MaxValue : (int)result.TotalCount);
+					hasMore = result.HasMore;
+					if (pageItems.Count == 0)
+					{
+						hasMore = false;
+						break;
+					}
+					all.AddRange(pageItems);
+					fetchOffset = checked(fetchOffset + pageItems.Count);
+					if (pageItems.Count < pageSize)
+					{
+						hasMore = false;
+					}
+					safety++;
+					bool currentHasMore = hasMore;
+					bool allowSelection = !firstApplied;
+					await ExecuteOnUiThreadAsync(delegate
+					{
+						if (!ShouldAbortViewRender(viewToken, "加载歌单分类"))
+						{
+							_currentPlaylists = CloneList(all);
+							_currentPlaylistCategoryHasMore = false;
+							_currentPlaylistCategoryTotalCount = offset + _currentPlaylists.Count + (currentHasMore ? 1 : 0);
+							_currentPlaylistCategoryOffset = offset;
+							_currentPlaylistCategoryName = cat;
+							PatchPlaylists(_currentPlaylists, offset + 1, showPagination: false, hasPreviousPage: false, hasNextPage: false, pendingFocusIndex, allowSelection);
+							if (allowSelection)
+							{
+								FocusListAfterEnrich(pendingFocusIndex, viewSource);
+							}
+							UpdateStatusBar(currentHasMore ? $"{cat}歌单：已加载 {_currentPlaylists.Count} 个，正在自动加载更多" : $"{cat}歌单：{_currentPlaylists.Count} 个");
+						}
+					}).ConfigureAwait(continueOnCapturedContext: false);
+					firstApplied = true;
+					await Task.Yield();
 				}
-				int page = (offset / pageSize) + 1;
-				int maxPage = (totalCount > 0) ? Math.Max(1, (int)Math.Ceiling((double)totalCount / pageSize)) : page;
 				if (viewToken.IsCancellationRequested)
 				{
 					return;
 				}
-				await ExecuteOnUiThreadAsync(delegate
+				if (all.Count == 0)
 				{
-					if (!ShouldAbortViewRender(viewToken, "加载歌单分类"))
+					await ExecuteOnUiThreadAsync(delegate
 					{
-						_currentPlaylists = CloneList(playlists);
-						_currentPlaylistCategoryHasMore = hasMore;
-						_currentPlaylistCategoryTotalCount = Math.Max(totalCount, offset + _currentPlaylists.Count);
-						_currentPlaylistCategoryOffset = offset;
-						_currentPlaylistCategoryName = cat;
-						bool showPagination = offset > 0 || hasMore;
-						PatchPlaylists(_currentPlaylists, offset + 1, showPagination: showPagination, hasPreviousPage: offset > 0, hasNextPage: hasMore, pendingFocusIndex);
-						FocusListAfterEnrich(pendingFocusIndex);
-						if (_currentPlaylists.Count == 0)
+						if (!ShouldAbortViewRender(viewToken, "加载歌单分类"))
 						{
 							UpdateStatusBar("暂无" + cat + "歌单");
 						}
-						else if (totalCount > 0)
-						{
-							UpdateStatusBar($"第 {page}/{maxPage} 页，本页 {_currentPlaylists.Count} 个 / 总 {totalCount} 个");
-						}
-						else
-						{
-							UpdateStatusBar($"第 {page} 页，本页 {_currentPlaylists.Count} 个{(hasMore ? "，还有更多" : string.Empty)}");
-						}
-					}
-				}).ConfigureAwait(continueOnCapturedContext: false);
+					}).ConfigureAwait(continueOnCapturedContext: false);
+				}
 				await EnsureLibraryStateFreshAsync(LibraryEntityType.Playlists);
 			}
 			catch (Exception ex)
@@ -1727,37 +1728,7 @@ public partial class MainForm
 				ViewLoadRequest request = new ViewLoadRequest(viewSource, accessibleName, "正在加载播客...");
 				ViewLoadResult<(List<PodcastRadioInfo> Items, bool HasMore, int TotalCount, int FetchOffsetStart, int FetchOffsetNext)> loadResult = await RunViewLoadAsync(request, async delegate(CancellationToken token)
 				{
-					const int pageSize = 50;
-					int fetchOffset = Math.Max(0, fetchOffsetSeed);
-					int fetchOffsetStart = fetchOffset;
-					int totalCount = 0;
-					bool hasMore = true;
-					int safety = 0;
-					List<PodcastRadioInfo> podcasts = new List<PodcastRadioInfo>();
-					while (podcasts.Count < pageSize && hasMore && !token.IsCancellationRequested && safety < pageSize * 4)
-					{
-						int need = pageSize - podcasts.Count;
-						(List<PodcastRadioInfo> Podcasts, bool HasMore, int TotalCount) batch = await _apiClient.GetPodcastsByCategoryAsync(categoryId, need, fetchOffset, token).ConfigureAwait(continueOnCapturedContext: false);
-						token.ThrowIfCancellationRequested();
-						List<PodcastRadioInfo> batchItems = batch.Podcasts ?? new List<PodcastRadioInfo>();
-						totalCount = Math.Max(totalCount, batch.TotalCount);
-						if (batchItems.Count == 0)
-						{
-							hasMore = batch.HasMore;
-							if (hasMore)
-							{
-								fetchOffset = checked(fetchOffset + Math.Max(1, need));
-								safety++;
-								continue;
-							}
-							break;
-						}
-						podcasts.AddRange(batchItems);
-						fetchOffset = checked(fetchOffset + batchItems.Count);
-						hasMore = batch.HasMore;
-						safety++;
-					}
-					return (Items: podcasts, HasMore: hasMore, TotalCount: totalCount, FetchOffsetStart: fetchOffsetStart, FetchOffsetNext: fetchOffset);
+					return await FetchPodcastCategoryPageAsync(categoryId, fetchOffsetSeed, token).ConfigureAwait(continueOnCapturedContext: false);
 				}, "加载播客已取消").ConfigureAwait(continueOnCapturedContext: true);
 				if (loadResult.IsCanceled)
 				{
@@ -1771,34 +1742,39 @@ public partial class MainForm
 				{
 					totalCount = logicalOffset + podcasts.Count + 1;
 				}
-				bool hasMoreFinal = hasMore || logicalOffset + podcasts.Count < totalCount;
+				bool hasMoreFinal = hasMore;
 				SetPodcastCategoryFetchOffset(categoryId, logicalOffset, Math.Max(0, data.FetchOffsetStart));
 				if (podcasts.Count > 0)
 				{
 					SetPodcastCategoryFetchOffset(categoryId, checked(logicalOffset + 50), Math.Max(0, data.FetchOffsetNext));
 				}
-				if (TryHandlePaginationEmptyResult(paginationKey, logicalOffset, PodcastCategoryPageSize, totalCount, podcasts.Count, hasMoreFinal, viewSource, accessibleName))
+				int paginationGuardTotal = logicalOffset + podcasts.Count + (hasMoreFinal ? 1 : 0);
+				if (TryHandlePaginationEmptyResult(paginationKey, logicalOffset, PodcastCategoryPageSize, paginationGuardTotal, podcasts.Count, hasMoreFinal, viewSource, accessibleName))
 				{
 					return;
 				}
 				_currentPodcastCategoryId = categoryId;
 				_currentPodcastCategoryName = categoryName;
 				_currentPodcastCategoryOffset = logicalOffset;
-				_currentPodcastCategoryHasMore = hasMoreFinal;
-				_currentPodcastCategoryTotalCount = Math.Max(totalCount, logicalOffset + podcasts.Count);
+				_currentPodcastCategoryHasMore = false;
+				_currentPodcastCategoryTotalCount = logicalOffset + podcasts.Count + (hasMoreFinal ? 1 : 0);
 				int currentPage = unchecked(logicalOffset / 50) + 1;
 				int totalPages = Math.Max(1, (int)Math.Ceiling((double)Math.Max(totalCount, logicalOffset + podcasts.Count + (hasMoreFinal ? 1 : 0)) / 50.0));
 				await ExecuteOnUiThreadAsync(delegate
 				{
-					DisplayPodcasts(podcasts, showPagination: true, hasMoreFinal, logicalOffset + 1, preserveSelection: false, viewSource, accessibleName);
+					DisplayPodcasts(podcasts, showPagination: false, hasNextPage: false, logicalOffset + 1, preserveSelection: false, viewSource, accessibleName);
 					if (podcasts.Count == 0)
 					{
 						MessageBox.Show("该分类暂时没有播客。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
 						UpdateStatusBar("暂无播客");
 						return;
 					}
-					UpdateStatusBar($"{accessibleName}：第 {currentPage}/{totalPages} 页，本页 {podcasts.Count} 个 / 总 {totalCount} 个（PageDown/Up 翻页）");
+					UpdateStatusBar(hasMoreFinal ? $"{accessibleName}：已加载 {podcasts.Count} 个，正在自动加载更多" : $"{accessibleName}：{podcasts.Count} 个");
 				});
+				if (hasMoreFinal && podcasts.Count > 0)
+				{
+					LoadRemainingPodcastsByCategoryAsync(categoryId, logicalOffset, data.FetchOffsetNext, podcasts, viewSource, accessibleName, totalCount).SafeFireAndForget("podcast category proactive load");
+				}
 			}
 			catch (Exception ex)
 			{
@@ -1813,6 +1789,110 @@ public partial class MainForm
 					MessageBox.Show("加载播客失败: " + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 					UpdateStatusBar("加载失败");
 				}
+			}
+		}
+	}
+
+	private async Task<(List<PodcastRadioInfo> Items, bool HasMore, int TotalCount, int FetchOffsetStart, int FetchOffsetNext)> FetchPodcastCategoryPageAsync(int categoryId, int fetchOffsetSeed, CancellationToken token)
+	{
+		const int pageSize = PodcastCategoryPageSize;
+		int fetchOffset = Math.Max(0, fetchOffsetSeed);
+		int fetchOffsetStart = fetchOffset;
+		int totalCount = 0;
+		bool hasMore = true;
+		int safety = 0;
+		List<PodcastRadioInfo> podcasts = new List<PodcastRadioInfo>();
+		while (podcasts.Count < pageSize && hasMore && !token.IsCancellationRequested && safety < pageSize * 4)
+		{
+			int need = pageSize - podcasts.Count;
+			(List<PodcastRadioInfo> Podcasts, bool HasMore, int TotalCount) batch = await _apiClient.GetPodcastsByCategoryAsync(categoryId, need, fetchOffset, token).ConfigureAwait(continueOnCapturedContext: false);
+			token.ThrowIfCancellationRequested();
+			List<PodcastRadioInfo> batchItems = batch.Podcasts ?? new List<PodcastRadioInfo>();
+			totalCount = Math.Max(totalCount, batch.TotalCount);
+			if (batchItems.Count == 0)
+			{
+				hasMore = batch.HasMore;
+				if (hasMore)
+				{
+					fetchOffset = checked(fetchOffset + Math.Max(1, need));
+					safety++;
+					continue;
+				}
+				break;
+			}
+			podcasts.AddRange(batchItems);
+			fetchOffset = checked(fetchOffset + batchItems.Count);
+			hasMore = batch.HasMore;
+			safety++;
+		}
+		return (Items: podcasts, HasMore: hasMore, TotalCount: totalCount, FetchOffsetStart: fetchOffsetStart, FetchOffsetNext: fetchOffset);
+	}
+
+	private async Task LoadRemainingPodcastsByCategoryAsync(int categoryId, int baseLogicalOffset, int fetchOffsetSeed, List<PodcastRadioInfo> seedItems, string viewSource, string accessibleName, int knownTotalCount)
+	{
+		CancellationToken viewToken = GetCurrentViewContentToken();
+		List<PodcastRadioInfo> all = CloneList(seedItems);
+		int fetchOffset = Math.Max(0, fetchOffsetSeed);
+		int logicalOffset = checked(baseLogicalOffset + all.Count);
+		int totalCount = Math.Max(knownTotalCount, logicalOffset);
+		bool hasMore = true;
+		int safety = 0;
+		try
+		{
+			while (hasMore && safety < 200)
+			{
+				viewToken.ThrowIfCancellationRequested();
+				if (!string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
+				{
+					return;
+				}
+				UpdateStatusBar("正在自动加载更多播客...");
+				var page = await FetchPodcastCategoryPageAsync(categoryId, fetchOffset, viewToken).ConfigureAwait(continueOnCapturedContext: false);
+				List<PodcastRadioInfo> pageItems = page.Items ?? new List<PodcastRadioInfo>();
+				if (pageItems.Count == 0)
+				{
+					hasMore = false;
+					break;
+				}
+				all.AddRange(pageItems);
+				fetchOffset = Math.Max(0, page.FetchOffsetNext);
+				logicalOffset = checked(baseLogicalOffset + all.Count);
+				totalCount = Math.Max(Math.Max(totalCount, page.TotalCount), logicalOffset);
+				hasMore = page.HasMore;
+				SetPodcastCategoryFetchOffset(categoryId, logicalOffset, fetchOffset);
+				if (pageItems.Count < PodcastCategoryPageSize)
+				{
+					hasMore = false;
+				}
+				bool currentHasMore = hasMore;
+				await ExecuteOnUiThreadAsync(delegate
+				{
+					if (string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
+					{
+						_currentPodcastCategoryId = categoryId;
+						_currentPodcastCategoryOffset = baseLogicalOffset;
+						_currentPodcastCategoryHasMore = false;
+						_currentPodcastCategoryTotalCount = baseLogicalOffset + all.Count + (currentHasMore ? 1 : 0);
+						PatchPodcasts(all, baseLogicalOffset + 1, showPagination: false, hasPreviousPage: false, hasNextPage: false, pendingFocusIndex: -1, allowSelection: false);
+						UpdateStatusBar(currentHasMore ? $"{accessibleName}：已加载 {_currentPodcasts.Count} 个，正在自动加载更多" : $"{accessibleName}：{_currentPodcasts.Count} 个");
+					}
+				}).ConfigureAwait(continueOnCapturedContext: false);
+				safety++;
+				await Task.Yield();
+			}
+		}
+		catch (Exception ex)
+		{
+			if (!TryHandleOperationCancelled(ex, "加载播客已取消"))
+			{
+				Debug.WriteLine($"[LoadPodcastsByCategory] 自动加载更多失败: {ex}");
+				await ExecuteOnUiThreadAsync(delegate
+				{
+					if (string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
+					{
+						UpdateStatusBar("加载更多播客失败，请稍后刷新重试");
+					}
+				}).ConfigureAwait(continueOnCapturedContext: false);
 			}
 		}
 	}

@@ -200,7 +200,8 @@ private async Task<Dictionary<string, SongUrlInfo>> GetSongUrlWithRetryAsync(str
 		}
 		checked
 		{
-			using CancellationTokenSource unblockTimeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(8L));
+			using CancellationTokenSource unblockTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+			unblockTimeoutCts.CancelAfter(TimeSpan.FromSeconds(25L));
 			CancellationToken unblockToken = unblockTimeoutCts.Token;
 			bool shouldRefreshDetail = song.IsAvailable == false ||
 			                           song.Duration <= 0 ||
@@ -211,7 +212,7 @@ private async Task<Dictionary<string, SongUrlInfo>> GetSongUrlWithRetryAsync(str
 			{
 				try
 				{
-					SongInfo detail = (await _apiClient.GetSongDetailAsync(new string[1] { song.Id }).ConfigureAwait(continueOnCapturedContext: false))?.FirstOrDefault();
+					SongInfo detail = (await _apiClient.GetSongDetailAsync(new string[1] { song.Id }, unblockToken).ConfigureAwait(continueOnCapturedContext: false))?.FirstOrDefault();
 					if (detail != null)
 					{
 						if (detail.Duration > 0 && (song.Duration <= 0 || Math.Abs(detail.Duration - song.Duration) > 1))
@@ -244,7 +245,7 @@ private async Task<Dictionary<string, SongUrlInfo>> GetSongUrlWithRetryAsync(str
 				catch (Exception ex)
 				{
 					Exception ex2 = ex;
-					Debug.WriteLine("[Unblock] å\u008f–æ\u00a0·æ\u008d¢è\u00af\u0086ç»†èŠ‚æ•°æ\u008d®å¤±è\u00b4¥ï¼ˆå¿½ç•¥ï¼‰: " + ex2.Message);
+					Debug.WriteLine("[Unblock] 获取歌曲详情失败（忽略）: " + ex2.Message);
 				}
 			}
 			UnblockService.UnblockMatchResult result;
@@ -259,10 +260,11 @@ private async Task<Dictionary<string, SongUrlInfo>> GetSongUrlWithRetryAsync(str
 			}
 			if (result == null || string.IsNullOrWhiteSpace(result.Url))
 			{
+				Debug.WriteLine("[Unblock] 未找到可用解封资源: " + song.Name + " (" + song.Id + ")");
 				return false;
 			}
 			Dictionary<string, string> headers = ((result.Headers != null) ? new Dictionary<string, string>(result.Headers, StringComparer.OrdinalIgnoreCase) : null);
-			string level = (string.IsNullOrWhiteSpace(targetQualityLevel) ? GetQualityLevelString(GetCurrentQuality()) : targetQualityLevel);
+			string level = StreamSizeEstimator.NormalizeQualityLevel(string.IsNullOrWhiteSpace(targetQualityLevel) ? GetQualityLevelString(GetCurrentQuality()) : targetQualityLevel);
 			int durationSeconds = StreamSizeEstimator.NormalizeDurationSeconds(song.Duration);
 			if (result.DurationMs.HasValue && result.DurationMs.Value > 0)
 			{
@@ -329,7 +331,7 @@ private async Task<Dictionary<string, SongUrlInfo>> GetSongUrlWithRetryAsync(str
 			return SongResolveResult.Failed();
 		}
 
-		string selectedQualityLevel = selectedQuality.ToString().ToLower();
+		string selectedQualityLevel = StreamSizeEstimator.NormalizeQualityLevel(GetQualityLevelString(selectedQuality));
 		bool needRefreshUrl = string.IsNullOrEmpty(song.Url) || song.IsTrial;
 
 		void ApplyOfficialUrl(SongUrlInfo songUrl, long resolvedSize, bool isTrial, long trialStart, long trialEnd)
@@ -468,13 +470,34 @@ private async Task<Dictionary<string, SongUrlInfo>> GetSongUrlWithRetryAsync(str
 			return SongResolveResult.Failed();
 		}
 
-		long resolvedSize = songUrl.Size;
-		if (resolvedSize <= 0)
+		static bool IsMeaningfullyDifferentSize(long currentSize, long detectedSize)
 		{
-			long contentLength = (await HttpRangeHelper.CheckRangeSupportAsync(songUrl.Url, null, cancellationToken, song.CustomHeaders).ConfigureAwait(continueOnCapturedContext: false)).Item2;
+			if (currentSize <= 0 || detectedSize <= 0)
+			{
+				return false;
+			}
+
+			long difference = Math.Abs(currentSize - detectedSize);
+			return difference >= 64L * 1024 || difference >= currentSize / 100;
+		}
+
+		long resolvedSize = songUrl.Size;
+		bool shouldProbeContentLength = resolvedSize <= 0 ||
+			song.IsPodcastEpisode ||
+			song.Duration >= 1800 ||
+			resolvedSize >= 50L * 1024 * 1024;
+		if (shouldProbeContentLength)
+		{
+			using CancellationTokenSource sizeCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+			sizeCts.CancelAfter(TimeSpan.FromSeconds(8));
+			long contentLength = await HttpRangeHelper.TryGetContentLengthAsync(songUrl.Url, song.CustomHeaders, sizeCts.Token, TimeSpan.FromSeconds(6)).ConfigureAwait(continueOnCapturedContext: false);
 			if (contentLength > 0)
 			{
-				resolvedSize = contentLength;
+				if (resolvedSize <= 0 || IsMeaningfullyDifferentSize(resolvedSize, contentLength))
+				{
+					Debug.WriteLine($"[MainForm] 使用 CDN Content-Length 修正播放大小: {resolvedSize} -> {contentLength}");
+					resolvedSize = contentLength;
+				}
 			}
 		}
 		if (resolvedSize <= 0)
@@ -697,16 +720,6 @@ private Task PlaySongByIndex(int index)
 			}
 		}
 
-		try
-		{
-			_suppressAutoAdvance = true;
-			_audioEngine.Stop();
-		}
-		catch (Exception ex)
-		{
-			Debug.WriteLine("[MainForm] Stop before switch failed: " + ex.Message);
-		}
-
 		(CancellationToken cancellationToken, long requestVersion) = BeginPlaybackRequestScope();
 
 		TimeSpan timeSinceLastRequest = DateTime.Now - _lastPlayRequestTime;
@@ -869,8 +882,6 @@ private async Task PlaySongDirect(SongInfo song, CancellationToken cancellationT
 			Debug.WriteLine("[MainForm ERROR] song is null");
 			return;
 		}
-		_positionCoordinator?.ResetForTrack(song.Id);
-		PreparePlaybackReportingForNextSong(song);
 		string currentSongId = song.Id;
 		string nextSongId = PredictNextSong()?.Id;
 		_nextSongPreloader?.CleanupStaleData(currentSongId, nextSongId);
@@ -949,8 +960,6 @@ private async Task PlaySongDirect(SongInfo song, CancellationToken cancellationT
 				Debug.WriteLine("[MainForm] 播放请求已取消（播放前）");
 				return;
 			}
-			ApplyLoadedLyricsContext(null);
-			Debug.WriteLine("[MainForm] 已清空旧歌词，准备播放新歌曲");
 			bool playResult = await _audioEngine.PlayAsync(song, cancellationToken, preloadedData);
 			Debug.WriteLine($"[MainForm] _audioEngine.PlayAsync() 返回: {playResult}");
                         if (!playResult)
@@ -961,6 +970,10 @@ private async Task PlaySongDirect(SongInfo song, CancellationToken cancellationT
                                 AnnouncePlaybackFailure();
                                 return;
                         }
+			_positionCoordinator?.ResetForTrack(song.Id);
+			PreparePlaybackReportingForNextSong(song);
+			ApplyLoadedLyricsContext(null);
+			Debug.WriteLine("[MainForm] 新音频流已开始，已切换播放位置、上报上下文和歌词上下文");
 			if (_seekManager != null)
 			{
 				if (_audioEngine.CurrentCacheManager != null)
@@ -1191,14 +1204,14 @@ private async Task PlaySongDirect(SongInfo song, CancellationToken cancellationT
 				{
 					UpdateTrayIconTooltip(null);
 				}
-				UpdateStatusBar("Playback queue is empty");
+				UpdateStatusBar("播放队列为空");
 				return true;
 			}
 			if (!result.HasSong)
 			{
 				if (result.ReachedBoundary)
 				{
-					UpdateStatusBar(isNext ? "Already at the last song" : "Already at the first song");
+					UpdateStatusBar(isNext ? "已经是最后一首" : "已经是第一首");
 				}
 				RestoreQueuePosition(currentSong, playMode);
 				return true;
@@ -1216,7 +1229,7 @@ private async Task PlaySongDirect(SongInfo song, CancellationToken cancellationT
 			if (!attemptedCandidates.Add(attemptKey))
 			{
 				Debug.WriteLine("[MainForm] Manual navigation loop detected, stop searching: " + attemptKey);
-				UpdateStatusBar("No playable song found");
+				UpdateStatusBar("未找到可播放的歌曲");
 				RestoreQueuePosition(currentSong, playMode);
 				return true;
 			}
@@ -1251,7 +1264,7 @@ private async Task PlaySongDirect(SongInfo song, CancellationToken cancellationT
 			string friendlyName = BuildFriendlySongName(candidate);
 			if (availability == ManualNavigationAvailability.Missing)
 			{
-				string message = (string.IsNullOrEmpty(friendlyName) ? "Skipped unavailable song (official resource missing)" : ("Skipped: " + friendlyName + " (official resource missing)"));
+				string message = (string.IsNullOrEmpty(friendlyName) ? "已跳过不可播放的歌曲（官方资源不存在）" : ("已跳过：" + friendlyName + "（官方资源不存在）"));
 				UpdateStatusBar(message);
 				Debug.WriteLine("[MainForm] Manual " + (isNext ? "next" : "previous") + " skipped missing song: " + candidate?.Id + " - " + friendlyName);
 				RemoveSongFromQueueAndCaches(candidate);
@@ -1260,17 +1273,17 @@ private async Task PlaySongDirect(SongInfo song, CancellationToken cancellationT
 			}
 			if (string.IsNullOrEmpty(friendlyName))
 			{
-				UpdateStatusBar("Failed to get playback URL");
+				UpdateStatusBar("获取播放链接失败");
 			}
 			else
 			{
-				UpdateStatusBar("Failed to get playback URL: " + friendlyName);
+				UpdateStatusBar("获取播放链接失败：" + friendlyName);
 			}
 			Debug.WriteLine("[MainForm] Manual navigation failed to get playback URL: " + candidate?.Id);
 			RestoreQueuePosition(currentSong, playMode);
 			return true;
 		}
-		UpdateStatusBar("No playable song found");
+		UpdateStatusBar("未找到可播放的歌曲");
 		RestoreQueuePosition(currentSong, playMode);
 		return true;
 	}
@@ -1419,7 +1432,7 @@ private async Task PlaySongDirect(SongInfo song, CancellationToken cancellationT
 		case PlaybackRoute.PendingInjection:
 			UpdateFocusForInjection(result.Song, result.InjectionIndex);
 			await PlaySongDirectWithCancellation(result.Song);
-			UpdateStatusBar("Injection: " + result.Song.Name + " - " + result.Song.Artist);
+			UpdateStatusBar("插播：" + result.Song.Name + " - " + result.Song.Artist);
 			break;
 		case PlaybackRoute.Injection:
 			UpdateFocusForInjection(result.Song, result.InjectionIndex);
@@ -1536,11 +1549,6 @@ private async Task PlaySongDirect(SongInfo song, CancellationToken cancellationT
 			return;
 		}
 		bool viewMatched = IsSameViewSourceForFocus(queueSource, _currentViewSource);
-		if (expectedSong != null)
-		{
-			RememberPlaybackFocusForSource(queueSource, expectedSong);
-		}
-
 		int focusIndex = queueIndex;
 		if (expectedSong != null && _currentSongs != null && _currentSongs.Count > 0)
 		{
@@ -1573,6 +1581,10 @@ private async Task PlaySongDirect(SongInfo song, CancellationToken cancellationT
 
 		if (viewMatched && resultListView != null && focusIndex >= 0 && focusIndex < resultListView.Items.Count)
 		{
+			if (expectedSong != null)
+			{
+				RememberPlaybackFocusForSource(queueSource, expectedSong, queueIndex);
+			}
 			_lastListViewFocusedIndex = focusIndex;
 			if (base.Visible)
 			{
@@ -1585,7 +1597,7 @@ private async Task PlaySongDirect(SongInfo song, CancellationToken cancellationT
 		}
 		else
 		{
-			if (expectedSong != null && queueIndex >= 0)
+			if (viewMatched && expectedSong != null && queueIndex >= 0)
 			{
 				RememberPlaybackFocusForSource(queueSource, expectedSong, queueIndex);
 			}
@@ -1615,9 +1627,9 @@ private async Task PlaySongDirect(SongInfo song, CancellationToken cancellationT
 			return;
 		}
 
-		RememberPlaybackFocusForSource(source, song);
 		if (IsSameViewSourceForFocus(source, _currentViewSource))
 		{
+			RememberPlaybackFocusForSource(source, song);
 			int num = -1;
 			if (_currentSongs != null)
 			{

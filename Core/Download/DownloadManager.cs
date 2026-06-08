@@ -985,6 +985,23 @@ namespace YTPlayer.Core.Download
                     DebugLogger.LogException("DownloadManager", ex, $"获取下载 URL 失败: {task.Song.Name}");
                     return false;
                 }
+                catch (global::YTPlayer.Core.PaidAlbumNotPurchasedException ex)
+                {
+                    task.ErrorMessage = $"获取下载链接失败: {ex.Message}";
+                    DebugLogger.LogException("DownloadManager", ex, $"付费数字专辑未购买: {task.Song.Name}");
+                    return false;
+                }
+                catch (Exception ex)
+                {
+                    if (await TryApplyUnblockAsync(task, CancellationToken.None).ConfigureAwait(false))
+                    {
+                        return true;
+                    }
+
+                    task.ErrorMessage = $"获取下载链接失败: {ex.Message}";
+                    DebugLogger.LogException("DownloadManager", ex, $"获取下载 URL 失败: {task.Song.Name}");
+                    return false;
+                }
 
                 if (urlDict == null || !urlDict.ContainsKey(task.Song.Id))
                 {

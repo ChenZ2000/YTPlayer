@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -55,7 +56,25 @@ namespace YTPlayer.Core.Unblock
                     EnableFlac = true,
                     MinBr = 0,
                     Endpoint = string.Empty,
-                    MatchOrder = new List<string>() // 使用默认顺序并行
+                    AllowUnvalidatedFallback = false,
+                    MatchOrder = new List<string>
+                    {
+                        "byfuns",
+                        "gdmusic",
+                        "baka",
+                        "bikonoo",
+                        "msls",
+                        "qijieya",
+                        "pyncmd",
+                        "bodian",
+                        "qq",
+                        "kugou",
+                        "kuwo",
+                        "migu",
+                        "joox",
+                        "bilibili",
+                        "bilivideo"
+                    }
                 };
 
                 _http = new HttpHelper();
@@ -64,6 +83,12 @@ namespace YTPlayer.Core.Unblock
 
                 var providers = new Dictionary<string, IProvider>(StringComparer.OrdinalIgnoreCase)
                 {
+                    { "byfuns",   new ByfunsProvider(_cache, _options.NoCache) },
+                    { "gdmusic",  new GdMusicProvider(_cache, _options.NoCache) },
+                    { "baka",     new BakaProvider(_cache, _options.NoCache) },
+                    { "bikonoo",  new BikonooProvider(_cache, _options.NoCache) },
+                    { "msls",     new MslsProvider(_cache, _options.NoCache) },
+                    { "qijieya",  new QijieyaProvider(_cache, _options.NoCache) },
                     { "kugou",    new KugouProvider(_http, _cache, _options.NoCache) },
                     { "kuwo",     new KuwoProvider(_http, _cache, _options.NoCache) },
                     { "qq",       new QQProvider(_http, _cache, _options.NoCache) },
@@ -101,7 +126,7 @@ namespace YTPlayer.Core.Unblock
 
                 // 严格时长匹配：误差不超过 ±1s，否则视为无效解封结果
                 long targetMs = song.Duration > 0 ? song.Duration * 1000L : 0;
-                if (targetMs > 0 && audio.DurationMs.HasValue)
+                if (targetMs > 0 && audio.DurationMs.HasValue && audio.DurationMs.Value > 0)
                 {
                     long diff = Math.Abs(audio.DurationMs.Value - targetMs);
                     if (diff > 1000)
@@ -120,9 +145,10 @@ namespace YTPlayer.Core.Unblock
                     DurationMs = audio.DurationMs
                 };
             }
-            catch
+            catch (Exception ex)
             {
                 // 仅兜底使用，失败时静默，让上层走原有流程。
+                Debug.WriteLine("[UnblockService] 匹配失败: " + song.Id + " - " + song.Name + "，原因: " + ex.Message);
                 return null;
             }
         }

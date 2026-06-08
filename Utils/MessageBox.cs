@@ -151,6 +151,29 @@ namespace YTPlayer
             MessageBoxIcon icon,
             MessageBoxDefaultButton defaultButton)
         {
+            return ShowInternal(owner, text, caption, buttons, icon, defaultButton, null, null);
+        }
+
+        public static DialogResult ShowContinueCancel(
+            IWin32Window? owner,
+            string text,
+            string caption,
+            MessageBoxIcon icon = MessageBoxIcon.Question,
+            MessageBoxDefaultButton defaultButton = MessageBoxDefaultButton.Button1)
+        {
+            return ShowInternal(owner, text, caption, MessageBoxButtons.OKCancel, icon, defaultButton, "继续", "取消");
+        }
+
+        private static DialogResult ShowInternal(
+            IWin32Window? owner,
+            string text,
+            string caption,
+            MessageBoxButtons buttons,
+            MessageBoxIcon icon,
+            MessageBoxDefaultButton defaultButton,
+            string? acceptButtonText,
+            string? cancelButtonText)
+        {
             DialogResult ShowCore()
             {
                 ThemeManager.Initialize();
@@ -159,7 +182,14 @@ namespace YTPlayer
                 Interlocked.Increment(ref _activeDialogCount);
                 try
                 {
-                    using (var dialog = new ThemedMessageBoxForm(text, caption, buttons, icon, defaultButton))
+                    using (var dialog = new ThemedMessageBoxForm(
+                        text,
+                        caption,
+                        buttons,
+                        icon,
+                        defaultButton,
+                        acceptButtonText,
+                        cancelButtonText))
                     {
                         return resolvedOwner == null ? dialog.ShowDialog() : dialog.ShowDialog(resolvedOwner);
                     }

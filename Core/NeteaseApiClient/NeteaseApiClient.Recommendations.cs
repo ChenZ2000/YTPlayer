@@ -301,7 +301,7 @@ namespace YTPlayer.Core
         /// 参考: NeteaseCloudMusicApi/module/recommend_songs.js
         /// 注意: 需要设置 os = "ios"
         /// </summary>
-        public async Task<List<SongInfo>> GetDailyRecommendSongsAsync()
+        public async Task<List<SongInfo>> GetDailyRecommendSongsAsync(CancellationToken cancellationToken = default)
         {
             // 创建临时cookies，设置os为ios (这是关键!)
             var tempCookies = new Dictionary<string, string>(_cookieContainer.GetCookies(new Uri(OFFICIAL_API_BASE))
@@ -324,9 +324,9 @@ namespace YTPlayer.Core
                 { "params", encrypted.Params },
                 { "encSecKey", encrypted.EncSecKey }
             };
-            var content = new FormUrlEncodedContent(formData);
+            using var content = new FormUrlEncodedContent(formData);
 
-            var request = new HttpRequestMessage(HttpMethod.Post, $"{OFFICIAL_API_BASE}/api/v3/discovery/recommend/songs")
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"{OFFICIAL_API_BASE}/weapi/v3/discovery/recommend/songs")
             {
                 Content = content
             };
@@ -335,8 +335,8 @@ namespace YTPlayer.Core
             request.Headers.Add("User-Agent", _desktopUserAgent ?? USER_AGENT);
             request.Headers.Add("Referer", REFERER);
 
-            var httpResponse = await _httpClient.SendAsync(request);
-            string responseText = await httpResponse.Content.ReadAsStringAsync();
+            using var httpResponse = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+            string responseText = await httpResponse.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
 
             var response = JObject.Parse(responseText);
 

@@ -96,7 +96,7 @@ namespace UnblockNCM.Core.Providers
             return list.First();
         }
 
-        private async Task<string> TrackAsync(string bvid, CancellationToken ct)
+        private async Task<(string Url, long DurationMs)> TrackAsync(string bvid, CancellationToken ct)
         {
             var viewParam = await SignParamAsync(new Dictionary<string, string>
             {
@@ -106,6 +106,7 @@ namespace UnblockNCM.Core.Providers
             var viewJson = JObject.Parse(await HttpHelper.ReadStringAsync(viewResp));
             if (viewJson.Value<int>("code") != 0) throw new InvalidOperationException("bilivideo view fail");
             var cid = viewJson["data"]?["cid"]?.ToString();
+            long durationMs = (viewJson["data"]?.Value<long?>("duration") ?? 0) * 1000L;
             var playParam = await SignParamAsync(new Dictionary<string, string>
             {
                 { "bvid", bvid },
@@ -118,18 +119,18 @@ namespace UnblockNCM.Core.Providers
             if (playJson.Value<int>("code") != 0) throw new InvalidOperationException("bilivideo play fail");
             var audio = playJson["data"]?["dash"]?["audio"]?.FirstOrDefault()?["base_url"]?.ToString();
             if (string.IsNullOrEmpty(audio)) throw new InvalidOperationException("bilivideo audio empty");
-            return audio;
+            return (audio, durationMs);
         }
 
         public async Task<AudioResult> CheckAsync(SongInfo info, CancellationToken ct)
         {
             var item = await _cache.GetOrAddAsync($"bilivideo:{info.Keyword}", () => SearchAsync(info, ct), null, _noCache);
-            var url = await TrackAsync(item.Bvid, ct);
+            var track = await TrackAsync(item.Bvid, ct);
             return new AudioResult
             {
-                Url = url,
+                Url = track.Url,
                 Source = "bilivideo",
-                DurationMs = item.Duration,
+                DurationMs = track.DurationMs > 0 ? track.DurationMs : (item.Duration > 0 ? item.Duration : info.Duration),
                 Title = info.Name,
                 Artists = string.Join(" / ", info.Artists.Select(a => a.Name)),
                 Headers = new System.Collections.Generic.Dictionary<string, string>

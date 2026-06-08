@@ -30,6 +30,7 @@ namespace UnblockNCM.Core.Config
         public bool SelectMaxBr { get; set; }
         public bool FollowSourceOrder { get; set; }
         public bool EnableFlac { get; set; }
+        public bool AllowUnvalidatedFallback { get; set; } = true;
         public bool NoCache { get; set; }
         public string SignCertPath { get; set; }
         public string SignKeyPath { get; set; }

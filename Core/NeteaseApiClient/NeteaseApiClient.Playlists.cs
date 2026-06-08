@@ -300,89 +300,57 @@ namespace YTPlayer.Core
         }
 
         /// <summary>
-        /// 批量获取歌曲详情（参考 Python 版本 _fetch_songs_by_ids，11967-11977行）
-        /// 添加延迟避免触发风控限流，减小批次大小提高成功率
+        /// 批量获取歌曲详情。新版接口单次最多支持约 1000 个 ID；失败时降级为小批次重试。
         /// </summary>
         public async Task<List<SongInfo>> GetSongsByIdsAsync(List<string> ids, CancellationToken cancellationToken = default)
         {
             var allSongs = new List<SongInfo>();
-            // 减小批次大小到200，降低触发风控概率
-            int step = 200;
+            if (ids == null || ids.Count == 0)
+            {
+                return allSongs;
+            }
+
+            const int primaryBatchSize = 1000;
+            const int fallbackBatchSize = 200;
             int batchNum = 0;
 
-            System.Diagnostics.Debug.WriteLine($"[API] 开始批量获取 {ids.Count} 首歌曲详情，每批 {step} 首");
+            System.Diagnostics.Debug.WriteLine($"[API] 开始批量获取 {ids.Count} 首歌曲详情，每批最多 {primaryBatchSize} 首");
 
-            for (int i = 0; i < ids.Count; i += step)
+            for (int i = 0; i < ids.Count; i += primaryBatchSize)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 batchNum++;
-                var batch = ids.Skip(i).Take(step).ToList();
+                var batch = ids.Skip(i).Take(primaryBatchSize).ToList();
+                string label = $"{batchNum}（{i + 1}-{Math.Min(i + batch.Count, ids.Count)}）";
 
-                // 每批之间延迟 1.5 秒，降低风控风险
-                if (i > 0)
+                List<SongInfo>? parsed = await TryFetchSongDetailBatchAsync(batch, label, cancellationToken).ConfigureAwait(false);
+                if (parsed != null)
                 {
-                    int delayMs = 1500;
-                    System.Diagnostics.Debug.WriteLine($"[API] 等待 {delayMs}ms 避免限流...");
-                    await Task.Delay(delayMs, cancellationToken).ConfigureAwait(false);
+                    allSongs.AddRange(parsed);
+                    continue;
                 }
 
-                System.Diagnostics.Debug.WriteLine($"[API] 获取第 {batchNum} 批（{i + 1}-{Math.Min(i + step, ids.Count)}）...");
-
-                var cJson = JsonConvert.SerializeObject(batch.Select(x => new { id = long.Parse(x) }), Formatting.None);
-                var idsJson = JsonConvert.SerializeObject(batch);
-
-                var data = new Dictionary<string, object>
+                if (batch.Count <= fallbackBatchSize)
                 {
-                    { "c", cJson },
-                    { "ids", idsJson }
-                };
-
-                int retryCount = 0;
-                bool success = false;
-
-                // 添加重试机制（最多重试2次）
-                while (retryCount < 3 && !success)
-                {
-                    try
-                    {
-                        var response = await PostWeApiAsync<JObject>("/song/detail", data, cancellationToken: cancellationToken);
-                        var songs = response["songs"] as JArray;
-
-                        if (songs != null && songs.Count > 0)
-                        {
-                            var parsed = ParseSongList(songs);
-                            allSongs.AddRange(parsed);
-                            System.Diagnostics.Debug.WriteLine($"[API] 第 {batchNum} 批成功获取 {parsed.Count} 首");
-                            success = true;
-                        }
-                        else
-                        {
-                            System.Diagnostics.Debug.WriteLine($"[API] 第 {batchNum} 批返回空数据");
-                            throw new Exception("返回空数据");
-                        }
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        System.Diagnostics.Debug.WriteLine("[API] 批量获取歌曲操作被取消");
-                        throw;
-                    }
-                    catch (Exception ex)
-                    {
-                        retryCount++;
-                        System.Diagnostics.Debug.WriteLine($"[API ERROR] 第 {batchNum} 批获取失败（重试 {retryCount}/3）: {ex.Message}");
-
-                        if (retryCount < 3)
-                        {
-                            // 重试前等待更长时间
-                            int retryDelay = 2000 * retryCount;
-                            System.Diagnostics.Debug.WriteLine($"[API] 等待 {retryDelay}ms 后重试...");
-                            await Task.Delay(retryDelay, cancellationToken).ConfigureAwait(false);
-                        }
-                    }
+                    System.Diagnostics.Debug.WriteLine($"[API ERROR] 第 {label} 批最终失败，跳过该批次");
+                    continue;
                 }
 
-                if (!success)
+                System.Diagnostics.Debug.WriteLine($"[API] 第 {label} 批失败，降级为每批 {fallbackBatchSize} 首继续请求");
+                for (int j = 0; j < batch.Count; j += fallbackBatchSize)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[API ERROR] 第 {batchNum} 批最终失败，跳过该批次");
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var fallbackBatch = batch.Skip(j).Take(fallbackBatchSize).ToList();
+                    string fallbackLabel = $"{label}.{(j / fallbackBatchSize) + 1}";
+                    List<SongInfo>? fallbackParsed = await TryFetchSongDetailBatchAsync(fallbackBatch, fallbackLabel, cancellationToken).ConfigureAwait(false);
+                    if (fallbackParsed != null)
+                    {
+                        allSongs.AddRange(fallbackParsed);
+                    }
+                    else
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[API ERROR] 第 {fallbackLabel} 批最终失败，跳过该批次");
+                    }
                 }
             }
 
@@ -390,10 +358,70 @@ namespace YTPlayer.Core
             return allSongs;
         }
 
+        private async Task<List<SongInfo>?> TryFetchSongDetailBatchAsync(List<string> batch, string batchLabel, CancellationToken cancellationToken)
+        {
+            if (batch == null || batch.Count == 0)
+            {
+                return new List<SongInfo>();
+            }
+
+            var normalizedIds = batch
+                .Where(id => long.TryParse(id, NumberStyles.Integer, CultureInfo.InvariantCulture, out _))
+                .ToList();
+            if (normalizedIds.Count == 0)
+            {
+                return new List<SongInfo>();
+            }
+
+            var cJson = JsonConvert.SerializeObject(
+                normalizedIds.Select(x => new { id = long.Parse(x, CultureInfo.InvariantCulture) }),
+                Formatting.None);
+            var idsJson = JsonConvert.SerializeObject(normalizedIds);
+            var data = new Dictionary<string, object>
+            {
+                { "c", cJson },
+                { "ids", idsJson }
+            };
+
+            for (int attempt = 1; attempt <= 3; attempt++)
+            {
+                try
+                {
+                    System.Diagnostics.Debug.WriteLine($"[API] 获取歌曲详情第 {batchLabel} 批，数量 {batch.Count}，尝试 {attempt}/3");
+                    var response = await PostWeApiAsync<JObject>("/song/detail", data, cancellationToken: cancellationToken).ConfigureAwait(false);
+                    var songs = response["songs"] as JArray;
+                    if (songs != null && songs.Count > 0)
+                    {
+                        var parsed = ParseSongList(songs);
+                        System.Diagnostics.Debug.WriteLine($"[API] 第 {batchLabel} 批成功获取 {parsed.Count} 首");
+                        return parsed;
+                    }
+
+                    throw new Exception("返回空数据");
+                }
+                catch (OperationCanceledException)
+                {
+                    System.Diagnostics.Debug.WriteLine("[API] 批量获取歌曲操作被取消");
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[API ERROR] 第 {batchLabel} 批获取失败（尝试 {attempt}/3）: {ex.Message}");
+                    if (attempt < 3)
+                    {
+                        int retryDelay = 1000 * attempt;
+                        await Task.Delay(retryDelay, cancellationToken).ConfigureAwait(false);
+                    }
+                }
+            }
+
+            return null;
+        }
+
         /// <summary>
         /// 获取专辑详情（名称、歌手、封面等基础信息）
         /// </summary>
-        public async Task<AlbumInfo?> GetAlbumDetailAsync(string albumId)
+        public async Task<AlbumInfo?> GetAlbumDetailAsync(string albumId, CancellationToken cancellationToken = default)
         {
             if (string.IsNullOrWhiteSpace(albumId))
             {
@@ -402,10 +430,7 @@ namespace YTPlayer.Core
 
             try
             {
-                string url = $"https://music.163.com/api/album/{albumId}";
-                var response = await _httpClient.GetAsync(url).ConfigureAwait(false);
-                var jsonString = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-                var json = JObject.Parse(jsonString);
+                var json = await GetAlbumV1ResponseAsync(albumId, cancellationToken).ConfigureAwait(false);
                 var albumToken = json["album"];
                 if (albumToken == null)
                 {
@@ -435,6 +460,10 @@ namespace YTPlayer.Core
 
                 return album;
             }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[API] 获取专辑详情失败: {ex.Message}");
@@ -443,48 +472,16 @@ namespace YTPlayer.Core
         }
 
         /// <summary>
-        /// 获取专辑内的所有歌曲（参考 Python 版本 _fetch_album_detail，14999-15048行）
+        /// 获取专辑内的所有歌曲（参考 api-enhanced album.js 的 WEAPI 专辑接口）。
         /// </summary>
-        public async Task<List<SongInfo>> GetAlbumSongsAsync(string albumId)
+        public async Task<List<SongInfo>> GetAlbumSongsAsync(string albumId, CancellationToken cancellationToken = default)
         {
             System.Diagnostics.Debug.WriteLine($"[API] 获取专辑歌曲: {albumId}");
-
-            // 尝试第一个API
-            try
+            var json = await GetAlbumV1ResponseAsync(albumId, cancellationToken).ConfigureAwait(false);
+            var songs = json["songs"] as JArray ?? json["album"]?["songs"] as JArray;
+            if (songs != null && songs.Count > 0)
             {
-                string url = $"https://music.163.com/api/album/{albumId}";
-                var response = await _httpClient.GetAsync(url);
-                var jsonString = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-                var json = JObject.Parse(jsonString);
-
-                var songs = json["songs"] as JArray ?? json["album"]?["songs"] as JArray;
-                if (songs != null && songs.Count > 0)
-                {
-                    return ParseSongList(songs);
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[API] 获取专辑歌曲方法1失败: {ex.Message}");
-            }
-
-            // 尝试第二个API
-            try
-            {
-                string url = $"https://music.163.com/api/album/detail?id={albumId}";
-                var response = await _httpClient.GetAsync(url);
-                var jsonString = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-                var json = JObject.Parse(jsonString);
-
-                var songs = json["songs"] as JArray ?? json["album"]?["songs"] as JArray;
-                if (songs != null && songs.Count > 0)
-                {
-                    return ParseSongList(songs);
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[API] 获取专辑歌曲方法2失败: {ex.Message}");
+                return ParseSongList(songs);
             }
 
             throw new Exception("无法获取专辑歌曲");
@@ -501,32 +498,17 @@ namespace YTPlayer.Core
             }
 
             JObject? response = null;
-
             try
             {
-                response = await PostWeApiAsync<JObject>($"/api/v1/album/{albumId}", new Dictionary<string, object>(), cancellationToken: cancellationToken)
-                    .ConfigureAwait(false);
+                response = await GetAlbumV1ResponseAsync(albumId, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[API] 获取专辑歌曲ID（v1）失败: {ex.Message}");
-            }
-
-            if (response == null)
-            {
-                try
-                {
-                    var payload = new Dictionary<string, object>
-                    {
-                        { "id", albumId }
-                    };
-                    response = await PostWeApiAsync<JObject>("/api/album/v3/detail", payload, cancellationToken: cancellationToken)
-                        .ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"[API] 获取专辑歌曲ID（v3）失败: {ex.Message}");
-                }
+                System.Diagnostics.Debug.WriteLine($"[API] 获取专辑歌曲ID失败: {ex.Message}");
             }
 
             var songsToken = response?["songs"] as JArray ?? response?["album"]?["songs"] as JArray;
@@ -545,6 +527,29 @@ namespace YTPlayer.Core
                 }
             }
             return ids;
+        }
+
+        private async Task<JObject> GetAlbumV1ResponseAsync(string albumId, CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(albumId))
+            {
+                throw new ArgumentException("专辑ID不能为空", nameof(albumId));
+            }
+
+            var response = await PostWeApiAsync<JObject>(
+                $"/api/v1/album/{albumId}",
+                new Dictionary<string, object>(),
+                cancellationToken: cancellationToken,
+                autoConvertApiSegment: true).ConfigureAwait(false);
+
+            int code = response["code"]?.Value<int>() ?? 200;
+            if (code != 200)
+            {
+                string message = response["message"]?.Value<string>() ?? response["msg"]?.Value<string>() ?? "未知错误";
+                throw new InvalidOperationException($"专辑接口请求失败: code={code}, message={message}");
+            }
+
+            return response;
         }
 
         /// <summary>

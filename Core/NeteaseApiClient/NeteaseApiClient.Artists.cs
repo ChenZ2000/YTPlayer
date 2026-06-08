@@ -223,7 +223,7 @@ namespace YTPlayer.Core
         /// <summary>
         /// 分页获取歌手歌曲列表。
         /// </summary>
-        public async Task<(List<SongInfo> Songs, bool HasMore, int TotalCount)> GetArtistSongsAsync(long artistId, int limit = 50, int offset = 0, string order = "hot")
+        public async Task<(List<SongInfo> Songs, bool HasMore, int TotalCount)> GetArtistSongsAsync(long artistId, int limit = 50, int offset = 0, string order = "hot", CancellationToken cancellationToken = default)
         {
             if (artistId <= 0)
             {
@@ -240,14 +240,24 @@ namespace YTPlayer.Core
                 { "limit", limit }
             };
 
-            var response = await PostWeApiAsync<JObject>(
+            var response = await PostEApiAsync<JObject>(
                 "/api/v1/artist/songs",
                 payload,
-                autoConvertApiSegment: true);
+                useIosHeaders: true,
+                cancellationToken: cancellationToken);
 
-            var songs = ParseSongList(response?["songs"] as JArray);
-            bool hasMore = response?["more"]?.Value<bool>() ?? response?["hasMore"]?.Value<bool>() ?? false;
-            int totalCount = response?["total"]?.Value<int>() ?? response?["songCount"]?.Value<int>() ?? (offset + songs.Count + (hasMore ? 1 : 0));
+            var dataNode = response?["data"] as JObject ?? response;
+            var songs = ParseSongList(dataNode?["songs"] as JArray ?? response?["songs"] as JArray);
+            bool hasMore = dataNode?["more"]?.Value<bool>()
+                ?? dataNode?["hasMore"]?.Value<bool>()
+                ?? response?["more"]?.Value<bool>()
+                ?? response?["hasMore"]?.Value<bool>()
+                ?? false;
+            int totalCount = dataNode?["total"]?.Value<int>()
+                ?? dataNode?["songCount"]?.Value<int>()
+                ?? response?["total"]?.Value<int>()
+                ?? response?["songCount"]?.Value<int>()
+                ?? (offset + songs.Count + (hasMore ? 1 : 0));
 
             return (songs, hasMore, totalCount);
         }
@@ -294,7 +304,17 @@ namespace YTPlayer.Core
 
             var dataNode = response?["data"] as JObject ?? response;
             var artists = ParseArtistList(dataNode?["artists"] as JArray ?? dataNode?["list"] as JArray ?? dataNode?["data"] as JArray);
-            int totalCount = dataNode?["artistCount"]?.Value<int>() ?? response?["count"]?.Value<int>() ?? artists.Count;
+            bool hasMore = dataNode?["hasMore"]?.Value<bool>()
+                ?? dataNode?["more"]?.Value<bool>()
+                ?? response?["hasMore"]?.Value<bool>()
+                ?? response?["more"]?.Value<bool>()
+                ?? false;
+            int totalCount = dataNode?["artistCount"]?.Value<int>()
+                ?? dataNode?["count"]?.Value<int>()
+                ?? dataNode?["total"]?.Value<int>()
+                ?? response?["count"]?.Value<int>()
+                ?? response?["total"]?.Value<int>()
+                ?? (offset + artists.Count + (hasMore ? 1 : 0));
 
             return new SearchResult<ArtistInfo>(artists, totalCount, offset, limit, response);
         }

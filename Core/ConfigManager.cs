@@ -11,16 +11,15 @@ using YTPlayer.Core.Auth;
 namespace YTPlayer.Core
 {
     /// <summary>
-    /// 配置管理器 - 负责配置文件的加载、保存和管理
-    /// 便携式设计：配置文件保存在程序目录，与 Python 版本保持一致
+    /// 配置管理器 - 负责配置文件的加载、保存和管理。
+    /// 默认使用便携式目录；安装到当前 Windows 用户后，配置文件会切换到用户文档目录。
     /// </summary>
     public class ConfigManager
     {
-        private static readonly object _lock = new object();
+        private static readonly object _lock = ApplicationStorage.SyncRoot;
         private static ConfigManager? _instance;
 
         internal const int MaxSearchHistoryCount = 50;
-        internal const int MaxLastPlayingQueueCount = 300;
 
         /// <summary>
         /// 获取程序所在目录
@@ -38,17 +37,14 @@ namespace YTPlayer.Core
         }
 
         /// <summary>
-        /// 配置文件路径（保存在程序目录，便携式设计）
+        /// 配置文件路径
         /// </summary>
-        private static readonly string ConfigFilePath = Path.Combine(
-            GetApplicationDirectory(),
-            "config.json"
-        );
+        private static string ConfigFilePath => ApplicationStorage.ConfigFilePath;
 
         /// <summary>
         /// 配置目录路径
         /// </summary>
-        private static readonly string ConfigDirectory = GetApplicationDirectory();
+        private static string ConfigDirectory => ApplicationStorage.CurrentDataDirectory;
 
         /// <summary>
         /// 单例实例
@@ -515,7 +511,6 @@ namespace YTPlayer.Core
             else
             {
                 var cleanedQueue = new List<string>(config.LastPlayingQueue.Count);
-                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foreach (string id in config.LastPlayingQueue)
                 {
                     if (string.IsNullOrWhiteSpace(id))
@@ -523,15 +518,7 @@ namespace YTPlayer.Core
                         continue;
                     }
                     string trimmed = id.Trim();
-                    if (!seen.Add(trimmed))
-                    {
-                        continue;
-                    }
                     cleanedQueue.Add(trimmed);
-                    if (cleanedQueue.Count >= MaxLastPlayingQueueCount)
-                    {
-                        break;
-                    }
                 }
                 if (!config.LastPlayingQueue.SequenceEqual(cleanedQueue, StringComparer.OrdinalIgnoreCase))
                 {

@@ -1045,7 +1045,7 @@ public partial class MainForm
 			int pageStart = (focusedPage >= 0 && pendingPages.Contains(focusedPage)) ? focusedPage : pendingPages.First();
 			pendingPages.Remove(pageStart);
 
-			var (episodes, hasMore, reportedTotal) = await _apiClient.GetPodcastEpisodesAsync(podcastId, 100, pageStart).ConfigureAwait(continueOnCapturedContext: false);
+			var (episodes, hasMore, reportedTotal) = await _apiClient.GetPodcastEpisodesAsync(podcastId, 100, pageStart, cancellationToken: cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 			int requiredCount = totalCount;
 			if (reportedTotal > requiredCount)
 			{
@@ -1143,7 +1143,7 @@ public partial class MainForm
 		foreach (int pageStart in pages)
 		{
 			cancellationToken.ThrowIfCancellationRequested();
-			var (episodes, _, _) = await _apiClient.GetPodcastEpisodesAsync(podcastId, 100, pageStart).ConfigureAwait(continueOnCapturedContext: false);
+			var (episodes, _, _) = await _apiClient.GetPodcastEpisodesAsync(podcastId, 100, pageStart, cancellationToken: cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 			if (episodes == null || episodes.Count == 0)
 			{
 				continue;
@@ -1297,7 +1297,26 @@ public partial class MainForm
 							throw new Exception("请先登录");
 						}
 						long userId = long.Parse(_accountState.UserId);
-						var (playlists, _) = await _apiClient.GetUserPlaylistsAsync(userId);
+						const int pageSize = 1000;
+						int offset = 0;
+						int totalCount = 0;
+						List<PlaylistInfo> playlists = new List<PlaylistInfo>();
+						while (true)
+						{
+							var (pageItems, reportedTotal) = await _apiClient.GetUserPlaylistsAsync(userId, pageSize, offset);
+							List<PlaylistInfo> currentPage = pageItems ?? new List<PlaylistInfo>();
+							if (currentPage.Count == 0)
+							{
+								break;
+							}
+							playlists.AddRange(currentPage);
+							totalCount = Math.Max(totalCount, reportedTotal);
+							if (currentPage.Count < pageSize || (totalCount > 0 && playlists.Count >= totalCount))
+							{
+								break;
+							}
+							offset = checked(offset + currentPage.Count);
+						}
 						if (playlists == null || playlists.Count == 0)
 						{
 							throw new Exception("您还没有歌单");
@@ -1341,9 +1360,27 @@ public partial class MainForm
 				case "user_albums":
 					totalTasks = await DownloadAlbumListCategory(categoryName, async delegate
 					{
-						(List<AlbumInfo>, int) tuple = await _apiClient.GetUserAlbumsAsync();
-						var (albums, _) = tuple;
-						_ = tuple;
+						const int pageSize = 100;
+						int offset = 0;
+						int totalCount = 0;
+						List<AlbumInfo> albums = new List<AlbumInfo>();
+						while (true)
+						{
+							(List<AlbumInfo>, int) tuple = await _apiClient.GetUserAlbumsAsync(pageSize, offset);
+							var (pageItems, reportedTotal) = tuple;
+							List<AlbumInfo> currentPage = pageItems ?? new List<AlbumInfo>();
+							if (currentPage.Count == 0)
+							{
+								break;
+							}
+							albums.AddRange(currentPage);
+							totalCount = Math.Max(totalCount, reportedTotal);
+							if (currentPage.Count < pageSize || (totalCount > 0 && albums.Count >= totalCount))
+							{
+								break;
+							}
+							offset = checked(offset + currentPage.Count);
+						}
 						if (albums == null || albums.Count == 0)
 						{
 							throw new Exception("您还没有收藏专辑");
@@ -2156,15 +2193,7 @@ public partial class MainForm
 				{
 					_cloudLoading = true;
 					string paginationKey = BuildCloudPaginationKey();
-					bool offsetClamped;
-					int requestedOffset = Math.Max(0, (_cloudPage - 1) * CloudPageSize);
-					int normalizedOffset = NormalizeOffsetWithCap(paginationKey, CloudPageSize, requestedOffset, out offsetClamped);
-					if (offsetClamped)
-					{
-						int page = (normalizedOffset / CloudPageSize) + 1;
-						_cloudPage = page;
-						UpdateStatusBar($"页码过大，已跳到第 {page} 页");
-					}
+					_cloudPage = 1;
 					int pendingIndex = 0;
 					int num;
 					if (preserveSelection)
@@ -2188,8 +2217,8 @@ public partial class MainForm
 					ViewLoadRequest request = new ViewLoadRequest("user_cloud", "云盘歌曲", "正在加载云盘歌曲...", cancelActiveNavigation: true, pendingIndex);
 					ViewLoadResult<CloudPageViewData?> loadResult = await RunViewLoadAsync(request, async delegate(CancellationToken token)
 					{
-						int offset = Math.Max(0, (_cloudPage - 1) * 50);
-						CloudSongPageResult pageResult = await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.GetCloudSongsAsync(50, offset), $"user_cloud:page{_cloudPage}", token, delegate(int attempt, Exception _)
+						const int offset = 0;
+						CloudSongPageResult pageResult = await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.GetCloudSongsAsync(CloudPageSize, offset), "user_cloud:offset0", token, delegate(int attempt, Exception _)
 						{
 							SafeInvoke(delegate
 							{
@@ -2205,16 +2234,20 @@ public partial class MainForm
 						{
 							return;
 						}
-						_cloudHasMore = data.HasMore;
+						_cloudHasMore = false;
 						_cloudTotalCount = data.TotalCount;
 						_cloudUsedSize = data.UsedSize;
 						_cloudMaxSize = data.MaxSize;
-						_currentPage = _cloudPage;
-						_maxPage = (_cloudHasMore ? (_cloudPage + 1) : _cloudPage);
-						_hasNextSearchPage = data.HasMore;
-						DisplaySongs(data.Songs, showPagination: true, data.HasMore, data.Offset + 1, preserveSelection, "user_cloud", "云盘歌曲", skipAvailabilityCheck: true);
+						_currentPage = 1;
+						_maxPage = 1;
+						_hasNextSearchPage = false;
+						DisplaySongs(data.Songs, showPagination: false, hasNextPage: false, 1, preserveSelection, "user_cloud", "云盘歌曲", skipAvailabilityCheck: true);
 						RestoreCloudSelection();
-						UpdateStatusBar(BuildCloudStatusText(data.Songs.Count));
+						UpdateStatusBar(BuildCloudStatusText(data.Songs.Count, data.HasMore));
+						if (data.HasMore && data.Songs != null && data.Songs.Count > 0)
+						{
+							LoadRemainingCloudSongsAsync(data.Songs, data.Offset + data.Songs.Count, data.TotalCount, data.UsedSize, data.MaxSize).SafeFireAndForget("cloud songs proactive load");
+						}
 					}
 				}
 				catch (Exception ex)
@@ -2239,11 +2272,94 @@ public partial class MainForm
 		}
 	}
 
-	private string BuildCloudStatusText(int currentCount)
+	private async Task LoadRemainingCloudSongsAsync(List<SongInfo> seedSongs, int nextOffset, int totalCount, long usedSize, long maxSize)
+	{
+		List<SongInfo> allSongs = CloneList(seedSongs ?? new List<SongInfo>());
+		int offset = Math.Max(0, nextOffset);
+		int knownTotal = Math.Max(totalCount, allSongs.Count);
+		bool hasMore = true;
+		int safety = 0;
+		try
+		{
+			checked
+			{
+				while (hasMore && safety < 200)
+				{
+					if (!string.Equals(_currentViewSource, "user_cloud", StringComparison.OrdinalIgnoreCase))
+					{
+						return;
+					}
+					int fetchOffset = offset;
+					CloudSongPageResult pageResult = await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.GetCloudSongsAsync(CloudPageSize, fetchOffset), $"user_cloud:offset{fetchOffset}", CancellationToken.None, delegate(int attempt, Exception _)
+					{
+						SafeInvoke(delegate
+						{
+							UpdateStatusBar($"加载云盘失败，正在重试（第 {attempt} 次）...");
+						});
+					}).ConfigureAwait(continueOnCapturedContext: false);
+					List<SongInfo> pageSongs = pageResult?.Songs ?? new List<SongInfo>();
+					if (pageSongs.Count == 0)
+					{
+						break;
+					}
+					allSongs.AddRange(pageSongs);
+					offset = Math.Max(fetchOffset + CloudPageSize, fetchOffset + pageSongs.Count);
+					knownTotal = Math.Max(Math.Max(knownTotal, pageResult.TotalCount), allSongs.Count);
+					usedSize = pageResult.UsedSize;
+					maxSize = pageResult.MaxSize;
+					hasMore = pageResult.HasMore || (knownTotal > offset);
+					int loadedCount = allSongs.Count;
+					bool currentHasMore = hasMore;
+					long currentUsedSize = usedSize;
+					long currentMaxSize = maxSize;
+					int totalForStatus = knownTotal;
+					await ExecuteOnUiThreadAsync(delegate
+					{
+						if (string.Equals(_currentViewSource, "user_cloud", StringComparison.OrdinalIgnoreCase))
+						{
+							_cloudPage = 1;
+							_cloudHasMore = false;
+							_cloudTotalCount = totalForStatus;
+							_cloudUsedSize = currentUsedSize;
+							_cloudMaxSize = currentMaxSize;
+							_currentPage = 1;
+							_maxPage = 1;
+							_hasNextSearchPage = false;
+							PatchSongs(allSongs, 1, skipAvailabilityCheck: true, showPagination: false, hasPreviousPage: false, hasNextPage: false, pendingFocusIndex: -1, allowSelection: false);
+							UpdateStatusBar(BuildCloudStatusText(loadedCount, currentHasMore));
+						}
+					}).ConfigureAwait(continueOnCapturedContext: false);
+					safety++;
+					await Task.Yield();
+				}
+			}
+		}
+		catch (Exception ex)
+		{
+			if (!TryHandleOperationCancelled(ex, "加载云盘已取消"))
+			{
+				Debug.WriteLine($"[Cloud] 自动加载更多云盘歌曲失败: {ex}");
+				await ExecuteOnUiThreadAsync(delegate
+				{
+					if (string.Equals(_currentViewSource, "user_cloud", StringComparison.OrdinalIgnoreCase))
+					{
+						UpdateStatusBar("加载更多云盘歌曲失败，请稍后刷新重试");
+					}
+				}).ConfigureAwait(continueOnCapturedContext: false);
+			}
+		}
+	}
+
+	private string BuildCloudStatusText(int currentCount, bool hasMore = false)
 	{
 		string value = FormatSize(_cloudUsedSize);
 		string value2 = ((_cloudMaxSize > 0) ? FormatSize(_cloudMaxSize) : "未知");
-		return $"云盘 - 第 {_cloudPage} 页，本页 {currentCount} 首 / 总 {_cloudTotalCount} 首，已用 {value} / {value2}";
+		string countText = (_cloudTotalCount > currentCount) ? $"已加载 {currentCount} / {_cloudTotalCount} 首" : $"{currentCount} 首";
+		if (hasMore)
+		{
+			countText += "，正在自动加载更多";
+		}
+		return $"云盘 - {countText}，已用 {value} / {value2}";
 	}
 
 	private static string FormatSize(long bytes)

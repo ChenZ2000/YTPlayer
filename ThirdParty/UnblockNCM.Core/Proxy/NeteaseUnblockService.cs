@@ -126,6 +126,12 @@ namespace UnblockNCM.Core.Proxy
             var find = new FindService(_http, cacheCommon, Environment.GetEnvironmentVariable("SEARCH_ALBUM") == "true", options.NoCache);
             var providers = new Dictionary<string, IProvider>(StringComparer.OrdinalIgnoreCase)
             {
+                { "byfuns", new ByfunsProvider(cacheCommon, options.NoCache) },
+                { "gdmusic", new GdMusicProvider(cacheCommon, options.NoCache) },
+                { "baka", new BakaProvider(cacheCommon, options.NoCache) },
+                { "bikonoo", new BikonooProvider(cacheCommon, options.NoCache) },
+                { "msls", new MslsProvider(cacheCommon, options.NoCache) },
+                { "qijieya", new QijieyaProvider(cacheCommon, options.NoCache) },
                 { "kugou", new KugouProvider(_http, cacheCommon, options.NoCache) },
                 { "bodian", new BodianProvider(_http, cacheCommon, options.NoCache) },
                 { "migu", new MiguProvider(_http, cacheCommon, Environment.GetEnvironmentVariable("MIGU_COOKIE"), options.NoCache) },

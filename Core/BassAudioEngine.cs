@@ -379,42 +379,60 @@ namespace YTPlayer.Core
             }
 
             bool lockTaken = true;
+            bool transitionedToLoading = false;
+            bool committed = false;
+            int preparedStream = 0;
+            BassStreamProvider? preparedStreamProvider = null;
+            SmartCacheManager? preparedCacheManager = null;
+
             try
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                StopInternal(raiseEvent: false);
-                _stateMachine.TransitionTo(PlaybackState.Loading);
+                bool hadCurrentStream = HasCurrentStream();
+                if (!hadCurrentStream)
+                {
+                    transitionedToLoading = _stateMachine.TransitionTo(PlaybackState.Loading);
+                }
+                else
+                {
+                    Debug.WriteLine("[BassAudioEngine] 当前已有播放流，延迟到新流启动成功后再切换");
+                }
 
-                // ⭐⭐⭐ 检查是否有预加载的完整流对象（就绪状态）
+                // 检查是否有预加载的完整流对象（就绪状态）。旧流会一直保留到预加载流成功启动后。
                 if (preloadedData != null && preloadedData.IsReady && preloadedData.StreamHandle != 0)
                 {
-                    Debug.WriteLine($"[BassAudioEngine] ✓✓✓ 使用预加载的完整流对象，句柄: {preloadedData.StreamHandle}");
+                    if (preloadedData.CacheManager == null || preloadedData.StreamProvider == null)
+                    {
+                        OnPlaybackError("预加载播放资源不完整");
+                        RestoreIdleAfterFailedPlayback(transitionedToLoading);
+                        return false;
+                    }
 
-                    // 直接使用预加载的流对象，跳过所有初始化
-                    _currentCacheManager = preloadedData.CacheManager;
-                    _currentStreamProvider = preloadedData.StreamProvider;
-                    RegisterStreamProviderCallbacks(_currentStreamProvider);
-                    _currentStream = preloadedData.StreamHandle;
+                    preparedStream = preloadedData.StreamHandle;
+                    preparedStreamProvider = preloadedData.StreamProvider;
+                    preparedCacheManager = preloadedData.CacheManager;
 
-                    AttachCacheManager(_currentCacheManager);
+                    Debug.WriteLine($"[BassAudioEngine] ✓✓✓ 使用预加载的完整流对象，句柄: {preparedStream}");
+                    Debug.WriteLine($"[BassAudioEngine] ⭐ 准备播放预加载流: stream={preparedStream}");
 
-                    Debug.WriteLine($"[BassAudioEngine] ⭐ 准备播放预加载流: stream={_currentStream}");
-
-                    ApplyVolume();
+                    EnsureDeviceContext();
+                    BASS_ChannelSetPosition(preparedStream, 0, BASS_POS_BYTE);
+                    BASS_ChannelSetAttribute(preparedStream, BASS_ATTRIB_VOL, _volume);
                     Debug.WriteLine($"[BassAudioEngine] ✓ ApplyVolume完成，音量={_volume}");
 
-                    SetupSyncs();
-                    Debug.WriteLine($"[BassAudioEngine] ✓ SetupSyncs完成");
+                    if (!ValidatePreparedStream(preparedStream, preloadedData.Size > 0 ? preloadedData.Size : song.Size))
+                    {
+                        ReleasePreparedPlaybackResources(preparedStream, preparedStreamProvider, preparedCacheManager);
+                        preparedStream = 0;
+                        preparedStreamProvider = null;
+                        preparedCacheManager = null;
+                        RestoreIdleAfterFailedPlayback(transitionedToLoading);
+                        return false;
+                    }
 
-                    StartPositionMonitor();
-                    Debug.WriteLine($"[BassAudioEngine] ✓ StartPositionMonitor完成");
-
-                    _currentCacheManager.SetPlayingState();
-                    _currentSong = song;
-
-                    Debug.WriteLine($"[BassAudioEngine] ⭐⭐⭐ 调用 BASS_ChannelPlay (预加载流, stream={_currentStream})");
-                    bool preloadPlayResult = BASS_ChannelPlay(_currentStream, false);
+                    Debug.WriteLine($"[BassAudioEngine] ⭐⭐⭐ 调用 BASS_ChannelPlay (预加载流, stream={preparedStream})");
+                    bool preloadPlayResult = BASS_ChannelPlay(preparedStream, false);
                     Debug.WriteLine($"[BassAudioEngine] BASS_ChannelPlay 返回: {preloadPlayResult}");
 
                     if (!preloadPlayResult)
@@ -422,13 +440,15 @@ namespace YTPlayer.Core
                         int errorCode = BASS_ErrorGetCode();
                         Debug.WriteLine($"[BassAudioEngine] ❌ BASS_ChannelPlay失败: errorCode={errorCode}, msg={GetErrorMessage(errorCode)}");
                         OnPlaybackError($"播放失败: {GetErrorMessage(errorCode)}");
-                        _stateMachine.TransitionTo(PlaybackState.Idle);
+                        ReleasePreparedPlaybackResources(preparedStream, preparedStreamProvider, preparedCacheManager);
+                        preparedStream = 0;
+                        preparedStreamProvider = null;
+                        preparedCacheManager = null;
+                        RestoreIdleAfterFailedPlayback(transitionedToLoading);
                         return false;
                     }
 
-                    Debug.WriteLine($"[BassAudioEngine] ✓✓✓ 预加载流播放成功，无缝切换完成！");
-
-                    int preloadChannelState = BASS_ChannelIsActive(_currentStream);
+                    int preloadChannelState = BASS_ChannelIsActive(preparedStream);
                     Debug.WriteLine($"[BassAudioEngine] BASS_ChannelIsActive 返回: {preloadChannelState} (1=Playing)");
 
                     if (preloadChannelState != BASS_ACTIVE_PLAYING)
@@ -436,20 +456,30 @@ namespace YTPlayer.Core
                         int errorCode = BASS_ErrorGetCode();
                         Debug.WriteLine($"[BassAudioEngine] ❌❌❌ Channel未在播放状态！ errorCode={errorCode}");
                         OnPlaybackError($"播放启动失败: Channel状态异常 (state={preloadChannelState})");
-                        _stateMachine.TransitionTo(PlaybackState.Idle);
+                        ReleasePreparedPlaybackResources(preparedStream, preparedStreamProvider, preparedCacheManager);
+                        preparedStream = 0;
+                        preparedStreamProvider = null;
+                        preparedCacheManager = null;
+                        RestoreIdleAfterFailedPlayback(transitionedToLoading);
                         return false;
                     }
 
-                    bool preloadStateChanged = _stateMachine.TransitionTo(PlaybackState.Playing);
+                    CommitPreparedPlayback(song, preparedStream, preparedStreamProvider, preparedCacheManager);
+                    committed = true;
+                    preparedStream = 0;
+                    preparedStreamProvider = null;
+                    preparedCacheManager = null;
+
+                    bool preloadStateChanged = TransitionToPlayingAfterCommit();
                     Debug.WriteLine($"[BassAudioEngine] 状态转换结果: {preloadStateChanged}");
 
                     OnPlaybackStarted(song);
-                    Debug.WriteLine($"[BassAudioEngine] ✓ PlayAsync完成（预加载流），返回true");
+                    Debug.WriteLine("[BassAudioEngine] ✓ PlayAsync完成（预加载流），返回true");
                     return true;
                 }
 
-                // ⭐ 回退：使用原有流程（预加载缓存或新建）
-                Debug.WriteLine($"[BassAudioEngine] 无预加载完整流，使用传统流程");
+                // 回退：使用常规流程准备缓存和 BASS stream。准备阶段不改动当前播放流。
+                Debug.WriteLine("[BassAudioEngine] 无预加载完整流，使用延迟提交流程");
 
                 long totalSize = song.Size;
                 if (totalSize <= 0)
@@ -465,70 +495,73 @@ namespace YTPlayer.Core
                 if (totalSize <= 0)
                 {
                     OnPlaybackError("无法获取音频文件大小");
-                    _stateMachine.TransitionTo(PlaybackState.Idle);
+                    RestoreIdleAfterFailedPlayback(transitionedToLoading);
                     return false;
                 }
 
-                // ⭐ 使用预加载的缓存（如果有），否则创建新的
-                SmartCacheManager cacheManager;
+                cancellationToken.ThrowIfCancellationRequested();
+
                 if (preloadedData != null && preloadedData.CacheManager != null)
                 {
-                    Debug.WriteLine($"[BassAudioEngine] ✓ 使用预加载的缓存管理器");
-                    cacheManager = preloadedData.CacheManager;
+                    Debug.WriteLine("[BassAudioEngine] ✓ 使用预加载的缓存管理器");
+                    preparedCacheManager = preloadedData.CacheManager;
                 }
                 else
                 {
-                    Debug.WriteLine($"[BassAudioEngine] 创建新的缓存管理器");
-                    cacheManager = await GetOrCreateCacheManagerAsync(song, totalSize, cancellationToken, song.CustomHeaders).ConfigureAwait(false);
+                    Debug.WriteLine("[BassAudioEngine] 创建新的缓存管理器");
+                    preparedCacheManager = await GetOrCreateCacheManagerAsync(song, totalSize, cancellationToken, song.CustomHeaders).ConfigureAwait(false);
                 }
 
-                AttachCacheManager(cacheManager);
-                _currentCacheManager = cacheManager;
-
-                bool ready = await cacheManager.WaitForCacheReadyAsync(0, true, cancellationToken).ConfigureAwait(false);
+                bool ready = await preparedCacheManager.WaitForCacheReadyAsync(0, true, cancellationToken).ConfigureAwait(false);
                 if (!ready)
                 {
                     OnPlaybackError("缓存加载超时");
-                    _stateMachine.TransitionTo(PlaybackState.Idle);
+                    ReleasePreparedPlaybackResources(0, null, preparedCacheManager);
+                    preparedCacheManager = null;
+                    RestoreIdleAfterFailedPlayback(transitionedToLoading);
                     return false;
                 }
 
-                _currentStreamProvider = new BassStreamProvider(cacheManager);
-                RegisterStreamProviderCallbacks(_currentStreamProvider);
-                EnsureDeviceContext();
-                _currentStream = _currentStreamProvider.CreateStream();
+                cancellationToken.ThrowIfCancellationRequested();
 
-                // ⭐⭐⭐ 关键修复：BASS stream句柄是DWORD（无符号32位），但C#中声明为int（有符号）
-                // 大于0x7FFFFFFF的句柄会被解释为负数，但仍然是有效句柄
-                // BASS_StreamCreateFileUser只在失败时返回0，不会返回负数错误码
-                if (_currentStream == 0)
+                preparedStreamProvider = new BassStreamProvider(preparedCacheManager);
+                EnsureDeviceContext();
+                preparedStream = preparedStreamProvider.CreateStream();
+
+                // BASS stream 句柄是 DWORD（无符号32位），C# 声明为 int；只有 0 表示失败。
+                if (preparedStream == 0)
                 {
                     int errorCode = BASS_ErrorGetCode();
                     DebugLogger.Log(
                         DebugLogger.LogLevel.Error,
                         "BassAudioEngine",
-                        $"创建播放流失败: handle={_currentStream}, error={GetErrorMessage(errorCode)}");
+                        $"创建播放流失败: handle={preparedStream}, error={GetErrorMessage(errorCode)}");
                     OnPlaybackError($"创建播放流失败: {GetErrorMessage(errorCode)}");
-                    _stateMachine.TransitionTo(PlaybackState.Idle);
+                    ReleasePreparedPlaybackResources(preparedStream, preparedStreamProvider, preparedCacheManager);
+                    preparedStream = 0;
+                    preparedStreamProvider = null;
+                    preparedCacheManager = null;
+                    RestoreIdleAfterFailedPlayback(transitionedToLoading);
                     return false;
                 }
 
-                Debug.WriteLine($"[BassAudioEngine] ⭐ 准备播放: stream={_currentStream}");
+                Debug.WriteLine($"[BassAudioEngine] ⭐ 准备播放: stream={preparedStream}");
 
-                ApplyVolume();
+                BASS_ChannelSetAttribute(preparedStream, BASS_ATTRIB_VOL, _volume);
                 Debug.WriteLine($"[BassAudioEngine] ✓ ApplyVolume完成，音量={_volume}");
 
-                SetupSyncs();
-                Debug.WriteLine($"[BassAudioEngine] ✓ SetupSyncs完成");
+                if (!ValidatePreparedStream(preparedStream, totalSize))
+                {
+                    ReleasePreparedPlaybackResources(preparedStream, preparedStreamProvider, preparedCacheManager);
+                    preparedStream = 0;
+                    preparedStreamProvider = null;
+                    preparedCacheManager = null;
+                    RestoreIdleAfterFailedPlayback(transitionedToLoading);
+                    return false;
+                }
 
-                StartPositionMonitor();
-                Debug.WriteLine($"[BassAudioEngine] ✓ StartPositionMonitor完成");
-
-                cacheManager.SetPlayingState();
-                _currentSong = song;
-
-                Debug.WriteLine($"[BassAudioEngine] ⭐⭐⭐ 调用 BASS_ChannelPlay (stream={_currentStream})");
-                bool playResult = BASS_ChannelPlay(_currentStream, false);
+                Debug.WriteLine($"[BassAudioEngine] ⭐⭐⭐ 调用 BASS_ChannelPlay (stream={preparedStream})");
+                bool playResult = BASS_ChannelPlay(preparedStream, false);
                 Debug.WriteLine($"[BassAudioEngine] BASS_ChannelPlay 返回: {playResult}");
 
                 if (!playResult)
@@ -536,100 +569,63 @@ namespace YTPlayer.Core
                     int errorCode = BASS_ErrorGetCode();
                     Debug.WriteLine($"[BassAudioEngine] ❌ BASS_ChannelPlay失败: errorCode={errorCode}, msg={GetErrorMessage(errorCode)}");
                     OnPlaybackError($"播放失败: {GetErrorMessage(errorCode)}");
-                    _stateMachine.TransitionTo(PlaybackState.Idle);
+                    ReleasePreparedPlaybackResources(preparedStream, preparedStreamProvider, preparedCacheManager);
+                    preparedStream = 0;
+                    preparedStreamProvider = null;
+                    preparedCacheManager = null;
+                    RestoreIdleAfterFailedPlayback(transitionedToLoading);
                     return false;
                 }
 
-                Debug.WriteLine($"[BassAudioEngine] ✓✓✓ BASS_ChannelPlay成功，开始转换状态到Playing");
-
-                // ⭐⭐⭐ 验证播放状态
-                int channelState = BASS_ChannelIsActive(_currentStream);
+                int channelState = BASS_ChannelIsActive(preparedStream);
                 Debug.WriteLine($"[BassAudioEngine] BASS_ChannelIsActive 返回: {channelState} (1=Playing, 0=Stopped, 3=Paused)");
-
-                // 获取channel详细信息
-                BASS_CHANNELINFO channelInfo = new BASS_CHANNELINFO();
-                bool infoSuccess = BASS_ChannelGetInfo(_currentStream, ref channelInfo);
-                if (infoSuccess)
-                {
-                    Debug.WriteLine($"[BassAudioEngine] Channel信息:");
-                    Debug.WriteLine($"[BassAudioEngine]   采样率: {channelInfo.freq} Hz");
-                    Debug.WriteLine($"[BassAudioEngine]   声道数: {channelInfo.chans}");
-                    Debug.WriteLine($"[BassAudioEngine]   类型: 0x{channelInfo.ctype:X8}");
-                    Debug.WriteLine($"[BassAudioEngine]   插件: {channelInfo.plugin}");
-                    Debug.WriteLine($"[BassAudioEngine]   标志: 0x{channelInfo.flags:X8}");
-                }
-                else
-                {
-                    Debug.WriteLine($"[BassAudioEngine] ⚠️ 无法获取Channel信息");
-                }
-
-                long channelLength = BASS_ChannelGetLength(_currentStream, BASS_POS_BYTE);
-                Debug.WriteLine($"[BassAudioEngine] Channel长度: {channelLength} bytes");
-
-                // ⭐⭐⭐ 关键修复：验证 stream 长度是否有效
-                // 如果长度无效（<= 0 或明显过小），说明 BASS 无法正确识别音频格式
-                // 这通常是因为缓存数据不足或损坏导致的
-                if (channelLength <= 0)
-                {
-                    Debug.WriteLine($"[BassAudioEngine] ❌❌❌ Channel长度无效: {channelLength}，无法播放");
-                    OnPlaybackError($"音频格式识别失败: stream长度无效 ({channelLength} bytes)");
-
-                    // 清理已创建的资源
-                    _currentStreamProvider?.AbortPendingReads();
-                    if (_currentStream != 0)
-                    {
-                        BASS_ChannelStop(_currentStream);
-                        BASS_StreamFree(_currentStream);
-                        _currentStream = 0;
-                    }
-                    if (_currentStreamProvider != null)
-                    {
-                        UnregisterStreamProviderCallbacks(_currentStreamProvider);
-                        _currentStreamProvider.Dispose();
-                        _currentStreamProvider = null;
-                    }
-
-                    _stateMachine.TransitionTo(PlaybackState.Idle);
-                    return false;
-                }
-
-                // ⭐ 可选：验证长度是否合理（与预期大小相差不能太大）
-                // 对于无损音频，允许一定的误差（元数据、封装格式等）
-                if (totalSize > 0 && channelLength < totalSize * 0.5)
-                {
-                    Debug.WriteLine($"[BassAudioEngine] ⚠️ Channel长度({channelLength})明显小于预期({totalSize})，可能识别不完整");
-                    Debug.WriteLine($"[BassAudioEngine] ⚠️ 继续播放，但可能提前结束");
-                }
 
                 if (channelState != BASS_ACTIVE_PLAYING)
                 {
                     int errorCode = BASS_ErrorGetCode();
                     Debug.WriteLine($"[BassAudioEngine] ❌❌❌ Channel未在播放状态！ errorCode={errorCode}, msg={GetErrorMessage(errorCode)}");
-
                     OnPlaybackError($"播放启动失败: Channel状态异常 (state={channelState})");
-                    _stateMachine.TransitionTo(PlaybackState.Idle);
+                    ReleasePreparedPlaybackResources(preparedStream, preparedStreamProvider, preparedCacheManager);
+                    preparedStream = 0;
+                    preparedStreamProvider = null;
+                    preparedCacheManager = null;
+                    RestoreIdleAfterFailedPlayback(transitionedToLoading);
                     return false;
                 }
 
-                bool stateChanged = _stateMachine.TransitionTo(PlaybackState.Playing);
+                CommitPreparedPlayback(song, preparedStream, preparedStreamProvider, preparedCacheManager);
+                committed = true;
+                preparedStream = 0;
+                preparedStreamProvider = null;
+                preparedCacheManager = null;
+
+                bool stateChanged = TransitionToPlayingAfterCommit();
                 Debug.WriteLine($"[BassAudioEngine] 状态转换结果: {stateChanged}");
 
                 OnPlaybackStarted(song);
-                Debug.WriteLine($"[BassAudioEngine] ✓ PlayAsync完成，返回true");
+                Debug.WriteLine("[BassAudioEngine] ✓ PlayAsync完成，返回true");
                 return true;
             }
             catch (OperationCanceledException)
             {
-                StopInternal(raiseEvent: false);
-                _stateMachine.TransitionTo(PlaybackState.Idle);
+                if (!committed)
+                {
+                    ReleasePreparedPlaybackResources(preparedStream, preparedStreamProvider, preparedCacheManager);
+                    RestoreIdleAfterFailedPlayback(transitionedToLoading);
+                }
+
                 return false;
             }
             catch (Exception ex)
             {
-                StopInternal(raiseEvent: false);
+                if (!committed)
+                {
+                    ReleasePreparedPlaybackResources(preparedStream, preparedStreamProvider, preparedCacheManager);
+                    RestoreIdleAfterFailedPlayback(transitionedToLoading);
+                }
+
                 DebugLogger.LogException("BassAudioEngine", ex, "PlayAsync failure");
-                OnPlaybackError($"Playback error: {ex.Message}");
-                _stateMachine.TransitionTo(PlaybackState.Idle);
+                OnPlaybackError($"播放错误: {ex.Message}");
                 return false;
             }
             finally
@@ -645,6 +641,280 @@ namespace YTPlayer.Core
                         // 已释放时忽略
                     }
                 }
+            }
+        }
+
+        private bool HasCurrentStream()
+        {
+            lock (_syncRoot)
+            {
+                return _currentStream != 0;
+            }
+        }
+
+        private void RestoreIdleAfterFailedPlayback(bool shouldRestore)
+        {
+            if (!shouldRestore)
+            {
+                return;
+            }
+
+            lock (_syncRoot)
+            {
+                if (_currentStream != 0)
+                {
+                    return;
+                }
+            }
+
+            if (_stateMachine.CurrentState != PlaybackState.Idle)
+            {
+                _stateMachine.TransitionTo(PlaybackState.Idle);
+            }
+        }
+
+        private bool TransitionToPlayingAfterCommit()
+        {
+            PlaybackState currentState = _stateMachine.CurrentState;
+            if (currentState == PlaybackState.Idle || currentState == PlaybackState.Stopped)
+            {
+                _stateMachine.TransitionTo(PlaybackState.Loading);
+            }
+
+            return _stateMachine.TransitionTo(PlaybackState.Playing);
+        }
+
+        private bool ValidatePreparedStream(int stream, long expectedSize)
+        {
+            BASS_CHANNELINFO channelInfo = new BASS_CHANNELINFO();
+            bool infoSuccess = BASS_ChannelGetInfo(stream, ref channelInfo);
+            if (infoSuccess)
+            {
+                Debug.WriteLine("[BassAudioEngine] Channel信息:");
+                Debug.WriteLine($"[BassAudioEngine]   采样率: {channelInfo.freq} Hz");
+                Debug.WriteLine($"[BassAudioEngine]   声道数: {channelInfo.chans}");
+                Debug.WriteLine($"[BassAudioEngine]   类型: 0x{channelInfo.ctype:X8}");
+                Debug.WriteLine($"[BassAudioEngine]   插件: {channelInfo.plugin}");
+                Debug.WriteLine($"[BassAudioEngine]   标志: 0x{channelInfo.flags:X8}");
+            }
+            else
+            {
+                Debug.WriteLine("[BassAudioEngine] ⚠️ 无法获取Channel信息");
+            }
+
+            long channelLength = BASS_ChannelGetLength(stream, BASS_POS_BYTE);
+            Debug.WriteLine($"[BassAudioEngine] Channel长度: {channelLength} bytes");
+
+            if (channelLength <= 0)
+            {
+                Debug.WriteLine($"[BassAudioEngine] ❌❌❌ Channel长度无效: {channelLength}，无法播放");
+                OnPlaybackError($"音频格式识别失败: stream长度无效 ({channelLength} bytes)");
+                return false;
+            }
+
+            if (expectedSize > 0 && channelLength < expectedSize * 0.5)
+            {
+                Debug.WriteLine($"[BassAudioEngine] ⚠️ Channel长度({channelLength})明显小于预期({expectedSize})，可能识别不完整");
+                Debug.WriteLine("[BassAudioEngine] ⚠️ 继续播放，但可能提前结束");
+            }
+
+            return true;
+        }
+
+        private void CommitPreparedPlayback(
+            SongInfo song,
+            int newStream,
+            BassStreamProvider newStreamProvider,
+            SmartCacheManager newCacheManager)
+        {
+            BassStreamProvider? oldStreamProvider = null;
+            SmartCacheManager? oldCacheManager = null;
+            int oldStream = 0;
+            int oldEndSyncHandle = 0;
+            int oldNearEndSyncHandle = 0;
+            var pendingPreload = TakeGaplessPreload();
+
+            if (pendingPreload != null && pendingPreload.Data.StreamHandle != newStream)
+            {
+                ReleasePreloadedResources(pendingPreload);
+            }
+
+            lock (_syncRoot)
+            {
+                _positionMonitorCts?.Cancel();
+                _positionMonitorCts?.Dispose();
+                _positionMonitorCts = null;
+                _positionMonitorTask = null;
+
+                oldStream = _currentStream;
+                oldStreamProvider = _currentStreamProvider;
+                if (oldStreamProvider != null)
+                {
+                    UnregisterStreamProviderCallbacks(oldStreamProvider);
+                }
+
+                oldCacheManager = _currentCacheManager;
+                oldEndSyncHandle = _endSyncHandle;
+                oldNearEndSyncHandle = _nearEndSyncHandle;
+
+                _endSyncHandle = 0;
+                _nearEndSyncHandle = 0;
+                _currentStream = newStream;
+                _currentStreamProvider = newStreamProvider;
+                _currentCacheManager = newCacheManager;
+                _currentSong = song;
+            }
+
+            RegisterStreamProviderCallbacks(newStreamProvider);
+            AttachCacheManager(newCacheManager);
+
+            SetupSyncs();
+            Debug.WriteLine("[BassAudioEngine] ✓ SetupSyncs完成");
+
+            StartPositionMonitor();
+            Debug.WriteLine("[BassAudioEngine] ✓ StartPositionMonitor完成");
+
+            newCacheManager.SetPlayingState();
+
+            ReleaseDetachedPlaybackResources(
+                oldStream,
+                oldStreamProvider,
+                oldCacheManager,
+                oldEndSyncHandle,
+                oldNearEndSyncHandle,
+                "CommitPreparedPlayback");
+
+            _bufferingStateSinceUtc = DateTime.MinValue;
+            _bufferingTimeoutTriggered = false;
+        }
+
+        private void ReleasePreparedPlaybackResources(int stream, BassStreamProvider? streamProvider, SmartCacheManager? cacheManager)
+        {
+            if (streamProvider != null)
+            {
+                try
+                {
+                    streamProvider.AbortPendingReads();
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"[BassAudioEngine] Prepared AbortPendingReads failed: {ex.Message}");
+                }
+            }
+
+            if (stream != 0)
+            {
+                try
+                {
+                    BASS_ChannelStop(stream);
+                    BASS_StreamFree(stream);
+                    Debug.WriteLine($"[BassAudioEngine] Released prepared stream: {stream}");
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"[BassAudioEngine] Release prepared stream failed: {ex.Message}");
+                }
+            }
+
+            if (streamProvider != null)
+            {
+                try
+                {
+                    UnregisterStreamProviderCallbacks(streamProvider);
+                    streamProvider.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"[BassAudioEngine] Dispose prepared StreamProvider failed: {ex.Message}");
+                }
+            }
+
+            if (cacheManager != null)
+            {
+                try
+                {
+                    DetachCacheManager(cacheManager);
+                    cacheManager.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"[BassAudioEngine] Dispose prepared CacheManager failed: {ex.Message}");
+                }
+            }
+        }
+
+        private void ReleaseDetachedPlaybackResources(
+            int oldStream,
+            BassStreamProvider? oldStreamProvider,
+            SmartCacheManager? oldCacheManager,
+            int oldEndSyncHandle,
+            int oldNearEndSyncHandle,
+            string reason)
+        {
+            if (oldStreamProvider != null)
+            {
+                try
+                {
+                    oldStreamProvider.AbortPendingReads();
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"[BassAudioEngine] {reason}: AbortPendingReads failed: {ex.Message}");
+                }
+            }
+
+            if (oldStream != 0)
+            {
+                if (oldEndSyncHandle != 0)
+                {
+                    BASS_ChannelRemoveSync(oldStream, oldEndSyncHandle);
+                }
+
+                if (oldNearEndSyncHandle != 0)
+                {
+                    BASS_ChannelRemoveSync(oldStream, oldNearEndSyncHandle);
+                }
+
+                Debug.WriteLine($"[BassAudioEngine] {reason}: stopping detached stream outside lock: {oldStream}");
+                BASS_ChannelStop(oldStream);
+            }
+
+            if (oldStream != 0 || oldStreamProvider != null || oldCacheManager != null)
+            {
+                Task.Run(async () =>
+                {
+                    try
+                    {
+                        Debug.WriteLine($"[BassAudioEngine] {reason}: async release start (stream={oldStream})");
+
+                        if (oldStream != 0)
+                        {
+                            BASS_StreamFree(oldStream);
+                            Debug.WriteLine($"[BassAudioEngine] {reason}: BASS_StreamFree called: {oldStream}");
+                        }
+
+                        await Task.Delay(200);
+
+                        if (oldStreamProvider != null)
+                        {
+                            oldStreamProvider.Dispose();
+                            Debug.WriteLine($"[BassAudioEngine] {reason}: disposed StreamProvider");
+                        }
+
+                        if (oldCacheManager != null)
+                        {
+                            DetachCacheManager(oldCacheManager);
+                            oldCacheManager.Dispose();
+                            Debug.WriteLine($"[BassAudioEngine] {reason}: disposed CacheManager");
+                        }
+
+                        Debug.WriteLine($"[BassAudioEngine] {reason}: async release completed");
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"[BassAudioEngine] {reason}: release error: {ex.Message}");
+                    }
+                });
             }
         }
 
@@ -1182,7 +1452,7 @@ namespace YTPlayer.Core
                                 Debug.WriteLine($"[BassAudioEngine] Buffering timeout exceeded {MaxBufferingDuration.TotalSeconds:F0}s, stopping playback");
                                 StopInternal(raiseEvent: false);
                                 _stateMachine.TransitionTo(PlaybackState.Idle);
-                                OnPlaybackError($"Buffering timeout ({MaxBufferingDuration.TotalSeconds:F0}s)");
+                                OnPlaybackError($"缓冲超时（{MaxBufferingDuration.TotalSeconds:F0} 秒）");
                                 break;
                             }
                         }
@@ -1207,18 +1477,29 @@ namespace YTPlayer.Core
                         if (!endChunksRequested && totalBytes > 0 && positionBytes > 0)
                         {
                             double progress = (double)positionBytes / totalBytes;
-                            if (progress >= 0.90)
+                            if (progress >= 0.85)
                             {
                                 endChunksRequested = true;
                                 Debug.WriteLine($"[BassAudioEngine] Playback progress {progress:P1}, proactively requesting tail chunks");
 
-                                _ = Task.Run(() =>
+                                _ = Task.Run(async () =>
                                 {
                                     try
                                     {
-                                        long nearEndPosition = Math.Max(0, totalBytes - 1024 * 1024);
-                                        _currentCacheManager?.UpdatePlaybackPosition(nearEndPosition);
+                                        var cacheManager = _currentCacheManager;
+                                        if (cacheManager == null)
+                                        {
+                                            return;
+                                        }
+
+                                        long nearEndPosition = Math.Max(0, totalBytes - 2L * 1024 * 1024);
+                                        cacheManager.UpdatePlaybackPosition(nearEndPosition);
+                                        await cacheManager.PrefetchAroundAsync(nearEndPosition, aheadChunks: 8, token, allowRangeRescue: true).ConfigureAwait(false);
                                         Debug.WriteLine($"[BassAudioEngine] Requested near-end cache position: {nearEndPosition}/{totalBytes}");
+                                    }
+                                    catch (OperationCanceledException)
+                                    {
+                                        // Playback was stopped or switched.
                                     }
                                     catch (Exception ex)
                                     {
@@ -2009,7 +2290,7 @@ namespace YTPlayer.Core
             Debug.WriteLine($"[BassAudioEngine] Stream read failure at {e.Position}: {e.Reason}");
             StopInternal(raiseEvent: false);
             _stateMachine.TransitionTo(PlaybackState.Idle);
-            OnPlaybackError($"Stream read failure: {e.Reason}");
+            OnPlaybackError($"音频流读取失败: {e.Reason}");
         }
 
         private void OnPlaybackStarted(SongInfo song)

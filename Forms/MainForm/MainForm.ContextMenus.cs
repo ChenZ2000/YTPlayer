@@ -564,7 +564,7 @@ public partial class MainForm
 			{
 				return null;
 			}
-			PodcastEpisodeInfo detail = await _apiClient.GetPodcastEpisodeDetailAsync(programId).ConfigureAwait(false);
+			PodcastEpisodeInfo detail = await _apiClient.GetPodcastEpisodeDetailAsync(programId, cancellationToken).ConfigureAwait(false);
 			if (cancellationToken.IsCancellationRequested)
 			{
 				return null;
@@ -581,7 +581,7 @@ public partial class MainForm
 		{
 			return null;
 		}
-		SongInfo detailSong = (await _apiClient.GetSongDetailAsync(new string[1] { resolvedSongId }).ConfigureAwait(false))?.FirstOrDefault();
+		SongInfo detailSong = (await _apiClient.GetSongDetailAsync(new string[1] { resolvedSongId }, cancellationToken).ConfigureAwait(false))?.FirstOrDefault();
 		if (cancellationToken.IsCancellationRequested || detailSong == null)
 		{
 			return null;
@@ -1195,7 +1195,7 @@ public partial class MainForm
 			{
 				return null;
 			}
-			AlbumInfo detail2 = await _apiClient.GetAlbumDetailAsync(albumId).ConfigureAwait(false);
+			AlbumInfo detail2 = await _apiClient.GetAlbumDetailAsync(albumId, cancellationToken).ConfigureAwait(false);
 			if (cancellationToken.IsCancellationRequested || string.IsNullOrWhiteSpace(detail2?.Name))
 			{
 				return null;
@@ -1209,7 +1209,7 @@ public partial class MainForm
 			{
 				return null;
 			}
-			PodcastRadioInfo detail3 = await _apiClient.GetPodcastRadioDetailAsync(radioId).ConfigureAwait(false);
+			PodcastRadioInfo detail3 = await _apiClient.GetPodcastRadioDetailAsync(radioId, cancellationToken).ConfigureAwait(false);
 			if (cancellationToken.IsCancellationRequested || string.IsNullOrWhiteSpace(detail3?.Name))
 			{
 				return null;
@@ -1294,7 +1294,7 @@ public partial class MainForm
 			{
 				return null;
 			}
-			SongInfo detailSong = (await _apiClient.GetSongDetailAsync(new string[1] { songIdFromUrl }).ConfigureAwait(false))?.FirstOrDefault();
+			SongInfo detailSong = (await _apiClient.GetSongDetailAsync(new string[1] { songIdFromUrl }, cancellationToken).ConfigureAwait(false))?.FirstOrDefault();
 			if (cancellationToken.IsCancellationRequested || detailSong == null)
 			{
 				return null;

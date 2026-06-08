@@ -402,6 +402,28 @@ public partial class MainForm
 			bool handledByView = false;
 			try
 			{
+				ClearPlaybackFollowPendingState();
+				string pendingRestoreViewSource = state.ViewSource;
+				if (string.IsNullOrWhiteSpace(pendingRestoreViewSource))
+				{
+					if (string.Equals(state.PageType, "playlist", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(state.PlaylistId))
+					{
+						pendingRestoreViewSource = "playlist:" + state.PlaylistId;
+					}
+					else if (string.Equals(state.PageType, "album", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(state.AlbumId))
+					{
+						pendingRestoreViewSource = "album:" + state.AlbumId;
+					}
+				}
+				int pendingRestoreIndex = (state.SelectedDataIndex >= 0) ? state.SelectedDataIndex : state.SelectedIndex;
+				if (!string.IsNullOrWhiteSpace(pendingRestoreViewSource) && pendingRestoreIndex >= 0)
+				{
+					SetPendingNavigationRestoreFocus(pendingRestoreViewSource, pendingRestoreIndex);
+				}
+				else
+				{
+					ClearPendingNavigationRestoreFocus();
+				}
 				switch (state.PageType)
 				{
 				case "homepage":
@@ -568,8 +590,10 @@ public partial class MainForm
 				if (!IsNavigationStateApplied(state))
 				{
 					Debug.WriteLine("[Navigation] 页面状态未切换，当前 view=" + _currentViewSource + ", 期望=" + state.ViewSource);
+					ClearPendingNavigationRestoreFocus();
 					return false;
 				}
+				ClearPlaybackFollowPendingState();
 				if (handledByView)
 				{
 					UpdateStatusBar("返回到: " + state.ViewName);
@@ -603,19 +627,24 @@ public partial class MainForm
 				DebugLogListFocusState("Restore: resolved", _currentViewSource, state, resolvedIndex);
 				if (resolvedIndex >= 0 && resolvedIndex < resultListView.Items.Count)
 				{
-					resultListView.BeginUpdate();
-					ClearListViewSelection();
-					ListViewItem targetItem = resultListView.Items[resolvedIndex];
-					targetItem.Selected = true;
-					targetItem.Focused = true;
-					targetItem.EnsureVisible();
-					EndListViewUpdateAndRefreshAccessibility();
-					resultListView.Focus();
+					if (!IsListSelectionAndFocusAt(resolvedIndex))
+					{
+						EnsureListSelectionWithoutFocus(resolvedIndex);
+					}
+					if (resultListView.CanFocus && !resultListView.Focused)
+					{
+						resultListView.Focus();
+					}
 					_lastListViewFocusedIndex = resolvedIndex;
+					SetPendingNavigationRestoreFocus(_currentViewSource, resolvedIndex);
 				}
 				else
 				{
-					resultListView.Focus();
+					if (resultListView.CanFocus && !resultListView.Focused)
+					{
+						resultListView.Focus();
+					}
+					ClearPendingNavigationRestoreFocus(_currentViewSource);
 				}
 				DebugLogListFocusState("Restore: applied", _currentViewSource, state, resolvedIndex);
 				_pendingListFocusIndex = -1;
@@ -632,6 +661,7 @@ public partial class MainForm
 				MessageBox.Show("返回失败: " + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 				UpdateStatusBar("返回失败");
 				_currentViewSource = previousViewSource;
+				ClearPendingNavigationRestoreFocus();
 				return false;
 			}
 			finally

@@ -527,7 +527,8 @@ private void ActivateMixedSearchTypeOption()
 			SaveNavigationState();
 		}
 		_lastKeyword = keyword;
-		_currentPage = Math.Max(1, page);
+		bool autoExpandableItemSearch = normalizedSearchType == "歌曲" || normalizedSearchType == "歌单" || normalizedSearchType == "专辑" || normalizedSearchType == "歌手" || normalizedSearchType == "播客";
+		_currentPage = autoExpandableItemSearch ? 1 : Math.Max(1, page);
 		_currentSearchType = normalizedSearchType;
 		_isHomePage = false;
 		_currentMixedQueryKey = null;
@@ -584,89 +585,13 @@ private void ActivateMixedSearchTypeOption()
 
 	private async Task EnrichSongSearchResultsAsync(string keyword, int page, int offset, string viewSource, string accessibleName, bool showEmptyPrompt, CancellationToken searchToken, int pendingFocusIndex = -1)
 	{
-		CancellationToken viewToken = GetCurrentViewContentToken();
-		checked
+		await EnrichExpandableSearchResultsAsync(keyword, page, offset, "歌曲", "song", "首", "SearchSong", viewSource, accessibleName, showEmptyPrompt, searchToken, pendingFocusIndex, (int pageOffset, CancellationToken ct) => _apiClient.SearchSongsAsync(keyword, _resultsPerPage, pageOffset, ct), delegate(List<SongInfo> items, int startIndex, int focusIndex, bool allowSelection)
 		{
-			using (WorkScopes.BeginEnrichment("SearchSong", viewSource))
-			{
-				CancellationTokenSource linkedCts = null;
-				CancellationToken effectiveToken = LinkCancellationTokens(viewToken, searchToken, out linkedCts);
-				try
-				{
-					SearchResult<SongInfo> songResult = await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.SearchSongsAsync(keyword, _resultsPerPage, offset, ct), $"search:song:{keyword}:page{page}", effectiveToken, delegate(int attempt, Exception _)
-					{
-						SafeInvoke(delegate
-						{
-							UpdateStatusBar($"搜索歌曲失败，正在重试（第 {attempt} 次）...");
-						});
-					}).ConfigureAwait(continueOnCapturedContext: true);
-					List<SongInfo> songs = songResult?.Items ?? new List<SongInfo>();
-					int totalCount = songResult?.TotalCount ?? songs.Count;
-					bool hasMore = songResult?.HasMore ?? false;
-					int maxPage = Math.Max(1, (int)Math.Ceiling((double)Math.Max(1, totalCount) / (double)Math.Max(1, _resultsPerPage)));
-					string paginationKey = BuildSearchPaginationKey(keyword, "歌曲");
-					if (TryHandlePaginationEmptyResult(paginationKey, offset, _resultsPerPage, totalCount, songs.Count, hasMore, viewSource, accessibleName))
-					{
-						return;
-					}
-					if (effectiveToken.IsCancellationRequested)
-					{
-						return;
-					}
-					await ExecuteOnUiThreadAsync(delegate
-					{
-						if (!ShouldAbortViewRender(viewToken, "搜索歌曲"))
-						{
-							_currentSongs = CloneList(songs);
-							_currentPlaylist = null;
-							_maxPage = maxPage;
-							_hasNextSearchPage = hasMore;
-							PatchSongs(_currentSongs, offset + 1, skipAvailabilityCheck: false, showPagination: true, page > 1, hasMore, pendingFocusIndex);
-							FocusListAfterEnrich(pendingFocusIndex);
-							if (_currentSongs.Count == 0)
-							{
-								UpdateStatusBar("未找到结果");
-								if (showEmptyPrompt)
-								{
-									MessageBox.Show("未找到相关歌曲: " + keyword, "搜索结果", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
-								}
-							}
-							else
-							{
-								UpdateStatusBar($"第 {_currentPage}/{_maxPage} 页，本页 {_currentSongs.Count} 首 / 总 {totalCount} 首");
-							}
-						}
-					}).ConfigureAwait(continueOnCapturedContext: false);
-					await EnsureLibraryStateFreshAsync(LibraryEntityType.Songs);
-				}
-				catch (Exception ex)
-				{
-					Exception ex2 = ex;
-					string paginationKey = BuildSearchPaginationKey(keyword, "歌曲");
-					if (TryHandlePaginationOffsetError(ex2, paginationKey, offset, _resultsPerPage, viewSource, accessibleName))
-					{
-						return;
-					}
-					if (TryHandleOperationCancelled(ex2, "搜索歌曲已取消"))
-					{
-						return;
-					}
-					Debug.WriteLine($"[Search] 搜索歌曲失败: {ex2}");
-					await ExecuteOnUiThreadAsync(delegate
-					{
-						if (!ShouldAbortViewRender(viewToken, "搜索歌曲"))
-						{
-							MessageBox.Show("搜索歌曲失败: " + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
-							UpdateStatusBar("搜索歌曲失败");
-						}
-					}).ConfigureAwait(continueOnCapturedContext: false);
-				}
-				finally
-				{
-					linkedCts?.Dispose();
-				}
-			}
-		}
+			_currentSongs = CloneList(items);
+			_currentPlaylist = null;
+			PatchSongs(_currentSongs, startIndex, skipAvailabilityCheck: !allowSelection, showPagination: false, hasPreviousPage: false, hasNextPage: false, pendingFocusIndex: focusIndex, allowSelection: allowSelection);
+		}).ConfigureAwait(continueOnCapturedContext: true);
+		await EnsureLibraryStateFreshAsync(LibraryEntityType.Songs);
 	}
 
 	private async Task ShowPlaylistSearchResultsAsync(string keyword, int page, bool skipSaveNavigation, bool showEmptyPrompt, CancellationToken searchToken, int pendingFocusIndex = -1)
@@ -700,88 +625,12 @@ private void ActivateMixedSearchTypeOption()
 
 	private async Task EnrichPlaylistSearchResultsAsync(string keyword, int page, int offset, string viewSource, string accessibleName, bool showEmptyPrompt, CancellationToken searchToken, int pendingFocusIndex = -1)
 	{
-		CancellationToken viewToken = GetCurrentViewContentToken();
-		checked
+		await EnrichExpandableSearchResultsAsync(keyword, page, offset, "歌单", "playlist", "个", "SearchPlaylist", viewSource, accessibleName, showEmptyPrompt, searchToken, pendingFocusIndex, (int pageOffset, CancellationToken ct) => _apiClient.SearchPlaylistsAsync(keyword, _resultsPerPage, pageOffset, ct), delegate(List<PlaylistInfo> items, int startIndex, int focusIndex, bool allowSelection)
 		{
-			using (WorkScopes.BeginEnrichment("SearchPlaylist", viewSource))
-			{
-				CancellationTokenSource linkedCts = null;
-				CancellationToken effectiveToken = LinkCancellationTokens(viewToken, searchToken, out linkedCts);
-				try
-				{
-					SearchResult<PlaylistInfo> playlistResult = await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.SearchPlaylistsAsync(keyword, _resultsPerPage, offset, ct), $"search:playlist:{keyword}:page{page}", effectiveToken, delegate(int attempt, Exception _)
-					{
-						SafeInvoke(delegate
-						{
-							UpdateStatusBar($"搜索歌单失败，正在重试（第 {attempt} 次）...");
-						});
-					}).ConfigureAwait(continueOnCapturedContext: true);
-					List<PlaylistInfo> playlists = playlistResult?.Items ?? new List<PlaylistInfo>();
-					int totalCount = playlistResult?.TotalCount ?? playlists.Count;
-					bool hasMore = playlistResult?.HasMore ?? false;
-					int maxPage = Math.Max(1, (int)Math.Ceiling((double)Math.Max(1, totalCount) / (double)Math.Max(1, _resultsPerPage)));
-					string paginationKey = BuildSearchPaginationKey(keyword, "歌单");
-					if (TryHandlePaginationEmptyResult(paginationKey, offset, _resultsPerPage, totalCount, playlists.Count, hasMore, viewSource, accessibleName))
-					{
-						return;
-					}
-					if (effectiveToken.IsCancellationRequested)
-					{
-						return;
-					}
-					await ExecuteOnUiThreadAsync(delegate
-					{
-						if (!ShouldAbortViewRender(viewToken, "搜索歌单"))
-						{
-							_currentPlaylists = CloneList(playlists);
-							_maxPage = maxPage;
-							_hasNextSearchPage = hasMore;
-							PatchPlaylists(_currentPlaylists, offset + 1, showPagination: true, page > 1, hasMore, pendingFocusIndex);
-							FocusListAfterEnrich(pendingFocusIndex);
-							if (_currentPlaylists.Count == 0)
-							{
-								UpdateStatusBar("未找到结果");
-								if (showEmptyPrompt)
-								{
-									MessageBox.Show("未找到相关歌单: " + keyword, "搜索结果", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
-								}
-							}
-							else
-							{
-								UpdateStatusBar($"第 {_currentPage}/{_maxPage} 页，本页 {_currentPlaylists.Count} 个 / 总 {totalCount} 个");
-							}
-						}
-					}).ConfigureAwait(continueOnCapturedContext: false);
-					await EnsureLibraryStateFreshAsync(LibraryEntityType.Playlists);
-				}
-				catch (Exception ex)
-				{
-					Exception ex2 = ex;
-					string paginationKey = BuildSearchPaginationKey(keyword, "歌单");
-					if (TryHandlePaginationOffsetError(ex2, paginationKey, offset, _resultsPerPage, viewSource, accessibleName))
-					{
-						return;
-					}
-					if (TryHandleOperationCancelled(ex2, "搜索歌单已取消"))
-					{
-						return;
-					}
-					Debug.WriteLine($"[Search] 搜索歌单失败: {ex2}");
-					await ExecuteOnUiThreadAsync(delegate
-					{
-						if (!ShouldAbortViewRender(viewToken, "搜索歌单"))
-						{
-							MessageBox.Show("搜索歌单失败: " + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
-							UpdateStatusBar("搜索歌单失败");
-						}
-					}).ConfigureAwait(continueOnCapturedContext: false);
-				}
-				finally
-				{
-					linkedCts?.Dispose();
-				}
-			}
-		}
+			_currentPlaylists = CloneList(items);
+			PatchPlaylists(_currentPlaylists, startIndex, showPagination: false, hasPreviousPage: false, hasNextPage: false, pendingFocusIndex: focusIndex, allowSelection: allowSelection);
+		}).ConfigureAwait(continueOnCapturedContext: true);
+		await EnsureLibraryStateFreshAsync(LibraryEntityType.Playlists);
 	}
 
 	private async Task ShowAlbumSearchResultsAsync(string keyword, int page, bool skipSaveNavigation, bool showEmptyPrompt, CancellationToken searchToken, int pendingFocusIndex = -1)
@@ -815,88 +664,12 @@ private void ActivateMixedSearchTypeOption()
 
 	private async Task EnrichAlbumSearchResultsAsync(string keyword, int page, int offset, string viewSource, string accessibleName, bool showEmptyPrompt, CancellationToken searchToken, int pendingFocusIndex = -1)
 	{
-		CancellationToken viewToken = GetCurrentViewContentToken();
-		checked
+		await EnrichExpandableSearchResultsAsync(keyword, page, offset, "专辑", "album", "张", "SearchAlbum", viewSource, accessibleName, showEmptyPrompt, searchToken, pendingFocusIndex, (int pageOffset, CancellationToken ct) => _apiClient.SearchAlbumsAsync(keyword, _resultsPerPage, pageOffset, ct), delegate(List<AlbumInfo> items, int startIndex, int focusIndex, bool allowSelection)
 		{
-			using (WorkScopes.BeginEnrichment("SearchAlbum", viewSource))
-			{
-				CancellationTokenSource linkedCts = null;
-				CancellationToken effectiveToken = LinkCancellationTokens(viewToken, searchToken, out linkedCts);
-				try
-				{
-					SearchResult<AlbumInfo> albumResult = await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.SearchAlbumsAsync(keyword, _resultsPerPage, offset, ct), $"search:album:{keyword}:page{page}", effectiveToken, delegate(int attempt, Exception _)
-					{
-						SafeInvoke(delegate
-						{
-							UpdateStatusBar($"搜索专辑失败，正在重试（第 {attempt} 次）...");
-						});
-					}).ConfigureAwait(continueOnCapturedContext: true);
-					List<AlbumInfo> albums = albumResult?.Items ?? new List<AlbumInfo>();
-					int totalCount = albumResult?.TotalCount ?? albums.Count;
-					bool hasMore = albumResult?.HasMore ?? false;
-					int maxPage = Math.Max(1, (int)Math.Ceiling((double)Math.Max(1, totalCount) / (double)Math.Max(1, _resultsPerPage)));
-					string paginationKey = BuildSearchPaginationKey(keyword, "专辑");
-					if (TryHandlePaginationEmptyResult(paginationKey, offset, _resultsPerPage, totalCount, albums.Count, hasMore, viewSource, accessibleName))
-					{
-						return;
-					}
-					if (effectiveToken.IsCancellationRequested)
-					{
-						return;
-					}
-					await ExecuteOnUiThreadAsync(delegate
-					{
-						if (!ShouldAbortViewRender(viewToken, "搜索专辑"))
-						{
-							_currentAlbums = CloneList(albums);
-							_maxPage = maxPage;
-							_hasNextSearchPage = hasMore;
-							PatchAlbums(_currentAlbums, offset + 1, showPagination: true, page > 1, hasMore, pendingFocusIndex);
-							FocusListAfterEnrich(pendingFocusIndex);
-							if (_currentAlbums.Count == 0)
-							{
-								UpdateStatusBar("未找到结果");
-								if (showEmptyPrompt)
-								{
-									MessageBox.Show("未找到相关专辑: " + keyword, "搜索结果", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
-								}
-							}
-							else
-							{
-								UpdateStatusBar($"第 {_currentPage}/{_maxPage} 页，本页 {_currentAlbums.Count} 张 / 总 {totalCount} 张");
-							}
-						}
-					}).ConfigureAwait(continueOnCapturedContext: false);
-					await EnsureLibraryStateFreshAsync(LibraryEntityType.Albums);
-				}
-				catch (Exception ex)
-				{
-					Exception ex2 = ex;
-					string paginationKey = BuildSearchPaginationKey(keyword, "专辑");
-					if (TryHandlePaginationOffsetError(ex2, paginationKey, offset, _resultsPerPage, viewSource, accessibleName))
-					{
-						return;
-					}
-					if (TryHandleOperationCancelled(ex2, "搜索专辑已取消"))
-					{
-						return;
-					}
-					Debug.WriteLine($"[Search] 搜索专辑失败: {ex2}");
-					await ExecuteOnUiThreadAsync(delegate
-					{
-						if (!ShouldAbortViewRender(viewToken, "搜索专辑"))
-						{
-							MessageBox.Show("搜索专辑失败: " + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
-							UpdateStatusBar("搜索专辑失败");
-						}
-					}).ConfigureAwait(continueOnCapturedContext: false);
-				}
-				finally
-				{
-					linkedCts?.Dispose();
-				}
-			}
-		}
+			_currentAlbums = CloneList(items);
+			PatchAlbums(_currentAlbums, startIndex, showPagination: false, hasPreviousPage: false, hasNextPage: false, pendingFocusIndex: focusIndex, allowSelection: allowSelection);
+		}).ConfigureAwait(continueOnCapturedContext: true);
+		await EnsureLibraryStateFreshAsync(LibraryEntityType.Albums);
 	}
 
 	private async Task ShowArtistSearchResultsAsync(string keyword, int page, bool skipSaveNavigation, bool showEmptyPrompt, CancellationToken searchToken, int pendingFocusIndex = -1)
@@ -930,88 +703,12 @@ private void ActivateMixedSearchTypeOption()
 
 	private async Task EnrichArtistSearchResultsAsync(string keyword, int page, int offset, string viewSource, string accessibleName, bool showEmptyPrompt, CancellationToken searchToken, int pendingFocusIndex = -1)
 	{
-		CancellationToken viewToken = GetCurrentViewContentToken();
-		checked
+		await EnrichExpandableSearchResultsAsync(keyword, page, offset, "歌手", "artist", "位", "SearchArtist", viewSource, accessibleName, showEmptyPrompt, searchToken, pendingFocusIndex, (int pageOffset, CancellationToken ct) => _apiClient.SearchArtistsAsync(keyword, _resultsPerPage, pageOffset, ct), delegate(List<ArtistInfo> items, int startIndex, int focusIndex, bool allowSelection)
 		{
-			using (WorkScopes.BeginEnrichment("SearchArtist", viewSource))
-			{
-				CancellationTokenSource linkedCts = null;
-				CancellationToken effectiveToken = LinkCancellationTokens(viewToken, searchToken, out linkedCts);
-				try
-				{
-					SearchResult<ArtistInfo> artistResult = await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.SearchArtistsAsync(keyword, _resultsPerPage, offset, ct), $"search:artist:{keyword}:page{page}", effectiveToken, delegate(int attempt, Exception _)
-					{
-						SafeInvoke(delegate
-						{
-							UpdateStatusBar($"搜索歌手失败，正在重试（第 {attempt} 次）...");
-						});
-					}).ConfigureAwait(continueOnCapturedContext: true);
-					List<ArtistInfo> artists = artistResult?.Items ?? new List<ArtistInfo>();
-					int totalCount = artistResult?.TotalCount ?? artists.Count;
-					bool hasMore = artistResult?.HasMore ?? false;
-					int maxPage = Math.Max(1, (int)Math.Ceiling((double)Math.Max(1, totalCount) / (double)Math.Max(1, _resultsPerPage)));
-					string paginationKey = BuildSearchPaginationKey(keyword, "歌手");
-					if (TryHandlePaginationEmptyResult(paginationKey, offset, _resultsPerPage, totalCount, artists.Count, hasMore, viewSource, accessibleName))
-					{
-						return;
-					}
-					if (effectiveToken.IsCancellationRequested)
-					{
-						return;
-					}
-					await ExecuteOnUiThreadAsync(delegate
-					{
-						if (!ShouldAbortViewRender(viewToken, "搜索歌手"))
-						{
-							_currentArtists = CloneList(artists);
-							_maxPage = maxPage;
-							_hasNextSearchPage = hasMore;
-							PatchArtists(_currentArtists, offset + 1, showPagination: true, page > 1, hasMore, pendingFocusIndex);
-							FocusListAfterEnrich(pendingFocusIndex);
-							if (_currentArtists.Count == 0)
-							{
-								UpdateStatusBar("未找到结果");
-								if (showEmptyPrompt)
-								{
-									MessageBox.Show("未找到相关歌手: " + keyword, "搜索结果", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
-								}
-							}
-							else
-							{
-								UpdateStatusBar($"第 {_currentPage}/{_maxPage} 页，本页 {_currentArtists.Count} 位 / 总 {totalCount} 位");
-							}
-						}
-					}).ConfigureAwait(continueOnCapturedContext: false);
-					await EnsureLibraryStateFreshAsync(LibraryEntityType.Artists);
-				}
-				catch (Exception ex)
-				{
-					Exception ex2 = ex;
-					string paginationKey = BuildSearchPaginationKey(keyword, "歌手");
-					if (TryHandlePaginationOffsetError(ex2, paginationKey, offset, _resultsPerPage, viewSource, accessibleName))
-					{
-						return;
-					}
-					if (TryHandleOperationCancelled(ex2, "搜索歌手已取消"))
-					{
-						return;
-					}
-					Debug.WriteLine($"[Search] 搜索歌手失败: {ex2}");
-					await ExecuteOnUiThreadAsync(delegate
-					{
-						if (!ShouldAbortViewRender(viewToken, "搜索歌手"))
-						{
-							MessageBox.Show("搜索歌手失败: " + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
-							UpdateStatusBar("搜索歌手失败");
-						}
-					}).ConfigureAwait(continueOnCapturedContext: false);
-				}
-				finally
-				{
-					linkedCts?.Dispose();
-				}
-			}
-		}
+			_currentArtists = CloneList(items);
+			PatchArtists(_currentArtists, startIndex, showPagination: false, hasPreviousPage: false, hasNextPage: false, pendingFocusIndex: focusIndex, allowSelection: allowSelection, refreshArtistDetails: allowSelection);
+		}).ConfigureAwait(continueOnCapturedContext: true);
+		await EnsureLibraryStateFreshAsync(LibraryEntityType.Artists);
 	}
 
 	private async Task ShowPodcastSearchResultsAsync(string keyword, int page, bool skipSaveNavigation, bool showEmptyPrompt, CancellationToken searchToken, int pendingFocusIndex = -1)
@@ -1045,79 +742,130 @@ private void ActivateMixedSearchTypeOption()
 
 	private async Task EnrichPodcastSearchResultsAsync(string keyword, int page, int offset, string viewSource, string accessibleName, bool showEmptyPrompt, CancellationToken searchToken, int pendingFocusIndex = -1)
 	{
+		await EnrichExpandableSearchResultsAsync(keyword, page, offset, "播客", "podcast", "个", "SearchPodcast", viewSource, accessibleName, showEmptyPrompt, searchToken, pendingFocusIndex, (int pageOffset, CancellationToken ct) => _apiClient.SearchPodcastsAsync(keyword, _resultsPerPage, pageOffset, ct), delegate(List<PodcastRadioInfo> items, int startIndex, int focusIndex, bool allowSelection)
+		{
+			_currentPodcasts = CloneList(items);
+			PatchPodcasts(_currentPodcasts, startIndex, showPagination: false, hasPreviousPage: false, hasNextPage: false, pendingFocusIndex: focusIndex, allowSelection: allowSelection);
+		}).ConfigureAwait(continueOnCapturedContext: true);
+		await EnsureLibraryStateFreshAsync(LibraryEntityType.Podcasts);
+	}
+
+	private async Task EnrichExpandableSearchResultsAsync<T>(string keyword, int page, int offset, string typeName, string cacheType, string unit, string workScopeName, string viewSource, string accessibleName, bool showEmptyPrompt, CancellationToken searchToken, int pendingFocusIndex, Func<int, CancellationToken, Task<SearchResult<T>>> fetchPageAsync, Action<List<T>, int, int, bool> applyResults)
+	{
 		CancellationToken viewToken = GetCurrentViewContentToken();
 		checked
 		{
-			using (WorkScopes.BeginEnrichment("SearchPodcast", viewSource))
+			using (WorkScopes.BeginEnrichment(workScopeName, viewSource))
 			{
 				CancellationTokenSource linkedCts = null;
 				CancellationToken effectiveToken = LinkCancellationTokens(viewToken, searchToken, out linkedCts);
 				try
 				{
-					SearchResult<PodcastRadioInfo> podcastResult = await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.SearchPodcastsAsync(keyword, _resultsPerPage, offset, ct), $"search:podcast:{keyword}:page{page}", effectiveToken, delegate(int attempt, Exception _)
+					List<T> allItems = new List<T>();
+					int currentOffset = Math.Max(0, offset);
+					int startIndex = currentOffset + 1;
+					int totalCount = 0;
+					bool hasMore = true;
+					bool firstPage = true;
+					bool firstApplied = false;
+					int safety = 0;
+					while (hasMore && safety < 200)
 					{
-						SafeInvoke(delegate
+						int fetchOffset = currentOffset;
+						SearchResult<T> searchResult = await FetchWithRetryUntilCancel((CancellationToken ct) => fetchPageAsync(fetchOffset, ct), $"search:{cacheType}:{keyword}:offset{fetchOffset}", effectiveToken, delegate(int attempt, Exception _)
 						{
-							UpdateStatusBar($"搜索播客失败，正在重试（第 {attempt} 次）...");
-						});
-					}).ConfigureAwait(continueOnCapturedContext: true);
-					List<PodcastRadioInfo> podcasts = podcastResult?.Items ?? new List<PodcastRadioInfo>();
-					int totalCount = podcastResult?.TotalCount ?? podcasts.Count;
-					bool hasMore = podcastResult?.HasMore ?? false;
-					int maxPage = Math.Max(1, (int)Math.Ceiling((double)Math.Max(1, totalCount) / (double)Math.Max(1, _resultsPerPage)));
-					string paginationKey = BuildSearchPaginationKey(keyword, "播客");
-					if (TryHandlePaginationEmptyResult(paginationKey, offset, _resultsPerPage, totalCount, podcasts.Count, hasMore, viewSource, accessibleName))
-					{
-						return;
-					}
-					if (effectiveToken.IsCancellationRequested)
-					{
-						return;
-					}
-					await ExecuteOnUiThreadAsync(delegate
-					{
-						if (!ShouldAbortViewRender(viewToken, "搜索播客"))
-						{
-							_currentPodcasts = CloneList(podcasts);
-							_maxPage = maxPage;
-							_hasNextSearchPage = hasMore;
-							PatchPodcasts(_currentPodcasts, offset + 1, showPagination: true, page > 1, hasMore, pendingFocusIndex, allowSelection: false);
-							FocusListAfterEnrich(pendingFocusIndex);
-							if (_currentPodcasts.Count == 0)
+							SafeInvoke(delegate
 							{
+								UpdateStatusBar($"搜索{typeName}失败，正在重试（第 {attempt} 次）...");
+							});
+						}).ConfigureAwait(continueOnCapturedContext: true);
+						List<T> pageItems = searchResult?.Items ?? new List<T>();
+						totalCount = Math.Max(totalCount, searchResult?.TotalCount ?? (currentOffset + pageItems.Count));
+						hasMore = searchResult?.HasMore ?? false;
+						if (firstPage)
+						{
+							firstPage = false;
+							string paginationKey = BuildSearchPaginationKey(keyword, typeName);
+							if (TryHandlePaginationEmptyResult(paginationKey, currentOffset, _resultsPerPage, totalCount, pageItems.Count, hasMore, viewSource, accessibleName))
+							{
+								return;
+							}
+						}
+						if (effectiveToken.IsCancellationRequested)
+						{
+							return;
+						}
+						if (pageItems.Count == 0)
+						{
+							break;
+						}
+						allItems.AddRange(pageItems);
+						await ExecuteOnUiThreadAsync(delegate
+						{
+							if (!ShouldAbortViewRender(viewToken, "搜索" + typeName))
+							{
+								_currentPage = Math.Max(1, page);
+								_maxPage = 1;
+								_hasNextSearchPage = false;
+								applyResults(allItems, startIndex, firstApplied ? -1 : pendingFocusIndex, !firstApplied);
+								if (!firstApplied)
+								{
+									FocusListAfterEnrich(pendingFocusIndex, viewSource);
+								}
+								UpdateStatusBar(BuildExpandableSearchStatus(typeName, allItems.Count, totalCount, hasMore, unit));
+							}
+						}).ConfigureAwait(continueOnCapturedContext: false);
+						firstApplied = true;
+						if (!hasMore)
+						{
+							break;
+						}
+						int nextOffset = Math.Max(currentOffset + _resultsPerPage, currentOffset + pageItems.Count);
+						if (nextOffset <= currentOffset)
+						{
+							break;
+						}
+						currentOffset = nextOffset;
+						safety++;
+					}
+					if (!firstApplied)
+					{
+						await ExecuteOnUiThreadAsync(delegate
+						{
+							if (!ShouldAbortViewRender(viewToken, "搜索" + typeName))
+							{
+								_currentPage = Math.Max(1, page);
+								_maxPage = 1;
+								_hasNextSearchPage = false;
+								applyResults(allItems, startIndex, pendingFocusIndex, true);
 								UpdateStatusBar("未找到结果");
 								if (showEmptyPrompt)
 								{
-									MessageBox.Show("未找到相关播客: " + keyword, "搜索结果", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+									MessageBox.Show("未找到相关" + typeName + ": " + keyword, "搜索结果", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
 								}
 							}
-							else
-							{
-								UpdateStatusBar($"第 {_currentPage}/{_maxPage} 页，本页 {_currentPodcasts.Count} 个 / 总 {totalCount} 个");
-							}
-						}
-					}).ConfigureAwait(continueOnCapturedContext: false);
-					await EnsureLibraryStateFreshAsync(LibraryEntityType.Podcasts);
+						}).ConfigureAwait(continueOnCapturedContext: false);
+					}
 				}
 				catch (Exception ex)
 				{
 					Exception ex2 = ex;
-					string paginationKey = BuildSearchPaginationKey(keyword, "播客");
+					string paginationKey = BuildSearchPaginationKey(keyword, typeName);
 					if (TryHandlePaginationOffsetError(ex2, paginationKey, offset, _resultsPerPage, viewSource, accessibleName))
 					{
 						return;
 					}
-					if (TryHandleOperationCancelled(ex2, "搜索播客已取消"))
+					if (TryHandleOperationCancelled(ex2, "搜索" + typeName + "已取消"))
 					{
 						return;
 					}
-					Debug.WriteLine($"[Search] 搜索播客失败: {ex2}");
+					Debug.WriteLine($"[Search] 搜索{typeName}失败: {ex2}");
 					await ExecuteOnUiThreadAsync(delegate
 					{
-						if (!ShouldAbortViewRender(viewToken, "搜索播客"))
+						if (!ShouldAbortViewRender(viewToken, "搜索" + typeName))
 						{
-							MessageBox.Show("搜索播客失败: " + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
-							UpdateStatusBar("搜索播客失败");
+							MessageBox.Show("搜索" + typeName + "失败: " + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+							UpdateStatusBar("搜索" + typeName + "失败");
 						}
 					}).ConfigureAwait(continueOnCapturedContext: false);
 				}
@@ -1127,6 +875,22 @@ private void ActivateMixedSearchTypeOption()
 				}
 			}
 		}
+	}
+
+	private static string BuildExpandableSearchStatus(string typeName, int loadedCount, int totalCount, bool hasMore, string unit)
+	{
+		int safeLoaded = Math.Max(0, loadedCount);
+		int safeTotal = Math.Max(0, totalCount);
+		if (hasMore)
+		{
+			if (safeTotal > 0)
+			{
+				return $"搜索{typeName}：已加载 {safeLoaded} / {safeTotal} {unit}，正在自动加载更多";
+			}
+			return $"搜索{typeName}：已加载 {safeLoaded} {unit}，正在自动加载更多";
+		}
+		int finalCount = (safeTotal > 0) ? Math.Max(safeLoaded, safeTotal) : safeLoaded;
+		return $"搜索{typeName}：加载完成，共 {finalCount} {unit}";
 	}
 
 	private async Task HandleNeteaseUrlSearchAsync(NeteaseUrlMatch match, CancellationToken cancellationToken)
@@ -1164,7 +928,7 @@ private void ActivateMixedSearchTypeOption()
 		if (TryValidateNeteaseResourceId(match.ResourceId, "歌曲", out var parsedSongId))
 		{
 			string resolvedSongId = parsedSongId.ToString();
-			List<SongInfo> songs = await _apiClient.GetSongDetailAsync(new string[1] { resolvedSongId });
+			List<SongInfo> songs = await _apiClient.GetSongDetailAsync(new string[1] { resolvedSongId }, cancellationToken);
 			cancellationToken.ThrowIfCancellationRequested();
 			SongInfo song = songs?.FirstOrDefault();
 			if (song == null)
@@ -1231,7 +995,7 @@ private void ActivateMixedSearchTypeOption()
 		string viewSource = (_currentViewSource = "url:song:" + text);
 		string accessibleName = (string.IsNullOrWhiteSpace(song.Name) ? ("歌曲: " + text) : ("歌曲: " + song.Name));
 		DisplaySongs(_currentSongs, showPagination: false, hasNextPage: false, 1, preserveSelection: false, viewSource, accessibleName);
-		FocusListAfterEnrich(0);
+		FocusListAfterEnrich(0, viewSource);
 		return true;
 	}
 
@@ -1240,7 +1004,7 @@ private void ActivateMixedSearchTypeOption()
 		if (TryValidateNeteaseResourceId(match.ResourceId, "歌单", out var parsedPlaylistId))
 		{
 			await LoadPlaylistById(parsedPlaylistId.ToString());
-			FocusListAfterEnrich(0);
+			FocusListAfterEnrich(0, "playlist:" + parsedPlaylistId);
 		}
 	}
 
@@ -1249,7 +1013,7 @@ private void ActivateMixedSearchTypeOption()
 		if (TryValidateNeteaseResourceId(match.ResourceId, "专辑", out var parsedAlbumId))
 		{
 			await LoadAlbumById(parsedAlbumId.ToString());
-			FocusListAfterEnrich(0);
+			FocusListAfterEnrich(0, "album:" + parsedAlbumId);
 		}
 	}
 
@@ -1270,7 +1034,7 @@ private void ActivateMixedSearchTypeOption()
 	{
 		if (TryValidateNeteaseResourceId(match.ResourceId, "播客", out var podcastId))
 		{
-			PodcastRadioInfo podcast = await _apiClient.GetPodcastRadioDetailAsync(podcastId);
+			PodcastRadioInfo podcast = await _apiClient.GetPodcastRadioDetailAsync(podcastId, cancellationToken);
 			cancellationToken.ThrowIfCancellationRequested();
 			if (podcast == null)
 			{
@@ -1280,7 +1044,12 @@ private void ActivateMixedSearchTypeOption()
 			else
 			{
 				await OpenPodcastRadioAsync(podcast);
-				FocusListAfterEnrich(0);
+				string podcastViewSource = "podcast:" + podcastId + ":offset0";
+				if (_podcastSortState.CurrentOption)
+				{
+					podcastViewSource += ":asc1";
+				}
+				FocusListAfterEnrich(0, podcastViewSource);
 			}
 		}
 	}
@@ -1289,7 +1058,7 @@ private void ActivateMixedSearchTypeOption()
 	{
 		if (TryValidateNeteaseResourceId(match.ResourceId, "播客节目", out var programId))
 		{
-			PodcastEpisodeInfo episode = await _apiClient.GetPodcastEpisodeDetailAsync(programId);
+			PodcastEpisodeInfo episode = await _apiClient.GetPodcastEpisodeDetailAsync(programId, cancellationToken);
 			cancellationToken.ThrowIfCancellationRequested();
 			if (episode == null)
 			{
@@ -1408,7 +1177,7 @@ private void ActivateMixedSearchTypeOption()
 			IEnumerable<string> preview = data.Failures.Take(5);
 			MessageBox.Show(string.Concat("部分链接未能加载：\n", str2: (data.Failures.Count > 5) ? "\n..." : string.Empty, str1: string.Join("\n", preview)), "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
 		}
-		FocusListAfterEnrich(0);
+		FocusListAfterEnrich(0, viewSource);
 		return;
 		IL_042c:
 		string failureMessage2 = (string)obj;
@@ -1437,7 +1206,7 @@ private void ActivateMixedSearchTypeOption()
 			.ToList();
 		if (songIds.Count > 0)
 		{
-			List<SongInfo> songDetails = await _apiClient.GetSongDetailAsync(songIds.ToArray()).ConfigureAwait(continueOnCapturedContext: true);
+			List<SongInfo> songDetails = await _apiClient.GetSongDetailAsync(songIds.ToArray(), cancellationToken).ConfigureAwait(continueOnCapturedContext: true);
 			cancellationToken.ThrowIfCancellationRequested();
 			if (songDetails != null)
 			{
@@ -1494,7 +1263,7 @@ private void ActivateMixedSearchTypeOption()
 			case NeteaseUrlType.Album:
 				if (!albumCache.TryGetValue(normalized.IdText, out album) || album == null)
 				{
-					album = await _apiClient.GetAlbumDetailAsync(normalized.IdText).ConfigureAwait(continueOnCapturedContext: true);
+					album = await _apiClient.GetAlbumDetailAsync(normalized.IdText, cancellationToken).ConfigureAwait(continueOnCapturedContext: true);
 					cancellationToken.ThrowIfCancellationRequested();
 					if (album != null)
 					{
@@ -1545,7 +1314,7 @@ private void ActivateMixedSearchTypeOption()
 				break;
 			case NeteaseUrlType.Podcast:
 			{
-				PodcastRadioInfo podcastDetail = await _apiClient.GetPodcastRadioDetailAsync(normalized.NumericId).ConfigureAwait(continueOnCapturedContext: true);
+				PodcastRadioInfo podcastDetail = await _apiClient.GetPodcastRadioDetailAsync(normalized.NumericId, cancellationToken).ConfigureAwait(continueOnCapturedContext: true);
 				cancellationToken.ThrowIfCancellationRequested();
 				if (podcastDetail != null)
 				{
@@ -1563,7 +1332,7 @@ private void ActivateMixedSearchTypeOption()
 			}
 			case NeteaseUrlType.PodcastEpisode:
 			{
-				PodcastEpisodeInfo episodeDetail = await _apiClient.GetPodcastEpisodeDetailAsync(normalized.NumericId).ConfigureAwait(continueOnCapturedContext: true);
+				PodcastEpisodeInfo episodeDetail = await _apiClient.GetPodcastEpisodeDetailAsync(normalized.NumericId, cancellationToken).ConfigureAwait(continueOnCapturedContext: true);
 				cancellationToken.ThrowIfCancellationRequested();
 				if (episodeDetail != null)
 				{

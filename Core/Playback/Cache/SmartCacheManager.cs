@@ -1609,12 +1609,25 @@ namespace YTPlayer.Core.Playback.Cache
 
             try
             {
+                PrioritizeDestination(position);
+                EnsureActiveDownload();
+                await EnsurePositionAsync(position, linkedCts.Token, allowRangeRescue: true).ConfigureAwait(false);
+
+                bytesRead = Read(position, buffer, offset, count);
+                if (bytesRead > 0)
+                {
+                    return bytesRead;
+                }
+
                 while (!linkedCts.Token.IsCancellationRequested)
                 {
                     await Task.Delay(HealthPollDelayMs, linkedCts.Token).ConfigureAwait(false);
 
                     // Retry after each poll and merge newly prepared pre-cache chunks.
                     CheckAndMergePreCache(position);
+                    PrioritizeDestination(position);
+                    EnsureActiveDownload();
+                    await EnsurePositionAsync(position, linkedCts.Token, allowRangeRescue: true).ConfigureAwait(false);
 
                     bytesRead = Read(position, buffer, offset, count);
                     if (bytesRead > 0)

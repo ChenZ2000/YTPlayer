@@ -293,6 +293,45 @@ namespace YTPlayer.Core.Playback
             }
         }
 
+        public bool TryEnsureQueueLengthWithPlaceholders(string expectedQueueSource, int desiredCount)
+        {
+            if (string.IsNullOrWhiteSpace(expectedQueueSource) || desiredCount <= 0)
+            {
+                return false;
+            }
+
+            lock (_syncRoot)
+            {
+                if (!string.Equals(_queueSource, expectedQueueSource, StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+
+                if (_queue.Count >= desiredCount)
+                {
+                    return false;
+                }
+
+                while (_queue.Count < desiredCount)
+                {
+                    var placeholder = new SongInfo
+                    {
+                        Name = "正在加载 ...",
+                        ViewSource = expectedQueueSource
+                    };
+                    _queue.Add(placeholder);
+                }
+
+                if (_queueIndex < 0 && _queue.Count > 0)
+                {
+                    _queueIndex = 0;
+                    SyncRandomHistoryWithQueueIndex();
+                }
+
+                return true;
+            }
+        }
+
         private static string BuildQueueAppendKey(SongInfo? song)
         {
             if (song == null)

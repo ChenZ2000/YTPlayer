@@ -82,7 +82,7 @@ namespace YTPlayer.Core
         /// <summary>
         /// 获取播客/电台详情。
         /// </summary>
-        public async Task<PodcastRadioInfo?> GetPodcastRadioDetailAsync(long radioId)
+        public async Task<PodcastRadioInfo?> GetPodcastRadioDetailAsync(long radioId, CancellationToken cancellationToken = default)
         {
             if (radioId <= 0)
             {
@@ -97,6 +97,7 @@ namespace YTPlayer.Core
             var response = await PostWeApiAsync<JObject>(
                 "/api/djradio/v2/get",
                 payload,
+                cancellationToken: cancellationToken,
                 autoConvertApiSegment: true);
 
             if (response["code"]?.Value<int>() != 200)
@@ -115,7 +116,7 @@ namespace YTPlayer.Core
         /// <summary>
         /// 获取指定播客的节目列表。
         /// </summary>
-        public async Task<(List<PodcastEpisodeInfo> Episodes, bool HasMore, int TotalCount)> GetPodcastEpisodesAsync(long radioId, int limit = 50, int offset = 0, bool asc = false)
+        public async Task<(List<PodcastEpisodeInfo> Episodes, bool HasMore, int TotalCount)> GetPodcastEpisodesAsync(long radioId, int limit = 50, int offset = 0, bool asc = false, CancellationToken cancellationToken = default)
         {
             if (radioId <= 0)
             {
@@ -135,7 +136,8 @@ namespace YTPlayer.Core
 
             var response = await PostWeApiAsync<JObject>(
                 "/weapi/dj/program/byradio",
-                payload);
+                payload,
+                cancellationToken: cancellationToken);
 
             if (response["code"]?.Value<int>() != 200)
             {
@@ -159,7 +161,7 @@ namespace YTPlayer.Core
         /// <summary>
         /// 获取单个播客节目的详情。
         /// </summary>
-        public async Task<PodcastEpisodeInfo?> GetPodcastEpisodeDetailAsync(long programId)
+        public async Task<PodcastEpisodeInfo?> GetPodcastEpisodeDetailAsync(long programId, CancellationToken cancellationToken = default)
         {
             if (programId <= 0)
             {
@@ -174,6 +176,7 @@ namespace YTPlayer.Core
             var response = await PostWeApiAsync<JObject>(
                 "/api/dj/program/detail",
                 payload,
+                cancellationToken: cancellationToken,
                 autoConvertApiSegment: true);
 
             if (response["code"]?.Value<int>() != 200)

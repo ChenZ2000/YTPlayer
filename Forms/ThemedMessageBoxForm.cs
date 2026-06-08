@@ -30,7 +30,14 @@ namespace YTPlayer.Forms
         [DllImport("user32.dll")]
         private static extern void NotifyWinEvent(uint eventId, IntPtr hwnd, int idObject, int idChild);
 
-        public ThemedMessageBoxForm(string text, string caption, MessageBoxButtons buttons, MessageBoxIcon icon, MessageBoxDefaultButton defaultButton)
+        public ThemedMessageBoxForm(
+            string text,
+            string caption,
+            MessageBoxButtons buttons,
+            MessageBoxIcon icon,
+            MessageBoxDefaultButton defaultButton,
+            string? acceptButtonText = null,
+            string? cancelButtonText = null)
         {
             string messageText = text ?? string.Empty;
             string titleText = string.IsNullOrWhiteSpace(caption) ? "\u63D0\u793A" : caption;
@@ -116,7 +123,7 @@ namespace YTPlayer.Forms
             };
             layout.SetColumnSpan(_buttonPanel, 2);
             layout.Controls.Add(_buttonPanel, 0, 1);
-            CreateButtons(buttons, defaultButton);
+            CreateButtons(buttons, defaultButton, acceptButtonText, cancelButtonText);
             ThemeManager.ApplyTheme(this);
             ApplyMessageTextBoxTheme(palette);
             UpdateMessageLayout();
@@ -332,7 +339,11 @@ namespace YTPlayer.Forms
             _messageTextBox.ForeColor = palette.TextPrimary;
             _messageTextBox.BorderStyle = BorderStyle.None;
         }
-        private void CreateButtons(MessageBoxButtons buttons, MessageBoxDefaultButton defaultButton)
+        private void CreateButtons(
+            MessageBoxButtons buttons,
+            MessageBoxDefaultButton defaultButton,
+            string? acceptButtonText,
+            string? cancelButtonText)
         {
             Button? acceptButton = null;
             Button? cancelButton = null;
@@ -361,11 +372,11 @@ namespace YTPlayer.Forms
             switch (buttons)
             {
                 case MessageBoxButtons.OK:
-                    AddButton("\u786E\u5B9A", DialogResult.OK, isCancel: true);
+                    AddButton(acceptButtonText ?? "\u786E\u5B9A", DialogResult.OK, isCancel: true);
                     break;
                 case MessageBoxButtons.OKCancel:
-                    AddButton("\u53D6\u6D88", DialogResult.Cancel, isCancel: true);
-                    AddButton("\u786E\u5B9A", DialogResult.OK);
+                    AddButton(cancelButtonText ?? "\u53D6\u6D88", DialogResult.Cancel, isCancel: true);
+                    AddButton(acceptButtonText ?? "\u786E\u5B9A", DialogResult.OK);
                     break;
                 case MessageBoxButtons.YesNo:
                     AddButton("\u5426", DialogResult.No, isCancel: true);

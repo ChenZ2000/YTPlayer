@@ -38,11 +38,6 @@ namespace YTPlayer.Core
         /// </summary>
         private static string GetEncodeType(string level)
         {
-            // Python源码：
-            // if level in ("standard", "higher", "exhigh", "medium"):
-            //     return "mp3"
-            // return "flac"
-
             if (level == "standard" || level == "higher" || level == "exhigh" || level == "medium")
             {
                 return "mp3";
@@ -93,6 +88,17 @@ namespace YTPlayer.Core
             string requestedLevel = GetQualityLevel(quality);
             string[] qualityOrder = { "jymaster", "sky", "jyeffect", "hires", "lossless", "exhigh", "standard" };
             var missingSongIds = new HashSet<string>(StringComparer.Ordinal);
+
+            void MarkRequestedSongsMissing()
+            {
+                foreach (string requestedId in ids)
+                {
+                    if (!string.IsNullOrWhiteSpace(requestedId))
+                    {
+                        missingSongIds.Add(requestedId.Trim());
+                    }
+                }
+            }
 
             // ⭐ 可用性预检：仅在登录状态下启用，未登录时跳过以避免误判
             bool isLoggedIn = _authContext?.CurrentAccountState?.IsLoggedIn ?? false;
@@ -150,6 +156,25 @@ namespace YTPlayer.Core
 
                     System.Diagnostics.Debug.WriteLine("[SongUrl] 公共API未返回有效结果，尝试使用 EAPI 兜底。");
                 }
+                catch (SongResourceNotFoundException simplifiedMissingEx)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[SongUrl] 公共API确认歌曲资源不可用: {simplifiedMissingEx.Message}，尝试使用 EAPI 兜底。");
+                    lastException = simplifiedMissingEx;
+                    if (simplifiedMissingEx.SongIds != null && simplifiedMissingEx.SongIds.Count > 0)
+                    {
+                        foreach (string missingId in simplifiedMissingEx.SongIds)
+                        {
+                            if (!string.IsNullOrWhiteSpace(missingId))
+                            {
+                                missingSongIds.Add(missingId);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        MarkRequestedSongsMissing();
+                    }
+                }
                 catch (Exception simplifiedEx)
                 {
                     System.Diagnostics.Debug.WriteLine($"[SongUrl] 公共API获取失败: {simplifiedEx.Message}，尝试使用 EAPI 兜底。");
@@ -194,7 +219,7 @@ namespace YTPlayer.Core
                     }
                     else
                     {
-                        System.Diagnostics.Debug.WriteLine("[EAPI] 未登录或未开启个人Cookie，使用公开API");
+                        System.Diagnostics.Debug.WriteLine("[EAPI] 未登录或未开启个人Cookie，使用官方匿名 EAPI");
                     }
 
                     if (!header.ContainsKey("__csrf") && !string.IsNullOrEmpty(_csrfToken))
@@ -202,13 +227,13 @@ namespace YTPlayer.Core
                         header["__csrf"] = _csrfToken;
                     }
 
-            var payload = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["ids"] = numericIds,
-                ["level"] = currentLevel,
-                ["encodeType"] = GetEncodeType(currentLevel),
-                ["header"] = header
-            };
+                    var payload = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["ids"] = numericIds,
+                        ["level"] = currentLevel,
+                        ["encodeType"] = GetEncodeType(currentLevel),
+                        ["header"] = header
+                    };
 
                     if (currentLevel == "sky")
                     {
@@ -227,6 +252,7 @@ namespace YTPlayer.Core
                     if (code == 404 || (!string.IsNullOrEmpty(message) && message.Contains("不存在")))
                     {
                         System.Diagnostics.Debug.WriteLine($"[EAPI] 官方接口返回资源不存在 (code={code}, message={message})，尝试降级。");
+                        MarkRequestedSongsMissing();
                         continue;
                     }
 
@@ -243,6 +269,12 @@ namespace YTPlayer.Core
 
                         if (code != 200)
                         {
+                            if (code == 404 || (!string.IsNullOrEmpty(message) && message.Contains("不存在")))
+                            {
+                                System.Diagnostics.Debug.WriteLine($"[EAPI] 海外兜底确认资源不存在 (code={code}, message={message})，尝试降级。");
+                                MarkRequestedSongsMissing();
+                                continue;
+                            }
                             System.Diagnostics.Debug.WriteLine($"[EAPI] code={code}, message={message}，尝试下一个音质");
                             continue;
                         }
@@ -1092,7 +1124,7 @@ namespace YTPlayer.Core
         /// <summary>
         /// 获取歌曲详情
         /// </summary>
-        public async Task<List<SongInfo>> GetSongDetailAsync(string[] ids)
+        public async Task<List<SongInfo>> GetSongDetailAsync(string[] ids, CancellationToken cancellationToken = default)
         {
             var payload = new Dictionary<string, object>
             {
@@ -1100,7 +1132,7 @@ namespace YTPlayer.Core
                 { "ids", $"[{string.Join(",", ids)}]" }
             };
 
-            var response = await PostWeApiAsync<JObject>("/v3/song/detail", payload);
+            var response = await PostWeApiAsync<JObject>("/v3/song/detail", payload, cancellationToken: cancellationToken);
             var songs = response["songs"] as JArray;
             return ParseSongList(songs);
         }

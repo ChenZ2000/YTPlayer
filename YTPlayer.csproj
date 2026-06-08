@@ -121,6 +121,9 @@
     <Compile Include="Forms\MainForm\MainForm.ResultListInteractions.cs" />
     <Compile Include="Forms\MainForm\MainForm.Pagination.cs" />
     <Compile Include="Forms\MainForm\MainForm.ArtistSongIndexing.cs" />
+    <Compile Include="Forms\MainForm\MainForm.PlaybackSourceContext.cs" />
+    <Compile Include="Forms\MainForm\MainForm.ListenTogether.cs" />
+    <Compile Include="Forms\MainForm\MainForm.UserInstallation.cs" />
     <Compile Include="Forms\AccessibleTrackBar.cs">
       <SubType>Component</SubType>
     </Compile>
@@ -141,6 +144,9 @@
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="Forms\SongRecognitionDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Forms\ListenTogetherDialog.cs">
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="Forms\Update\UpdateCheckDialog.cs">
@@ -177,6 +183,7 @@
     <Compile Include="Core\NeteaseApiClient\NeteaseApiClient.Comments.cs" />
     <Compile Include="Core\BassAudioEngine.cs" />
     <Compile Include="Core\SeekManager.cs" />
+    <Compile Include="Core\ApplicationStorage.cs" />
     <Compile Include="Core\ConfigManager.cs" />
     <Compile Include="Core\Exceptions\SongResourceNotFoundException.cs" />
     <Compile Include="Core\Exceptions\PaidAlbumNotPurchasedException.cs" />
@@ -188,6 +195,9 @@
     <Compile Include="Core\Playback\NextSongPreloader.cs" />
     <Compile Include="Core\Playback\SongResolveResult.cs" />
     <Compile Include="Core\Playback\PositionCoordinator.cs" />
+    <Compile Include="Core\ListenTogether\ListenTogetherPlaybackSnapshot.cs" />
+    <Compile Include="Core\ListenTogether\ListenTogetherHttpServer.cs" />
+    <Compile Include="Core\ListenTogether\ListenTogetherClient.cs" />
     <Compile Include="Core\Playback\Cache\CacheHealthInfo.cs" />
     <Compile Include="Core\Playback\Cache\ChunkDownloadManager.cs" />
     <Compile Include="Core\Playback\Cache\DownloadStrategy.cs" />

@@ -49,6 +49,10 @@ namespace YTPlayer.Core
                 System.Diagnostics.Debug.WriteLine($"[API] 搜索成功，返回 {songs.Count} 首歌曲, total={totalCount}");
                 return new SearchResult<SongInfo>(songs, totalCount, offset, limit, result);
             }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[API] 搜索失败: {ex.GetType().Name}: {ex.Message}");
@@ -150,7 +154,7 @@ namespace YTPlayer.Core
 
                 var resp = await _httpClient.GetAsync(url, cancellationToken).ConfigureAwait(false);
                 resp.EnsureSuccessStatusCode();
-                var txt = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+                var txt = await resp.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
                 obj = JsonConvert.DeserializeObject<JObject>(txt);
             }
             catch (Exception ex)
@@ -174,9 +178,13 @@ namespace YTPlayer.Core
                     { "os", "pc" }
                     };
 
-                    obj = await PostEApiAsync<JObject>("/api/music/audio/match", eapiPayload, useIosHeaders: true, skipErrorHandling: true)
+                    obj = await PostEApiAsync<JObject>("/api/music/audio/match", eapiPayload, useIosHeaders: true, skipErrorHandling: true, cancellationToken: cancellationToken)
                         .ConfigureAwait(false);
                 }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex) when (IsConnectionRefused(ex as HttpRequestException))
             {
@@ -310,11 +318,19 @@ namespace YTPlayer.Core
                         { "offset", offset.ToString() }
                     };
 
-                    System.Diagnostics.Debug.WriteLine($"[API] 通过简化接口搜索: type={typeCode}, keyword={keyword}");
-                    var simplifiedResponse = await GetSimplifiedApiAsync<JObject>("/search", simplifiedParameters, cancellationToken);
+                    System.Diagnostics.Debug.WriteLine($"[API] 通过简化 cloudsearch 搜索: type={typeCode}, keyword={keyword}");
+                    var simplifiedResponse = await GetSimplifiedApiAsync<JObject>("/cloudsearch", simplifiedParameters, cancellationToken);
                     if (simplifiedResponse?["result"] is JObject simplifiedResult)
                     {
                         return simplifiedResult;
+                    }
+
+                    System.Diagnostics.Debug.WriteLine("[API] 简化 cloudsearch 结果为空或类型错误，尝试简化 search 兼容接口");
+
+                    simplifiedResponse = await GetSimplifiedApiAsync<JObject>("/search", simplifiedParameters, cancellationToken);
+                    if (simplifiedResponse?["result"] is JObject legacySimplifiedResult)
+                    {
+                        return legacySimplifiedResult;
                     }
 
                     System.Diagnostics.Debug.WriteLine("[API] 简化接口结果为空或类型错误，切换到官方接口");
@@ -334,7 +350,27 @@ namespace YTPlayer.Core
                 { "total", true }
             };
 
-            // 优先使用 WEAPI 官方接口（与移动端一致），失败时再回退到 EAPI
+            // 优先使用 cloudsearch。旧 /api/search/get 在部分关键词上只返回 300 条左右的有效分页总量，
+            // cloudsearch 与参考项目 /cloudsearch 对齐，深分页结果更完整。
+            try
+            {
+                var cloudSearchResponse = await PostEApiAsync<JObject>(
+                    "/api/cloudsearch/pc",
+                    payload,
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+                if (cloudSearchResponse?["result"] is JObject cloudSearchResult)
+                {
+                    return cloudSearchResult;
+                }
+
+                System.Diagnostics.Debug.WriteLine("[API] cloudsearch 响应缺少 result 节点，尝试旧搜索接口回退。");
+            }
+            catch (Exception cloudSearchEx)
+            {
+                System.Diagnostics.Debug.WriteLine($"[API] cloudsearch 搜索失败，尝试旧搜索接口回退: {cloudSearchEx.Message}");
+            }
+
+            // 兼容回退：使用旧 WEAPI 搜索接口。
             try
             {
                 // 对标官方 Node 实现（module/search.js）：使用 weapi/search/get
@@ -364,7 +400,7 @@ namespace YTPlayer.Core
                 System.Diagnostics.Debug.WriteLine($"[API] WEAPI 搜索失败，尝试 EAPI 回退: {weapiEx.Message}");
             }
 
-            var response = await PostEApiAsync<JObject>("/api/cloudsearch/pc", payload);
+            var response = await PostEApiAsync<JObject>("/api/cloudsearch/pc", payload, cancellationToken: cancellationToken);
             if (response?["result"] is JObject result)
             {
                 return result;

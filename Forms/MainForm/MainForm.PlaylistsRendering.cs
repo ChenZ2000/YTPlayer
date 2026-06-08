@@ -136,10 +136,7 @@ public partial class MainForm
 			EnsureListSelectionWithoutFocus(num3);
 			if (flag)
 			{
-				_pendingSongFocusId = null;
-				_pendingSongFocusViewSource = null;
-				_pendingSongFocusSatisfied = true;
-				_pendingSongFocusSatisfiedViewSource = viewSource ?? _currentViewSource;
+				MarkPlaybackFocusSatisfied(viewSource ?? _currentViewSource);
 				if (resultListView != null && resultListView.CanFocus)
 				{
 					resultListView.Focus();
