@@ -9,6 +9,9 @@ namespace UnblockNCM.Core.Models
         public string Source { get; set; }
         public string Type { get; set; }
         public long? DurationMs { get; set; }
+        public bool IsTrial { get; set; }
+        public long TrialStartMs { get; set; }
+        public long TrialEndMs { get; set; }
         public string Title { get; set; }
         public string Artists { get; set; }
         /// <summary>

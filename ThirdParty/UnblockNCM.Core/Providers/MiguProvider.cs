@@ -37,16 +37,25 @@ namespace UnblockNCM.Core.Providers
         {
             public string Id { get; set; }
             public long Duration { get; set; }
+            public string Name { get; set; }
+            public string Artists { get; set; }
         }
 
         private MgSong Format(JObject song)
         {
-            var singerId = song.Value<string>("singerId")?.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries) ?? Array.Empty<string>();
             var singerName = song.Value<string>("singerName")?.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries) ?? Array.Empty<string>();
+            long duration = song.Value<long?>("duration") ?? 0;
+            if (duration > 0 && duration < 10000)
+            {
+                duration *= 1000;
+            }
+
             return new MgSong
             {
                 Id = song.Value<string>("id"),
-                Duration = (song.Value<long?>("duration") ?? 0)
+                Duration = duration,
+                Name = song.Value<string>("title") ?? song.Value<string>("songName") ?? song.Value<string>("name"),
+                Artists = string.Join(" / ", singerName)
             };
         }
 
@@ -95,8 +104,8 @@ namespace UnblockNCM.Core.Providers
                 Url = url,
                 Source = "migu",
                 DurationMs = song.Duration,
-                Title = info.Name,
-                Artists = string.Join(" / ", info.Artists.Select(a => a.Name)),
+                Title = string.IsNullOrWhiteSpace(song.Name) ? info.Name : song.Name,
+                Artists = string.IsNullOrWhiteSpace(song.Artists) ? string.Join(" / ", info.Artists.Select(a => a.Name)) : song.Artists,
                 Headers = new Dictionary<string, string>
                 {
                     { "referer", "http://m.music.migu.cn/v3/" },

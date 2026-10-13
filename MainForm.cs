@@ -331,6 +331,29 @@ public partial class MainForm : Form
 		public bool HasPrimaryEntity => PrimaryEntity != MenuEntityKind.None;
 	}
 
+	private sealed class MenuShortcutDisplayState
+	{
+		public bool ShowShortcutKeys { get; }
+
+		public string ShortcutKeyDisplayString { get; }
+
+		public Keys ShortcutKeys { get; }
+
+		public MenuShortcutDisplayState(ToolStripMenuItem menuItem)
+		{
+			ShowShortcutKeys = menuItem.ShowShortcutKeys;
+			ShortcutKeyDisplayString = menuItem.ShortcutKeyDisplayString ?? string.Empty;
+			ShortcutKeys = menuItem.ShortcutKeys;
+		}
+
+		public void Restore(ToolStripMenuItem menuItem)
+		{
+			menuItem.ShortcutKeys = ShortcutKeys;
+			menuItem.ShortcutKeyDisplayString = ShortcutKeyDisplayString;
+			menuItem.ShowShortcutKeys = ShowShortcutKeys;
+		}
+	}
+
 	private sealed class SortState<T> where T : notnull
 	{
 		private readonly Dictionary<T, string> _accessibleDescriptions;
@@ -790,6 +813,10 @@ public partial class MainForm : Form
 	private bool _isCurrentPlayingMenuActive = false;
 
 	private SongInfo? _currentPlayingMenuSong;
+
+	private bool _isMainMenuKeyboardActive = false;
+
+	private readonly Dictionary<ToolStripMenuItem, MenuShortcutDisplayState> _songContextMenuShortcutDisplayStates = new Dictionary<ToolStripMenuItem, MenuShortcutDisplayState>();
 
 	private int _lastListViewFocusedIndex = -1;
 
@@ -1779,6 +1806,10 @@ public partial class MainForm : Form
 
 	private ToolStripMenuItem unlikeSongMenuItem;
 
+	private ToolStripMenuItem dislikeSongMenuItem;
+
+	private ToolStripMenuItem deleteRecentPlayMenuItem;
+
 	private ToolStripMenuItem addToPlaylistMenuItem;
 
 	private ToolStripMenuItem removeFromPlaylistMenuItem;
@@ -1964,10 +1995,12 @@ public partial class MainForm : Form
 							Debug.WriteLine("[StateCache] 获取状态异常: " + ex3.Message);
 						}
 						double effectivePosition = position;
+						duration = NormalizePlaybackDurationForUi(duration, position);
 						if (_positionCoordinator != null)
 						{
 							effectivePosition = _positionCoordinator.GetEffectivePosition(position, duration, state == PlaybackState.Playing);
 						}
+						effectivePosition = ClampPlaybackPositionForUi(effectivePosition, duration);
 						PlaybackState previousState;
 						bool stateChanged;
 						lock (_stateCacheLock)
@@ -2043,6 +2076,60 @@ public partial class MainForm : Form
 		}
 	}
 
+	private static double SanitizeSeconds(double seconds)
+	{
+		if (double.IsNaN(seconds) || double.IsInfinity(seconds) || seconds < 0.0)
+		{
+			return 0.0;
+		}
+
+		return seconds;
+	}
+
+	private double NormalizePlaybackDurationForUi(double durationSeconds, double positionSeconds)
+	{
+		double duration = SanitizeSeconds(durationSeconds);
+		double position = SanitizeSeconds(positionSeconds);
+		SongInfo currentSong = _audioEngine?.CurrentSong;
+		int metadataDuration = StreamSizeEstimator.NormalizeDurationSeconds(currentSong?.Duration ?? 0);
+		if (currentSong != null && metadataDuration > 0 && !currentSong.IsTrial)
+		{
+			bool shouldPreferMetadata = duration <= 0.0;
+			if (currentSong.IsUnblocked && duration > 0.0)
+			{
+				shouldPreferMetadata =
+					duration < metadataDuration * 0.92 ||
+					(position > duration + 1.0 && position <= metadataDuration + 2.0);
+			}
+
+			if (shouldPreferMetadata && metadataDuration >= Math.Max(1.0, position - 2.0))
+			{
+				duration = metadataDuration;
+			}
+		}
+
+		return duration;
+	}
+
+	private static double ClampPlaybackPositionForUi(double positionSeconds, double durationSeconds)
+	{
+		double position = SanitizeSeconds(positionSeconds);
+		double duration = SanitizeSeconds(durationSeconds);
+		if (duration > 0.0 && position > duration)
+		{
+			return duration;
+		}
+
+		return position;
+	}
+
+	private (double Position, double Duration) NormalizePlaybackTimelineForUi(double positionSeconds, double durationSeconds)
+	{
+		double duration = NormalizePlaybackDurationForUi(durationSeconds, positionSeconds);
+		double position = ClampPlaybackPositionForUi(positionSeconds, duration);
+		return (position, duration);
+	}
+
 	private PlaybackState GetCachedPlaybackState()
 	{
 		lock (_stateCacheLock)
@@ -2055,6 +2142,7 @@ public partial class MainForm : Form
         {
                 InitializeComponent();
                 MenuNavigationBoundaryHelper.Attach(menuStrip1);
+                InitializeMainMenuKeyboardRouting();
                 IconAssetProvider.TryApplyFormIcon(this);
                 ApplySearchPanelStyle();
                 ApplyResultListViewStyle();
@@ -2101,6 +2189,104 @@ public partial class MainForm : Form
                 base.Load += MainForm_Load;
         }
 
+        private void InitializeMainMenuKeyboardRouting()
+        {
+                if (menuStrip1 != null)
+                {
+                        menuStrip1.MenuActivate -= menuStrip1_MenuActivate;
+                        menuStrip1.MenuActivate += menuStrip1_MenuActivate;
+                        menuStrip1.MenuDeactivate -= menuStrip1_MenuDeactivate;
+                        menuStrip1.MenuDeactivate += menuStrip1_MenuDeactivate;
+                }
+
+                if (progressTrackBar != null)
+                {
+                        progressTrackBar.ShouldYieldNavigationKeys = IsKeyboardMenuActive;
+                }
+
+                if (volumeTrackBar != null)
+                {
+                        volumeTrackBar.ShouldYieldNavigationKeys = IsKeyboardMenuActive;
+                }
+        }
+
+        private void menuStrip1_MenuActivate(object? sender, EventArgs e)
+        {
+                _isMainMenuKeyboardActive = true;
+        }
+
+        private void menuStrip1_MenuDeactivate(object? sender, EventArgs e)
+        {
+                _isMainMenuKeyboardActive = false;
+        }
+
+        private bool IsKeyboardMenuActive()
+        {
+                return IsMainMenuKeyboardInteractionActive() || IsAnyMainContextMenuVisible();
+        }
+
+        private bool IsMainMenuKeyboardInteractionActive()
+        {
+                if (menuStrip1 != null && !menuStrip1.IsDisposed)
+                {
+                        bool hasMenuFocus = menuStrip1.Focused || menuStrip1.ContainsFocus;
+                        bool hasSelectedItem = IsAnyMainMenuItemSelected();
+                        bool hasVisibleDropDown = IsAnyMainMenuDropDownVisible();
+                        if (_isMainMenuKeyboardActive && !hasMenuFocus && !hasSelectedItem && !hasVisibleDropDown)
+                        {
+                                _isMainMenuKeyboardActive = false;
+                        }
+
+                        if (_isMainMenuKeyboardActive || hasMenuFocus)
+                        {
+                                return true;
+                        }
+
+                        if (hasSelectedItem || hasVisibleDropDown)
+                        {
+                                return true;
+                        }
+                }
+
+                return false;
+        }
+
+        private bool IsAnyMainMenuItemSelected()
+        {
+                if (menuStrip1 == null || menuStrip1.IsDisposed)
+                {
+                        return false;
+                }
+
+                foreach (ToolStripItem item in menuStrip1.Items)
+                {
+                        if (item.Selected)
+                        {
+                                return true;
+                        }
+                }
+
+                return false;
+        }
+
+        private bool IsAnyMainMenuDropDownVisible()
+        {
+                if (menuStrip1 == null || menuStrip1.IsDisposed)
+                {
+                        return false;
+                }
+
+                foreach (ToolStripItem item in menuStrip1.Items)
+                {
+                        if (item is ToolStripDropDownItem dropDownItem && dropDownItem.DropDown != null && dropDownItem.DropDown.Visible)
+                        {
+                                return true;
+                        }
+                }
+
+                return false;
+        }
+
         protected override AccessibleObject CreateAccessibilityInstance()
         {
                 return new MainFormAccessibleObject(this);
@@ -2111,12 +2297,18 @@ public partial class MainForm : Form
                 const int WM_EXITSIZEMOVE = 0x0232;
                 const int WM_POWERBROADCAST = 0x0218;
                 const int WM_DEVICECHANGE = 0x0219;
+                const int WM_APPCOMMAND = 0x0319;
                 const int PBT_APMSUSPEND = 0x0004;
                 const int PBT_APMRESUMESUSPEND = 0x0007;
                 const int PBT_APMRESUMEAUTOMATIC = 0x0012;
                 const int DBT_DEVNODES_CHANGED = 0x0007;
 
-                if (m.Msg == WM_EXITSIZEMOVE)
+                if (m.Msg == WM_APPCOMMAND && TryHandleAppCommand(m))
+                {
+                        m.Result = new IntPtr(1);
+                        return;
+                }
+                else if (m.Msg == WM_EXITSIZEMOVE)
                 {
                         _windowLayoutPersistTimer?.Stop();
                         PersistWindowLayoutConfig();
@@ -2148,6 +2340,49 @@ public partial class MainForm : Form
                 }
 
                 base.WndProc(ref m);
+        }
+
+        private bool TryHandleAppCommand(Message message)
+        {
+                const int FAPPCOMMAND_MASK = 0xF000;
+                const int APPCOMMAND_MEDIA_NEXTTRACK = 11;
+                const int APPCOMMAND_MEDIA_PREVIOUSTRACK = 12;
+                const int APPCOMMAND_MEDIA_STOP = 13;
+                const int APPCOMMAND_MEDIA_PLAY_PAUSE = 14;
+                const int APPCOMMAND_MEDIA_PLAY = 46;
+                const int APPCOMMAND_MEDIA_PAUSE = 47;
+
+                int appCommand = unchecked((short)((message.LParam.ToInt64() >> 16) & 0xffff));
+                appCommand &= ~FAPPCOMMAND_MASK;
+                switch (appCommand)
+                {
+                        case APPCOMMAND_MEDIA_PLAY_PAUSE:
+                                TogglePlayPauseAsync().SafeFireAndForget("Media key play/pause");
+                                return true;
+                        case APPCOMMAND_MEDIA_PLAY:
+                                if (_audioEngine == null || _audioEngine.GetPlaybackState() != PlaybackState.Playing)
+                                {
+                                        TogglePlayPauseAsync().SafeFireAndForget("Media key play");
+                                }
+                                return true;
+                        case APPCOMMAND_MEDIA_PAUSE:
+                                if (_audioEngine != null && _audioEngine.GetPlaybackState() == PlaybackState.Playing)
+                                {
+                                        TogglePlayPauseAsync().SafeFireAndForget("Media key pause");
+                                }
+                                return true;
+                        case APPCOMMAND_MEDIA_PREVIOUSTRACK:
+                                PlayPreviousAsync().SafeFireAndForget("Media key previous");
+                                return true;
+                        case APPCOMMAND_MEDIA_NEXTTRACK:
+                                PlayNextAsync().SafeFireAndForget("Media key next");
+                                return true;
+                        case APPCOMMAND_MEDIA_STOP:
+                                StopPlayback();
+                                return true;
+                        default:
+                                return false;
+                }
         }
 
         private void ApplySearchPanelStyle()
@@ -5380,9 +5615,10 @@ public partial class MainForm : Form
 		InitializeSearchHistoryUi(configModel.SearchHistory);
         if (_audioEngine != null)
         {
-                volumeTrackBar.Value = checked((int)(configModel.Volume * 100.0));
-                _audioEngine.SetVolume((float)configModel.Volume);
+                volumeTrackBar.Value = Math.Max(0, Math.Min(100, checked((int)Math.Round(configModel.Volume * 100.0))));
+                _audioEngine.SetVolume(volumeTrackBar.Value / 100f);
                 volumeLabel.Text = $"{volumeTrackBar.Value}%";
+                SetVolumeTrackBarAccessibleValue(volumeLabel.Text, announceWhenFocused: false);
         }
 		PlayMode playMode = PlayMode.Sequential;
 		if (configModel.PlaybackOrder == "列表循环")
@@ -6319,6 +6555,7 @@ public partial class MainForm : Form
 
 	private void MainForm_Deactivate(object? sender, EventArgs e)
 	{
+		_isMainMenuKeyboardActive = false;
 		_leftKeyPressed = false;
 		_rightKeyPressed = false;
 		_leftScrubActive = false;
@@ -6349,6 +6586,10 @@ public partial class MainForm : Form
 
 	protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
 	{
+		if (IsKeyboardMenuActive())
+		{
+			return base.ProcessCmdKey(ref msg, keyData);
+		}
 		if (keyData == (Keys.Control | Keys.Shift | Keys.L))
 		{
 			StartSongRecognitionAsync().SafeFireAndForget("Shortcut ListenRecognition");
@@ -6439,9 +6680,56 @@ public partial class MainForm : Form
 			PerformSearch();
 			return true;
 		}
+		if (TryHandlePlaybackControlArrowShortcut(keyData))
+		{
+			return true;
+		}
 		goto IL_0054;
 		IL_0054:
 		return base.ProcessCmdKey(ref msg, keyData);
+	}
+
+	private bool TryHandlePlaybackControlArrowShortcut(Keys keyData)
+	{
+		if (IsKeyboardMenuActive())
+		{
+			return false;
+		}
+
+		Keys keyCode = keyData & Keys.KeyCode;
+		if (keyCode != Keys.Left && keyCode != Keys.Right && keyCode != Keys.Up && keyCode != Keys.Down)
+		{
+			return false;
+		}
+
+		Keys modifiers = keyData & Keys.Modifiers;
+		if (modifiers != Keys.None && modifiers != Keys.Control)
+		{
+			return false;
+		}
+
+		if (!IsPlaybackControlFocused())
+		{
+			return false;
+		}
+
+		if (keyCode == Keys.Left || keyCode == Keys.Right)
+		{
+			HandleDirectionalKeyDown(keyCode == Keys.Right);
+		}
+		else
+		{
+			AdjustVolumeByStep(keyCode == Keys.Up ? 2 : -2);
+		}
+
+		return true;
+	}
+
+	private bool IsPlaybackControlFocused()
+	{
+		return (progressTrackBar != null && progressTrackBar.ContainsFocus) ||
+			(volumeTrackBar != null && volumeTrackBar.ContainsFocus) ||
+			(playPauseButton != null && playPauseButton.ContainsFocus);
 	}
 
 	private void searchTextBox_KeyDown(object sender, KeyEventArgs e)
@@ -7046,13 +7334,28 @@ public partial class MainForm : Form
 			return;
 		}
 		PlaybackState playbackState = _audioEngine.GetPlaybackState();
-		string text = ((playbackState == PlaybackState.Playing) ? "暂停" : "播放");
+		string text = BuildPlayPauseButtonText(playbackState, _audioEngine.CurrentSong);
 		if (playPauseButton.Text != text)
 		{
 			playPauseButton.Text = text;
 			Debug.WriteLine($"[SyncPlayPauseButtonText] 按钮文本已更新: {text} (状态={playbackState})");
 		}
 		UpdateTrayPlayPauseMenuTextForState(playbackState);
+	}
+
+	private static string BuildPlayPauseButtonText(PlaybackState playbackState, SongInfo? song)
+	{
+		string text = ((playbackState == PlaybackState.Playing) ? "暂停" : "播放");
+		return AppendTrialMarker(text, song);
+	}
+
+	private static string AppendTrialMarker(string text, SongInfo? song)
+	{
+		if (song?.IsTrial == true)
+		{
+			text += Environment.NewLine + "试听版";
+		}
+		return text;
 	}
 
 	private void UpdateTrayPlayPauseMenuTextForState(PlaybackState playbackState)
@@ -7278,6 +7581,81 @@ public partial class MainForm : Form
 	}
 
 
+	private void SetProgressTrackBarAccessibleValue(string timeText, bool announceWhenFocused)
+	{
+		if (progressTrackBar == null)
+		{
+			return;
+		}
+
+		bool valueTextChanged = false;
+		if (progressTrackBar is AccessibleTrackBar accessibleTrackBar)
+		{
+			valueTextChanged = !string.Equals(accessibleTrackBar.AccessibleValueText, timeText, StringComparison.Ordinal);
+			accessibleTrackBar.SetAccessibleValueText(timeText, raiseValueChanged: false);
+		}
+
+		bool nameChanged = !string.Equals(progressTrackBar.AccessibleName, timeText, StringComparison.Ordinal);
+		if (nameChanged)
+		{
+			progressTrackBar.AccessibleName = timeText;
+		}
+
+		bool descriptionChanged = !string.Equals(progressTrackBar.AccessibleDescription, timeText, StringComparison.Ordinal);
+		if (descriptionChanged)
+		{
+			progressTrackBar.AccessibleDescription = timeText;
+		}
+
+		if (announceWhenFocused && progressTrackBar.ContainsFocus && progressTrackBar is AccessibleTrackBar focusedTrackBar)
+		{
+			if (nameChanged || valueTextChanged)
+			{
+				focusedTrackBar.RaiseNameChanged();
+			}
+		}
+	}
+
+	private void UpdateProgressTrackBarDisplay(double positionSeconds, double durationSeconds, bool announceWhenFocused)
+	{
+		if (progressTrackBar == null)
+		{
+			return;
+		}
+
+		var timeline = NormalizePlaybackTimelineForUi(positionSeconds, durationSeconds);
+		double position = timeline.Position;
+		double duration = timeline.Duration;
+		if (duration > 0.0)
+		{
+			int maximum = Math.Max(1, checked((int)Math.Ceiling(duration)));
+			int value = Math.Max(0, Math.Min(maximum, checked((int)Math.Round(position))));
+			string text = FormatTimeFromSeconds(position) + " / " + FormatTimeFromSeconds(duration);
+			bool willChangeValue = progressTrackBar.Value != value;
+			SetProgressTrackBarAccessibleValue(text, announceWhenFocused && !willChangeValue);
+			if (progressTrackBar.Maximum != maximum)
+			{
+				progressTrackBar.Maximum = maximum;
+				progressTrackBar.TickFrequency = Math.Max(1, maximum / 20);
+			}
+			if (progressTrackBar.Value != value)
+			{
+				progressTrackBar.Value = value;
+			}
+			timeLabel.Text = text;
+		}
+		else
+		{
+			const string emptyProgressText = "00:00 / 00:00";
+			bool willChangeValue = progressTrackBar.Value != 0;
+			SetProgressTrackBarAccessibleValue(emptyProgressText, announceWhenFocused && !willChangeValue);
+			progressTrackBar.Maximum = 1000;
+			progressTrackBar.Value = 0;
+			progressTrackBar.TickFrequency = 50;
+			timeLabel.Text = emptyProgressText;
+		}
+	}
+
         private void UpdateTimer_Tick(object sender, EventArgs e)
         {
 		if (_audioEngine == null || _isUserDragging)
@@ -7286,30 +7664,10 @@ public partial class MainForm : Form
 		}
 		double cachedPosition = GetCachedPosition();
 		double cachedDuration = GetCachedDuration();
-		if (cachedDuration > 0.0)
-		{
-			int num = checked((int)cachedDuration);
-			if (progressTrackBar.Maximum != num)
-			{
-				progressTrackBar.Maximum = Math.Max(1, num);
-				progressTrackBar.TickFrequency = Math.Max(1, num / 20);
-			}
-			int num2 = checked((int)cachedPosition);
-                if (num2 >= 0 && num2 <= progressTrackBar.Maximum)
-                {
-                        progressTrackBar.Value = num2;
-                }
-                string text = FormatTimeFromSeconds(cachedPosition) + " / " + FormatTimeFromSeconds(cachedDuration);
-                timeLabel.Text = text;
-                progressTrackBar.AccessibleName = text;
-        }
-        else
-        {
-                progressTrackBar.Maximum = 1000;
-                progressTrackBar.Value = 0;
-                progressTrackBar.TickFrequency = 50;
-                progressTrackBar.AccessibleName = "00:00 / 00:00";
-        }
+		var timeline = NormalizePlaybackTimelineForUi(cachedPosition, cachedDuration);
+		cachedPosition = timeline.Position;
+		cachedDuration = timeline.Duration;
+		UpdateProgressTrackBarDisplay(cachedPosition, cachedDuration, announceWhenFocused: true);
 		if (_currentLyrics != null && _currentLyrics.Count > 0)
 		{
 			TimeSpan position = TimeSpan.FromSeconds(cachedPosition);
@@ -7320,7 +7678,7 @@ public partial class MainForm : Form
 			}
 		}
 		PlaybackState cachedPlaybackState = GetCachedPlaybackState();
-		string text2 = ((cachedPlaybackState == PlaybackState.Playing) ? "暂停" : "播放");
+		string text2 = BuildPlayPauseButtonText(cachedPlaybackState, _audioEngine?.CurrentSong);
 		if (playPauseButton.Text != text2)
 		{
 			playPauseButton.Text = text2;
@@ -7343,6 +7701,7 @@ public partial class MainForm : Form
                         if (cachedDuration > 0.0)
                         {
                                 double num = progressTrackBar.Value;
+                                UpdateProgressTrackBarDisplay(num, cachedDuration, announceWhenFocused: true);
                                 Debug.WriteLine($"[MainForm] 进度条 Scroll: {num:F1}s");
                                 RequestSeekAndResetLyrics(num);
                         }
@@ -7478,7 +7837,7 @@ public partial class MainForm : Form
 			double enginePosition = _audioEngine.GetPosition();
 			double engineDuration = _audioEngine.GetDuration();
 			double cachedDuration = GetCachedDuration();
-			double duration = (engineDuration > 0.0) ? engineDuration : cachedDuration;
+			double duration = NormalizePlaybackDurationForUi((engineDuration > 0.0) ? engineDuration : cachedDuration, enginePosition);
 			bool preferSeekTarget = _seekManager != null && (_seekManager.IsSeekingLong || _seekManager.HasPendingDeferredSeek);
 			double basePosition = enginePosition;
 			if (_positionCoordinator != null)
@@ -7489,8 +7848,18 @@ public partial class MainForm : Form
 			{
 				basePosition = GetCachedPosition();
 			}
-			double num = ((direction > 0.0) ? Math.Min(duration, basePosition + Math.Abs(direction)) : Math.Max(0.0, basePosition + direction));
+			basePosition = ClampPlaybackPositionForUi(basePosition, duration);
+			double num;
+			if (duration > 0.0)
+			{
+				num = ((direction > 0.0) ? Math.Min(duration, basePosition + Math.Abs(direction)) : Math.Max(0.0, basePosition + direction));
+			}
+			else
+			{
+				num = Math.Max(0.0, basePosition + direction);
+			}
 			Debug.WriteLine($"[MainForm] 请求 Seek: {basePosition:F1}s → {num:F1}s (方向: {direction:+0;-0})");
+			UpdateProgressTrackBarDisplay(num, duration, announceWhenFocused: true);
 			RequestSeekAndResetLyrics(num, enableScrubbing);
 		}
 	}
@@ -7550,26 +7919,27 @@ public partial class MainForm : Form
 		{
 			return;
 		}
+		SongInfo? currentSong = _audioEngine?.CurrentSong;
 		switch (state)
 		{
 		case BufferingState.Buffering:
-			playPauseButton.Text = "缓冲中...";
+			playPauseButton.Text = AppendTrialMarker("缓冲中...", currentSong);
 			playPauseButton.Enabled = true;
 			return;
 		case BufferingState.Ready:
-			playPauseButton.Text = "就绪";
+			playPauseButton.Text = AppendTrialMarker("就绪", currentSong);
 			return;
 		case BufferingState.Playing:
-			playPauseButton.Text = "暂停";
+			playPauseButton.Text = BuildPlayPauseButtonText(PlaybackState.Playing, currentSong);
 			playPauseButton.Enabled = true;
 			return;
 		case BufferingState.LowBuffer:
-			playPauseButton.Text = "缓冲中...";
+			playPauseButton.Text = AppendTrialMarker("缓冲中...", currentSong);
 			return;
 		}
 		if (_audioEngine != null && _audioEngine.IsPaused)
 		{
-			playPauseButton.Text = "播放";
+			playPauseButton.Text = BuildPlayPauseButtonText(PlaybackState.Paused, currentSong);
 		}
 	}
 
@@ -7848,9 +8218,10 @@ public partial class MainForm : Form
                         {
                                 double position = _audioEngine.GetPosition();   
                                 double duration = _audioEngine.GetDuration();   
-                                string text = FormatTime(TimeSpan.FromSeconds(position));
-                                string text2 = FormatTime(TimeSpan.FromSeconds(duration));
-                                progressTrackBar.AccessibleName = text + " / " + text2;
+                                var timeline = NormalizePlaybackTimelineForUi(position, duration);
+                                string text = FormatTime(TimeSpan.FromSeconds(timeline.Position));
+                                string text2 = FormatTime(TimeSpan.FromSeconds(timeline.Duration));
+                                SetProgressTrackBarAccessibleValue(text + " / " + text2, announceWhenFocused: progressTrackBar.ContainsFocus);
                         }
                 }
                 catch (Exception ex)
@@ -7859,53 +8230,123 @@ public partial class MainForm : Form
                 }
         }
 
+	private void SetVolumeTrackBarAccessibleValue(string text, bool announceWhenFocused)
+	{
+		if (volumeTrackBar == null)
+		{
+			return;
+		}
+
+		bool valueChanged = false;
+		if (volumeTrackBar is AccessibleTrackBar accessibleTrackBar)
+		{
+			valueChanged = !string.Equals(accessibleTrackBar.AccessibleValueText, text, StringComparison.Ordinal);
+			accessibleTrackBar.SetAccessibleValueText(text, raiseValueChanged: false);
+		}
+
+		if (!string.Equals(volumeTrackBar.AccessibleName, "音量", StringComparison.Ordinal))
+		{
+			volumeTrackBar.AccessibleName = "音量";
+		}
+
+		bool descriptionChanged = !string.Equals(volumeTrackBar.AccessibleDescription, text, StringComparison.Ordinal);
+		if (descriptionChanged)
+		{
+			volumeTrackBar.AccessibleDescription = text;
+		}
+
+		if (announceWhenFocused && volumeTrackBar.ContainsFocus && valueChanged && volumeTrackBar is AccessibleTrackBar focusedTrackBar)
+		{
+			focusedTrackBar.RaiseValueChanged();
+		}
+	}
+
+	private void ApplyVolumeFromTrackBar(bool announceWhenFocused)
+	{
+		if (_audioEngine == null || volumeTrackBar == null)
+		{
+			return;
+		}
+
+		float num = (float)volumeTrackBar.Value / 100f;
+		_audioEngine.SetVolume(num);
+		string text = $"{volumeTrackBar.Value}%";
+		SetVolumeTrackBarAccessibleValue(text, announceWhenFocused);
+		volumeLabel.Text = text;
+		_config.Volume = num;
+		SaveConfig();
+	}
+
+	private void AdjustVolumeByStep(int delta)
+	{
+		if (volumeTrackBar == null)
+		{
+			return;
+		}
+
+		int next = Math.Max(0, Math.Min(100, volumeTrackBar.Value + delta));
+		if (next == volumeTrackBar.Value)
+		{
+			SetVolumeTrackBarAccessibleValue($"{volumeTrackBar.Value}%", announceWhenFocused: true);
+			return;
+		}
+
+		SetVolumeTrackBarAccessibleValue($"{next}%", announceWhenFocused: false);
+		volumeTrackBar.Value = next;
+		ApplyVolumeFromTrackBar(announceWhenFocused: true);
+	}
+
         private void volumeTrackBar_Scroll(object sender, EventArgs e)
         {
-                if (_audioEngine != null)
-                {
-                        float num = (float)volumeTrackBar.Value / 100f;
-                        _audioEngine.SetVolume(num);
-                        string text = $"{volumeTrackBar.Value}%";
-                        volumeLabel.Text = text;
-                        _config.Volume = num;
-                        SaveConfig();
-                }
+                ApplyVolumeFromTrackBar(announceWhenFocused: true);
         }
 
 	private void volumeTrackBar_KeyDown(object sender, KeyEventArgs e)
 	{
+		if (IsKeyboardMenuActive())
+		{
+			return;
+		}
 		checked
 		{
 			if (e.KeyCode == Keys.Up)
 			{
 				e.Handled = true;
 				e.SuppressKeyPress = true;
-				if (volumeTrackBar.Value < 100)
-				{
-					volumeTrackBar.Value = Math.Min(100, volumeTrackBar.Value + 2);
-					volumeTrackBar_Scroll(volumeTrackBar, EventArgs.Empty);
-				}
+				AdjustVolumeByStep(2);
 			}
 			else if (e.KeyCode == Keys.Down)
 			{
 				e.Handled = true;
 				e.SuppressKeyPress = true;
-				if (volumeTrackBar.Value > 0)
-				{
-					volumeTrackBar.Value = Math.Max(0, volumeTrackBar.Value - 2);
-					volumeTrackBar_Scroll(volumeTrackBar, EventArgs.Empty);
-				}
+				AdjustVolumeByStep(-2);
 			}
 		}
 	}
 
         private void progressTrackBar_KeyDown(object sender, KeyEventArgs e)
         {
-                if (e.KeyCode == Keys.Up || e.KeyCode == Keys.Down || e.KeyCode == Keys.Left || e.KeyCode == Keys.Right || e.KeyCode == Keys.Prior || e.KeyCode == Keys.Next || e.KeyCode == Keys.Home || e.KeyCode == Keys.End)
-                {
-                        e.Handled = true;
-                        e.SuppressKeyPress = true;
-                }
+		if (IsKeyboardMenuActive())
+		{
+			return;
+		}
+                if (e.KeyCode == Keys.Left || e.KeyCode == Keys.Right)
+		{
+			e.Handled = true;
+			e.SuppressKeyPress = true;
+			HandleDirectionalKeyDown(e.KeyCode == Keys.Right);
+		}
+		else if (e.KeyCode == Keys.Up || e.KeyCode == Keys.Down)
+		{
+			e.Handled = true;
+			e.SuppressKeyPress = true;
+			AdjustVolumeByStep(e.KeyCode == Keys.Up ? 2 : -2);
+		}
+		else if (e.KeyCode == Keys.Prior || e.KeyCode == Keys.Next || e.KeyCode == Keys.Home || e.KeyCode == Keys.End)
+		{
+			e.Handled = true;
+			e.SuppressKeyPress = true;
+		}
         }
 
 	private void OnAudioPositionChanged(object? sender, TimeSpan position)
@@ -8247,7 +8688,7 @@ public partial class MainForm : Form
 			{
 				string text = (nextSong.IsTrial ? (nextSong.Name + "(试听版)") : nextSong.Name);
 				currentSongLabel.Text = text + " - " + nextSong.Artist;
-				playPauseButton.Text = "暂停";
+				playPauseButton.Text = BuildPlayPauseButtonText(PlaybackState.Playing, nextSong);
 				UpdatePlayButtonDescription(nextSong);
 				UpdateTrayIconTooltip(nextSong);
 				SyncPlayPauseButtonText();
@@ -8607,6 +9048,8 @@ public partial class MainForm : Form
 			if (!string.IsNullOrEmpty(_playButtonTextBeforeLoading))
 			{
 				playPauseButton.Text = _playButtonTextBeforeLoading;
+				_lastSyncButtonTextTime = DateTime.MinValue;
+				SyncPlayPauseButtonText();
 			}
 			else
 			{
@@ -8625,12 +9068,11 @@ public partial class MainForm : Form
 
 	private string FormatTimeFromSeconds(double seconds)
 	{
-		checked
-		{
-			int value = (int)(seconds / 60.0);
-			int value2 = (int)(seconds % 60.0);
-			return $"{value:D2}:{value2:D2}";
-		}
+		seconds = SanitizeSeconds(seconds);
+		int totalSeconds = checked((int)Math.Floor(seconds));
+		int value = totalSeconds / 60;
+		int value2 = totalSeconds % 60;
+		return $"{value:D2}:{value2:D2}";
 	}
 
 [DllImport("user32.dll")]
@@ -8705,6 +9147,10 @@ private void searchTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
 
 	private void MainForm_KeyDown(object sender, KeyEventArgs e)
 	{
+		if (IsKeyboardMenuActive())
+		{
+			return;
+		}
 		if (e.KeyCode == Keys.Escape && e.Shift && !e.Control && !e.Alt)
 		{
 			e.Handled = true;
@@ -8717,6 +9163,23 @@ private void searchTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
 			e.Handled = true;
 			e.SuppressKeyPress = true;
 			GoBackAsync();
+			return;
+		}
+		if ((e.KeyCode == Keys.Left || e.KeyCode == Keys.Right || e.KeyCode == Keys.Up || e.KeyCode == Keys.Down) &&
+			IsPlaybackControlFocused() &&
+			!e.Alt &&
+			!e.Shift)
+		{
+			e.Handled = true;
+			e.SuppressKeyPress = true;
+			if (e.KeyCode == Keys.Left || e.KeyCode == Keys.Right)
+			{
+				HandleDirectionalKeyDown(e.KeyCode == Keys.Right);
+			}
+			else
+			{
+				AdjustVolumeByStep(e.KeyCode == Keys.Up ? 2 : -2);
+			}
 			return;
 		}
 		TextBox textBox = searchTextBox;
@@ -8758,21 +9221,13 @@ private void searchTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
 			{
 				e.Handled = true;
 				e.SuppressKeyPress = true;
-				if (volumeTrackBar.Value > 0)
-				{
-					volumeTrackBar.Value = Math.Max(0, volumeTrackBar.Value - 2);
-					volumeTrackBar_Scroll(volumeTrackBar, EventArgs.Empty);
-				}
+				AdjustVolumeByStep(-2);
 			}
 			else if (e.KeyCode == Keys.F2)
 			{
 				e.Handled = true;
 				e.SuppressKeyPress = true;
-				if (volumeTrackBar.Value < 100)
-				{
-					volumeTrackBar.Value = Math.Min(100, volumeTrackBar.Value + 2);
-					volumeTrackBar_Scroll(volumeTrackBar, EventArgs.Empty);
-				}
+				AdjustVolumeByStep(2);
 			}
 			else if (e.KeyCode == Keys.F3)
 			{
@@ -9383,6 +9838,20 @@ private void searchTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
 
 	private void UpdateDownloadMenuShortcutDisplay(bool showShortcuts)
 	{
+		if (songContextMenu != null)
+		{
+			if (showShortcuts)
+			{
+				RestoreSongContextMenuShortcutDisplay();
+			}
+			else
+			{
+				SuppressSongContextMenuShortcutDisplay(songContextMenu.Items);
+			}
+			songContextMenu.PerformLayout();
+			songContextMenu.Invalidate();
+			return;
+		}
 		if (insertPlayMenuItem != null)
 		{
 			insertPlayMenuItem.ShowShortcutKeys = showShortcuts;
@@ -9479,6 +9948,60 @@ private void searchTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
 		{
 			downloadCategoryMenuItem.ShowShortcutKeys = showShortcuts;
 		}
+	}
+
+	private bool IsCurrentPlayingMenuContextRequest()
+	{
+		return songContextMenu?.OwnerItem == currentPlayingMenuItem ||
+			string.Equals(songContextMenu?.Tag as string, CurrentPlayingMenuContextTag, StringComparison.Ordinal) ||
+			_isCurrentPlayingMenuActive;
+	}
+
+	private void SuppressSongContextMenuShortcutDisplay(ToolStripItemCollection items)
+	{
+		if (items == null)
+		{
+			return;
+		}
+		foreach (ToolStripItem item in items)
+		{
+			if (item is ToolStripMenuItem menuItem)
+			{
+				if (!_songContextMenuShortcutDisplayStates.ContainsKey(menuItem))
+				{
+					_songContextMenuShortcutDisplayStates.Add(menuItem, new MenuShortcutDisplayState(menuItem));
+				}
+				menuItem.ShortcutKeys = Keys.None;
+				menuItem.ShortcutKeyDisplayString = string.Empty;
+				menuItem.ShowShortcutKeys = false;
+				if (menuItem.DropDownItems.Count > 0)
+				{
+					SuppressSongContextMenuShortcutDisplay(menuItem.DropDownItems);
+				}
+			}
+		}
+	}
+
+	private void RestoreSongContextMenuShortcutDisplay()
+	{
+		if (_songContextMenuShortcutDisplayStates.Count == 0)
+		{
+			return;
+		}
+		foreach (KeyValuePair<ToolStripMenuItem, MenuShortcutDisplayState> pair in _songContextMenuShortcutDisplayStates.ToList())
+		{
+			try
+			{
+				pair.Value.Restore(pair.Key);
+			}
+			catch (ObjectDisposedException)
+			{
+			}
+			catch (InvalidOperationException)
+			{
+			}
+		}
+		_songContextMenuShortcutDisplayStates.Clear();
 	}
 
 	private void UpdateTrayIconTooltip(SongInfo? song, bool isPaused = false)
@@ -10047,6 +10570,7 @@ private void searchTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
 
         private void SongContextMenu_Opened(object sender, EventArgs e)
         {
+                UpdateDownloadMenuShortcutDisplay(!IsCurrentPlayingMenuContextRequest());
                 if (_pendingShareShortcutRootMenuItem != null)
                 {
                         ToolStripMenuItem pendingShareRoot = _pendingShareShortcutRootMenuItem;
@@ -10892,7 +11416,7 @@ private void UpdateHideSequenceMenuItemText()
 {
         try
         {
-                SetMenuItemCheckedState(hideSequenceMenuItem, _hideSequenceNumbers);
+                ClearMenuItemCheckedState(hideSequenceMenuItem);
                 hideSequenceMenuItem.Text = (_hideSequenceNumbers ? "显示序号\tF8" : "隐藏序号\tF8");
         }
         catch
@@ -10904,7 +11428,7 @@ private void UpdateHideControlBarMenuItemText()
 {
         try
         {
-                SetMenuItemCheckedState(hideControlBarMenuItem, _hideControlBar);
+                ClearMenuItemCheckedState(hideControlBarMenuItem);
                 hideControlBarMenuItem.Text = (_hideControlBar ? "显示控制栏\tF7" : "隐藏控制栏\tF7");
         }
         catch
@@ -12147,7 +12671,8 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		RefreshCurrentPlayingMenuCaption(songInfo);
 		if (songContextMenu != null)
 		{
-			songContextMenu.Tag = "current_playing_context";
+			songContextMenu.Tag = CurrentPlayingMenuContextTag;
+			UpdateDownloadMenuShortcutDisplay(showShortcuts: false);
 		}
 	}
 
@@ -12158,7 +12683,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 			songContextMenu.ShowCheckMargin = true;
 		}
 		EnsureSortMenuCheckMargins();
-		bool flag = songContextMenu?.OwnerItem == currentPlayingMenuItem || string.Equals(songContextMenu?.Tag as string, "current_playing_context", StringComparison.Ordinal);
+		bool flag = IsCurrentPlayingMenuContextRequest();
 		UpdateDownloadMenuShortcutDisplay(!flag);
 		MenuContextSnapshot menuContextSnapshot = BuildMenuContextSnapshot(flag);
 		if (!menuContextSnapshot.IsValid)
@@ -12179,6 +12704,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 					currentPlayingMenuItem.Visible = false;
 				}
 			}
+			UpdateDownloadMenuShortcutDisplay(showShortcuts: true);
 			e.Cancel = true;
 			return;
 		}
@@ -12199,14 +12725,14 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		_isCurrentPlayingMenuActive = menuContextSnapshot.IsCurrentPlayback;
 		if (!menuContextSnapshot.IsCurrentPlayback)
 		{
-			if (songContextMenu != null && string.Equals(songContextMenu.Tag as string, "current_playing_context", StringComparison.Ordinal))
+			if (songContextMenu != null && string.Equals(songContextMenu.Tag as string, CurrentPlayingMenuContextTag, StringComparison.Ordinal))
 			{
 				songContextMenu.Tag = null;
 			}
 		}
 		else if (songContextMenu != null)
 		{
-			songContextMenu.Tag = "current_playing_context";
+			songContextMenu.Tag = CurrentPlayingMenuContextTag;
 		}
 		ResetSongContextMenuState();
 		bool showViewSection = false;
@@ -12218,6 +12744,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		if (!menuContextSnapshot.IsCurrentPlayback && menuContextSnapshot.PrimaryEntity == MenuEntityKind.Artist && menuContextSnapshot.Artist != null)
 		{
 			ConfigureArtistContextMenu(menuContextSnapshot.Artist);
+			UpdateDownloadMenuShortcutDisplay(showShortcuts: true);
 			return;
 		}
 		bool flag2 = false;
@@ -12273,6 +12800,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		goto IL_03a8;
 		IL_03a8:
 		toolStripSeparatorView.Visible = showViewSection;
+		UpdateDownloadMenuShortcutDisplay(!menuContextSnapshot.IsCurrentPlayback);
 	}
 
 	private void songContextMenu_Closed(object sender, ToolStripDropDownClosedEventArgs e)
@@ -12280,7 +12808,8 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		_isCurrentPlayingMenuActive = false;
 		_currentPlayingMenuSong = null;
 		_pendingShareShortcutRootMenuItem = null;
-		if (songContextMenu != null && string.Equals(songContextMenu.Tag as string, "current_playing_context", StringComparison.Ordinal))
+		UpdateDownloadMenuShortcutDisplay(showShortcuts: true);
+		if (songContextMenu != null && string.Equals(songContextMenu.Tag as string, CurrentPlayingMenuContextTag, StringComparison.Ordinal))
 		{
 			songContextMenu.Tag = null;
 		}
@@ -14967,7 +15496,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		}
 		try
 		{
-			UpdateStatusBar("正在创建歌单...");
+			AnnounceStatusBarMessage("正在创建歌单...");
 			PlaylistInfo created = await _apiClient.CreatePlaylistAsync(playlistName);
 			if (created != null && !string.IsNullOrWhiteSpace(created.Id))
 			{
@@ -15008,7 +15537,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		}
 		try
 		{
-			UpdateStatusBar("正在收藏歌单...");
+			AnnounceStatusBarMessage("正在收藏歌单...");
 			if (await _apiClient.SubscribePlaylistAsync(playlist.Id, subscribe: true))
 			{
 				playlist.IsSubscribed = true;
@@ -15039,7 +15568,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		}
 		try
 		{
-			UpdateStatusBar("正在取消收藏歌单...");
+			AnnounceStatusBarMessage("正在取消收藏歌单...");
 			if (await _apiClient.SubscribePlaylistAsync(playlist.Id, subscribe: false))
 			{
 				playlist.IsSubscribed = false;
@@ -15083,7 +15612,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		}
 		try
 		{
-			UpdateStatusBar("正在删除歌单...");
+			AnnounceStatusBarMessage("正在删除歌单...");
 			if (await _apiClient.DeletePlaylistAsync(playlist.Id))
 			{
 				UpdatePlaylistOwnershipState(playlist.Id, isOwned: false);
@@ -15524,7 +16053,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		}
 		try
 		{
-			UpdateStatusBar("正在收藏播客...");
+			AnnounceStatusBarMessage("正在收藏播客...");
 			if (await _apiClient.SubscribePodcastAsync(podcast.Id))
 			{
 				podcast.Subscribed = true;
@@ -15561,7 +16090,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		}
 		try
 		{
-			UpdateStatusBar("正在取消收藏播客...");
+			AnnounceStatusBarMessage("正在取消收藏播客...");
 			if (await _apiClient.UnsubscribePodcastAsync(podcast.Id))
 			{
 				podcast.Subscribed = false;
@@ -15597,7 +16126,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		}
 		try
 		{
-			UpdateStatusBar("正在取消收藏专辑...");
+			AnnounceStatusBarMessage("正在取消收藏专辑...");
 			if (await _apiClient.UnsubscribeAlbumAsync(album.Id))
 			{
 				album.IsSubscribed = false;
@@ -16493,7 +17022,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 			}
 			try
 			{
-				UpdateStatusBar("正在收藏歌曲...");
+				AnnounceStatusBarMessage("正在收藏歌曲...");
 				if (await _apiClient.LikeSongAsync(targetSongId, like: true))
 				{
 					UpdateSongLikeState(song, isLiked: true);
@@ -16513,6 +17042,185 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 				UpdateStatusBar("歌曲收藏失败");
 			}
 		}
+	}
+
+	private async void dislikeSongMenuItem_Click(object sender, EventArgs e)
+	{
+		if (!IsUserLoggedIn())
+		{
+			MessageBox.Show("请先登录后再标记不感兴趣", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+			return;
+		}
+		SongInfo song = GetSelectedSongFromContextMenu(sender);
+		if (song == null)
+		{
+			ShowContextSongMissingMessage("标记为不感兴趣的歌曲");
+			return;
+		}
+		if (!TryResolveSongIdForLibraryActions(song, "标记为不感兴趣", out var targetSongId))
+		{
+			return;
+		}
+		try
+		{
+			AnnounceStatusBarMessage("正在标记歌曲为不感兴趣...");
+			if (await _apiClient.MarkSongNotInterestedAsync(targetSongId))
+			{
+				bool removedFromList = TryRemoveSongFromCurrentRecommendationList(song);
+				string statusText = removedFromList ? "已标记为不感兴趣，已从列表移除" : "已标记为不感兴趣";
+				AnnounceStatusBarMessage(statusText);
+				return;
+			}
+			MessageBox.Show("标记不感兴趣失败，请检查网络或稍后重试。", "失败", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+			UpdateStatusBar("标记不感兴趣失败");
+		}
+		catch (Exception ex)
+		{
+			MessageBox.Show("标记不感兴趣失败: " + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+			UpdateStatusBar("标记不感兴趣失败");
+		}
+	}
+
+	private async void deleteRecentPlayMenuItem_Click(object sender, EventArgs e)
+	{
+		if (!IsUserLoggedIn())
+		{
+			MessageBox.Show("请先登录后再删除最近播放记录", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
+			return;
+		}
+
+		SongInfo song = GetSelectedSongFromContextMenu(sender);
+		if (song == null)
+		{
+			ShowContextSongMissingMessage("删除最近播放记录的歌曲");
+			return;
+		}
+		if (!TryResolveSongIdForLibraryActions(song, "删除最近播放记录", out var targetSongId))
+		{
+			return;
+		}
+
+		string songTitle = string.IsNullOrWhiteSpace(song.Name) ? "未知歌曲" : song.Name.Trim();
+		string artistTitle = string.IsNullOrWhiteSpace(song.Artist) ? "未知歌手" : song.Artist.Trim();
+		if (MessageBox.Show("确定要从最近播放记录中删除：\n" + songTitle + " - " + artistTitle, "确认删除", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+		{
+			return;
+		}
+
+		try
+		{
+			AnnounceStatusBarMessage("正在删除最近播放记录...");
+			if (await _apiClient.DeleteRecentPlayedSongAsync(targetSongId))
+			{
+				TryRemoveRecentPlayedSongLocally(song, targetSongId);
+				string statusText = _recentPlayCount <= 0 ? "最近播放记录已删除，当前列表为空" : $"最近播放记录已删除，剩余 {_recentPlayCount} 首";
+				AnnounceStatusBarMessage(statusText);
+				return;
+			}
+
+			MessageBox.Show("删除最近播放记录失败，请检查网络或稍后重试。", "失败", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+			UpdateStatusBar("删除最近播放记录失败");
+		}
+		catch (Exception ex)
+		{
+			MessageBox.Show("删除最近播放记录失败: " + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+			UpdateStatusBar("删除最近播放记录失败");
+		}
+	}
+
+	private bool TryRemoveSongFromCurrentRecommendationList(SongInfo song)
+	{
+		if (!ShouldAutoRemoveNotInterestedSong(_currentViewSource) || song == null || _currentSongs == null || _currentSongs.Count == 0)
+		{
+			return false;
+		}
+
+		string targetId = ResolveSongIdForLibraryState(song) ?? song.Id;
+		if (string.IsNullOrWhiteSpace(targetId))
+		{
+			return false;
+		}
+
+		int index = _currentSongs.FindIndex(candidate =>
+		{
+			string candidateId = ResolveSongIdForLibraryState(candidate) ?? candidate?.Id;
+			return !string.IsNullOrWhiteSpace(candidateId) && string.Equals(candidateId, targetId, StringComparison.OrdinalIgnoreCase);
+		});
+		if (index < 0)
+		{
+			return false;
+		}
+
+		List<SongInfo> updated = new List<SongInfo>(_currentSongs);
+		updated.RemoveAt(index);
+		int nextFocusIndex = updated.Count > 0 ? Math.Min(index, updated.Count - 1) : -1;
+		PatchSongs(updated, 1, skipAvailabilityCheck: false, showPagination: false, hasPreviousPage: false, hasNextPage: false, pendingFocusIndex: nextFocusIndex, allowSelection: updated.Count > 0);
+		return true;
+	}
+
+	private static bool ShouldAutoRemoveNotInterestedSong(string viewSource)
+	{
+		if (string.IsNullOrWhiteSpace(viewSource))
+		{
+			return false;
+		}
+
+		string normalized = viewSource.Trim();
+		return string.Equals(normalized, "daily_recommend_songs", StringComparison.OrdinalIgnoreCase) ||
+			string.Equals(normalized, "daily_recommend", StringComparison.OrdinalIgnoreCase) ||
+			string.Equals(normalized, "personalized_newsongs", StringComparison.OrdinalIgnoreCase) ||
+			string.Equals(normalized, "personalized_newsong", StringComparison.OrdinalIgnoreCase) ||
+			string.Equals(normalized, PersonalFmCategoryId, StringComparison.OrdinalIgnoreCase);
+	}
+
+	private bool TryRemoveRecentPlayedSongLocally(SongInfo song, string targetSongId)
+	{
+		if (string.IsNullOrWhiteSpace(targetSongId))
+		{
+			targetSongId = ResolveSongIdForLibraryState(song) ?? song?.Id ?? string.Empty;
+		}
+		if (string.IsNullOrWhiteSpace(targetSongId))
+		{
+			return false;
+		}
+
+		bool removed = RemoveSongByResolvedId(_recentSongsCache, targetSongId) >= 0;
+		_recentPlayCount = _recentSongsCache?.Count ?? 0;
+
+		if (!string.Equals(_currentViewSource, "recent_play", StringComparison.OrdinalIgnoreCase) || _currentSongs == null || _currentSongs.Count == 0)
+		{
+			return removed;
+		}
+
+		int index = RemoveSongByResolvedId(_currentSongs, targetSongId);
+		if (index < 0)
+		{
+			return removed;
+		}
+
+		int nextFocusIndex = _currentSongs.Count > 0 ? Math.Min(index, _currentSongs.Count - 1) : -1;
+		PatchSongs(_currentSongs, 1, skipAvailabilityCheck: false, showPagination: false, hasPreviousPage: false, hasNextPage: false, pendingFocusIndex: nextFocusIndex, allowSelection: _currentSongs.Count > 0);
+		return true;
+	}
+
+	private int RemoveSongByResolvedId(List<SongInfo> songs, string targetSongId)
+	{
+		if (songs == null || songs.Count == 0 || string.IsNullOrWhiteSpace(targetSongId))
+		{
+			return -1;
+		}
+
+		int index = songs.FindIndex(candidate =>
+		{
+			string candidateId = ResolveSongIdForLibraryState(candidate) ?? candidate?.Id;
+			return !string.IsNullOrWhiteSpace(candidateId) && string.Equals(candidateId, targetSongId, StringComparison.OrdinalIgnoreCase);
+		});
+		if (index >= 0)
+		{
+			songs.RemoveAt(index);
+		}
+
+		return index;
 	}
 
 	private async void unlikeSongMenuItem_Click(object sender, EventArgs e)
@@ -16539,7 +17247,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		}
 		try
 		{
-			UpdateStatusBar("正在取消收藏...");
+			AnnounceStatusBarMessage("正在取消收藏...");
 			if (await _apiClient.LikeSongAsync(targetSongId, like: false))
 			{
 				UpdateSongLikeState(song, isLiked: false);
@@ -16633,7 +17341,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		}
 		try
 		{
-			UpdateStatusBar("正在从歌单中移除歌曲...");
+			AnnounceStatusBarMessage("正在从歌单中移除歌曲...");
 			if (await _apiClient.RemoveTracksFromPlaylistAsync(playlistIdValue, new string[1] { targetSongId }))
 			{
 				MessageBox.Show("已将歌曲 \"" + song.Name + "\" 从歌单中移除", "成功", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
@@ -16709,7 +17417,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 				{
 					return;
 				}
-				UpdateStatusBar("正在添加歌曲到歌单...");
+				AnnounceStatusBarMessage("正在添加歌曲到歌单...");
 				(int successCount, int failCount) = await AddSongToPlaylistsAsync(targetSongId, targetPlaylistIds);
 				if (successCount > 0 && failCount == 0)
 				{
@@ -17746,6 +18454,8 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		this.insertPlayMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.likeSongMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.unlikeSongMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+		this.dislikeSongMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+		this.deleteRecentPlayMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.addToPlaylistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.removeFromPlaylistMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.cloudMenuSeparator = new System.Windows.Forms.ToolStripSeparator();
@@ -17843,7 +18553,8 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		this.menuStrip1.Name = "menuStrip1";
 		this.menuStrip1.Size = new System.Drawing.Size(1200, 28);
 		this.menuStrip1.TabIndex = 0;
-		this.menuStrip1.Text = "menuStrip1";
+		this.menuStrip1.Text = string.Empty;
+		this.menuStrip1.AccessibleName = string.Empty;
 		this.hideMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 		this.hideMenuItem.Name = "hideMenuItem";
 		this.hideMenuItem.Size = new System.Drawing.Size(178, 26);
@@ -17904,6 +18615,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		this.playbackMenuItem.DropDownItems.AddRange(this.sequentialMenuItem, this.loopMenuItem, this.loopOneMenuItem, this.randomMenuItem);
 		this.playbackMenuItem.Name = "playbackMenuItem";
 		this.playbackMenuItem.Size = new System.Drawing.Size(180, 26);
+		this.playbackMenuItem.ShortcutKeyDisplayString = "Ctrl+R";
 		this.playbackMenuItem.Text = "播放次序";
 		this.sequentialMenuItem.CheckOnClick = true;
 		this.sequentialMenuItem.Name = "sequentialMenuItem";
@@ -18003,13 +18715,13 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
           this.hideSequenceMenuItem.ShortcutKeys = System.Windows.Forms.Keys.F8;
           this.hideSequenceMenuItem.Size = new System.Drawing.Size(180, 26);
           this.hideSequenceMenuItem.Text = "隐藏序号\tF8";
-          this.hideSequenceMenuItem.CheckOnClick = true;
+          this.hideSequenceMenuItem.CheckOnClick = false;
           this.hideSequenceMenuItem.Click += new System.EventHandler(hideSequenceMenuItem_Click);
           this.hideControlBarMenuItem.Name = "hideControlBarMenuItem";
           this.hideControlBarMenuItem.ShortcutKeys = System.Windows.Forms.Keys.F7;
           this.hideControlBarMenuItem.Size = new System.Drawing.Size(180, 26);
           this.hideControlBarMenuItem.Text = "隐藏控制栏\tF7";
-          this.hideControlBarMenuItem.CheckOnClick = true;
+          this.hideControlBarMenuItem.CheckOnClick = false;
           this.hideControlBarMenuItem.Click += new System.EventHandler(hideControlBarMenuItem_Click);
 		this.themeMenuItem.DropDownItems.AddRange(this.themeGrassFreshMenuItem, this.themeGrassSoftMenuItem, this.themeGrassWarmMenuItem, this.themeGrassMutedMenuItem);
 		this.themeMenuItem.Name = "themeMenuItem";
@@ -18301,7 +19013,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
         this.toolStripStatusLabel1.AccessibleRole = System.Windows.Forms.AccessibleRole.StaticText;
         this.toolStripStatusLabel1.AccessibleName = "";
 		this.songContextMenu.ImageScalingSize = new System.Drawing.Size(20, 20);
-		this.songContextMenu.Items.AddRange(this.viewSourceMenuItem, this.insertPlayMenuItem, this.likeSongMenuItem, this.unlikeSongMenuItem, this.addToPlaylistMenuItem, this.removeFromPlaylistMenuItem, this.cloudMenuSeparator, this.uploadToCloudMenuItem, this.deleteFromCloudMenuItem, this.toolStripSeparatorCollection, this.subscribePlaylistMenuItem, this.unsubscribePlaylistMenuItem, this.deletePlaylistMenuItem, this.createPlaylistMenuItem, this.subscribeAlbumMenuItem, this.unsubscribeAlbumMenuItem, this.subscribePodcastMenuItem, this.unsubscribePodcastMenuItem, this.toolStripSeparatorView, this.viewSongArtistMenuItem, this.viewSongAlbumMenuItem, this.subscribeSongArtistMenuItem, this.subscribeSongAlbumMenuItem, this.viewPodcastMenuItem, this.shareSongMenuItem, this.sharePlaylistMenuItem, this.shareAlbumMenuItem, this.sharePodcastMenuItem, this.sharePodcastEpisodeMenuItem, this.artistSongsSortMenuItem, this.artistAlbumsSortMenuItem, this.podcastSortMenuItem, this.commentMenuSeparator, this.commentMenuItem, this.toolStripSeparatorArtist, this.shareArtistMenuItem, this.subscribeArtistMenuItem, this.unsubscribeArtistMenuItem, this.toolStripSeparatorDownload3, this.downloadSongMenuItem, this.downloadLyricsMenuItem, this.lyricsLanguageMenuItem, this.downloadPlaylistMenuItem, this.downloadAlbumMenuItem, this.downloadPodcastMenuItem, this.batchDownloadMenuItem, this.downloadCategoryMenuItem, this.batchDownloadPlaylistsMenuItem);
+		this.songContextMenu.Items.AddRange(this.viewSourceMenuItem, this.insertPlayMenuItem, this.likeSongMenuItem, this.unlikeSongMenuItem, this.dislikeSongMenuItem, this.deleteRecentPlayMenuItem, this.addToPlaylistMenuItem, this.removeFromPlaylistMenuItem, this.cloudMenuSeparator, this.uploadToCloudMenuItem, this.deleteFromCloudMenuItem, this.toolStripSeparatorCollection, this.subscribePlaylistMenuItem, this.unsubscribePlaylistMenuItem, this.deletePlaylistMenuItem, this.createPlaylistMenuItem, this.subscribeAlbumMenuItem, this.unsubscribeAlbumMenuItem, this.subscribePodcastMenuItem, this.unsubscribePodcastMenuItem, this.toolStripSeparatorView, this.viewSongArtistMenuItem, this.viewSongAlbumMenuItem, this.subscribeSongArtistMenuItem, this.subscribeSongAlbumMenuItem, this.viewPodcastMenuItem, this.shareSongMenuItem, this.sharePlaylistMenuItem, this.shareAlbumMenuItem, this.sharePodcastMenuItem, this.sharePodcastEpisodeMenuItem, this.artistSongsSortMenuItem, this.artistAlbumsSortMenuItem, this.podcastSortMenuItem, this.commentMenuSeparator, this.commentMenuItem, this.toolStripSeparatorArtist, this.shareArtistMenuItem, this.subscribeArtistMenuItem, this.unsubscribeArtistMenuItem, this.toolStripSeparatorDownload3, this.downloadSongMenuItem, this.downloadLyricsMenuItem, this.lyricsLanguageMenuItem, this.downloadPlaylistMenuItem, this.downloadAlbumMenuItem, this.downloadPodcastMenuItem, this.batchDownloadMenuItem, this.downloadCategoryMenuItem, this.batchDownloadPlaylistsMenuItem);
 		this.songContextMenu.Name = "songContextMenu";
 		this.songContextMenu.Size = new System.Drawing.Size(211, 320);
 		this.songContextMenu.Opening += new System.ComponentModel.CancelEventHandler(songContextMenu_Opening);
@@ -18327,6 +19039,16 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		this.unlikeSongMenuItem.ShortcutKeyDisplayString = "Ctrl+U";
 		this.unlikeSongMenuItem.Text = "取消收藏歌曲(&U)";
 		this.unlikeSongMenuItem.Click += new System.EventHandler(unlikeSongMenuItem_Click);
+		this.dislikeSongMenuItem.Name = "dislikeSongMenuItem";
+		this.dislikeSongMenuItem.Size = new System.Drawing.Size(210, 24);
+		this.dislikeSongMenuItem.Text = "不感兴趣(&I)";
+		this.dislikeSongMenuItem.Visible = false;
+		this.dislikeSongMenuItem.Click += new System.EventHandler(dislikeSongMenuItem_Click);
+		this.deleteRecentPlayMenuItem.Name = "deleteRecentPlayMenuItem";
+		this.deleteRecentPlayMenuItem.Size = new System.Drawing.Size(210, 24);
+		this.deleteRecentPlayMenuItem.Text = "从最近播放中删除(&E)";
+		this.deleteRecentPlayMenuItem.Visible = false;
+		this.deleteRecentPlayMenuItem.Click += new System.EventHandler(deleteRecentPlayMenuItem_Click);
 		this.addToPlaylistMenuItem.Name = "addToPlaylistMenuItem";
 		this.addToPlaylistMenuItem.Size = new System.Drawing.Size(210, 24);
 		this.addToPlaylistMenuItem.ShortcutKeyDisplayString = "Ctrl+A";

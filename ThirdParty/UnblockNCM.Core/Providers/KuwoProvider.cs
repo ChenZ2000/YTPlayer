@@ -44,6 +44,8 @@ namespace UnblockNCM.Core.Providers
         {
             public string Rid { get; set; }
             public long Duration { get; set; }
+            public string Name { get; set; }
+            public string Artists { get; set; }
         }
 
         private KwSong Format(JObject song)
@@ -60,7 +62,9 @@ namespace UnblockNCM.Core.Providers
             return new KwSong
             {
                 Rid = song.Value<string>("rid") ?? song.Value<string>("MUSICRID")?.Split('_').Last(),
-                Duration = duration * 1000
+                Duration = duration * 1000,
+                Name = song.Value<string>("name") ?? song.Value<string>("SONGNAME") ?? song.Value<string>("songname"),
+                Artists = song.Value<string>("ARTIST") ?? song.Value<string>("artist") ?? song.Value<string>("artistName")
             };
         }
 
@@ -186,8 +190,8 @@ namespace UnblockNCM.Core.Providers
                 Url = url,
                 Source = "kuwo",
                 DurationMs = song.Duration,
-                Title = info.Name,
-                Artists = string.Join(" / ", info.Artists.Select(a => a.Name)),
+                Title = string.IsNullOrWhiteSpace(song.Name) ? info.Name : song.Name,
+                Artists = string.IsNullOrWhiteSpace(song.Artists) ? string.Join(" / ", info.Artists.Select(a => a.Name)) : song.Artists,
                 Headers = new Dictionary<string, string>
                 {
                     { "Referer", "http://kuwo.cn" },

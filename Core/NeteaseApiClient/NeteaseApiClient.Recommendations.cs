@@ -666,6 +666,75 @@ namespace YTPlayer.Core
             }
         }
 
+        /// <summary>
+        /// 删除单首歌曲的最近播放记录。
+        /// 参考数据来源: api-enhanced/module/record_recent_song.js (/api/play-record/song/list)。
+        /// 删除接口未在参考项目中暴露，因此按同族端点做兼容尝试。
+        /// </summary>
+        public async Task<bool> DeleteRecentPlayedSongAsync(string songId, CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(songId))
+            {
+                return false;
+            }
+
+            await EnforceThrottleAsync($"recent-song-delete:{songId}", TimeSpan.FromSeconds(1)).ConfigureAwait(false);
+
+            var payload = new Dictionary<string, object>
+            {
+                { "id", songId },
+                { "ids", $"[{songId}]" },
+                { "songId", songId },
+                { "songIds", $"[{songId}]" },
+                { "resourceId", songId },
+                { "resourceIds", $"[{songId}]" },
+                { "resourceType", "song" },
+                { "type", "song" }
+            };
+
+            string[] endpoints =
+            {
+                "/api/play-record/song/delete",
+                "/api/play-record/song/del",
+                "/api/play-record/song/remove",
+                "/api/play-record/delete",
+                "/api/play-record/del",
+                "/api/pc/recent/listen/delete"
+            };
+
+            foreach (string endpoint in endpoints)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    JObject response = await PostWeApiAsync<JObject>(
+                        endpoint,
+                        payload,
+                        skipErrorHandling: true,
+                        cancellationToken: cancellationToken,
+                        autoConvertApiSegment: true).ConfigureAwait(false);
+
+                    int code = response?["code"]?.Value<int>() ?? -1;
+                    string message = response?["message"]?.Value<string>() ?? response?["msg"]?.Value<string>() ?? string.Empty;
+                    System.Diagnostics.Debug.WriteLine($"[API] 删除最近播放记录 endpoint={endpoint}, song={songId}, code={code}, message={message}");
+                    if (code == 200)
+                    {
+                        return true;
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[API] 删除最近播放记录 endpoint={endpoint} 失败: {ex.Message}");
+                }
+            }
+
+            return false;
+        }
+
         private static bool IsRecentSongEntryPodcastOrVoice(JToken? entry)
         {
             if (entry == null)
@@ -820,6 +889,51 @@ namespace YTPlayer.Core
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[PlaybackReporting] weblog 请求失败: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 标记推荐歌曲为不感兴趣。
+        /// API: POST /api/v2/discovery/recommend/dislike
+        /// 参考: api-enhanced/module/recommend_songs_dislike.js
+        /// </summary>
+        public async Task<bool> MarkSongNotInterestedAsync(string songId, CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(songId))
+            {
+                return false;
+            }
+
+            try
+            {
+                await EnforceThrottleAsync($"song-dislike:{songId}", TimeSpan.FromSeconds(1)).ConfigureAwait(false);
+
+                var payload = new Dictionary<string, object>
+                {
+                    { "resId", songId },
+                    { "resType", 4 },
+                    { "sceneType", 1 }
+                };
+
+                var response = await PostWeApiAsync<JObject>(
+                    "/api/v2/discovery/recommend/dislike",
+                    payload,
+                    skipErrorHandling: true,
+                    cancellationToken: cancellationToken,
+                    autoConvertApiSegment: true).ConfigureAwait(false);
+
+                int code = response?["code"]?.Value<int>() ?? -1;
+                System.Diagnostics.Debug.WriteLine($"[API] 标记歌曲不感兴趣 {songId}: code={code}");
+                return code == 200;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[API] 标记歌曲不感兴趣失败: {ex.Message}");
                 return false;
             }
         }

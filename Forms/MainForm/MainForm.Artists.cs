@@ -2087,7 +2087,7 @@ private async Task EnrichArtistCategoryAllResultsAsync(int typeCode, int areaCod
 		}
 		try
 		{
-			UpdateStatusBar("正在取消收藏歌手...");
+			AnnounceStatusBarMessage("正在取消收藏歌手...");
 			if (await _apiClient.SetArtistSubscriptionAsync(artist.Id, subscribe: false))
 			{
 				artist.IsSubscribed = false;

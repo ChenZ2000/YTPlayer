@@ -276,17 +276,70 @@ private async Task<Dictionary<string, SongUrlInfo>> GetSongUrlWithRetryAsync(str
 					Debug.WriteLine($"[Unblock] 使用解封时长: {durationSeconds}s");
 				}
 			}
-			long size = ((result.Size > 0) ? result.Size : song.Size);
-			if (size <= 0)
+			static bool IsMeaningfullyDifferentSize(long currentSize, long detectedSize)
+			{
+				if (currentSize <= 0 || detectedSize <= 0)
+				{
+					return false;
+				}
+
+				long difference = Math.Abs(currentSize - detectedSize);
+				return difference >= 64L * 1024 || difference >= currentSize / 100;
+			}
+
+			bool SizeLooksSafeForDuration(long candidateSize)
+			{
+				if (candidateSize <= 0)
+				{
+					return false;
+				}
+
+				if (durationSeconds <= 0)
+				{
+					return true;
+				}
+
+				double absoluteMinimum = durationSeconds * 56000d / 8d;
+				if (candidateSize < absoluteMinimum)
+				{
+					return false;
+				}
+
+				int bitrate = result.BitRate.GetValueOrDefault();
+				if (bitrate <= 0)
+				{
+					bitrate = StreamSizeEstimator.GetApproxBitrateForLevel(level);
+				}
+
+				long estimated = StreamSizeEstimator.EstimateSizeFromBitrate(bitrate, durationSeconds);
+				if (estimated > 0 && candidateSize < estimated * 0.35)
+				{
+					return false;
+				}
+
+				return true;
+			}
+
+			long size = result.Size > 0 ? result.Size : 0;
+			bool shouldProbeContentLength = size <= 0 || !SizeLooksSafeForDuration(size);
+			if (shouldProbeContentLength)
 			{
 				using CancellationTokenSource sizeCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 				sizeCts.CancelAfter(TimeSpan.FromSeconds(10L));
 				long contentLength = await HttpRangeHelper.TryGetContentLengthAsync(result.Url, headers, sizeCts.Token, TimeSpan.FromSeconds(8L)).ConfigureAwait(continueOnCapturedContext: false);
 				if (contentLength > 0)
 				{
-					size = contentLength;
-					Debug.WriteLine($"[Unblock] Content-Length: {contentLength}");
+					if (size <= 0 || IsMeaningfullyDifferentSize(size, contentLength))
+					{
+						Debug.WriteLine($"[Unblock] 使用 Content-Length 修正解封大小: {size} -> {contentLength}");
+						size = contentLength;
+					}
 				}
+			}
+			if (size <= 0 && !song.IsTrial && SizeLooksSafeForDuration(song.Size))
+			{
+				size = song.Size;
+				Debug.WriteLine($"[Unblock] 沿用原始大小: {size}");
 			}
 			if (size <= 0)
 			{
@@ -303,23 +356,23 @@ private async Task<Dictionary<string, SongUrlInfo>> GetSongUrlWithRetryAsync(str
 			}
 			if (size <= 0)
 			{
-				size = ((song.Size > 0) ? song.Size : 16777216);
+				size = 16777216;
 				Debug.WriteLine($"[Unblock] 大小兜底: {size}");
 			}
 			song.IsAvailable = true;
-			song.IsTrial = false;
-			song.TrialStart = 0L;
-			song.TrialEnd = 0L;
+			song.IsTrial = result.IsTrial;
+			song.TrialStart = result.IsTrial ? result.TrialStart : 0L;
+			song.TrialEnd = result.IsTrial ? result.TrialEnd : 0L;
 			song.IsUnblocked = true;
 			song.UnblockSource = result.Source ?? string.Empty;
 			song.CustomHeaders = headers;
-			song.SetQualityUrl(level, result.Url, size, isAvailable: true, isTrial: false, 0L, 0L);
+			song.SetQualityUrl(level, result.Url, size, isAvailable: true, isTrial: result.IsTrial, trialStart: song.TrialStart, trialEnd: song.TrialEnd);
 			song.Url = result.Url;
 			song.Level = level;
 			song.Size = size;
 			OptimizedHttpClientFactory.PreWarmConnection(song.Url);
 			RefreshAvailabilityIndicatorsInCurrentView(song.Id, song);
-			Debug.WriteLine($"[Unblock] ✓ 解封成功: {song.Name} ({song.UnblockSource}), level={level}, size={size}");
+			Debug.WriteLine($"[Unblock] ✓ 解封成功: {song.Name} ({song.UnblockSource}), level={level}, size={size}, trial={song.IsTrial}");
 			return true;
 		}
 	}
@@ -1007,8 +1060,8 @@ private async Task PlaySongDirect(SongInfo song, CancellationToken cancellationT
 			{
 				string text = (song.IsTrial ? (song.Name + "(试听版)") : song.Name);
 				currentSongLabel.Text = text + " - " + song.Artist;
-				playPauseButton.Text = "暂停";
-				Debug.WriteLine("[PlaySongDirect] 播放成功，按钮设置为: 暂停");
+				playPauseButton.Text = BuildPlayPauseButtonText(PlaybackState.Playing, song);
+				Debug.WriteLine("[PlaySongDirect] 播放成功，按钮设置为: " + playPauseButton.Text);
 			});
 			await Task.Delay(50, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 			if (!cancellationToken.IsCancellationRequested)
@@ -1032,7 +1085,7 @@ private async Task PlaySongDirect(SongInfo song, CancellationToken cancellationT
 			{
 				Task.Run(delegate
 				{
-					bool flag = TtsHelper.SpeakText("[试听片段 30 秒]", interrupt: true, suppressGlobalInterrupt: true);
+					bool flag = TtsHelper.SpeakText("[试听片段]", interrupt: true, suppressGlobalInterrupt: true);
 					Debug.WriteLine("[TTS] 试听提示: " + (flag ? "成功" : "失败"));
 				});
 			}
@@ -2101,6 +2154,7 @@ private async Task PlaySongDirect(SongInfo song, CancellationToken cancellationT
 
 	private void UpdateUIForPlaybackState(PlaybackState state)
 	{
+		SongInfo? currentSong = _audioEngine?.CurrentSong;
 		switch (state)
 		{
 		case PlaybackState.Idle:
@@ -2108,19 +2162,19 @@ private async Task PlaySongDirect(SongInfo song, CancellationToken cancellationT
 			playPauseButton.Enabled = true;
 			break;
 		case PlaybackState.Loading:
-			playPauseButton.Text = "加载中...";
+			playPauseButton.Text = AppendTrialMarker("加载中...", currentSong);
 			playPauseButton.Enabled = false;
 			break;
 		case PlaybackState.Buffering:
-			playPauseButton.Text = "缓冲中...";
+			playPauseButton.Text = AppendTrialMarker("缓冲中...", currentSong);
 			playPauseButton.Enabled = false;
 			break;
 		case PlaybackState.Playing:
-			playPauseButton.Text = "暂停";
+			playPauseButton.Text = BuildPlayPauseButtonText(PlaybackState.Playing, currentSong);
 			playPauseButton.Enabled = true;
 			break;
 		case PlaybackState.Paused:
-			playPauseButton.Text = "播放";
+			playPauseButton.Text = BuildPlayPauseButtonText(PlaybackState.Paused, currentSong);
 			playPauseButton.Enabled = true;
 			break;
 		case PlaybackState.Stopped:

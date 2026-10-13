@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
@@ -7,47 +8,101 @@ using YTPlayer.Utils;
 
 namespace YTPlayer
 {
+    [DefaultEvent(nameof(Scroll))]
+    [DefaultProperty(nameof(Value))]
     internal sealed class AccessibleTrackBar : TrackBar
     {
         private const int WM_PAINT = 0x000F;
         private const int WM_MOUSEMOVE = 0x0200;
         private const int WM_LBUTTONDOWN = 0x0201;
         private const int WM_LBUTTONUP = 0x0202;
-        private const int WM_MOUSELEAVE = 0x02A3;
-        private const int TBM_GETCHANNELRECT = 0x0400 + 26;
-        private const int TBM_GETTHUMBRECT = 0x0400 + 25;
+        private const int WM_CAPTURECHANGED = 0x0215;
+        private const int MinimumTrackLength = 1;
+
+        private string _accessibleValueText = string.Empty;
+        private bool _isDragging;
+
+        [Browsable(false)]
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+        public Func<bool>? ShouldYieldNavigationKeys { get; set; }
+
+        public AccessibleTrackBar()
+        {
+            SetStyle(
+                ControlStyles.OptimizedDoubleBuffer |
+                ControlStyles.ResizeRedraw |
+                ControlStyles.Selectable,
+                true);
+
+            AutoSize = false;
+            AccessibleRole = AccessibleRole.Slider;
+            TickStyle = TickStyle.None;
+        }
+
+        [Browsable(false)]
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+        public string AccessibleValueText
+        {
+            get => _accessibleValueText;
+            set => SetAccessibleValueText(value, raiseValueChanged: ContainsFocus);
+        }
 
         public void RaiseNameChanged()
         {
-            try
-            {
-                AccessibilityNotifyClients(AccessibleEvents.NameChange, 0);
-            }
-            catch
-            {
-            }
+            NotifyAccessibleClients(AccessibleEvents.NameChange);
         }
 
         public void RaiseFocusChanged()
         {
-            try
-            {
-                AccessibilityNotifyClients(AccessibleEvents.Focus, 0);
-            }
-            catch
-            {
-            }
+            NotifyAccessibleClients(AccessibleEvents.Focus);
         }
 
         public void RaiseValueChanged()
         {
-            try
+            NotifyAccessibleClients(AccessibleEvents.ValueChange);
+        }
+
+        public void RaiseDescriptionChanged()
+        {
+            NotifyAccessibleClients(AccessibleEvents.DescriptionChange);
+        }
+
+        public void SetAccessibleValueText(string? value, bool raiseValueChanged)
+        {
+            string next = value ?? string.Empty;
+            if (string.Equals(_accessibleValueText, next, StringComparison.Ordinal))
             {
-                AccessibilityNotifyClients(AccessibleEvents.ValueChange, 0);
+                return;
             }
-            catch
+
+            _accessibleValueText = next;
+            if (raiseValueChanged)
             {
+                RaiseValueChanged();
             }
+        }
+
+        protected override bool IsInputKey(Keys keyData)
+        {
+            Keys keyCode = keyData & Keys.KeyCode;
+            if (keyCode == Keys.Left ||
+                keyCode == Keys.Right ||
+                keyCode == Keys.Up ||
+                keyCode == Keys.Down ||
+                keyCode == Keys.Home ||
+                keyCode == Keys.End ||
+                keyCode == Keys.PageUp ||
+                keyCode == Keys.PageDown)
+            {
+                if (ShouldYieldNavigationKeys?.Invoke() == true)
+                {
+                    return false;
+                }
+
+                return true;
+            }
+
+            return base.IsInputKey(keyData);
         }
 
         protected override void OnGotFocus(EventArgs e)
@@ -56,13 +111,6 @@ namespace YTPlayer
             RaiseFocusChanged();
             RaiseValueChanged();
             RaiseNameChanged();
-            Invalidate();
-        }
-
-        protected override void OnLostFocus(EventArgs e)
-        {
-            base.OnLostFocus(e);
-            Invalidate();
         }
 
         protected override void OnValueChanged(EventArgs e)
@@ -71,16 +119,145 @@ namespace YTPlayer
             Invalidate();
         }
 
+        protected override void OnEnabledChanged(EventArgs e)
+        {
+            base.OnEnabledChanged(e);
+            Invalidate();
+        }
+
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+            Invalidate();
+        }
+
         protected override void WndProc(ref Message m)
         {
+            switch (m.Msg)
+            {
+                case WM_LBUTTONDOWN:
+                    if (HandleDirectMouseDown(m))
+                    {
+                        return;
+                    }
+                    break;
+                case WM_MOUSEMOVE:
+                    if (HandleDirectMouseMove(m))
+                    {
+                        return;
+                    }
+                    break;
+                case WM_LBUTTONUP:
+                    if (HandleDirectMouseUp(m))
+                    {
+                        return;
+                    }
+                    break;
+                case WM_CAPTURECHANGED:
+                    _isDragging = false;
+                    break;
+            }
+
             base.WndProc(ref m);
-            if (m.Msg == WM_PAINT ||
-                m.Msg == WM_MOUSEMOVE ||
-                m.Msg == WM_LBUTTONDOWN ||
-                m.Msg == WM_LBUTTONUP ||
-                m.Msg == WM_MOUSELEAVE)
+
+            if (m.Msg == WM_PAINT)
             {
                 DrawThemedOverlay();
+            }
+        }
+
+        private bool HandleDirectMouseDown(Message m)
+        {
+            if (!Enabled)
+            {
+                return false;
+            }
+
+            Point point = GetPointFromLParam(m.LParam);
+            Focus();
+            _isDragging = true;
+            Capture = true;
+            OnMouseDown(new MouseEventArgs(MouseButtons.Left, 1, point.X, point.Y, 0));
+            SetValueFromPoint(point, raiseScroll: true);
+            return true;
+        }
+
+        private bool HandleDirectMouseMove(Message m)
+        {
+            if (!_isDragging)
+            {
+                return false;
+            }
+
+            Point point = GetPointFromLParam(m.LParam);
+            SetValueFromPoint(point, raiseScroll: true);
+            OnMouseMove(new MouseEventArgs(MouseButtons.Left, 0, point.X, point.Y, 0));
+            return true;
+        }
+
+        private bool HandleDirectMouseUp(Message m)
+        {
+            if (!_isDragging)
+            {
+                return false;
+            }
+
+            Point point = GetPointFromLParam(m.LParam);
+            SetValueFromPoint(point, raiseScroll: true);
+            _isDragging = false;
+            Capture = false;
+            OnMouseUp(new MouseEventArgs(MouseButtons.Left, 1, point.X, point.Y, 0));
+            return true;
+        }
+
+        private void SetValueFromPoint(Point point, bool raiseScroll)
+        {
+            RectangleF track = GetTrackBounds();
+            if (track.Width < MinimumTrackLength || track.Height < MinimumTrackLength || Maximum <= Minimum)
+            {
+                return;
+            }
+
+            double percent;
+            if (Orientation == Orientation.Vertical)
+            {
+                double y = Math.Max(track.Top, Math.Min(track.Bottom, point.Y));
+                percent = 1.0 - ((y - track.Top) / track.Height);
+            }
+            else
+            {
+                double x = Math.Max(track.Left, Math.Min(track.Right, point.X));
+                percent = (x - track.Left) / track.Width;
+            }
+
+            int next = Minimum + (int)Math.Round((Maximum - Minimum) * percent, MidpointRounding.AwayFromZero);
+            next = Math.Max(Minimum, Math.Min(Maximum, next));
+            if (Value == next)
+            {
+                return;
+            }
+
+            Value = next;
+            if (raiseScroll)
+            {
+                OnScroll(EventArgs.Empty);
+            }
+        }
+
+        private void NotifyAccessibleClients(AccessibleEvents accEvent)
+        {
+            NotifyAccessibleClients(accEvent, 0);
+            NotifyAccessibleClients(accEvent, -1);
+        }
+
+        private void NotifyAccessibleClients(AccessibleEvents accEvent, int childId)
+        {
+            try
+            {
+                AccessibilityNotifyClients(accEvent, childId);
+            }
+            catch
+            {
             }
         }
 
@@ -91,155 +268,200 @@ namespace YTPlayer
                 return;
             }
 
-            var palette = ThemeManager.Current;
-            using (Graphics graphics = Graphics.FromHwnd(Handle))
+            try
             {
-                graphics.SmoothingMode = SmoothingMode.AntiAlias;
-
-                Color background = Parent?.BackColor ?? BackColor;
-                using (var backgroundBrush = new SolidBrush(background))
+                using (Graphics graphics = Graphics.FromHwnd(Handle))
                 {
-                    graphics.FillRectangle(backgroundBrush, ClientRectangle);
+                    DrawTrackBar(graphics);
                 }
-
-                Rectangle channel = GetChannelRect();
-                Rectangle thumb = GetThumbRect();
-                if (channel.Width <= 0 || channel.Height <= 0)
-                {
-                    channel = new Rectangle(6, Height / 2 - 2, Math.Max(1, Width - 12), 4);
-                }
-
-                int trackHeight = Math.Max(7, Math.Min(9, Height / 3));
-                int trackY = channel.Top + (channel.Height - trackHeight) / 2;
-                Rectangle trackBounds = new Rectangle(channel.Left, trackY, channel.Width, trackHeight);
-
-                Color trackColor = Enabled ? palette.Divider : palette.Border;
-                Color fillColor = Enabled ? palette.Accent : palette.Border;
-                Color thumbColor = Enabled ? palette.Accent : palette.Border;
-                Color thumbBorder = BlendColor(thumbColor, palette.TextPrimary, 0.35f);
-                Color thumbHighlight = BlendColor(thumbColor, Color.White, 0.35f);
-
-                using (var trackBrush = new SolidBrush(trackColor))
-                using (var trackPath = BuildRoundedPath(trackBounds, trackHeight / 2))
-                {
-                    graphics.FillPath(trackBrush, trackPath);
-                }
-
-                Rectangle progress = GetProgressRect(trackBounds, thumb);
-                if (progress.Width > 0 && progress.Height > 0)
-                {
-                    using (var fillBrush = new SolidBrush(fillColor))
-                    using (var fillPath = BuildRoundedPath(progress, trackHeight / 2))
-                    {
-                        graphics.FillPath(fillBrush, fillPath);
-                    }
-                }
-
-                int thumbSize = Math.Max(14, Math.Min(18, trackHeight * 2 + 2));
-                int thumbCenterX = thumb.Left + thumb.Width / 2;
-                int thumbCenterY = thumb.Top + thumb.Height / 2;
-                Rectangle thumbBounds = new Rectangle(
-                    thumbCenterX - thumbSize / 2,
-                    thumbCenterY - thumbSize / 2,
-                    thumbSize,
-                    thumbSize);
-                thumbBounds = ClampToClient(thumbBounds);
-                if (thumbBounds.Width > 0 && thumbBounds.Height > 0)
-                {
-                    using (var thumbBrush = new SolidBrush(thumbColor))
-                    {
-                        graphics.FillEllipse(thumbBrush, thumbBounds);
-                    }
-
-                    using (var borderPen = new Pen(thumbBorder))
-                    {
-                        graphics.DrawEllipse(borderPen, thumbBounds);
-                    }
-
-                    Rectangle highlightBounds = thumbBounds;
-                    highlightBounds.Inflate(-4, -4);
-                    highlightBounds = ClampToClient(highlightBounds);
-                    if (highlightBounds.Width > 0 && highlightBounds.Height > 0)
-                    {
-                        using (var highlightBrush = new SolidBrush(thumbHighlight))
-                        {
-                            graphics.FillEllipse(highlightBrush, highlightBounds);
-                        }
-                    }
-
-                    if (Focused)
-                    {
-                        using (var focusPen = new Pen(palette.FocusRing, 2))
-                        {
-                            Rectangle focusBounds = thumbBounds;
-                            focusBounds.Inflate(3, 3);
-                            focusBounds = ClampToClient(focusBounds);
-                            graphics.DrawEllipse(focusPen, focusBounds);
-                        }
-                    }
-                }
+            }
+            catch
+            {
             }
         }
 
-        private Rectangle GetChannelRect()
+        private void DrawTrackBar(Graphics graphics)
         {
-            RECT rect = new RECT();
-            SendMessage(Handle, TBM_GETCHANNELRECT, IntPtr.Zero, ref rect);
-            return rect.ToRectangle();
+            var palette = ThemeManager.Current;
+            Color background = Parent?.BackColor ?? BackColor;
+            Color trackColor = Enabled ? palette.Divider : palette.Border;
+            Color fillColor = Enabled ? palette.Accent : palette.Border;
+            Color thumbColor = Enabled ? palette.Accent : palette.Border;
+            Color thumbBorder = BlendColor(thumbColor, palette.TextPrimary, 0.35f);
+            Color thumbHighlight = BlendColor(thumbColor, Color.White, 0.35f);
+
+            using (var backgroundBrush = new SolidBrush(background))
+            {
+                graphics.FillRectangle(backgroundBrush, ClientRectangle);
+            }
+
+            graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+
+            RectangleF trackBounds = GetTrackBounds();
+            if (trackBounds.Width < MinimumTrackLength || trackBounds.Height < MinimumTrackLength)
+            {
+                return;
+            }
+
+            float trackRadius = Math.Min(trackBounds.Width, trackBounds.Height) / 2f;
+            using (GraphicsPath trackPath = BuildRoundedPath(trackBounds, trackRadius))
+            using (var trackBrush = new SolidBrush(trackColor))
+            {
+                graphics.FillPath(trackBrush, trackPath);
+            }
+
+            DrawFill(graphics, trackBounds, trackRadius, fillColor);
+            DrawThumb(graphics, trackBounds, thumbColor, thumbBorder, thumbHighlight, palette.FocusRing);
         }
 
-        private Rectangle GetThumbRect()
+        private RectangleF GetTrackBounds()
         {
-            RECT rect = new RECT();
-            SendMessage(Handle, TBM_GETTHUMBRECT, IntPtr.Zero, ref rect);
-            return rect.ToRectangle();
-        }
+            int thumbDiameter = GetThumbDiameter();
+            int trackThickness = GetTrackThickness();
+            float margin = thumbDiameter / 2f + 4f;
 
-        private Rectangle GetProgressRect(Rectangle trackBounds, Rectangle thumbBounds)
-        {
             if (Orientation == Orientation.Vertical)
             {
-                int center = thumbBounds.Top + thumbBounds.Height / 2;
-                int height = Math.Max(0, trackBounds.Bottom - center);
-                return new Rectangle(trackBounds.Left, trackBounds.Bottom - height, trackBounds.Width, height);
+                float left = (Width - trackThickness) / 2f;
+                float top = margin;
+                float height = Math.Max(MinimumTrackLength, Height - (margin * 2f));
+                return new RectangleF(left, top, trackThickness, height);
             }
 
-            int x = thumbBounds.Left + thumbBounds.Width / 2;
-            int width = Math.Max(0, Math.Min(trackBounds.Width, x - trackBounds.Left));
-            return new Rectangle(trackBounds.Left, trackBounds.Top, width, trackBounds.Height);
+            float x = margin;
+            float y = (Height - trackThickness) / 2f;
+            float width = Math.Max(MinimumTrackLength, Width - (margin * 2f));
+            return new RectangleF(x, y, width, trackThickness);
         }
 
-        private Rectangle ClampToClient(Rectangle rect)
+        private float GetValuePercent()
         {
-            Rectangle client = ClientRectangle;
-            if (rect.Width <= 0 || rect.Height <= 0)
-            {
-                return Rectangle.Empty;
-            }
-
-            int x = Math.Max(client.Left, Math.Min(rect.X, client.Right - rect.Width));
-            int y = Math.Max(client.Top, Math.Min(rect.Y, client.Bottom - rect.Height));
-            return new Rectangle(x, y, rect.Width, rect.Height);
+            int range = Math.Max(1, Maximum - Minimum);
+            return (Value - Minimum) / (float)range;
         }
 
-        private static GraphicsPath BuildRoundedPath(Rectangle bounds, int radius)
+        private PointF GetThumbCenter(RectangleF trackBounds)
+        {
+            float percent = GetValuePercent();
+            if (Orientation == Orientation.Vertical)
+            {
+                float y = trackBounds.Bottom - (trackBounds.Height * percent);
+                return new PointF(trackBounds.Left + (trackBounds.Width / 2f), y);
+            }
+
+            float x = trackBounds.Left + (trackBounds.Width * percent);
+            return new PointF(x, trackBounds.Top + (trackBounds.Height / 2f));
+        }
+
+        private int GetTrackThickness()
+        {
+            int basis = Orientation == Orientation.Vertical ? Width : Height;
+            return Math.Max(7, Math.Min(9, Math.Max(1, basis) / 3));
+        }
+
+        private int GetThumbDiameter()
+        {
+            int basis = Orientation == Orientation.Vertical ? Width : Height;
+            return Math.Max(14, Math.Min(18, Math.Max(1, basis) - 12));
+        }
+
+        private void DrawFill(Graphics graphics, RectangleF trackBounds, float trackRadius, Color fillColor)
+        {
+            PointF center = GetThumbCenter(trackBounds);
+            RectangleF fillBounds;
+            if (Orientation == Orientation.Vertical)
+            {
+                fillBounds = RectangleF.FromLTRB(trackBounds.Left, center.Y, trackBounds.Right, trackBounds.Bottom);
+            }
+            else
+            {
+                fillBounds = RectangleF.FromLTRB(trackBounds.Left, trackBounds.Top, center.X, trackBounds.Bottom);
+            }
+
+            if (fillBounds.Width <= 0.5f || fillBounds.Height <= 0.5f)
+            {
+                return;
+            }
+
+            using (GraphicsPath fillPath = BuildRoundedPath(fillBounds, trackRadius))
+            using (var fillBrush = new SolidBrush(fillColor))
+            {
+                graphics.FillPath(fillBrush, fillPath);
+            }
+        }
+
+        private void DrawThumb(
+            Graphics graphics,
+            RectangleF trackBounds,
+            Color thumbColor,
+            Color thumbBorder,
+            Color thumbHighlight,
+            Color focusRing)
+        {
+            PointF center = GetThumbCenter(trackBounds);
+            float size = GetThumbDiameter();
+            RectangleF thumbBounds = new RectangleF(
+                center.X - (size / 2f),
+                center.Y - (size / 2f),
+                size,
+                size);
+
+            using (var thumbBrush = new SolidBrush(thumbColor))
+            {
+                graphics.FillEllipse(thumbBrush, thumbBounds);
+            }
+
+            using (var borderPen = new Pen(thumbBorder))
+            {
+                graphics.DrawEllipse(borderPen, thumbBounds);
+            }
+
+            RectangleF highlightBounds = thumbBounds;
+            highlightBounds.Inflate(-4f, -4f);
+            if (highlightBounds.Width > 0f && highlightBounds.Height > 0f)
+            {
+                using (var highlightBrush = new SolidBrush(thumbHighlight))
+                {
+                    graphics.FillEllipse(highlightBrush, highlightBounds);
+                }
+            }
+
+            if (Focused || ContainsFocus)
+            {
+                RectangleF focusBounds = thumbBounds;
+                focusBounds.Inflate(3f, 3f);
+                using (var focusPen = new Pen(focusRing, 2f))
+                {
+                    graphics.DrawEllipse(focusPen, focusBounds);
+                }
+            }
+        }
+
+        private static GraphicsPath BuildRoundedPath(RectangleF bounds, float radius)
         {
             GraphicsPath path = new GraphicsPath();
-            if (radius <= 0)
+            if (bounds.Width <= 0f || bounds.Height <= 0f)
+            {
+                return path;
+            }
+
+            radius = Math.Max(0f, Math.Min(radius, Math.Min(bounds.Width, bounds.Height) / 2f));
+            if (radius <= 0f)
             {
                 path.AddRectangle(bounds);
                 return path;
             }
 
-            int diameter = radius * 2;
-            Rectangle arc = new Rectangle(bounds.Location, new Size(diameter, diameter));
-            path.AddArc(arc, 180, 90);
+            float diameter = radius * 2f;
+            RectangleF arc = new RectangleF(bounds.Left, bounds.Top, diameter, diameter);
+            path.AddArc(arc, 180f, 90f);
             arc.X = bounds.Right - diameter;
-            path.AddArc(arc, 270, 90);
+            path.AddArc(arc, 270f, 90f);
             arc.Y = bounds.Bottom - diameter;
-            path.AddArc(arc, 0, 90);
+            path.AddArc(arc, 0f, 90f);
             arc.X = bounds.Left;
-            path.AddArc(arc, 90, 90);
+            path.AddArc(arc, 90f, 90f);
             path.CloseFigure();
             return path;
         }
@@ -247,27 +469,18 @@ namespace YTPlayer
         private static Color BlendColor(Color baseColor, Color overlay, float amount)
         {
             amount = Math.Max(0f, Math.Min(1f, amount));
-            int r = (int)(baseColor.R + (overlay.R - baseColor.R) * amount);
-            int g = (int)(baseColor.G + (overlay.G - baseColor.G) * amount);
-            int b = (int)(baseColor.B + (overlay.B - baseColor.B) * amount);
+            int r = (int)(baseColor.R + ((overlay.R - baseColor.R) * amount));
+            int g = (int)(baseColor.G + ((overlay.G - baseColor.G) * amount));
+            int b = (int)(baseColor.B + ((overlay.B - baseColor.B) * amount));
             return Color.FromArgb(baseColor.A, r, g, b);
         }
 
-        [DllImport("user32.dll")]
-        private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, ref RECT lParam);
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct RECT
+        private static Point GetPointFromLParam(IntPtr lParam)
         {
-            public int Left;
-            public int Top;
-            public int Right;
-            public int Bottom;
-
-            public Rectangle ToRectangle()
-            {
-                return Rectangle.FromLTRB(Left, Top, Right, Bottom);
-            }
+            int value = lParam.ToInt32();
+            int x = unchecked((short)(value & 0xFFFF));
+            int y = unchecked((short)((value >> 16) & 0xFFFF));
+            return new Point(x, y);
         }
     }
 }

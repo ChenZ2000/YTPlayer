@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Windows.Forms;
 
 namespace YTPlayer.Utils
@@ -81,12 +82,14 @@ namespace YTPlayer.Utils
             {
                 Keys.Right => ShouldSuppressRight(menu),
                 Keys.Left => ShouldSuppressLeft(menu),
+                Keys.Up => ShouldCycleVertical(menu, movePrevious: true),
+                Keys.Down => ShouldCycleVertical(menu, movePrevious: false),
                 _ => false
             };
 
             if (shouldSuppress)
             {
-                // 仅在需要“边界拦截”时把左右键转为输入键；
+                // 仅在需要“边界拦截”时把方向键转为输入键；
                 // 其余情况放行给 ToolStrip 默认导航（展开/折叠子菜单）。
                 e.IsInputKey = true;
             }
@@ -111,6 +114,18 @@ namespace YTPlayer.Utils
                     if (ShouldSuppressLeft(menu))
                     {
                         SuppressAndKeepFocus(menu, e);
+                    }
+                    break;
+                case Keys.Up:
+                    if (ShouldCycleVertical(menu, movePrevious: true))
+                    {
+                        CycleVertical(menu, movePrevious: true, e);
+                    }
+                    break;
+                case Keys.Down:
+                    if (ShouldCycleVertical(menu, movePrevious: false))
+                    {
+                        CycleVertical(menu, movePrevious: false, e);
                     }
                     break;
             }
@@ -199,6 +214,98 @@ namespace YTPlayer.Utils
             return null;
         }
 
+        private static bool ShouldCycleVertical(ToolStrip menu, bool movePrevious)
+        {
+            if (menu is MenuStrip)
+            {
+                return false;
+            }
+
+            if (menu is ToolStripDropDown dropDown && !dropDown.Visible)
+            {
+                return false;
+            }
+
+            List<ToolStripItem> items = GetNavigableItems(menu);
+            if (items.Count == 0)
+            {
+                return false;
+            }
+
+            if (items.Count == 1)
+            {
+                return true;
+            }
+
+            int selectedIndex = FindSelectedItemIndex(items);
+            if (selectedIndex < 0)
+            {
+                return true;
+            }
+
+            return movePrevious ? selectedIndex == 0 : selectedIndex == items.Count - 1;
+        }
+
+        private static void CycleVertical(ToolStrip menu, bool movePrevious, KeyEventArgs e)
+        {
+            List<ToolStripItem> items = GetNavigableItems(menu);
+            if (items.Count == 0)
+            {
+                return;
+            }
+
+            int selectedIndex = FindSelectedItemIndex(items);
+            ToolStripItem targetItem;
+            if (items.Count == 1)
+            {
+                targetItem = items[0];
+            }
+            else if (selectedIndex < 0)
+            {
+                targetItem = movePrevious ? items[items.Count - 1] : items[0];
+            }
+            else
+            {
+                targetItem = movePrevious ? items[items.Count - 1] : items[0];
+            }
+
+            SuppressAndSelectItem(targetItem, e);
+        }
+
+        private static List<ToolStripItem> GetNavigableItems(ToolStrip menu)
+        {
+            List<ToolStripItem> result = new List<ToolStripItem>();
+            foreach (ToolStripItem item in menu.Items)
+            {
+                if (item is ToolStripSeparator)
+                {
+                    continue;
+                }
+
+                if (!item.Available || !item.Visible || !item.Enabled)
+                {
+                    continue;
+                }
+
+                result.Add(item);
+            }
+
+            return result;
+        }
+
+        private static int FindSelectedItemIndex(IReadOnlyList<ToolStripItem> items)
+        {
+            for (int i = 0; i < items.Count; i++)
+            {
+                if (items[i].Selected)
+                {
+                    return i;
+                }
+            }
+
+            return -1;
+        }
+
         private static void SuppressAndKeepFocus(ToolStrip menu, KeyEventArgs e)
         {
             e.Handled = true;
@@ -209,6 +316,14 @@ namespace YTPlayer.Utils
             {
                 return;
             }
+
+            SuppressAndSelectItem(selectedItem, e);
+        }
+
+        private static void SuppressAndSelectItem(ToolStripItem selectedItem, KeyEventArgs e)
+        {
+            e.Handled = true;
+            e.SuppressKeyPress = true;
 
             selectedItem.Select();
             try

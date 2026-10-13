@@ -2433,7 +2433,7 @@ public partial class MainForm
 			string fallbackFocusId = DetermineNeighborCloudSongId(song);
 			try
 			{
-				UpdateStatusBar("正在删除云盘歌曲...");
+				AnnounceStatusBarMessage("正在删除云盘歌曲...");
 				if (await _apiClient.DeleteCloudSongsAsync(new string[1] { song.CloudSongId }))
 				{
 					UpdateStatusBar("云盘歌曲已删除");

@@ -19,6 +19,9 @@ namespace YTPlayer.Core.Unblock
     /// </summary>
     public sealed class UnblockService : IDisposable
     {
+        private const int MinAverageBitRate = 56000;
+        private const long AbsoluteMinimumAudioBytes = 96 * 1024;
+
         public sealed class UnblockMatchResult
         {
             public string Url { get; set; } = string.Empty;
@@ -27,6 +30,9 @@ namespace YTPlayer.Core.Unblock
             public Dictionary<string, string>? Headers { get; set; }
             public int? BitRate { get; set; }
             public long? DurationMs { get; set; }
+            public bool IsTrial { get; set; }
+            public long TrialStart { get; set; }
+            public long TrialEnd { get; set; }
         }
 
         private readonly object _initLock = new object();
@@ -126,13 +132,37 @@ namespace YTPlayer.Core.Unblock
 
                 // 严格时长匹配：误差不超过 ±1s，否则视为无效解封结果
                 long targetMs = song.Duration > 0 ? song.Duration * 1000L : 0;
+                bool isTrial = audio.IsTrial;
                 if (targetMs > 0 && audio.DurationMs.HasValue && audio.DurationMs.Value > 0)
                 {
                     long diff = Math.Abs(audio.DurationMs.Value - targetMs);
                     if (diff > 1000)
                     {
-                        return null;
+                        if (audio.DurationMs.Value < targetMs)
+                        {
+                            isTrial = true;
+                        }
+                        else
+                        {
+                            return null;
+                        }
                     }
+                }
+
+                if (targetMs > 0)
+                {
+                    bool sizeLooksFull = audio.Size > 0 && SizeLooksFullLength(audio.Size, targetMs, audio.BitRate);
+                    if (!sizeLooksFull)
+                    {
+                        isTrial = true;
+                    }
+                }
+
+                long trialStart = isTrial ? Math.Max(0L, audio.TrialStartMs) : 0L;
+                long trialEnd = isTrial ? audio.TrialEndMs : 0L;
+                if (isTrial && trialEnd <= trialStart)
+                {
+                    trialEnd = EstimateTrialEndMs(audio.Size, audio.BitRate, targetMs);
                 }
 
                 return new UnblockMatchResult
@@ -142,7 +172,10 @@ namespace YTPlayer.Core.Unblock
                     Source = audio.Source ?? string.Empty,
                     Headers = audio.Headers,
                     BitRate = audio.BitRate,
-                    DurationMs = audio.DurationMs
+                    DurationMs = audio.DurationMs,
+                    IsTrial = isTrial,
+                    TrialStart = trialStart,
+                    TrialEnd = trialEnd
                 };
             }
             catch (Exception ex)
@@ -187,6 +220,87 @@ namespace YTPlayer.Core.Unblock
             };
 
             return obj;
+        }
+
+        private static bool SizeLooksFullLength(long totalLength, long targetDurationMs, int? bitRate)
+        {
+            if (totalLength < AbsoluteMinimumAudioBytes || targetDurationMs <= 0)
+            {
+                return targetDurationMs <= 0 && totalLength >= AbsoluteMinimumAudioBytes;
+            }
+
+            double seconds = targetDurationMs / 1000d;
+            double absoluteMinimum = seconds * MinAverageBitRate / 8d;
+            if (totalLength < absoluteMinimum)
+            {
+                return false;
+            }
+
+            int normalizedBitRate = NormalizeBitRate(bitRate);
+            if (normalizedBitRate > 0)
+            {
+                double expected = seconds * normalizedBitRate / 8d;
+                double required = expected * GetBitRateSizeRatio(normalizedBitRate);
+                if (totalLength < required)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static int NormalizeBitRate(int? bitRate)
+        {
+            if (!bitRate.HasValue || bitRate.Value <= 0)
+            {
+                return 0;
+            }
+
+            int value = bitRate.Value;
+            if (value < 1000)
+            {
+                value *= 1000;
+            }
+
+            return value;
+        }
+
+        private static double GetBitRateSizeRatio(int bitRate)
+        {
+            if (bitRate >= 900000)
+            {
+                return 0.30d;
+            }
+
+            if (bitRate >= 96000)
+            {
+                return 0.55d;
+            }
+
+            return 0.45d;
+        }
+
+        private static long EstimateTrialEndMs(long size, int? bitRate, long targetDurationMs)
+        {
+            int normalizedBitRate = NormalizeBitRate(bitRate);
+            long estimated = 0;
+            if (size > 0 && normalizedBitRate > 0)
+            {
+                estimated = (long)Math.Round(size * 8d * 1000d / normalizedBitRate);
+            }
+
+            if (estimated <= 0)
+            {
+                estimated = 30000;
+            }
+
+            if (targetDurationMs > 0)
+            {
+                estimated = Math.Min(estimated, targetDurationMs);
+            }
+
+            return estimated > 0 ? estimated : 30000;
         }
 
     }

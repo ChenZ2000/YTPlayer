@@ -104,7 +104,7 @@ namespace UnblockNCM.Core.Providers
                 Source = "kugou",
                 DurationMs = song.Duration,
                 Title = song.Name,
-                Artists = info.Artists != null ? string.Join(" / ", info.Artists) : info.Keyword,
+                Artists = info.Artists != null ? string.Join(" / ", info.Artists.Select(a => a.Name)) : info.Keyword,
                 Headers = new System.Collections.Generic.Dictionary<string, string>
                 {
                     { "User-Agent", "Mozilla/5.0 (Linux; Android 11; KUGOU_MUSIC)" },

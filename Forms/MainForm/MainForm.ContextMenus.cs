@@ -2033,6 +2033,19 @@ public partial class MainForm
 			menuItem.CheckState = (isChecked ? CheckState.Checked : CheckState.Unchecked);
 		}
 	}
+
+	private static void ClearMenuItemCheckedState(ToolStripMenuItem? menuItem)
+	{
+		if (menuItem == null)
+		{
+			return;
+		}
+
+		menuItem.CheckOnClick = false;
+		menuItem.Checked = false;
+		menuItem.CheckState = CheckState.Unchecked;
+		menuItem.AccessibleRole = AccessibleRole.MenuItem;
+	}
 	private MenuContextSnapshot BuildMenuContextSnapshot(bool isCurrentPlayingRequest)
 	{
 		string text = _currentViewSource ?? string.Empty;
@@ -2232,6 +2245,10 @@ public partial class MainForm
 		likeSongMenuItem.Tag = null;
 		unlikeSongMenuItem.Visible = false;
 		unlikeSongMenuItem.Tag = null;
+		dislikeSongMenuItem.Visible = false;
+		dislikeSongMenuItem.Tag = null;
+		deleteRecentPlayMenuItem.Visible = false;
+		deleteRecentPlayMenuItem.Tag = null;
 		addToPlaylistMenuItem.Visible = false;
 		addToPlaylistMenuItem.Tag = null;
 		removeFromPlaylistMenuItem.Visible = false;
@@ -2705,6 +2722,11 @@ public partial class MainForm
 			unlikeSongMenuItem.Visible = flag && flag4;
 			likeSongMenuItem.Tag = (flag ? songInfo : null);
 			unlikeSongMenuItem.Tag = (flag ? songInfo : null);
+			dislikeSongMenuItem.Visible = flag;
+			dislikeSongMenuItem.Tag = (flag ? songInfo : null);
+			bool canDeleteRecentPlay = flag && !snapshot.IsCurrentPlayback && string.Equals(snapshot.ViewSource, "recent_play", StringComparison.OrdinalIgnoreCase);
+			deleteRecentPlayMenuItem.Visible = canDeleteRecentPlay;
+			deleteRecentPlayMenuItem.Tag = (canDeleteRecentPlay ? songInfo : null);
 			addToPlaylistMenuItem.Visible = flag;
 			addToPlaylistMenuItem.Tag = (flag ? songInfo : null);
 			string playlistId = (snapshot.ViewSource.StartsWith("playlist:", StringComparison.OrdinalIgnoreCase) ? snapshot.ViewSource.Substring("playlist:".Length) : null);
@@ -2732,11 +2754,15 @@ public partial class MainForm
 		{
 			likeSongMenuItem.Visible = false;
 			unlikeSongMenuItem.Visible = false;
+			dislikeSongMenuItem.Visible = false;
+			deleteRecentPlayMenuItem.Visible = false;
 			addToPlaylistMenuItem.Visible = false;
 			removeFromPlaylistMenuItem.Visible = false;
 			removeFromPlaylistMenuItem.Text = "从歌单中移除(&R)";
 			likeSongMenuItem.Tag = null;
 			unlikeSongMenuItem.Tag = null;
+			dislikeSongMenuItem.Tag = null;
+			deleteRecentPlayMenuItem.Tag = null;
 			addToPlaylistMenuItem.Tag = null;
 			removeFromPlaylistMenuItem.Tag = null;
 		}

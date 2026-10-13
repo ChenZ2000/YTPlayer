@@ -935,13 +935,13 @@ namespace YTPlayer.Core.Download
             }
 
             task.Song.IsAvailable = true;
-            task.Song.IsTrial = false;
-            task.Song.TrialStart = 0;
-            task.Song.TrialEnd = 0;
+            task.Song.IsTrial = result.IsTrial;
+            task.Song.TrialStart = result.IsTrial ? result.TrialStart : 0;
+            task.Song.TrialEnd = result.IsTrial ? result.TrialEnd : 0;
             task.Song.IsUnblocked = true;
             task.Song.UnblockSource = result.Source ?? string.Empty;
             task.Song.CustomHeaders = headers;
-            task.Song.SetQualityUrl(level, result.Url, size, true, false, 0, 0);
+            task.Song.SetQualityUrl(level, result.Url, size, true, result.IsTrial, task.Song.TrialStart, task.Song.TrialEnd);
             task.Song.Url = result.Url;
             task.Song.Level = level;
             task.Song.Size = size;
