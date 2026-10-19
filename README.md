@@ -115,6 +115,9 @@ powershell -ExecutionPolicy Bypass -File .\Build-Debug.ps1
 
 - `Docs/KeyboardShortcuts.md`：集中维护快捷键说明，构建时会被嵌入到快捷键参考对话框。
 - `Docs/About.md`：维护关于对话框的文案与按钮信息，文件顶部的 `--- ... ---` 元数据块可配置 `ProjectUrl`、`AuthorName`、`AuthorUrl`、`ContributorName`、`ContributorUrl` 等键，正文中支持 `{{Version}}` 等占位符。
+- [播放上报与未缓存跳转验证](Docs/PlaybackReportingAndSeeking.md)：记录协议依据、修复边界与实测结果。
+- [网易云 API 动态分析 skill](.agents/skills/netease-runtime-analysis/SKILL.md)：仓库内可复用的 Android 运行时分析、双账号验证和客户端回归流程。
+- `pwsh -File scripts/Test-ProtocolRegression.ps1`：执行 Debug 构建及一起听、听歌识曲、播放上报和未缓存跳转的离线回归；需要 Visual Studio MSBuild、.NET 10 SDK 和 FFmpeg，不会使用真实账号或提交听歌记录。
 
 ## 鸣谢
 

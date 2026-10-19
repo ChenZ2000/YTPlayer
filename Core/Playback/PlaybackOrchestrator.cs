@@ -86,7 +86,7 @@ namespace YTPlayer.Core.Playback
             SmartCacheManager? cache = _audioEngine.CurrentCacheManager;
             if (cache != null)
             {
-                long targetBytes = _audioEngine.GetBytesFromSeconds(seconds);
+                long targetBytes = _audioEngine.GetEstimatedFileOffset(seconds);
                 await cache.WaitForCacheReadyAsync(targetBytes, true, token).ConfigureAwait(false);
             }
 

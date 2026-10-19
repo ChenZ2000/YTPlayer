@@ -34,6 +34,9 @@ namespace YTPlayer.Core
     /// </summary>
     public partial class NeteaseApiClient : IDisposable
     {
+        internal string PlaybackReportingAccountKey => string.IsNullOrWhiteSpace(_musicU) ? string.Empty
+            : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(_musicU)));
+
         #region 常量定义
 
         // API 基础地址

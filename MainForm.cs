@@ -7345,9 +7345,22 @@ public partial class MainForm : Form
 
 	private static string BuildPlayPauseButtonText(PlaybackState playbackState, SongInfo? song)
 	{
-		string text = ((playbackState == PlaybackState.Playing) ? "暂停" : "播放");
+		string text = playbackState switch
+		{
+			PlaybackState.Playing => "暂停",
+			PlaybackState.Loading => "加载中...",
+			PlaybackState.Buffering => "缓冲中...",
+			_ => "播放"
+		};
 		return AppendTrialMarker(text, song);
 	}
+
+	private static string GetPlaybackStatusText(PlaybackState state) => state switch
+	{
+		PlaybackState.Playing => "正在播放", PlaybackState.Paused => "已暂停",
+		PlaybackState.Buffering => "正在缓冲", PlaybackState.Loading => "正在加载",
+		_ => "已停止"
+	};
 
 	private static string AppendTrialMarker(string text, SongInfo? song)
 	{
@@ -7392,6 +7405,8 @@ public partial class MainForm : Form
 			switch (_audioEngine.GetPlaybackState())
 			{
 			case PlaybackState.Playing:
+			case PlaybackState.Buffering:
+				NotifyListenTogetherLocalControl();
 				TryCancelPendingLongSeek(false);
 				PersistPlaybackState();
 				await Task.Run(delegate
@@ -7400,12 +7415,15 @@ public partial class MainForm : Form
 				}).ConfigureAwait(continueOnCapturedContext: true);
 				break;
 			case PlaybackState.Paused:
+				NotifyListenTogetherLocalControl();
 				TryCancelPendingLongSeek(true);
 				await Task.Run(delegate
 				{
 					_audioEngine.Resume();
 				}).ConfigureAwait(continueOnCapturedContext: true);
 				break;
+			case PlaybackState.Loading:
+				return;
 			default:
 				if (!(await TryResumeLastPlaybackAsync()))
 				{
@@ -7424,8 +7442,21 @@ public partial class MainForm : Form
 	{
 		if (_audioEngine != null)
 		{
+			NotifyListenTogetherLocalControl();
 			CancelActivePlaybackRequest("stop playback");
 			CancelPendingPlaceholderPlayback("stop playback");
+			if (_listenTogetherSession?.IsReady == true && _audioEngine.CurrentSong != null)
+			{
+				// The room protocol represents stopping as a pause at the beginning.
+				_seekManager?.CancelPendingSeeks();
+				_audioEngine.Pause();
+				bool resetPosition = _audioEngine.SetPosition(0);
+				if (resetPosition) Interlocked.Increment(ref _listenTogetherSeekVersion);
+				RefreshListenTogetherPlaybackUi(timelineChanged: true);
+				PersistPlaybackState();
+				UpdateStatusBar(resetPosition ? "已暂停并回到开头，正在同步房间。" : "已暂停，当前歌曲暂时无法回到开头。");
+				return;
+			}
 			_suppressAutoAdvance = true;
 			_audioEngine.Stop();
 			currentSongLabel.Text = "未播放";
@@ -7658,6 +7689,7 @@ public partial class MainForm : Form
 
         private void UpdateTimer_Tick(object sender, EventArgs e)
         {
+		RefreshListenTogetherPlaybackDisplay();
 		if (_audioEngine == null || _isUserDragging)
 		{
 			return;
@@ -7888,11 +7920,13 @@ public partial class MainForm : Form
 
 	private void OnSeekRequested(object? sender, SeekManager.SeekRequestEventArgs e)
 	{
+		NotifyListenTogetherLocalControl();
 		_positionCoordinator?.OnSeekRequested(e.TargetSeconds, e.IsPreview, e.Version);
 	}
 
 	private void OnSeekExecuted(object? sender, SeekManager.SeekExecutionEventArgs e)
 	{
+		if (e.Success && !e.IsPreview) Interlocked.Increment(ref _listenTogetherSeekVersion);
 		_positionCoordinator?.OnSeekExecuted(e.TargetSeconds, e.Success, e.IsPreview, e.Version);
 	}
 
@@ -8351,6 +8385,7 @@ public partial class MainForm : Form
 
 	private void OnAudioPositionChanged(object? sender, TimeSpan position)
 	{
+		ObservePlaybackReportingPosition(position);
 		EvaluatePositionStallRecovery(position);
 		DetectLyricPositionJump(position);
 		_lyricsDisplayManager?.UpdatePosition(position);
@@ -8522,7 +8557,9 @@ public partial class MainForm : Form
 		}
 		else
 		{
-			_audioEngine?.SetPosition(targetPosition);
+			NotifyListenTogetherLocalControl();
+			if (_audioEngine?.SetPosition(targetPosition) == true && !preview)
+				Interlocked.Increment(ref _listenTogetherSeekVersion);
 		}
 	}
 
@@ -9823,14 +9860,15 @@ private void searchTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
 			_config.PlaybackOrder = "随机播放";
 			break;
 		default:
-			_audioEngine.PlayMode = PlayMode.Sequential;
-			_config.PlaybackOrder = "顺序播放";
+			_audioEngine.PlayMode = _listenTogetherSession?.IsActive == true ? PlayMode.Loop : PlayMode.Sequential;
+			_config.PlaybackOrder = _listenTogetherSession?.IsActive == true ? "列表循环" : "顺序播放";
 			break;
 		}
 		SaveConfig();
 		UpdatePlaybackOrderMenuCheck();
 		RefreshNextSongPreload();
 		string text = _config.PlaybackOrder;
+		NotifyListenTogetherLocalControl();
 		AnnounceUiMessage(text, interrupt: true);
 		UpdateStatusBar(text);
 		return true;
@@ -10021,7 +10059,8 @@ private void searchTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
 			Debug.WriteLine("[MainForm] 托盘提示已重置为未播放状态");
 			return;
 		}
-		string text = song.Name + " - " + song.Artist;
+		string stateText = GetPlaybackStatusText(isPaused ? PlaybackState.Paused : _audioEngine?.GetPlaybackState() ?? PlaybackState.Stopped);
+		string text = stateText + "：" + song.Name + " - " + song.Artist;
 		if (song.IsTrial)
 		{
 			text += " [试听版]";
@@ -10782,6 +10821,7 @@ private void searchTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
 		if (_audioEngine != null)
 		{
 			_audioEngine.PlayMode = PlayMode.Sequential;
+			NotifyListenTogetherLocalControl();
 			_config.PlaybackOrder = "顺序播放";
 			SaveConfig();
 			UpdatePlaybackOrderMenuCheck();
@@ -10794,6 +10834,7 @@ private void searchTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
 		if (_audioEngine != null)
 		{
 			_audioEngine.PlayMode = PlayMode.Loop;
+			NotifyListenTogetherLocalControl();
 			_config.PlaybackOrder = "列表循环";
 			SaveConfig();
 			UpdatePlaybackOrderMenuCheck();
@@ -10806,6 +10847,7 @@ private void searchTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
 		if (_audioEngine != null)
 		{
 			_audioEngine.PlayMode = PlayMode.LoopOne;
+			NotifyListenTogetherLocalControl();
 			_config.PlaybackOrder = "单曲循环";
 			SaveConfig();
 			UpdatePlaybackOrderMenuCheck();
@@ -10818,6 +10860,7 @@ private void searchTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
 		if (_audioEngine != null)
 		{
 			_audioEngine.PlayMode = PlayMode.Random;
+			NotifyListenTogetherLocalControl();
 			_config.PlaybackOrder = "随机播放";
 			SaveConfig();
 			UpdatePlaybackOrderMenuCheck();
@@ -16852,6 +16895,9 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 
 	protected override void OnFormClosing(FormClosingEventArgs e)
 	{
+        if (DeferCloseForListenTogether(e)) return;
+        if (DeferCloseForPlaybackReporting(e)) return;
+        _recognitionCancellation?.Cancel();
 		_isFormClosing = true;
 		_isApplicationExitRequested = true;
 		PersistPlaybackState();
@@ -17640,81 +17686,36 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		}
 	}
 
+	private SongRecognitionDialog? _songRecognitionDialog;
+	private CancellationTokenSource? _recognitionCancellation;
+
 	private async Task StartSongRecognitionAsync()
 	{
-		if (_songRecognitionCoordinator == null)
-		{
-			MessageBox.Show(this, "识曲服务初始化失败，请重启应用。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
-			return;
-		}
-		IReadOnlyList<AudioInputDeviceInfo> devices;
+		if (_songRecognitionDialog != null && !_songRecognitionDialog.IsDisposed) { _songRecognitionDialog.Activate(); return; }
+		if (_songRecognitionCoordinator == null) { UpdateStatusBar("识曲服务初始化失败，请重启应用。"); return; }
 		try
 		{
-			devices = _songRecognitionCoordinator.EnumerateDevices();
+			var devices = _songRecognitionCoordinator.EnumerateDevices();
+			if (devices.Count == 0) { UpdateStatusBar("未找到可用的录音或系统内录设备。"); return; }
+			using var cancellation = new CancellationTokenSource();
+			_recognitionCancellation = cancellation;
+			using var dialog = new SongRecognitionDialog(devices, _config?.RecognitionInputDeviceId,
+				async (device, duration, token, progress) =>
+				{
+					if (_config != null) { _config.RecognitionInputDeviceId = device.DeviceId; _configManager.Save(_config); }
+					return await _songRecognitionCoordinator.RecognizeAsync(device, duration, token, progress);
+				}, cancellation.Token);
+			_songRecognitionDialog = dialog;
+			if (dialog.ShowDialog(this) == DialogResult.OK && dialog.Result != null &&
+				!cancellation.IsCancellationRequested && !_isApplicationExitRequested)
+				await ShowRecognitionResultsAsync(dialog.Result);
+			else if (!_isApplicationExitRequested) UpdateStatusBar("听歌识曲已取消");
 		}
 		catch (Exception ex)
 		{
-			Exception ex2 = ex;
-			Exception ex3 = ex2;
-			MessageBox.Show(this, "枚举录音设备失败：" + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
-			return;
+			if (!_isApplicationExitRequested) MessageBox.Show(this, "听歌识曲失败：" + ex.Message, "听歌识曲", MessageBoxButtons.OK, MessageBoxIcon.Error);
 		}
-		if (devices == null || devices.Count == 0)
-		{
-			MessageBox.Show(this, "未找到可用的录音设备。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
-			return;
-		}
-		SongRecognitionDialog dialog = new SongRecognitionDialog(devices, _config?.RecognitionInputDeviceId);
-		if (dialog.ShowDialog(this) != DialogResult.OK)
-		{
-			return;
-		}
-		AudioInputDeviceInfo selectedDevice = dialog.SelectedDevice ?? devices.First();
-		int durationSeconds = 6;
-		if (_config != null)
-		{
-			_config.RecognitionInputDeviceId = selectedDevice.DeviceId;
-			_configManager.Save(_config);
-		}
-		UpdateStatusBar("正在聆听环境音...");
-		using CancellationTokenSource cts = new CancellationTokenSource();
-		SongRecognitionResult result;
-		try
-		{
-			result = await _songRecognitionCoordinator.RecognizeAsync(selectedDevice, durationSeconds, cts.Token).ConfigureAwait(continueOnCapturedContext: true);
-		}
-		catch (NotSupportedException ex4)
-		{
-			NotSupportedException ex5 = ex4;
-			NotSupportedException nse = ex5;
-			MessageBox.Show(this, "指纹生成器尚未就绪：" + nse.Message + "\n请按设计文档接入 ncm-afp 库后重试。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
-			UpdateStatusBar("听歌识曲组件未就绪");
-			return;
-		}
-		catch (OperationCanceledException)
-		{
-			UpdateStatusBar("听歌识曲已取消");
-			return;
-		}
-		catch (Exception ex)
-		{
-			Exception ex7 = ex;
-			Exception ex8 = ex7;
-			Debug.WriteLine($"[Recognition] 识曲失败: {ex8}");
-			MessageBox.Show(this, "听歌识曲失败：" + ex8.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
-			UpdateStatusBar("听歌识曲失败");
-			return;
-		}
-		if (result == null || result.Matches.Count == 0)
-		{
-			UpdateStatusBar("未能识别出歌曲");
-			MessageBox.Show(this, "未能识别出歌曲，建议更长时间或更靠近音源重试。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
-			return;
-		}
-		await ShowRecognitionResultsAsync(result).ConfigureAwait(continueOnCapturedContext: true);
-		if ((_config?.RecognitionAutoCloseDialog ?? false) && _listenRecognitionMenuItem != null)
-		{
-		}
+		finally { _songRecognitionDialog = null; _recognitionCancellation = null; }
 	}
 
 	private async Task ShowRecognitionResultsAsync(SongRecognitionResult result)
@@ -17802,12 +17803,14 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 	{
 		List<SongInfo> merged = new List<SongInfo>();
 		HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+		List<SongInfo> previous = (existingSongs ?? Array.Empty<SongInfo>()).Where(s => s != null).ToList();
+		HashSet<string> previousKeys = new HashSet<string>(previous.Select(BuildKey), StringComparer.OrdinalIgnoreCase);
 		foreach (SongInfo item2 in newSongs ?? Array.Empty<SongInfo>())
 		{
 			AddIfNew(item2);
 		}
-		int count = merged.Count;
-		foreach (SongInfo item3 in existingSongs ?? Array.Empty<SongInfo>())
+		int count = merged.Count(song => !previousKeys.Contains(BuildKey(song)));
+		foreach (SongInfo item3 in previous)
 		{
 			AddIfNew(item3);
 		}

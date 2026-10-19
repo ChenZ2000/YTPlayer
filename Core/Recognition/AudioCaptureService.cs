@@ -1,7 +1,8 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
+using System.Diagnostics;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -9,222 +10,144 @@ using YTPlayer.Models;
 
 namespace YTPlayer.Core.Recognition
 {
-    /// <summary>
-    /// 基于 BASS 的轻量录制服务，用于听歌识曲采样。
-    /// </summary>
-    internal sealed class AudioCaptureService
+    internal interface IAudioCaptureSource
     {
-        #region BASS P/Invoke
+        IReadOnlyList<AudioInputDeviceInfo> EnumerateDevices();
+        IAsyncEnumerable<byte[]> CaptureProgressiveAsync(AudioInputDeviceInfo device, int durationSeconds, CancellationToken token);
+    }
 
-        private const int BASS_ERROR_OK = 0;
-        private const int BASS_ERROR_DEVICE = 3;
-        private const int BASS_ERROR_ALREADY = 14;
-        private const int BASS_ERROR_FORMAT = 6;
-
-        private const int BASS_DEVICE_ENABLED_FLAG = 0x1;
-        private const int BASS_DEVICE_DEFAULT_FLAG = 0x2;
-
-        [DllImport("bass.dll")]
-        private static extern bool BASS_RecordGetDeviceInfo(int device, out BASS_DEVICEINFO info);
-
-        [DllImport("bass.dll")]
-        private static extern bool BASS_RecordInit(int device);
-
-        [DllImport("bass.dll")]
-        private static extern bool BASS_RecordFree();
-
-        [DllImport("bass.dll")]
-        private static extern int BASS_RecordStart(int freq, int chans, int flags, RECORDPROC proc, IntPtr user);
-
-        [DllImport("bass.dll")]
-        private static extern bool BASS_ChannelStop(int handle);
-
-        [DllImport("bass.dll")]
-        private static extern int BASS_ErrorGetCode();
-
-        private delegate bool RECORDPROC(int handle, IntPtr buffer, int length, IntPtr user);
-
+    /// <summary>Continuous PCM capture. Recognition consumes cumulative, sample-counted snapshots.</summary>
+    internal sealed class AudioCaptureService : IAudioCaptureSource
+    {
+        private const int Enabled = 1, Default = 2, Loopback = 8;
+        private static readonly SemaphoreSlim CaptureGate = new(1, 1);
+        [DllImport("bass.dll")] private static extern bool BASS_RecordGetDeviceInfo(int device, out DeviceInfo info);
+        [DllImport("bass.dll")] private static extern bool BASS_GetDeviceInfo(int device, out DeviceInfo info);
+        [DllImport("bass.dll")] private static extern bool BASS_SetConfig(int option, int value);
+        [DllImport("bass.dll")] private static extern int BASS_GetConfig(int option);
+        [DllImport("bass.dll")] private static extern bool BASS_RecordInit(int device);
+        [DllImport("bass.dll")] private static extern int BASS_RecordGetDevice();
+        [DllImport("bass.dll")] private static extern bool BASS_RecordSetDevice(int device);
+        [DllImport("bass.dll")] private static extern bool BASS_RecordFree();
+        [DllImport("bass.dll")] private static extern int BASS_RecordStart(int freq, int chans, int flags, RecordProc proc, IntPtr user);
+        [DllImport("bass.dll")] private static extern bool BASS_ChannelStop(int handle);
+        [DllImport("bass.dll")] private static extern int BASS_ChannelIsActive(int handle);
+        [DllImport("bass.dll")] private static extern int BASS_ErrorGetCode();
+        private delegate bool RecordProc(int handle, IntPtr buffer, int length, IntPtr user);
         [StructLayout(LayoutKind.Sequential)]
-        private struct BASS_DEVICEINFO
-        {
-            public IntPtr name;
-            public IntPtr driver;
-            public int flags;
-        }
+        private struct DeviceInfo { public IntPtr Name, Driver; public int Flags; }
+        private static string Text(IntPtr value) => (BASS_GetConfig(42) != 0 ? Marshal.PtrToStringUTF8(value) : Marshal.PtrToStringAnsi(value)) ?? "";
 
-        #endregion
-
-        /// <summary>
-        /// 枚举录音设备，附带默认项。
-        /// </summary>
         public IReadOnlyList<AudioInputDeviceInfo> EnumerateDevices()
         {
-            var descriptors = new List<(int index, string name, string driver, bool isEnabled, bool isDefault)>();
-
-            int index = 0;
-            while (BASS_RecordGetDeviceInfo(index, out var info))
-            {
-                string name = Marshal.PtrToStringAnsi(info.name) ?? $"设备 {index}";
-                string driver = Marshal.PtrToStringAnsi(info.driver) ?? string.Empty;
-                bool isEnabled = (info.flags & BASS_DEVICE_ENABLED_FLAG) == BASS_DEVICE_ENABLED_FLAG;
-                bool isDefault = (info.flags & BASS_DEVICE_DEFAULT_FLAG) == BASS_DEVICE_DEFAULT_FLAG;
-
-                if (isEnabled)
-                {
-                    descriptors.Add((index, name, driver, isEnabled, isDefault));
-                }
-
-                index++;
-            }
-
+            BASS_SetConfig(28, 1); // BASS_CONFIG_REC_LOOPBACK: expose output capture devices.
             var result = new List<AudioInputDeviceInfo>();
-
-            if (descriptors.Count > 0)
+            string defaultOutput = "";
+            for (int i = 1; BASS_GetDeviceInfo(i, out var info); i++)
+                if ((info.Flags & (Enabled | Default)) == (Enabled | Default) && !string.IsNullOrEmpty(Text(info.Driver)))
+                { defaultOutput = Text(info.Driver); break; }
+            for (int i = 0; BASS_RecordGetDeviceInfo(i, out var info); i++)
             {
-                var defaultDescriptor = descriptors.FirstOrDefault(d => d.isDefault);
-                if (defaultDescriptor == default)
-                {
-                    defaultDescriptor = descriptors[0];
-                }
-
-                string defaultName = string.IsNullOrWhiteSpace(defaultDescriptor.name)
-                    ? "Windows 默认"
-                    : $"Windows 默认（当前：{defaultDescriptor.name})";
-
-                result.Add(new AudioInputDeviceInfo
-                {
-                    DeviceId = AudioInputDeviceInfo.WindowsDefaultId,
-                    DisplayName = defaultName,
-                    BassDeviceIndex = -1, // 让 BASS 选择当前 Windows 默认
-                    IsDefault = true,
-                    IsLoopback = false,
-                    IsCurrent = true
-                });
+                if ((info.Flags & Enabled) == 0) continue;
+                string name = Text(info.Name), endpoint = Text(info.Driver);
+                bool loopback = (info.Flags & Loopback) != 0;
+                bool isDefault = !loopback && (info.Flags & Default) != 0;
+                if (isDefault && result.All(d => d.DeviceId != AudioInputDeviceInfo.WindowsDefaultId))
+                    result.Insert(0, new AudioInputDeviceInfo { DeviceId = AudioInputDeviceInfo.WindowsDefaultId,
+                        DisplayName = "麦克风：Windows 默认输入设备", BassDeviceIndex = -1, IsDefault = true });
+                if (name.Equals("Default", StringComparison.OrdinalIgnoreCase) || endpoint.Equals("Default", StringComparison.OrdinalIgnoreCase)) continue;
+                if (loopback && endpoint == defaultOutput)
+                    result.Add(new AudioInputDeviceInfo { DeviceId = AudioInputDeviceInfo.LoopbackId,
+                        DisplayName = "系统内录：Windows 默认播放设备（" + name + "）", BassDeviceIndex = i, IsLoopback = true });
+                result.Add(new AudioInputDeviceInfo { DeviceId = string.IsNullOrEmpty(endpoint) ? $"rec:{i}" : "endpoint:" + endpoint,
+                    DisplayName = (loopback ? "系统内录：" : "录音输入：") + name,
+                    BassDeviceIndex = i, IsDefault = isDefault, IsLoopback = loopback });
             }
-
-            foreach (var descriptor in descriptors)
-            {
-                if (descriptor.isDefault && IsPlaceholderDefaultRecordDevice(descriptor.name, descriptor.driver))
-                {
-                    continue; // 合并“Default (默认)”占位项
-                }
-
-                result.Add(new AudioInputDeviceInfo
-                {
-                    DeviceId = $"rec:{descriptor.index}",
-                    DisplayName = descriptor.isDefault ? $"{descriptor.name} (默认)" : descriptor.name,
-                    BassDeviceIndex = descriptor.index,
-                    IsDefault = descriptor.isDefault,
-                    IsLoopback = false
-                });
-            }
-
             return result;
         }
 
-        /// <summary>
-        /// 录制指定时长的 16-bit PCM（单声道），默认 8000 Hz。
-        /// </summary>
-        public async Task<byte[]> CaptureAsync(AudioInputDeviceInfo? device, int durationSeconds, CancellationToken cancellationToken)
+        public async Task<byte[]> CaptureAsync(AudioInputDeviceInfo device, int durationSeconds, CancellationToken token)
         {
-            if (durationSeconds <= 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(durationSeconds), "录制时长必须大于 0");
-            }
+            byte[] result = Array.Empty<byte>();
+            await foreach (var pcm in CaptureProgressiveAsync(device, durationSeconds, token).ConfigureAwait(false)) result = pcm;
+            return result;
+        }
 
-            int deviceIndex = device?.BassDeviceIndex ?? -1;
-            if (!BASS_RecordInit(deviceIndex))
+        public async IAsyncEnumerable<byte[]> CaptureProgressiveAsync(AudioInputDeviceInfo device, int durationSeconds,
+            [EnumeratorCancellation] CancellationToken token)
+        {
+            if (durationSeconds < 1 || durationSeconds > 30) throw new ArgumentOutOfRangeException(nameof(durationSeconds));
+            token.ThrowIfCancellationRequested();
+            await CaptureGate.WaitAsync(token).ConfigureAwait(false);
+            int handle = 0, recordingDevice = -1, stopping = 0, written = 0;
+            bool ownsDevice = false;
+            byte[] buffer = new byte[durationSeconds * 16000];
+            object bufferLock = new();
+            Exception? callbackError = null;
+            RecordProc callback = (_, pointer, length, _) =>
             {
-                throw new InvalidOperationException($"录音设备初始化失败: {GetErrorMessage()}");
-            }
-
-            var buffer = new MemoryStream();
-            bool stopRequested = false;
-
-            RECORDPROC callback = (handle, ptr, len, user) =>
-            {
-                if (stopRequested || cancellationToken.IsCancellationRequested)
+                if (Volatile.Read(ref stopping) != 0 || token.IsCancellationRequested) return false;
+                try
                 {
-                    return false;
-                }
-
-                if (ptr != IntPtr.Zero && len > 0)
-                {
-                    var tmp = new byte[len];
-                    Marshal.Copy(ptr, tmp, 0, len);
-                    lock (buffer)
+                    lock (bufferLock)
                     {
-                        buffer.Write(tmp, 0, tmp.Length);
+                        int count = Math.Min(length, buffer.Length - written) & ~1;
+                        if (pointer != IntPtr.Zero && count > 0) { Marshal.Copy(pointer, buffer, written, count); written += count; }
+                        return written < buffer.Length;
                     }
                 }
-
-                return true;
+                catch (Exception ex) { lock (bufferLock) callbackError = ex; return false; }
             };
-
-            // 目标 8kHz / mono / 16-bit
-            int handleId = BASS_RecordStart(8000, 1, 0, callback, IntPtr.Zero);
-            if (handleId == 0)
-            {
-                var code = BASS_ErrorGetCode();
-                BASS_RecordFree();
-                throw new InvalidOperationException($"开始录制失败: {GetErrorMessage(code)}");
-            }
-
             try
             {
-                await Task.Delay(TimeSpan.FromSeconds(durationSeconds), cancellationToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                // 允许取消，继续向下走停止录制
+                // Resolve endpoint identity afresh after USB/default-device changes.
+                var current = EnumerateDevices().FirstOrDefault(d => d.DeviceId == device.DeviceId)
+                    ?? throw new InvalidOperationException("所选音频设备已断开，请重新选择聆听设备。");
+                if (!BASS_RecordInit(current.BassDeviceIndex)) throw CaptureError("录音设备初始化失败");
+                ownsDevice = true;
+                recordingDevice = BASS_RecordGetDevice();
+                handle = BASS_RecordStart(8000, 1, 0, callback, IntPtr.Zero);
+                if (handle == 0) throw CaptureError("开始录制失败");
+                var elapsed = Stopwatch.StartNew();
+                int target = Math.Min(3, durationSeconds) * 16000;
+                while (true)
+                {
+                    token.ThrowIfCancellationRequested();
+                    byte[]? snapshot = null;
+                    lock (bufferLock)
+                    {
+                        if (callbackError != null) throw new InvalidOperationException("读取音频数据失败。", callbackError);
+                        if (written >= target) snapshot = buffer.AsSpan(0, target).ToArray();
+                    }
+                    if (snapshot != null)
+                    {
+                        yield return snapshot;
+                        if (target == buffer.Length) break;
+                        target = Math.Min(buffer.Length, target + 3 * 16000);
+                        continue;
+                    }
+                    if (BASS_ChannelIsActive(handle) == 0) throw new InvalidOperationException("录音设备已停止，请检查设备连接或麦克风权限。");
+                    if (elapsed.Elapsed.TotalSeconds > durationSeconds + 5)
+                        throw new InvalidOperationException(current.IsLoopback ? "没有收到足够的系统声音，请确认音乐正在所选播放设备上播放。" : "没有收到足够的录音，请检查麦克风权限和输入设备。");
+                    await Task.Delay(40, token).ConfigureAwait(false);
+                }
             }
             finally
             {
-                stopRequested = true;
-                BASS_ChannelStop(handleId);
-                BASS_RecordFree();
-            }
-
-            lock (buffer)
-            {
-                return buffer.ToArray();
+                Interlocked.Exchange(ref stopping, 1);
+                if (handle != 0) BASS_ChannelStop(handle);
+                // BASS recording-device selection is thread-local; await may change threads.
+                if (ownsDevice && BASS_RecordSetDevice(recordingDevice)) BASS_RecordFree();
+                GC.KeepAlive(callback);
+                CaptureGate.Release();
             }
         }
 
-        private static string GetErrorMessage(int? codeOverride = null)
+        private static Exception CaptureError(string operation)
         {
-            int code = codeOverride ?? BASS_ErrorGetCode();
-            switch (code)
-            {
-                case BASS_ERROR_OK: return "成功";
-                case BASS_ERROR_DEVICE: return "录音设备不可用或不存在";
-                case BASS_ERROR_ALREADY: return "录音设备已初始化";
-                case BASS_ERROR_FORMAT: return "录音参数不被设备支持";
-                default: return $"未知错误代码 {code}";
-            }
-        }
-
-        private static bool IsPlaceholderDefaultRecordDevice(string name, string driver)
-        {
-            string n = name?.Trim() ?? string.Empty;
-            string d = driver?.Trim() ?? string.Empty;
-
-            if (string.IsNullOrEmpty(n) && string.IsNullOrEmpty(d))
-            {
-                return true;
-            }
-
-            if (string.Equals(n, "default", StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-
-            if (string.Equals(d, "default", StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-
-            return false;
+            int code = BASS_ErrorGetCode();
+            string reason = code switch { 3 or 23 => "设备不可用或已断开", 6 => "设备不支持所需的录音格式", 14 or 46 => "设备正在被占用", 49 => "未获得录音权限，请检查 Windows 麦克风隐私设置", _ => $"音频错误 {code}" };
+            return new InvalidOperationException(operation + "：" + reason);
         }
     }
 }

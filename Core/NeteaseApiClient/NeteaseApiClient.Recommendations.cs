@@ -1074,27 +1074,42 @@ namespace YTPlayer.Core
                 return false;
             }
 
+            // Reporting is a separate ingestion service. A 200 from the general music
+            // API is not evidence of an accepted listen. Keep the saved session intact;
+            // select the supported desktop weblog dialect only for this request.
+            var header = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+            lock (_cookieLock)
+            {
+                foreach (Cookie cookie in _cookieContainer.GetCookies(EAPI_URI)) header[cookie.Name] = cookie.Value;
+            }
+            if (string.IsNullOrWhiteSpace(_musicU)) return false;
+            header["MUSIC_U"] = _musicU;
+            header["__csrf"] = _csrfToken ?? string.Empty;
+            header["os"] = "osx";
+            header["appver"] = "3.1.10.5100";
+            header["osver"] = "15.5";
+            header["channel"] = "netease";
+            string cookies = string.Join("; ", header.Select(pair => pair.Key + "=" + pair.Value));
             var payload = new Dictionary<string, object>
             {
-                { "logs", JsonConvert.SerializeObject(entries, Formatting.None) }
+                ["logs"] = JsonConvert.SerializeObject(entries, Formatting.None),
+                ["header"] = header,
+                ["e_r"] = true
             };
-
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(TimeSpan.FromSeconds(10));
             try
             {
-                // 使用 EAPI 客户端，路径以 /api/ 开头，由 PostEApiAsync 自动替换为 /eapi/
-                var response = await PostEApiAsync<JObject>("/api/feedback/weblog", payload, useIosHeaders: true, cancellationToken: cancellationToken).ConfigureAwait(false);
-                int code = response["code"]?.Value<int>() ?? -1;
-                if (code != 200)
-                {
-                    System.Diagnostics.Debug.WriteLine($"[PlaybackReporting][EAPI] weblog 返回异常: code={code}, msg={response["message"]}");
-                    return false;
-                }
-
-                return true;
+                var response = await PostEApiAsync<JObject>("/api/feedback/weblog", payload,
+                    useIosHeaders: false, retryCount: MAX_RETRY_COUNT, skipErrorHandling: true,
+                    cancellationToken: deadline.Token, cookieHeaderOverride: cookies,
+                    baseUrlOverride: "https://clientlog.music.163.com").ConfigureAwait(false);
+                return response?.Value<int>("code") == 200;
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[PlaybackReporting][EAPI] weblog 请求失败: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[PlaybackReporting] clientlog request failed: {ex.GetType().Name}");
                 return false;
             }
         }

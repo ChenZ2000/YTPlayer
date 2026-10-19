@@ -14,36 +14,39 @@ namespace YTPlayer
         private readonly Button _connectButton;
         private readonly Button _disconnectButton;
         private readonly Label _statusLabel;
+        private readonly TextBox _playbackTextBox;
 
         public ListenTogetherDialog()
         {
             Text = "一起听";
             AccessibleName = "一起听";
-            AccessibleDescription = "复制本机一起听 URL，或粘贴别人分享的 URL 连接同步听歌。";
+            AccessibleDescription = "使用网易云一起听房间。创建房间分享邀请，或粘贴一起听完整链接加入。按 Esc 关闭此窗口，房间保持连接。";
             StartPosition = FormStartPosition.CenterParent;
             MinimizeBox = false;
             MaximizeBox = false;
             ShowInTaskbar = false;
-            Size = new Size(620, 310);
-            MinimumSize = new Size(560, 280);
+            Size = new Size(700, 470);
+            MinimumSize = new Size(620, 450);
 
             var root = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 Padding = new Padding(12),
                 ColumnCount = 1,
-                RowCount = 5
+                RowCount = 7
             };
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
             var hostLabel = new Label
             {
                 AutoSize = true,
-                Text = "本机一起听 URL",
+                Text = "一起听邀请链接",
                 Margin = new Padding(0, 0, 0, 4)
             };
 
@@ -51,7 +54,7 @@ namespace YTPlayer
             {
                 ReadOnly = true,
                 Dock = DockStyle.Fill,
-                AccessibleName = "本机一起听 URL",
+                AccessibleName = "一起听邀请链接",
                 Margin = new Padding(0, 0, 0, 8)
             };
 
@@ -66,20 +69,20 @@ namespace YTPlayer
             _startHostButton = new Button
             {
                 AutoSize = true,
-                Text = "开始本机一起听(&S)",
-                AccessibleName = "开始本机一起听"
+                Text = "创建一起听房间(&S)",
+                AccessibleName = "创建一起听房间"
             };
             _copyUrlButton = new Button
             {
                 AutoSize = true,
-                Text = "复制 URL(&C)",
-                AccessibleName = "复制本机一起听 URL"
+                Text = "复制邀请链接(&C)",
+                AccessibleName = "复制一起听邀请链接"
             };
             _stopHostButton = new Button
             {
                 AutoSize = true,
-                Text = "停止本机一起听(&T)",
-                AccessibleName = "停止本机一起听",
+                Text = "退出一起听房间(&T)",
+                AccessibleName = "退出一起听房间",
                 Enabled = false
             };
             hostButtonPanel.Controls.Add(_startHostButton);
@@ -89,14 +92,14 @@ namespace YTPlayer
             var connectLabel = new Label
             {
                 AutoSize = true,
-                Text = "连接别人的一起听 URL",
+                Text = "粘贴一起听完整邀请链接",
                 Margin = new Padding(0, 0, 0, 4)
             };
 
             _connectUrlTextBox = new TextBox
             {
                 Dock = DockStyle.Fill,
-                AccessibleName = "连接别人的一起听 URL",
+                AccessibleName = "粘贴一起听完整邀请链接",
                 Margin = new Padding(0, 0, 0, 8)
             };
 
@@ -110,14 +113,14 @@ namespace YTPlayer
             _connectButton = new Button
             {
                 AutoSize = true,
-                Text = "连接(&J)",
-                AccessibleName = "连接一起听"
+                Text = "加入房间(&J)",
+                AccessibleName = "加入一起听房间"
             };
             _disconnectButton = new Button
             {
                 AutoSize = true,
-                Text = "断开连接(&D)",
-                AccessibleName = "断开一起听连接",
+                Text = "退出房间(&D)",
+                AccessibleName = "退出一起听房间",
                 Enabled = false
             };
             connectButtonPanel.Controls.Add(_connectButton);
@@ -125,9 +128,9 @@ namespace YTPlayer
 
             _statusLabel = new Label
             {
-                AutoSize = false,
+                AutoSize = true,
                 Dock = DockStyle.Fill,
-                Text = "未开始",
+                Text = "未加入一起听房间",
                 AccessibleName = "一起听状态",
                 TextAlign = ContentAlignment.TopLeft
             };
@@ -152,6 +155,22 @@ namespace YTPlayer
 
             root.Controls.Add(connectPanel, 0, 3);
             root.Controls.Add(_statusLabel, 0, 4);
+            _playbackTextBox = new TextBox
+            {
+                ReadOnly = true, Multiline = true, Dock = DockStyle.Fill,
+                ScrollBars = ScrollBars.Vertical, AccessibleName = "房间播放状态",
+                Text = "加入房间后显示歌曲、播放状态和进度。",
+                Margin = new Padding(0, 8, 0, 8)
+            };
+            root.Controls.Add(_playbackTextBox, 0, 5);
+            var closeButton = new Button
+            {
+                Text = "关闭（Esc）(&X)", AccessibleName = "关闭一起听窗口，保持房间连接",
+                AutoSize = true, DialogResult = DialogResult.Cancel, Anchor = AnchorStyles.Right
+            };
+            closeButton.Click += (_, _) => Close();
+            CancelButton = closeButton;
+            root.Controls.Add(closeButton, 0, 6);
             Controls.Add(root);
 
             _startHostButton.Click += (_, _) => StartHostingRequested?.Invoke(this, EventArgs.Empty);
@@ -171,22 +190,30 @@ namespace YTPlayer
 
         public event EventHandler? DisconnectRequested;
 
-        public void SetHostUrl(string? url)
+        public void SetSession(bool connected, bool host, bool busy, string inviteUrl)
         {
-            _hostUrlTextBox.Text = url ?? string.Empty;
-            _copyUrlButton.Enabled = !string.IsNullOrWhiteSpace(url);
-            _stopHostButton.Enabled = !string.IsNullOrWhiteSpace(url);
-        }
-
-        public void SetConnected(bool connected)
-        {
-            _connectButton.Enabled = !connected;
-            _disconnectButton.Enabled = connected;
+            if (_hostUrlTextBox.Text != inviteUrl) _hostUrlTextBox.Text = inviteUrl;
+            _startHostButton.Enabled = !connected && !busy;
+            _copyUrlButton.Enabled = connected && !busy && inviteUrl.Length > 0;
+            _stopHostButton.Enabled = connected && host && !busy;
+            _connectButton.Enabled = !connected && !busy;
+            _connectUrlTextBox.Enabled = !connected && !busy;
+            _disconnectButton.Enabled = connected && !host && !busy;
         }
 
         public void SetStatus(string status)
         {
-            _statusLabel.Text = string.IsNullOrWhiteSpace(status) ? "未开始" : status;
+            _statusLabel.Text = string.IsNullOrWhiteSpace(status) ? "未加入一起听房间" : status;
+            _statusLabel.AccessibleName = "一起听状态：" + _statusLabel.Text;
+        }
+
+        public void SetPlaybackSummary(string? summary)
+        {
+            string text = string.IsNullOrWhiteSpace(summary) ? "加入房间后显示歌曲、播放状态和进度。" : summary;
+            if (_playbackTextBox.Text == text) return;
+            int start = _playbackTextBox.SelectionStart, length = _playbackTextBox.SelectionLength;
+            _playbackTextBox.Text = text;
+            _playbackTextBox.Select(Math.Min(start, text.Length), Math.Min(length, Math.Max(0, text.Length - start)));
         }
     }
 }

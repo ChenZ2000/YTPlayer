@@ -62,6 +62,20 @@ namespace YTPlayer.Core.Playback
             }
         }
 
+        /// <summary>Accept an externally applied seek without retaining an older UI seek target.</summary>
+        public void OnPositionSynchronized(string? trackId, double positionSeconds)
+        {
+            lock (_lock)
+            {
+                _trackId = trackId;
+                _lastRequestedTarget = _lastExecutedTarget = -1;
+                _lastRequestAtUtc = _lastExecuteAtUtc = DateTime.MinValue;
+                _lastExecuteSuccess = false;
+                _lastEnginePosition = Math.Max(0, positionSeconds);
+                _lastEngineUpdateUtc = DateTime.UtcNow;
+            }
+        }
+
         public void OnSeekExecuted(double targetSeconds, bool success, bool isPreview, long version)
         {
             lock (_lock)

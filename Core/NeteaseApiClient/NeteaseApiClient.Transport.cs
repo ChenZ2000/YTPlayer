@@ -70,7 +70,7 @@ namespace YTPlayer.Core
                 });
 
                 // 调试：输出原始payload
-                System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] Raw JSON Payload: {jsonPayload}");
+                System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] Payload fields: {string.Join(", ", payloadDict.Keys)}");
 
                 // WEAPI加密
                 var encrypted = EncryptionHelper.EncryptWeapi(jsonPayload);
@@ -132,17 +132,7 @@ namespace YTPlayer.Core
                 // ⭐ 调试：输出Cookie信息
                 var cookies = _cookieContainer.GetCookies(baseUri);
                 System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] Cookie Count: {cookies.Count}");
-                foreach (Cookie cookie in cookies)
-                {
-                    if (cookie.Name == "MUSIC_U")
-                    {
-                        System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] Cookie: {cookie.Name}={cookie.Value.Substring(0, Math.Min(30, cookie.Value.Length))}... (长度:{cookie.Value.Length})");
-                    }
-                    else
-                    {
-                        System.Diagnostics.Debug.WriteLine($"[DEBUG WEAPI] Cookie: {cookie.Name}={cookie.Value}");
-                    }
-                }
+                System.Diagnostics.Debug.WriteLine("[DEBUG WEAPI] Cookie names: " + string.Join(", ", cookies.Cast<Cookie>().Select(cookie => cookie.Name)));
 
                 using (var requestMessage = new HttpRequestMessage(HttpMethod.Post, url))
                 {
@@ -625,7 +615,7 @@ namespace YTPlayer.Core
         /// <summary>
         /// EAPI POST 请求
         /// </summary>
-        public async Task<T> PostEApiAsync<T>(string path, object payload, bool useIosHeaders = true, int retryCount = 0, bool skipErrorHandling = false, bool injectRealIpHeaders = false, CancellationToken cancellationToken = default)
+        public async Task<T> PostEApiAsync<T>(string path, object payload, bool useIosHeaders = true, int retryCount = 0, bool skipErrorHandling = false, bool injectRealIpHeaders = false, CancellationToken cancellationToken = default, string? cookieHeaderOverride = null, string? baseUrlOverride = null)
         {
             try
             {
@@ -637,7 +627,7 @@ namespace YTPlayer.Core
                 string jsonPayload = JsonConvert.SerializeObject(payloadDict, Formatting.None);
 
                 System.Diagnostics.Debug.WriteLine($"[DEBUG EAPI] Path: {path}");
-                System.Diagnostics.Debug.WriteLine($"[DEBUG EAPI] Payload: {jsonPayload}");
+                System.Diagnostics.Debug.WriteLine($"[DEBUG EAPI] Payload fields: {string.Join(", ", payloadDict.Keys)}");
 
                 // EAPI加密 - 使用 /api/ 路径
                 string encrypted = EncryptionHelper.EncryptEapi(path, jsonPayload);
@@ -652,12 +642,12 @@ namespace YTPlayer.Core
 
                 string antiCheatToken = useIosHeaders ? _authContext?.GetActiveAntiCheatToken() : null;
                 var requestHeaders = BuildEapiRequestHeaders(useIosHeaders, antiCheatToken);
-                string cookieHeader = BuildEapiCookieHeader(headerMap);
+                string cookieHeader = cookieHeaderOverride ?? BuildEapiCookieHeader(headerMap);
 
                 // 构建请求 URL - 将 /api/ 替换为 /eapi/
                 // ⭐ 使用 interface3 域名（iOS 端 API，性能更好）
                 string requestPath = path.Replace("/api/", "/eapi/");
-                string url = $"{EAPI_BASE_URL}{requestPath}";
+                string url = $"{baseUrlOverride ?? EAPI_BASE_URL}{requestPath}";
                 System.Diagnostics.Debug.WriteLine($"[DEBUG EAPI] Request URL: {url}");
                 using (var request = new HttpRequestMessage(HttpMethod.Post, url))
                 {
@@ -680,7 +670,7 @@ namespace YTPlayer.Core
                         request.Headers.TryAddWithoutValidation("Cookie", cookieHeader);
                     }
 
-                    var response = await _eapiClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+                    using var response = await _eapiClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
 
                     byte[] rawBytes = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
                     string decryptedText = null;
@@ -759,7 +749,7 @@ namespace YTPlayer.Core
                         System.Diagnostics.Debug.WriteLine("[DEBUG EAPI] Content-Type提示为JSON/TEXT，但内容不像明文JSON，继续尝试解密。");
                     }
 
-                    byte[] cipherBytes = looksLikeJson ? Array.Empty<byte>() : PrepareEapiCipherBytes(rawBytes);
+                    byte[] cipherBytes = looksLikeJson ? Array.Empty<byte>() : PrepareEapiCipherBytes(candidatePlainBytes);
                     if (!looksLikeJson && (cipherBytes == null || cipherBytes.Length == 0))
                     {
                         throw new Exception("EAPI 响应为空，无法解密。");
@@ -851,7 +841,7 @@ namespace YTPlayer.Core
                             if (refreshed)
                             {
                                 System.Diagnostics.Debug.WriteLine("[EAPI] 检测到 301，已自动刷新登录，重试当前请求。");
-                                return await PostEApiAsync<T>(path, payload, useIosHeaders, retryCount + 1, skipErrorHandling, injectRealIpHeaders, cancellationToken).ConfigureAwait(false);
+                                return await PostEApiAsync<T>(path, payload, useIosHeaders, retryCount + 1, skipErrorHandling, injectRealIpHeaders, cancellationToken, cookieHeaderOverride, baseUrlOverride).ConfigureAwait(false);
                             }
                         }
 
@@ -873,7 +863,7 @@ namespace YTPlayer.Core
                 {
                     int delayMs = GetRandomRetryDelay();
                     await Task.Delay(delayMs, cancellationToken).ConfigureAwait(false);
-                    return await PostEApiAsync<T>(path, payload, useIosHeaders, retryCount + 1, skipErrorHandling, injectRealIpHeaders, cancellationToken).ConfigureAwait(false);
+                    return await PostEApiAsync<T>(path, payload, useIosHeaders, retryCount + 1, skipErrorHandling, injectRealIpHeaders, cancellationToken, cookieHeaderOverride, baseUrlOverride).ConfigureAwait(false);
                 }
 
                 throw;

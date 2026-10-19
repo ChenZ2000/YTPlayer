@@ -13,16 +13,17 @@ namespace YTPlayer.Core.ListenTogether
         public int DurationSeconds { get; set; }
         public double PositionSeconds { get; set; }
         public bool IsPlaying { get; set; }
+        public bool IsBuffering { get; set; }
         public long UpdatedUnixMilliseconds { get; set; }
 
         public bool HasSong => !string.IsNullOrWhiteSpace(SongId);
 
-        public double EstimatePositionSeconds()
+        public double EstimatePositionSeconds(long? nowUnixMilliseconds = null)
         {
             double position = Math.Max(0, PositionSeconds);
             if (IsPlaying && UpdatedUnixMilliseconds > 0)
             {
-                long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                long now = nowUnixMilliseconds ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                 position += Math.Max(0, now - UpdatedUnixMilliseconds) / 1000.0;
             }
 

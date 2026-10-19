@@ -1031,17 +1031,14 @@ namespace YTPlayer.Core
 
         public bool SetPosition(double seconds)
         {
-            if (_currentStream == 0)
-            {
-                return false;
-            }
+            if (_currentStream == 0 || !double.IsFinite(seconds) || seconds < 0) return false;
 
             long targetBytes = BASS_ChannelSeconds2Bytes(_currentStream, seconds);
             bool success = BASS_ChannelSetPosition(_currentStream, targetBytes, BASS_POS_BYTE);
 
             if (success && _currentCacheManager != null)
             {
-                _currentCacheManager.UpdatePlaybackPosition(targetBytes);
+                _currentCacheManager.UpdatePlaybackPosition(GetEstimatedFileOffset(seconds));
             }
 
             return success;
@@ -1057,65 +1054,45 @@ namespace YTPlayer.Core
         /// <returns>是否成功跳转</returns>
         public async Task<bool> SetPositionWithCacheWaitAsync(
             double seconds,
-            int timeoutMs = 60000,
+            int timeoutMs = 12000,
             CancellationToken cancellationToken = default,
             bool waitTargetOnly = false)
         {
-            if (_currentStream == 0)
+            int stream = _currentStream;
+            var cache = _currentCacheManager;
+            if (stream == 0 || !double.IsFinite(seconds) || seconds < 0 || cancellationToken.IsCancellationRequested) return false;
+            // Decoder positions are PCM bytes. Cache positions are encoded file bytes.
+            long pcmPosition = BASS_ChannelSeconds2Bytes(stream, seconds);
+            long filePosition = GetEstimatedFileOffset(seconds);
+            if (pcmPosition < 0) return false;
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(Math.Clamp(timeoutMs, 1, 60000));
+            try
             {
-                return false;
-            }
-
-            long targetBytes = BASS_ChannelSeconds2Bytes(_currentStream, seconds);
-
-            // 如果有缓存管理器，先更新播放位置（触发调度器重新计算优先级），然后等待数据就绪
-            if (_currentCacheManager != null)
-            {
-                try
+                if (cache != null)
                 {
-                    // ⭐ 关键优化：先通知调度器更新下载优先级到目标位置
-                    // 这样在等待期间，后台会优先下载目标位置的块
-                    _currentCacheManager.UpdatePlaybackPosition(targetBytes);
-                    System.Diagnostics.Debug.WriteLine(
-                        $"[BassAudioEngine] 🎯 已通知调度器优先下载目标位置: {seconds:F1}s");
-
-                    // 短按场景：优先调度目标块本身
-                    await _currentCacheManager.EnsurePositionAsync(targetBytes, cancellationToken, allowRangeRescue: true).ConfigureAwait(false);
-
-                    // 然后等待数据就绪
-                    bool dataReady = await _currentCacheManager.WaitForPositionReadyAsync(
-                        targetBytes,
-                        timeoutMs,
-                        cancellationToken,
-                        forPlayback: !waitTargetOnly).ConfigureAwait(false);
-
-                    if (!dataReady)
+                    cache.UpdatePlaybackPosition(filePosition);
+                    // This estimate only warms the cache. The decoder's FILESEEK/READ
+                    // callbacks determine the real encoded offset, including VBR/indexes.
+                    await cache.EnsurePositionAsync(filePosition, deadline.Token, allowRangeRescue: true).ConfigureAwait(false);
+                    if (!await cache.WaitForPositionReadyAsync(filePosition, Math.Max(1, timeoutMs), deadline.Token,
+                        forPlayback: false).ConfigureAwait(false)) return false;
+                }
+                // A cache hit must not cause synchronous native I/O on the UI thread.
+                return await Task.Run(() =>
+                {
+                    if (deadline.IsCancellationRequested || _currentStream != stream || !ReferenceEquals(_currentCacheManager, cache)) return false;
+                    bool success = BASS_ChannelSetPosition(stream, pcmPosition, BASS_POS_BYTE);
+                    if (success && !deadline.IsCancellationRequested && _currentStream == stream)
                     {
-                        System.Diagnostics.Debug.WriteLine(
-                            $"[BassAudioEngine] ⚠️ Seek 等待超时: {seconds:F1}s (超时 {timeoutMs}ms)");
-                        return false;
+                        if (cache != null && _currentStreamProvider != null)
+                            cache.UpdatePlaybackPosition(Math.Clamp(_currentStreamProvider.CurrentPosition, 0, cache.TotalSize - 1));
+                        return true;
                     }
-
-                    System.Diagnostics.Debug.WriteLine(
-                        $"[BassAudioEngine] ✓ Seek 数据就绪: {seconds:F1}s");
-
-                    // 主动预取目标后的少量块，避免短距跳转后立即卡顿
-                    _ = _currentCacheManager.PrefetchAroundAsync(targetBytes, aheadChunks: 2, cancellationToken, allowRangeRescue: true);
-                }
-                catch (OperationCanceledException)
-                {
-                    System.Diagnostics.Debug.WriteLine(
-                        $"[BassAudioEngine] 🚫 Seek 被取消: {seconds:F1}s");
                     return false;
-                }
+                }).ConfigureAwait(false);
             }
-
-            // 数据就绪，执行跳转
-            bool success = BASS_ChannelSetPosition(_currentStream, targetBytes, BASS_POS_BYTE);
-
-            // UpdatePlaybackPosition 已经在上面调用过了，不需要重复调用
-
-            return success;
+            catch (OperationCanceledException) { return false; }
         }
 
         public double GetPosition()
@@ -1143,6 +1120,19 @@ namespace YTPlayer.Core
         public PlaybackState GetPlaybackState()
         {
             return _stateMachine.CurrentState;
+        }
+
+        /// <summary>Encoded-byte estimate for prefetch only; never pass this to BASS_ChannelSetPosition.</summary>
+        public long GetEstimatedFileOffset(double seconds)
+        {
+            var cache = _currentCacheManager;
+            return EstimateFileOffset(seconds, GetDuration(), cache?.TotalSize ?? 0);
+        }
+
+        internal static long EstimateFileOffset(double seconds, double duration, long fileSize)
+        {
+            if (!double.IsFinite(seconds) || !double.IsFinite(duration) || seconds <= 0 || duration <= 0 || fileSize <= 0) return 0;
+            return (long)Math.Clamp(seconds / duration * fileSize, 0, fileSize - 1);
         }
 
         public long GetBytesFromSeconds(double seconds)
@@ -1471,7 +1461,10 @@ namespace YTPlayer.Core
                         long totalBytes = BASS_ChannelGetLength(_currentStream, BASS_POS_BYTE);
                         double seconds = BASS_ChannelBytes2Seconds(_currentStream, positionBytes);
 
-                        _currentCacheManager?.UpdatePlaybackPosition(positionBytes);
+                        var positionCache = _currentCacheManager;
+                        var positionProvider = _currentStreamProvider;
+                        if (positionCache != null && positionProvider != null)
+                            positionCache.UpdatePlaybackPosition(Math.Clamp(positionProvider.CurrentPosition, 0, positionCache.TotalSize - 1));
                         PositionChanged?.Invoke(this, TimeSpan.FromSeconds(seconds));
 
                         if (!endChunksRequested && totalBytes > 0 && positionBytes > 0)
@@ -1492,7 +1485,7 @@ namespace YTPlayer.Core
                                             return;
                                         }
 
-                                        long nearEndPosition = Math.Max(0, totalBytes - 2L * 1024 * 1024);
+                                        long nearEndPosition = Math.Max(0, cacheManager.TotalSize - 2L * 1024 * 1024);
                                         cacheManager.UpdatePlaybackPosition(nearEndPosition);
                                         await cacheManager.PrefetchAroundAsync(nearEndPosition, aheadChunks: 8, token, allowRangeRescue: true).ConfigureAwait(false);
                                         Debug.WriteLine($"[BassAudioEngine] Requested near-end cache position: {nearEndPosition}/{totalBytes}");

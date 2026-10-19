@@ -1,5 +1,5 @@
 using System;
-using System.Diagnostics;
+using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -15,54 +15,29 @@ namespace YTPlayer
     public partial class MainForm
     {
         private const string ListenTogetherViewSource = "listen_together";
-        private const double ListenTogetherSeekThresholdSeconds = 2.0;
-        private const double ListenTogetherPausedSeekThresholdSeconds = 0.75;
-
-        private readonly SemaphoreSlim _listenTogetherApplyLock = new SemaphoreSlim(1, 1);
+        private readonly SemaphoreSlim _listenTogetherOperationLock = new SemaphoreSlim(1, 1);
         private ToolStripMenuItem? _listenTogetherMenuItem;
         private ListenTogetherDialog? _listenTogetherDialog;
-        private ListenTogetherHttpServer? _listenTogetherServer;
-        private ListenTogetherClient? _listenTogetherClient;
-        private readonly string _listenTogetherSessionId = Guid.NewGuid().ToString("N");
-        private string _listenTogetherLastSnapshotSongId = string.Empty;
-        private long _listenTogetherSnapshotSequence;
+        private ListenTogetherSession? _listenTogetherSession;
+        private CancellationTokenSource? _listenTogetherCancellation;
+        private Task? _listenTogetherLoop;
+        private bool _listenTogetherBusy;
+        private bool _listenTogetherClosing;
+        private bool _listenTogetherCloseReady;
+        private long _listenTogetherSeekVersion;
+        private long _listenTogetherLocalControlVersion;
+        private CancellationTokenSource? _listenTogetherApplyCancellation;
+        private string _listenTogetherStatus = "未加入一起听房间";
 
         private void InitializeListenTogetherFeature()
         {
-            AddListenTogetherMenuEntry();
-        }
-
-        private void AddListenTogetherMenuEntry()
-        {
-            if (fileMenuItem == null || _listenTogetherMenuItem != null)
-            {
-                return;
-            }
-
-            _listenTogetherMenuItem = new ToolStripMenuItem
-            {
-                Text = "一起听(&T)",
-                Name = "listenTogetherMenuItem"
-            };
+            if (fileMenuItem == null || _listenTogetherMenuItem != null) return;
+            _listenTogetherMenuItem = new ToolStripMenuItem { Text = "一起听(&T)", Name = "listenTogetherMenuItem" };
             _listenTogetherMenuItem.Click += (_, _) => OpenListenTogetherDialog();
-
-            int insertIndex = _listenRecognitionMenuItem != null
-                ? fileMenuItem.DropDownItems.IndexOf(_listenRecognitionMenuItem)
-                : -1;
-            if (insertIndex >= 0)
-            {
-                insertIndex++;
-            }
-            else
-            {
-                insertIndex = fileMenuItem.DropDownItems.IndexOf(downloadManagerMenuItem);
-                if (insertIndex < 0)
-                {
-                    insertIndex = Math.Max(0, fileMenuItem.DropDownItems.IndexOf(refreshMenuItem));
-                }
-            }
-
-            fileMenuItem.DropDownItems.Insert(Math.Max(0, insertIndex), _listenTogetherMenuItem);
+            int index = _listenRecognitionMenuItem == null ? -1 : fileMenuItem.DropDownItems.IndexOf(_listenRecognitionMenuItem);
+            if (index >= 0) index++;
+            else index = Math.Max(0, fileMenuItem.DropDownItems.IndexOf(downloadManagerMenuItem));
+            fileMenuItem.DropDownItems.Insert(index, _listenTogetherMenuItem);
         }
 
         private void OpenListenTogetherDialog()
@@ -72,320 +47,354 @@ namespace YTPlayer
                 _listenTogetherDialog.Activate();
                 return;
             }
-
             var dialog = new ListenTogetherDialog();
-            dialog.StartHostingRequested += async (_, _) => await StartListenTogetherHostAsync().ConfigureAwait(true);
-            dialog.CopyUrlRequested += async (_, _) => await CopyListenTogetherUrlAsync().ConfigureAwait(true);
-            dialog.StopHostingRequested += (_, _) => StopListenTogetherHost(updateStatus: true);
-            dialog.ConnectRequested += async (_, url) => await ConnectListenTogetherAsync(url).ConfigureAwait(true);
-            dialog.DisconnectRequested += (_, _) => DisconnectListenTogetherClient(updateStatus: true);
+            dialog.StartHostingRequested += async (_, _) => await StartOfficialListenTogetherAsync(null);
+            dialog.ConnectRequested += async (_, url) => await StartOfficialListenTogetherAsync(url);
+            dialog.CopyUrlRequested += (_, _) => CopyListenTogetherUrl();
+            dialog.StopHostingRequested += async (_, _) => await StopOfficialListenTogetherAsync();
+            dialog.DisconnectRequested += async (_, _) => await StopOfficialListenTogetherAsync();
             dialog.FormClosed += (_, _) => _listenTogetherDialog = null;
             _listenTogetherDialog = dialog;
-
-            dialog.SetHostUrl(_listenTogetherServer?.InviteUrl);
-            dialog.SetConnected(_listenTogetherClient?.IsConnected == true);
-            dialog.SetStatus(ResolveListenTogetherStatusText());
+            RefreshListenTogetherDialog();
             dialog.Show(this);
         }
 
-        private async Task StartListenTogetherHostAsync()
+        private void RefreshListenTogetherDialog()
         {
-            try
-            {
-                DisconnectListenTogetherClient(updateStatus: false);
-
-                _listenTogetherServer?.Dispose();
-                _listenTogetherServer = new ListenTogetherHttpServer(CreateListenTogetherSnapshot);
-                await _listenTogetherServer.StartAsync().ConfigureAwait(true);
-
-                _listenTogetherDialog?.SetHostUrl(_listenTogetherServer.InviteUrl);
-                string status = "本机一起听已开始。复制 URL 发给对方即可同步。";
-                _listenTogetherDialog?.SetStatus(status);
-                UpdateStatusBar(status);
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine("[ListenTogether] Start host failed: " + ex.Message);
-                string message = "启动一起听失败：" + ex.Message;
-                _listenTogetherDialog?.SetStatus(message);
-                MessageBox.Show(this, message, "一起听", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
+            var session = _listenTogetherSession;
+            if (sequentialMenuItem != null) sequentialMenuItem.Enabled = session?.IsActive != true;
+            _listenTogetherDialog?.SetSession(session?.IsActive == true, session?.IsHost == true, _listenTogetherBusy,
+                session?.IsReady == true ? session.InviteUrl(_audioEngine?.CurrentSong?.Id ?? "") : "");
+            _listenTogetherDialog?.SetStatus(_listenTogetherStatus);
+            RefreshListenTogetherPlaybackDisplay();
         }
 
-        private async Task CopyListenTogetherUrlAsync()
+        private void RefreshListenTogetherPlaybackDisplay()
         {
-            if (_listenTogetherServer == null)
+            if (_listenTogetherDialog == null || _listenTogetherDialog.IsDisposed) return;
+            if (_listenTogetherSession?.IsReady != true || _audioEngine == null || _listenTogetherCancellation?.IsCancellationRequested != false)
             {
-                await StartListenTogetherHostAsync().ConfigureAwait(true);
-            }
-
-            string? url = _listenTogetherServer?.InviteUrl;
-            if (string.IsNullOrWhiteSpace(url))
-            {
+                _listenTogetherDialog.SetPlaybackSummary(null);
                 return;
             }
+            var song = _audioEngine.CurrentSong;
+            var state = _audioEngine.GetPlaybackState();
+            string stateText = GetPlaybackStatusText(state);
+            var timeline = NormalizePlaybackTimelineForUi(_audioEngine.GetPosition(), _audioEngine.GetDuration());
+            _listenTogetherDialog.SetPlaybackSummary(
+                $"当前歌曲：{song?.Name ?? "等待歌曲"} - {song?.Artist ?? ""}\r\n" +
+                $"播放状态：{stateText}；进度：{FormatTimeFromSeconds(timeline.Position)} / {FormatTimeFromSeconds(timeline.Duration)}\r\n" +
+                $"播放模式：{_config.PlaybackOrder}；队列：{_playbackQueue.CurrentQueue.Count} 首");
+        }
 
+        private void NotifyListenTogetherLocalControl()
+        {
+            Interlocked.Increment(ref _listenTogetherLocalControlVersion);
+            try { Volatile.Read(ref _listenTogetherApplyCancellation)?.Cancel(); }
+            catch (ObjectDisposedException) { }
+        }
+
+        private void SetListenTogetherStatus(string message, bool announce = false)
+        {
+            if (_isFormClosing || IsDisposed) return;
+            bool changed = _listenTogetherStatus != message;
+            _listenTogetherStatus = message;
+            RefreshListenTogetherDialog();
+            if (changed)
+            {
+                if (announce) AnnounceStatusBarMessage(message);
+                else UpdateStatusBar(message);
+            }
+        }
+
+        private async Task StartOfficialListenTogetherAsync(string? inviteText)
+        {
+            if (_listenTogetherBusy || _listenTogetherSession?.IsActive == true || _listenTogetherClosing) return;
+            await _listenTogetherOperationLock.WaitAsync();
+            _listenTogetherBusy = true;
+            _listenTogetherCancellation?.Dispose();
+            _listenTogetherCancellation = new CancellationTokenSource();
+            var token = _listenTogetherCancellation.Token;
             try
             {
-                Clipboard.SetText(url);
-                string status = "已复制本机一起听 URL。";
-                _listenTogetherDialog?.SetStatus(status);
-                UpdateStatusBar(status);
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(this, "复制 URL 失败：" + ex.Message, "一起听", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
-
-        private void StopListenTogetherHost(bool updateStatus)
-        {
-            _listenTogetherServer?.Dispose();
-            _listenTogetherServer = null;
-            _listenTogetherDialog?.SetHostUrl(null);
-
-            if (updateStatus)
-            {
-                string status = "本机一起听已停止。";
-                _listenTogetherDialog?.SetStatus(status);
-                UpdateStatusBar(status);
-            }
-        }
-
-        private async Task ConnectListenTogetherAsync(string url)
-        {
-            if (string.IsNullOrWhiteSpace(url))
-            {
-                MessageBox.Show(this, "请先粘贴对方分享的一起听 URL。", "一起听", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
-
-            try
-            {
-                StopListenTogetherHost(updateStatus: false);
-
-                _listenTogetherClient?.Dispose();
-                _listenTogetherClient = new ListenTogetherClient();
-                _listenTogetherClient.SnapshotReceived += ListenTogetherClientOnSnapshotReceived;
-                _listenTogetherClient.StatusChanged += ListenTogetherClientOnStatusChanged;
-                _listenTogetherClient.Connect(url);
-
-                _listenTogetherDialog?.SetConnected(true);
-                string status = "正在连接一起听...";
-                _listenTogetherDialog?.SetStatus(status);
-                UpdateStatusBar(status);
-                await Task.CompletedTask.ConfigureAwait(true);
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine("[ListenTogether] Connect failed: " + ex.Message);
-                MessageBox.Show(this, "连接一起听失败：" + ex.Message, "一起听", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                DisconnectListenTogetherClient(updateStatus: false);
-            }
-        }
-
-        private void DisconnectListenTogetherClient(bool updateStatus)
-        {
-            if (_listenTogetherClient != null)
-            {
-                _listenTogetherClient.SnapshotReceived -= ListenTogetherClientOnSnapshotReceived;
-                _listenTogetherClient.StatusChanged -= ListenTogetherClientOnStatusChanged;
-                _listenTogetherClient.Dispose();
-                _listenTogetherClient = null;
-            }
-
-            _listenTogetherDialog?.SetConnected(false);
-            if (updateStatus)
-            {
-                string status = "已断开一起听连接。";
-                _listenTogetherDialog?.SetStatus(status);
-                UpdateStatusBar(status);
-            }
-        }
-
-        private string ResolveListenTogetherStatusText()
-        {
-            if (_listenTogetherServer != null)
-            {
-                return "本机一起听已开始。";
-            }
-
-            if (_listenTogetherClient?.IsConnected == true)
-            {
-                return "已连接一起听。";
-            }
-
-            return "未开始";
-        }
-
-        private ListenTogetherPlaybackSnapshot CreateListenTogetherSnapshot()
-        {
-            SongInfo? song = _audioEngine?.CurrentSong;
-            string songId = song?.Id ?? string.Empty;
-            if (!string.Equals(songId, _listenTogetherLastSnapshotSongId, StringComparison.Ordinal))
-            {
-                _listenTogetherLastSnapshotSongId = songId;
-                _listenTogetherSnapshotSequence++;
-            }
-
-            PlaybackState state = PlaybackState.Stopped;
-            double position = 0;
-            double duration = 0;
-            try
-            {
-                if (_audioEngine != null)
+                SetListenTogetherStatus(inviteText == null ? "正在创建一起听房间…" : "正在解析一起听邀请链接…", true);
+                var invitation = inviteText == null ? null : await ListenTogetherInvitation.ResolveAsync(inviteText, token);
+                _listenTogetherSession = new ListenTogetherSession(_apiClient.CreateListenTogetherApi(),
+                    GetCurrentUserId().ToString(CultureInfo.InvariantCulture));
+                SetListenTogetherStatus(invitation == null ? "正在创建一起听房间…" : "正在加入一起听房间…", true);
+                await _listenTogetherSession.StartAsync(invitation, CaptureListenTogetherState, ApplyOfficialListenTogetherStateAsync, token);
+                token.ThrowIfCancellationRequested();
+                // ORDER_LOOP is the room's sequential mode; the local stop-at-end mode
+                // cannot be represented by that protocol value.
+                if (_audioEngine?.PlayMode == PlayMode.Sequential)
                 {
-                    state = _audioEngine.GetPlaybackState();
-                    position = _audioEngine.GetPosition();
-                    duration = _audioEngine.GetDuration();
+                    _audioEngine.PlayMode = PlayMode.Loop;
+                    _config.PlaybackOrder = "列表循环";
+                    UpdatePlaybackOrderMenuCheck();
+                    PersistPlaybackState();
+                    RefreshNextSongPreload();
                 }
+                SetListenTogetherStatus(_listenTogetherSession.StatusText, true);
+                _listenTogetherLoop = RunListenTogetherLoopAsync(_listenTogetherSession, token);
             }
             catch (Exception ex)
             {
-                Debug.WriteLine("[ListenTogether] Snapshot state failed: " + ex.Message);
-            }
-
-            if (duration <= 0 && song?.Duration > 0)
-            {
-                duration = song.Duration;
-            }
-
-            return new ListenTogetherPlaybackSnapshot
-            {
-                SessionId = _listenTogetherSessionId,
-                Sequence = _listenTogetherSnapshotSequence,
-                SongId = songId,
-                SongName = song?.Name ?? string.Empty,
-                Artist = song?.Artist ?? string.Empty,
-                Album = song?.Album ?? string.Empty,
-                DurationSeconds = duration > 0 ? (int)Math.Round(duration) : Math.Max(0, song?.Duration ?? 0),
-                PositionSeconds = Math.Max(0, position),
-                IsPlaying = state == PlaybackState.Playing || state == PlaybackState.Buffering,
-                UpdatedUnixMilliseconds = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-            };
-        }
-
-        private void ListenTogetherClientOnStatusChanged(object? sender, string status)
-        {
-            if (IsDisposed)
-            {
-                return;
-            }
-
-            SafeInvoke(() =>
-            {
-                _listenTogetherDialog?.SetStatus(status);
-                UpdateStatusBar(status);
-            });
-        }
-
-        private void ListenTogetherClientOnSnapshotReceived(object? sender, ListenTogetherPlaybackSnapshot snapshot)
-        {
-            if (IsDisposed || snapshot == null || string.Equals(snapshot.SessionId, _listenTogetherSessionId, StringComparison.Ordinal))
-            {
-                return;
-            }
-
-            SafeInvoke(() => ApplyListenTogetherRemoteStateAsync(snapshot).SafeFireAndForget("listen together remote state"));
-        }
-
-        private async Task ApplyListenTogetherRemoteStateAsync(ListenTogetherPlaybackSnapshot snapshot)
-        {
-            if (!snapshot.HasSong || _audioEngine == null || _apiClient == null)
-            {
-                return;
-            }
-
-            if (!await _listenTogetherApplyLock.WaitAsync(0).ConfigureAwait(true))
-            {
-                return;
-            }
-
-            try
-            {
-                string currentSongId = _audioEngine.CurrentSong?.Id ?? string.Empty;
-                double expectedPosition = snapshot.EstimatePositionSeconds();
-
-                if (!string.Equals(currentSongId, snapshot.SongId, StringComparison.Ordinal))
+                bool cancelled = token.IsCancellationRequested;
+                string message = cancelled ? "一起听操作已取消。" : "一起听连接失败：" + ex.Message;
+                if (_listenTogetherSession?.IsActive == true)
                 {
-                    SongInfo? remoteSong = await ResolveListenTogetherSongAsync(snapshot).ConfigureAwait(true);
-                    if (remoteSong == null)
+                    try
                     {
-                        return;
+                        using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                        await _listenTogetherSession.LeaveAsync(cleanup.Token);
                     }
-
-                    remoteSong.ViewSource = ListenTogetherViewSource;
-                    await PlaySong(remoteSong).ConfigureAwait(true);
-                    if (expectedPosition > 1)
-                    {
-                        await _audioEngine.SetPositionWithCacheWaitAsync(expectedPosition, 15000, CancellationToken.None, waitTargetOnly: true).ConfigureAwait(true);
-                    }
+                    catch { message += " 房间退出未确认，请在网易云客户端检查。"; }
                 }
-                else
-                {
-                    double localPosition = _audioEngine.GetPosition();
-                    double drift = expectedPosition - localPosition;
-                    double threshold = snapshot.IsPlaying ? ListenTogetherSeekThresholdSeconds : ListenTogetherPausedSeekThresholdSeconds;
-                    if (Math.Abs(drift) >= threshold)
-                    {
-                        await _audioEngine.SetPositionWithCacheWaitAsync(expectedPosition, 12000, CancellationToken.None, waitTargetOnly: true).ConfigureAwait(true);
-                    }
-                }
-
-                ApplyListenTogetherPlaybackState(snapshot);
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine("[ListenTogether] Apply remote state failed: " + ex.Message);
-                UpdateStatusBar("一起听同步失败：" + ex.Message);
+                if (_listenTogetherSession?.IsActive != true) _listenTogetherSession = null;
+                _listenTogetherCancellation.Cancel();
+                _listenTogetherCancellation.Dispose();
+                _listenTogetherCancellation = null;
+                SetListenTogetherStatus(message, cancelled || _listenTogetherClosing);
+                if (!cancelled && !_listenTogetherClosing)
+                    MessageBox.Show(this, message, "一起听", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally
             {
-                _listenTogetherApplyLock.Release();
+                _listenTogetherBusy = false;
+                RefreshListenTogetherDialog();
+                _listenTogetherOperationLock.Release();
             }
         }
 
-        private async Task<SongInfo?> ResolveListenTogetherSongAsync(ListenTogetherPlaybackSnapshot snapshot)
+        private async Task RunListenTogetherLoopAsync(ListenTogetherSession session, CancellationToken token)
         {
+            int failures = 0;
+            while (!token.IsCancellationRequested)
+            {
+                try
+                {
+                    await Task.Delay(Math.Min(15000, 2000 * (1 + failures)), token);
+                    if (GetCurrentUserId().ToString(CultureInfo.InvariantCulture) != session.UserId)
+                        throw new ListenTogetherApiException(301, "账号已退出或切换，一起听同步已停止");
+                    await session.TickAsync(CaptureListenTogetherState, ApplyOfficialListenTogetherStateAsync, token);
+                    failures = 0;
+                    SetListenTogetherStatus(session.StatusText);
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested) { break; }
+                catch (Exception ex)
+                {
+                    if (token.IsCancellationRequested) break;
+                    if (ex is ListenTogetherRoomClosedException || ex is ListenTogetherApiException { Code: 301 })
+                    {
+                        _listenTogetherCancellation?.Cancel();
+                        _listenTogetherSession = null;
+                        SetListenTogetherStatus(ex.Message, true);
+                        break;
+                    }
+                    failures = Math.Min(failures + 1, 6);
+                    SetListenTogetherStatus("一起听同步暂时失败，将自动重试：" + ex.Message, failures == 1);
+                }
+            }
+        }
+
+        private async Task StopOfficialListenTogetherAsync()
+        {
+            _listenTogetherCancellation?.Cancel();
+            await _listenTogetherOperationLock.WaitAsync();
+            _listenTogetherBusy = true;
+            RefreshListenTogetherDialog();
             try
             {
-                SongInfo? detail = (await _apiClient.GetSongDetailAsync(new[] { snapshot.SongId }).ConfigureAwait(false))?.FirstOrDefault();
-                if (detail != null)
+                if (_listenTogetherLoop != null) await _listenTogetherLoop;
+                _listenTogetherLoop = null;
+                if (_listenTogetherSession?.IsActive == true)
                 {
-                    return detail;
+                    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                    await _listenTogetherSession.LeaveAsync(timeout.Token);
                 }
+                _listenTogetherSession = null;
+                SetListenTogetherStatus("已退出一起听房间。", true);
             }
             catch (Exception ex)
             {
-                Debug.WriteLine("[ListenTogether] Resolve song detail failed: " + ex.Message);
+                // Retain the Exit button so a failed end request can be retried.
+                SetListenTogetherStatus("本地同步已停止，一起听房间退出未确认，请重试退出：" + ex.Message, true);
             }
-
-            return new SongInfo
+            finally
             {
-                Id = snapshot.SongId,
-                Name = string.IsNullOrWhiteSpace(snapshot.SongName) ? "一起听歌曲" : snapshot.SongName,
-                Artist = snapshot.Artist,
-                Album = snapshot.Album,
-                Duration = snapshot.DurationSeconds
+                _listenTogetherCancellation?.Dispose();
+                _listenTogetherCancellation = null;
+                _listenTogetherBusy = false;
+                RefreshListenTogetherDialog();
+                _listenTogetherOperationLock.Release();
+            }
+        }
+
+        private void CopyListenTogetherUrl()
+        {
+            if (_listenTogetherSession?.IsReady != true) return;
+            try
+            {
+                Clipboard.SetText(_listenTogetherSession.InviteUrl(_audioEngine?.CurrentSong?.Id ?? ""));
+                SetListenTogetherStatus("已复制一起听邀请链接。", true);
+            }
+            catch (Exception ex) { SetListenTogetherStatus("复制邀请链接失败：" + ex.Message, true); }
+        }
+
+        private ListenTogetherLocalState CaptureListenTogetherState()
+        {
+            var song = _audioEngine?.CurrentSong;
+            var state = _audioEngine?.GetPlaybackState() ?? PlaybackState.Stopped;
+            return new ListenTogetherLocalState
+            {
+                Playback = new ListenTogetherPlaybackSnapshot
+                {
+                    SongId = song?.Id ?? "", SongName = song?.Name ?? "", Artist = song?.Artist ?? "", Album = song?.Album ?? "",
+                    DurationSeconds = song?.Duration ?? 0, PositionSeconds = Math.Max(0, _audioEngine?.GetPosition() ?? 0),
+                    IsPlaying = state == PlaybackState.Playing || state == PlaybackState.Buffering,
+                    IsBuffering = state == PlaybackState.Buffering,
+                    UpdatedUnixMilliseconds = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                },
+                Queue = _playbackQueue.CurrentQueue.Select(s => s.Id).ToArray(),
+                SeekVersion = Interlocked.Read(ref _listenTogetherSeekVersion),
+                IsChangingPlayback = IsSwitchingTrack || _isPlaybackLoading || _isUserDragging ||
+                    state == PlaybackState.Loading || Volatile.Read(ref _playPauseCommandInFlight) != 0 ||
+                    _seekManager?.IsSeeking == true || _seekManager?.IsSeekingLong == true || _seekManager?.HasPendingDeferredSeek == true,
+                PlayMode = _audioEngine?.PlayMode switch { PlayMode.Random => "RANDOM", PlayMode.LoopOne => "SINGLE_LOOP", _ => "ORDER_LOOP" }
             };
         }
 
-        private void ApplyListenTogetherPlaybackState(ListenTogetherPlaybackSnapshot snapshot)
+        private async Task ApplyOfficialListenTogetherStateAsync(ListenTogetherRemoteState update, CancellationToken token)
         {
-            PlaybackState state = _audioEngine?.GetPlaybackState() ?? PlaybackState.Stopped;
-            if (snapshot.IsPlaying)
+            long localVersion = Interlocked.Read(ref _listenTogetherLocalControlVersion);
+            using var applying = CancellationTokenSource.CreateLinkedTokenSource(token);
+            _listenTogetherApplyCancellation = applying;
+            try { await ApplyListenTogetherStateCoreAsync(update, localVersion, applying.Token); }
+            catch (OperationCanceledException) when (!token.IsCancellationRequested &&
+                localVersion != Interlocked.Read(ref _listenTogetherLocalControlVersion))
+            { throw new ListenTogetherLocalChangeException(); }
+            finally { _listenTogetherApplyCancellation = null; }
+        }
+
+        private async Task ApplyListenTogetherStateCoreAsync(ListenTogetherRemoteState update, long localVersion, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            if (_audioEngine == null || _isApplicationExitRequested) return;
+            void EnsureCurrent()
             {
-                if (state == PlaybackState.Paused || state == PlaybackState.Stopped || state == PlaybackState.Idle)
+                token.ThrowIfCancellationRequested();
+                if (_isApplicationExitRequested || IsDisposed) throw new OperationCanceledException(token);
+                if (localVersion != Interlocked.Read(ref _listenTogetherLocalControlVersion) || CaptureListenTogetherState().IsChangingPlayback)
+                    throw new ListenTogetherLocalChangeException();
+            }
+            EnsureCurrent();
+            if (update.Playback != null)
+                await ListenTogetherPlaybackApplier.ApplyAsync(update.Playback,
+                    new ListenTogetherPlaybackTarget(this, EnsureCurrent), EnsureCurrent, token);
+            EnsureCurrent();
+            string targetId = update.Playback?.SongId ?? _audioEngine.CurrentSong?.Id ?? "";
+            if (update.Queue != null)
+            {
+                var known = _playbackQueue.CurrentQueue.GroupBy(s => s.Id).ToDictionary(g => g.Key, g => g.First());
+                if (_audioEngine.CurrentSong is SongInfo current) known[current.Id] = current;
+                var songs = update.Queue.Select(id => known.TryGetValue(id, out var song) ? song :
+                    new SongInfo { Id = id, Name = "一起听歌曲", ViewSource = ListenTogetherViewSource }).ToList();
+                int anchor = songs.FindIndex(s => s.Id == targetId);
+                _playbackQueue.TrySyncQueueWithView(songs, ListenTogetherViewSource, Math.Max(0, anchor));
+            }
+            if (_audioEngine.CurrentSong is SongInfo selected)
+            {
+                _playbackQueue.TryUpdateSongDetail(selected);
+                if (update.Playback != null || update.Queue != null)
                 {
-                    _audioEngine?.Resume();
+                    var queue = _playbackQueue.CaptureSnapshot();
+                    if (queue.QueueSource != ListenTogetherViewSource || queue.QueueIndex < 0 || queue.QueueIndex >= queue.Queue.Count ||
+                        queue.Queue[queue.QueueIndex].Id != selected.Id)
+                        _playbackQueue.ManualSelect(selected, _playbackQueue.CurrentQueue, ListenTogetherViewSource);
                 }
             }
-            else
+            if (update.PlayMode != null)
             {
-                if (state == PlaybackState.Playing || state == PlaybackState.Buffering)
-                {
-                    _audioEngine?.Pause();
-                }
+                _audioEngine.PlayMode = update.PlayMode switch { "RANDOM" => PlayMode.Random, "SINGLE_LOOP" => PlayMode.LoopOne, _ => PlayMode.Loop };
+                _config.PlaybackOrder = update.PlayMode switch { "RANDOM" => "随机播放", "SINGLE_LOOP" => "单曲循环", _ => "列表循环" };
+                UpdatePlaybackOrderMenuCheck();
+            }
+            if (update.Queue != null || update.PlayMode != null) RefreshNextSongPreload();
+            PersistPlaybackState();
+            RefreshListenTogetherPlaybackDisplay();
+        }
+
+        private void RefreshListenTogetherPlaybackUi(bool timelineChanged)
+        {
+            if (_audioEngine == null || _isApplicationExitRequested) return;
+            var song = _audioEngine.CurrentSong;
+            var state = _audioEngine.GetPlaybackState();
+            var timeline = NormalizePlaybackTimelineForUi(_audioEngine.GetPosition(), _audioEngine.GetDuration());
+            _positionCoordinator?.OnPositionSynchronized(song?.Id, timeline.Position);
+            if (timelineChanged)
+            {
+                CancelPendingLyricSpeech(resetSuppression: false);
+                BeginLyricSeekSuppression(timeline.Position);
+                _lastLyricPlaybackPosition = TimeSpan.FromSeconds(timeline.Position);
+            }
+            lock (_stateCacheLock)
+            {
+                _cachedPosition = timeline.Position;
+                _cachedDuration = timeline.Duration;
+                _cachedPlaybackState = state;
+            }
+            UpdateUIForPlaybackState(state);
+            currentSongLabel.Text = song == null ? "未播放" : (song.IsTrial ? song.Name + "(试听版)" : song.Name) + " - " + song.Artist;
+            UpdatePlayButtonDescription(song);
+            UpdateTrayIconTooltip(song);
+            UpdateProgressTrackBarDisplay(timeline.Position, timeline.Duration, announceWhenFocused: true);
+            _lyricsDisplayManager?.UpdatePosition(TimeSpan.FromSeconds(timeline.Position));
+            if (_currentLyrics != null)
+                lyricsLabel.Text = LyricsManager.GetCurrentLyric(_currentLyrics, TimeSpan.FromSeconds(timeline.Position))?.Text ?? "";
+            RefreshListenTogetherPlaybackDisplay();
+        }
+
+        private sealed class ListenTogetherPlaybackTarget : IListenTogetherPlaybackTarget
+        {
+            private readonly MainForm _owner;
+            private readonly Action _ensureCurrent;
+            public ListenTogetherPlaybackTarget(MainForm owner, Action ensureCurrent) { _owner = owner; _ensureCurrent = ensureCurrent; }
+            public string SongId => _owner._audioEngine.CurrentSong?.Id ?? "";
+            public PlaybackState State => _owner._audioEngine.GetPlaybackState();
+            public double Position => _owner._audioEngine.GetPosition();
+            public double Duration => _owner._audioEngine.GetDuration();
+            public async Task LoadAsync(string songId, CancellationToken token)
+            {
+                var detail = (await _owner._apiClient.GetSongDetailAsync(new[] { songId }, token)).FirstOrDefault()
+                    ?? throw new InvalidOperationException("无法获取房间正在播放的歌曲。");
+                _ensureCurrent();
+                detail.ViewSource = ListenTogetherViewSource;
+                await _owner.PlaySongDirectWithCancellation(detail, parentToken: token);
+            }
+            public void Pause() => _owner._audioEngine.Pause();
+            public void Resume() => _owner._audioEngine.Resume();
+            public Task<bool> SeekAsync(double position, CancellationToken token) =>
+                _owner._audioEngine.SetPositionWithCacheWaitAsync(position, 12000, token, waitTargetOnly: true);
+            public void RefreshPresentation(bool timelineChanged) => _owner.RefreshListenTogetherPlaybackUi(timelineChanged);
+        }
+
+        private bool DeferCloseForListenTogether(FormClosingEventArgs e)
+        {
+            if (_listenTogetherCloseReady || (!_listenTogetherClosing && _listenTogetherSession == null && !_listenTogetherBusy)) return false;
+            e.Cancel = true;
+            if (_listenTogetherClosing) return true;
+            _listenTogetherClosing = true;
+            FinishListenTogetherBeforeCloseAsync().SafeFireAndForget("close listen together");
+            return true;
+        }
+
+        private async Task FinishListenTogetherBeforeCloseAsync()
+        {
+            try { await StopOfficialListenTogetherAsync(); }
+            finally
+            {
+                _listenTogetherCloseReady = true;
+                if (!IsDisposed) BeginInvoke(new Action(Close));
             }
         }
     }

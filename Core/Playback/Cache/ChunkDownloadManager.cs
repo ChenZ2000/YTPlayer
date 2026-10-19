@@ -75,9 +75,21 @@ namespace YTPlayer.Core.Playback.Cache
                         continue;
                     }
 
-                    byte[] data = await ReadChunkBodyAsync(response.Content, chunkIndex, token).ConfigureAwait(false);
+                    // Never cache the start of a whole-file 200 response at a requested
+                    // middle offset. Incorrect ranges silently corrupt decoder input.
+                    var range = response.Content.Headers.ContentRange;
+                    long expectedLength = end - start + 1;
+                    if (response.StatusCode != System.Net.HttpStatusCode.PartialContent ||
+                        range?.Unit != "bytes" || range.From != start || range.To != end || range.Length != _totalSize ||
+                        (response.Content.Headers.ContentLength is long length && length != expectedLength))
+                    {
+                        DebugLogger.Log(DebugLogger.LogLevel.Warning, "ChunkDownload", "Server did not return the requested byte range; rejecting chunk");
+                        return null;
+                    }
 
-                    if (data.Length == 0)
+                    byte[] data = await ReadChunkBodyAsync(response.Content, chunkIndex, (int)expectedLength, token).ConfigureAwait(false);
+
+                    if (data.Length != expectedLength)
                     {
                         DebugLogger.Log(
                             DebugLogger.LogLevel.Warning,
@@ -104,7 +116,7 @@ namespace YTPlayer.Core.Playback.Cache
             return null;
         }
 
-        private async Task<byte[]> ReadChunkBodyAsync(HttpContent content, int chunkIndex, CancellationToken token)
+        private async Task<byte[]> ReadChunkBodyAsync(HttpContent content, int chunkIndex, int expectedLength, CancellationToken token)
         {
             using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(ChunkBodyReadTimeoutMs));
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token, timeoutCts.Token);
@@ -117,7 +129,9 @@ namespace YTPlayer.Core.Playback.Cache
 
                 while (true)
                 {
-                    int read = await stream.ReadAsync(buffer.AsMemory(0, buffer.Length), linkedCts.Token).ConfigureAwait(false);
+                    int remaining = expectedLength + 1 - (int)memory.Length;
+                    if (remaining <= 0) break;
+                    int read = await stream.ReadAsync(buffer.AsMemory(0, Math.Min(buffer.Length, remaining)), linkedCts.Token).ConfigureAwait(false);
                     if (read <= 0)
                     {
                         break;
@@ -126,7 +140,7 @@ namespace YTPlayer.Core.Playback.Cache
                     memory.Write(buffer, 0, read);
 
                     // Prevent runaway payloads when a server ignores range semantics.
-                    if (memory.Length > _chunkSize * 2L)
+                    if (memory.Length > expectedLength)
                     {
                         break;
                     }

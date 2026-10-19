@@ -8,6 +8,10 @@
 ## Get latest from https://github.com/github/gitignore/blob/main/Dotnet.gitignore
 
 # User-specific files and sensitive data
+/DebugingProfiles/
+/Tests/**/__pycache__/
+/Tests/**/test-data-*/
+/Tests/**/live-data/
 account.json
 account.json.bak
 account.json.tmp

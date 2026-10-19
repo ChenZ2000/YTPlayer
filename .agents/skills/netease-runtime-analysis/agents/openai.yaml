@@ -1,0 +1,4 @@
+interface:
+  display_name: "网易云 API 动态分析"
+  short_description: "网易云 Android 运行时协议分析、双账号验证与 .NET 播放器回归工作流"
+  default_prompt: "使用 $netease-runtime-analysis 对照 Android 运行时证据定位网易云 API 问题，修复客户端并验证结果。"

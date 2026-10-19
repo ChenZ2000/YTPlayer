@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -91,7 +92,25 @@ namespace YTPlayer.Core.Playback
         public string? ContentOverride { get; set; }
         public DateTimeOffset StartedAt { get; set; }
         public double PlayedSeconds { get; set; }
+        public string AccountKey { get; set; } = string.Empty;
         internal bool HasCompleted { get; set; }
+        internal bool CompleteQueued { get; set; }
+        private double _lastPosition;
+        private long _lastTick;
+        private bool _wasPlaying;
+
+        // Count audible progress, never the seek target or wall time spent paused.
+        internal void Observe(double position, bool playing, long timestamp)
+        {
+            if (!double.IsFinite(position) || position < 0) { _wasPlaying = false; return; }
+            double elapsed = _lastTick == 0 ? 0 : (timestamp - _lastTick) / (double)Stopwatch.Frequency;
+            double advance = position - _lastPosition;
+            if (_wasPlaying && playing && elapsed > 0 && elapsed < 3 && advance >= 0 && advance <= elapsed + 0.75)
+                PlayedSeconds += Math.Min(advance, elapsed);
+            _lastPosition = position;
+            _lastTick = timestamp;
+            _wasPlaying = playing;
+        }
     }
 
     internal enum PlaybackReportOperationKind
@@ -102,22 +121,25 @@ namespace YTPlayer.Core.Playback
 
     internal sealed class PlaybackReportOperation
     {
-        public PlaybackReportOperation(PlaybackReportOperationKind kind, PlaybackReportContext context, PlaybackEndReason endReason = PlaybackEndReason.Completed)
+        public PlaybackReportOperation(PlaybackReportOperationKind kind, PlaybackReportContext context, PlaybackEndReason endReason = PlaybackEndReason.Completed, string accountKey = "")
         {
             Kind = kind;
             Context = context;
             EndReason = endReason;
+            AccountKey = accountKey;
         }
 
         public PlaybackReportOperationKind Kind { get; }
         public PlaybackReportContext Context { get; }
         public PlaybackEndReason EndReason { get; }
+        public string AccountKey { get; }
     }
 
     internal sealed class PlaybackReportOperationSnapshot
     {
         public PlaybackReportOperationKind Kind { get; set; }
         public PlaybackEndReason EndReason { get; set; }
+        public string AccountKey { get; set; } = string.Empty;
         public PlaybackReportContext? Context { get; set; }
 
         public static PlaybackReportOperationSnapshot FromOperation(PlaybackReportOperation op)
@@ -126,6 +148,7 @@ namespace YTPlayer.Core.Playback
             {
                 Kind = op.Kind,
                 EndReason = op.EndReason,
+                AccountKey = op.AccountKey,
                 Context = op.Context
             };
         }
@@ -137,14 +160,12 @@ namespace YTPlayer.Core.Playback
                 return null;
             }
 
-            return new PlaybackReportOperation(Kind, Context, EndReason);
+            return new PlaybackReportOperation(Kind, Context, EndReason, AccountKey);
         }
     }
 
     public sealed class PlaybackReportingService : IDisposable
     {
-        private const int MinimumEndReportSeconds = 30;           // 最低上报时间
-        private const int MaxEndReportSeconds = 240;              // 上报时间上限
 
         private readonly NeteaseApiClient _apiClient;
         private readonly BlockingCollection<PlaybackReportOperation> _queue;
@@ -155,12 +176,13 @@ namespace YTPlayer.Core.Playback
         private readonly object _persistenceLock = new object();
         private const int MaxPersistedOperations = 50;
 
-        public PlaybackReportingService(NeteaseApiClient apiClient)
+        public PlaybackReportingService(NeteaseApiClient apiClient, bool enabled = true)
         {
             _apiClient = apiClient ?? throw new ArgumentNullException(nameof(apiClient));
-            _queue = new BlockingCollection<PlaybackReportOperation>(new ConcurrentQueue<PlaybackReportOperation>());
+            _queue = new BlockingCollection<PlaybackReportOperation>(new ConcurrentQueue<PlaybackReportOperation>(), 200);
             _retryFilePath = Path.Combine(Utils.PathHelper.ApplicationRootDirectory, "Logs", "playback_retry.json");
-            RestorePersistedOperations();
+            IsEnabled = enabled;
+            if (enabled) RestorePersistedOperations();
             _workerTask = Task.Run(() => ProcessQueueAsync(_cts.Token));
         }
 
@@ -186,7 +208,9 @@ namespace YTPlayer.Core.Playback
 
             context.StartedAt = DateTimeOffset.UtcNow;
             context.HasCompleted = false;
-            Enqueue(new PlaybackReportOperation(PlaybackReportOperationKind.Start, context));
+            context.CompleteQueued = false;
+            context.AccountKey = _apiClient.PlaybackReportingAccountKey;
+            Enqueue(new PlaybackReportOperation(PlaybackReportOperationKind.Start, context, accountKey: _apiClient.PlaybackReportingAccountKey));
         }
 
         public void ReportSongCompleted(PlaybackReportContext context, PlaybackEndReason reason)
@@ -196,20 +220,22 @@ namespace YTPlayer.Core.Playback
                 return;
             }
 
-            context.HasCompleted = true;
-            Enqueue(new PlaybackReportOperation(PlaybackReportOperationKind.Complete, context, reason));
+            lock (context)
+            {
+                if (context.CompleteQueued) return;
+                context.CompleteQueued = true;
+                context.HasCompleted = true;
+            }
+            Enqueue(new PlaybackReportOperation(PlaybackReportOperationKind.Complete, context, reason, context.AccountKey));
         }
 
         private void Enqueue(PlaybackReportOperation operation)
         {
-            if (_disposed)
-            {
-                return;
-            }
+            if (_disposed || !IsEnabled || string.IsNullOrEmpty(operation.AccountKey)) return;
 
             try
             {
-                _queue.Add(operation);
+                if (!_queue.TryAdd(operation)) PersistFailedOperation(operation);
             }
             catch (InvalidOperationException)
             {
@@ -223,7 +249,7 @@ namespace YTPlayer.Core.Playback
             {
                 foreach (var operation in _queue.GetConsumingEnumerable(token))
                 {
-                    if (!IsEnabled)
+                    if (!IsEnabled || operation.AccountKey != _apiClient.PlaybackReportingAccountKey)
                     {
                         continue;
                     }
@@ -250,17 +276,20 @@ namespace YTPlayer.Core.Playback
                     }
                     catch (OperationCanceledException) when (token.IsCancellationRequested)
                     {
+                        PersistFailedOperation(operation);
                         break;
                     }
                     catch (Exception ex)
                     {
-                        System.Diagnostics.Debug.WriteLine($"[PlaybackReporting] 发送失败: {ex.Message}");
+                        PersistFailedOperation(operation);
+                        System.Diagnostics.Debug.WriteLine($"[PlaybackReporting] 发送失败: {ex.GetType().Name}");
                     }
                 }
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) { }
+            finally
             {
-                // ignore
+                while (_queue.TryTake(out var pending)) PersistFailedOperation(pending);
             }
         }
 
@@ -280,9 +309,9 @@ namespace YTPlayer.Core.Playback
                     foreach (var snapshot in list)
                     {
                         var op = snapshot.ToOperation();
-                        if (op != null)
+                        if (op != null && !string.IsNullOrEmpty(op.AccountKey) && op.AccountKey == _apiClient.PlaybackReportingAccountKey)
                         {
-                            _queue.Add(op);
+                            _queue.TryAdd(op);
                         }
                     }
                 }
@@ -336,45 +365,22 @@ namespace YTPlayer.Core.Playback
                         { "id", context.SongId },
                         { "type", context.ResourceType },
                         { "mainsite", "1" },
+                        { "mainsiteWeb", "1" },
                         { "content", content }
                     }
                 }
             });
 
-            logs.Add(new Dictionary<string, object>
-            {
-                { "action", "play" },
-                {
-                    "json", new Dictionary<string, object>
-                    {
-                        { "id", context.SongId },
-                        { "type", context.ResourceType },
-                        { "source", string.IsNullOrWhiteSpace(context.Source.Source) ? "list" : context.Source.Source },
-                        { "sourceid", context.Source.SourceIdLong ?? (object)(context.Source.SourceId ?? string.Empty) },
-                        { "mainsite", "1" },
-                        { "content", content }
-                    }
-                }
-            });
-
-            return SendLogsWithFallbackAsync(logs, context, cancellationToken);
+            return SendLogsAsync(logs, context, cancellationToken);
         }
 
         private async Task<bool> SendCompleteLogAsync(PlaybackReportContext context, PlaybackEndReason reason, CancellationToken cancellationToken)
         {
-            int reportedSeconds = (int)Math.Max(1, Math.Round(context.PlayedSeconds > 0 ? context.PlayedSeconds : context.DurationSeconds));
-            if (context.DurationSeconds > 0)
-            {
-                reportedSeconds = Math.Min(context.DurationSeconds, reportedSeconds);
-            }
-
-            // 阈值控制：仅当播放达到 50% 或 240s（取较小者），且至少 30s
-            int threshold = ComputeEndReportThreshold(context.DurationSeconds);
-            if (reportedSeconds < threshold)
-            {
-                System.Diagnostics.Debug.WriteLine($"[PlaybackReporting] 跳过上报，播放时长不足阈值: played={reportedSeconds}s, threshold={threshold}s, song={context.SongId}");
-                return true;
-            }
+            int reportedSeconds = double.IsFinite(context.PlayedSeconds)
+                ? (int)Math.Clamp(Math.Floor(context.PlayedSeconds), 0, int.MaxValue) : 0;
+            // Server decides eligibility. Do not invent a half-song/240-second rule,
+            // and do not substitute total duration when the listener skipped immediately.
+            if (reportedSeconds == 0) return true;
 
             var log = new Dictionary<string, object>
             {
@@ -391,6 +397,7 @@ namespace YTPlayer.Core.Playback
                         { "source", string.IsNullOrWhiteSpace(context.Source.Source) ? "list" : context.Source.Source },
                         { "sourceId", context.Source.SourceIdLong ?? (object)(context.Source.SourceId ?? string.Empty) },
                         { "mainsite", "1" },
+                        { "mainsiteWeb", "1" },
                         { "content", BuildContent(context) }
                     }
                 }
@@ -398,14 +405,7 @@ namespace YTPlayer.Core.Playback
 
             var logs = new List<Dictionary<string, object>> { log };
 
-            bool weblogOk = await SendLogsWithFallbackAsync(logs, context, cancellationToken).ConfigureAwait(false);
-            bool scrobbleOk = await _apiClient.SendScrobbleEapiAsync(
-                long.TryParse(context.SongId, out var sid) ? sid : 0,
-                context.Source.SourceIdLong ?? 0,
-                reportedSeconds,
-                MapEndReason(reason), cancellationToken).ConfigureAwait(false);
-
-            return weblogOk || scrobbleOk;
+            return await SendLogsAsync(logs, context, cancellationToken).ConfigureAwait(false);
         }
 
         private static string MapEndReason(PlaybackEndReason reason)
@@ -419,18 +419,6 @@ namespace YTPlayer.Core.Playback
                 default:
                     return "interrupt";
             }
-        }
-
-        private static int ComputeEndReportThreshold(int durationSeconds)
-        {
-            if (durationSeconds <= 0)
-            {
-                return Math.Max(MinimumEndReportSeconds, Math.Min(MaxEndReportSeconds, 60));
-            }
-
-            int half = (int)Math.Ceiling(durationSeconds * 0.5);
-            int threshold = Math.Min(MaxEndReportSeconds, Math.Max(MinimumEndReportSeconds, half));
-            return threshold;
         }
 
         private static string BuildContent(PlaybackReportContext context)
@@ -459,23 +447,28 @@ namespace YTPlayer.Core.Playback
             return content;
         }
 
-        private async Task<bool> SendLogsWithFallbackAsync(IEnumerable<Dictionary<string, object>> logs, PlaybackReportContext context, CancellationToken cancellationToken)
+        private async Task<bool> SendLogsAsync(IEnumerable<Dictionary<string, object>> logs, PlaybackReportContext context, CancellationToken cancellationToken)
         {
             try
             {
-                bool primary = await _apiClient.SendPlaybackLogsAsync(logs, cancellationToken).ConfigureAwait(false);
-                if (primary)
-                {
-                    return true;
-                }
-
                 return await _apiClient.SendPlaybackLogsEapiAsync(logs, cancellationToken).ConfigureAwait(false);
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[PlaybackReporting] weblog 发送失败: {ex.Message} | song={context?.SongId}");
                 return false;
             }
+        }
+
+        public async Task DrainAsync(TimeSpan budget)
+        {
+            if (_disposed) return;
+            _queue.CompleteAdding();
+            _cts.CancelAfter(budget);
+            // Cancellation persists the unfinished operation and drains queued work to
+            // disk before normal application shutdown disposes the API client.
+            await _workerTask.WaitAsync(budget + TimeSpan.FromSeconds(1)).ConfigureAwait(false);
         }
 
         public void Dispose()
@@ -486,8 +479,8 @@ namespace YTPlayer.Core.Playback
             }
 
             _disposed = true;
-            _cts.Cancel();
             _queue.CompleteAdding();
+            _cts.CancelAfter(TimeSpan.FromSeconds(2));
 
             if (_workerTask.IsCompleted)
             {

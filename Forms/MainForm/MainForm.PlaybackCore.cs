@@ -668,9 +668,11 @@ private Task PlaySongByIndex(int index)
 
 	private bool IsSwitchingTrack => Volatile.Read(ref _switchingTrackCount) > 0;
 
-	private (CancellationToken Token, long Version) BeginPlaybackRequestScope()
+	private (CancellationToken Token, long Version) BeginPlaybackRequestScope(CancellationToken parentToken = default)
 	{
-		CancellationTokenSource newCts = new CancellationTokenSource();
+		if (!parentToken.CanBeCanceled) NotifyListenTogetherLocalControl();
+		CancellationTokenSource newCts = parentToken.CanBeCanceled
+            ? CancellationTokenSource.CreateLinkedTokenSource(parentToken) : new CancellationTokenSource();
 		CancellationTokenSource? previousCts = null;
 
 		lock (_playbackCancellationLock)
@@ -742,7 +744,7 @@ private Task PlaySongByIndex(int index)
 		}
 	}
 
-	private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlayback = false, QualityLevel? requestedQuality = null, int? queueIndexHint = null)
+	private async Task PlaySongDirectWithCancellation(SongInfo song, bool isAutoPlayback = false, QualityLevel? requestedQuality = null, int? queueIndexHint = null, CancellationToken parentToken = default)
 	{
 		Debug.WriteLine($"[MainForm] PlaySongDirectWithCancellation called: song={song?.Name}, isAutoPlayback={isAutoPlayback}");
 		if (_isApplicationExitRequested)
@@ -773,7 +775,7 @@ private Task PlaySongByIndex(int index)
 			}
 		}
 
-		(CancellationToken cancellationToken, long requestVersion) = BeginPlaybackRequestScope();
+		(CancellationToken cancellationToken, long requestVersion) = BeginPlaybackRequestScope(parentToken);
 
 		TimeSpan timeSinceLastRequest = DateTime.Now - _lastPlayRequestTime;
 		if (timeSinceLastRequest.TotalMilliseconds < MIN_PLAY_REQUEST_INTERVAL_MS)
@@ -1725,9 +1727,39 @@ private async Task PlaySongDirect(SongInfo song, CancellationToken cancellationT
 		{
 			if (_playbackReportingService == null)
 			{
-				_playbackReportingService = new PlaybackReportingService(_apiClient);
+				_playbackReportingService = new PlaybackReportingService(_apiClient, _config?.PlaybackReportingEnabled ?? true);
 			}
 			_playbackReportingService.UpdateSettings(_config);
+		}
+	}
+
+	private bool _reportingCloseStarted;
+	private bool _reportingCloseCompleted;
+
+	private bool DeferCloseForPlaybackReporting(FormClosingEventArgs e)
+	{
+		if (_reportingCloseCompleted || _playbackReportingService == null) return false;
+		e.Cancel = true;
+		if (_reportingCloseStarted) return true;
+		_reportingCloseStarted = true;
+		_isFormClosing = true;
+		CompleteActivePlaybackSession(PlaybackEndReason.Stopped);
+		_ = FinishPlaybackReportingCloseAsync();
+		return true;
+	}
+
+	private async Task FinishPlaybackReportingCloseAsync()
+	{
+		try
+		{
+			if (_playbackReportingService != null)
+				await _playbackReportingService.DrainAsync(TimeSpan.FromSeconds(2));
+		}
+		catch (Exception ex) { Debug.WriteLine($"[PlaybackReporting] Close drain: {ex.GetType().Name}"); }
+		finally
+		{
+			_reportingCloseCompleted = true;
+			if (!IsDisposed && IsHandleCreated) BeginInvoke(new Action(Close));
 		}
 	}
 
@@ -1794,35 +1826,17 @@ private async Task PlaySongDirect(SongInfo song, CancellationToken cancellationT
 
 	private double DeterminePlaybackSeconds(PlaybackReportContext session)
 	{
-		double num = 0.0;
-		try
+		return Math.Max(0, session.PlayedSeconds);
+	}
+
+	private void ObservePlaybackReportingPosition(TimeSpan position)
+	{
+		lock (_playbackReportingLock)
 		{
-			if (_audioEngine?.CurrentSong?.Id == session.SongId)
-			{
-				num = _audioEngine.GetPosition();
-				if (num <= 0.0)
-				{
-					num = _audioEngine.GetDuration();
-				}
-			}
+			var session = _activePlaybackReport;
+			if (session == null || _audioEngine?.CurrentSong?.Id != session.SongId) return;
+			session.Observe(position.TotalSeconds, _audioEngine.GetPlaybackState() == PlaybackState.Playing, Stopwatch.GetTimestamp());
 		}
-		catch
-		{
-			num = 0.0;
-		}
-		if (num <= 0.0)
-		{
-			num = (DateTimeOffset.UtcNow - session.StartedAt).TotalSeconds;
-		}
-		if (num <= 0.0 && session.DurationSeconds > 0)
-		{
-			num = session.DurationSeconds;
-		}
-		if (session.DurationSeconds > 0 && num > (double)session.DurationSeconds)
-		{
-			num = session.DurationSeconds;
-		}
-		return Math.Max(1.0, num);
 	}
 
 	private void ClearPlaybackReportingSession()
@@ -2057,6 +2071,7 @@ private async Task PlaySongDirect(SongInfo song, CancellationToken cancellationT
 
 	private void OnAudioEngineStateChanged(object sender, PlaybackState newState)
 	{
+		newState = _audioEngine?.GetPlaybackState() ?? newState;
 		PlaybackState oldState;
 		lock (_stateCacheLock)
 		{
@@ -2068,8 +2083,10 @@ private async Task PlaySongDirect(SongInfo song, CancellationToken cancellationT
 
 		SafeInvoke(delegate
 		{
-			UpdateUIForPlaybackState(newState);
-			bool isPlaying = IsPlaybackActiveState(newState);
+			// A delayed callback must not restore the UI for an older playback state.
+			PlaybackState currentState = _audioEngine?.GetPlaybackState() ?? newState;
+			UpdateUIForPlaybackState(currentState);
+			bool isPlaying = IsPlaybackActiveState(currentState);
 			DownloadBandwidthCoordinator.Instance.NotifyPlaybackStateChanged(isPlaying);
 			UpdatePlaybackPowerRequests(isPlaying);
 		});
@@ -2167,7 +2184,7 @@ private async Task PlaySongDirect(SongInfo song, CancellationToken cancellationT
 			break;
 		case PlaybackState.Buffering:
 			playPauseButton.Text = AppendTrialMarker("缓冲中...", currentSong);
-			playPauseButton.Enabled = false;
+			playPauseButton.Enabled = true;
 			break;
 		case PlaybackState.Playing:
 			playPauseButton.Text = BuildPlayPauseButtonText(PlaybackState.Playing, currentSong);
@@ -2183,6 +2200,9 @@ private async Task PlaySongDirect(SongInfo song, CancellationToken cancellationT
 			break;
 		}
 		UpdateTrayPlayPauseMenuTextForState(state);
+		UpdateTrayIconTooltip(currentSong, isPaused: state == PlaybackState.Paused);
+		UpdatePlayButtonDescription(currentSong);
+		RefreshListenTogetherPlaybackDisplay();
 	}
 
 	private static bool IsPlaybackActiveState(PlaybackState state)

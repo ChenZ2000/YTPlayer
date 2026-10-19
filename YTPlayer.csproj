@@ -198,6 +198,11 @@
     <Compile Include="Core\ListenTogether\ListenTogetherPlaybackSnapshot.cs" />
     <Compile Include="Core\ListenTogether\ListenTogetherHttpServer.cs" />
     <Compile Include="Core\ListenTogether\ListenTogetherClient.cs" />
+    <Compile Include="Core\ListenTogether\ListenTogetherApi.cs" />
+    <Compile Include="Core\ListenTogether\ListenTogetherInvitation.cs" />
+    <Compile Include="Core\ListenTogether\ListenTogetherSession.cs" />
+    <Compile Include="Core\ListenTogether\ListenTogetherPlaybackApplier.cs" />
+    <Compile Include="Core\NeteaseApiClient\NeteaseApiClient.ListenTogether.cs" />
     <Compile Include="Core\Playback\Cache\CacheHealthInfo.cs" />
     <Compile Include="Core\Playback\Cache\ChunkDownloadManager.cs" />
     <Compile Include="Core\Playback\Cache\DownloadStrategy.cs" />
@@ -225,6 +230,7 @@
     <Compile Include="Core\Recognition\AudioCaptureService.cs" />
     <Compile Include="Core\Recognition\AudioFingerprintGenerator.cs" />
     <Compile Include="Core\Recognition\SongRecognitionCoordinator.cs" />
+    <Compile Include="Core\NeteaseApiClient\NeteaseApiClient.Recognition.cs" />
     <Compile Include="Core\Streaming\HttpRangeHelper.cs" />
     <Compile Include="Core\Streaming\StreamSizeEstimator.cs" />
     <Compile Include="Core\Streaming\ChunkData.cs" />

@@ -16,6 +16,8 @@ using System.Runtime.Versioning;
 [assembly: Guid("b1234567-c890-1234-5678-901234567890")]
 
 [assembly: SupportedOSPlatform("windows7.0")]
+[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("Recognition.Tests")]
+[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("Playback.Tests")]
 
 [assembly: AssemblyVersion(YTPlayer.VersionInfo.AssemblyVersion)]
 [assembly: AssemblyFileVersion(YTPlayer.VersionInfo.AssemblyVersion)]

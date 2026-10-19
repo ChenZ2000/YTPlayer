@@ -28,6 +28,7 @@ namespace YTPlayer.Core.Playback
                 },
                 [PlaybackState.Buffering] = new HashSet<PlaybackState>
                 {
+                    PlaybackState.Paused,    // The room may pause while this device is buffering.
                     PlaybackState.Playing,
                     PlaybackState.Idle,      // 缓冲失败
                     PlaybackState.Stopped,   // 用户取消

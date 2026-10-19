@@ -63,8 +63,7 @@ namespace YTPlayer.Core.Streaming
                 }
 
                 // 检查是否支持 Range（仅基于 HEAD 的 Accept-Ranges）
-                supportsRange = response.Headers.AcceptRanges?.Contains("bytes") == true ||
-                                response.Headers.Contains("Accept-Ranges");
+                supportsRange = response.Headers.AcceptRanges?.Contains("bytes") == true;
 
                 // 获取内容长度
                 contentLength = response.Content.Headers.ContentLength ?? 0;
@@ -87,6 +86,7 @@ namespace YTPlayer.Core.Streaming
                 supportsRange = supportsRange || probe.supportsRange;
                 return (supportsRange, contentLength);
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
             catch (TaskCanceledException)
             {
                 Debug.WriteLine("[HttpRangeHelper] Request cancelled");
@@ -240,15 +240,12 @@ namespace YTPlayer.Core.Streaming
                     contentLength = response.Content.Headers.ContentLength.Value;
                 }
 
-                if (!supportsRange)
-                {
-                    // 某些 CDN 未返回 206，但仍支持 Range；尝试通过 Content-Range 判断
-                    supportsRange = range != null && range.Unit == "bytes";
-                }
+                supportsRange = supportsRange && range?.Unit == "bytes" && range.From == 0 && range.To == 0 && range.Length > 0;
 
                 Debug.WriteLine($"[HttpRangeHelper] Range probe: supports={supportsRange}, length={contentLength}");
                 return (supportsRange, contentLength);
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
                 Debug.WriteLine($"[HttpRangeHelper] Range probe error: {ex.Message}");
