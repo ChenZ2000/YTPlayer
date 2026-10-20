@@ -32,7 +32,12 @@ namespace YTPlayer
         private void InitializeListenTogetherFeature()
         {
             if (fileMenuItem == null || _listenTogetherMenuItem != null) return;
-            _listenTogetherMenuItem = new ToolStripMenuItem { Text = "一起听(&T)", Name = "listenTogetherMenuItem" };
+            _listenTogetherMenuItem = new ToolStripMenuItem
+            {
+                Text = "一起听(&T)", Name = "listenTogetherMenuItem",
+                ShortcutKeys = Keys.Control | Keys.Shift | Keys.T,
+                ShortcutKeyDisplayString = "Ctrl+Shift+T", ShowShortcutKeys = true
+            };
             _listenTogetherMenuItem.Click += (_, _) => OpenListenTogetherDialog();
             int index = _listenRecognitionMenuItem == null ? -1 : fileMenuItem.DropDownItems.IndexOf(_listenRecognitionMenuItem);
             if (index >= 0) index++;

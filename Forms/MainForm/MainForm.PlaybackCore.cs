@@ -965,6 +965,8 @@ private async Task PlaySongDirect(SongInfo song, CancellationToken cancellationT
 			string defaultQualityName = _config.DefaultQuality ?? "超清母带";
 			QualityLevel selectedQuality = requestedQuality ?? NeteaseApiClient.GetQualityLevelFromName(defaultQualityName);
 			SongResolveResult resolveResult = await ResolveSongPlaybackAsync(song, selectedQuality, cancellationToken, suppressStatusUpdates: false).ConfigureAwait(continueOnCapturedContext: false);
+			DebugLogger.Log(DebugLogger.LogLevel.Info, "PlaybackRequest", $"Resolved song={song.Id}, auto={isAutoPlayback}, version={playRequestVersion}, status={resolveResult.Status}, preload={preloadedData != null}");
+			if (cancellationToken.IsCancellationRequested || (playRequestVersion != 0L && !IsCurrentPlayRequest(playRequestVersion))) return;
 			switch (resolveResult.Status)
 			{
 			case SongResolveStatus.Success:
@@ -1015,10 +1017,13 @@ private async Task PlaySongDirect(SongInfo song, CancellationToken cancellationT
 				Debug.WriteLine("[MainForm] 播放请求已取消（播放前）");
 				return;
 			}
-			bool playResult = await _audioEngine.PlayAsync(song, cancellationToken, preloadedData);
+			var preparedData = preloadedData;
+			preloadedData = null; // Ownership passes to the engine, including failed/cancelled startup.
+			bool playResult = await _audioEngine.PlayAsync(song, cancellationToken, preparedData);
 			Debug.WriteLine($"[MainForm] _audioEngine.PlayAsync() 返回: {playResult}");
                         if (!playResult)
                         {
+                                if (cancellationToken.IsCancellationRequested || (playRequestVersion != 0L && !IsCurrentPlayRequest(playRequestVersion))) return;
                                 UpdateLoadingState(isLoading: false, "播放失败", playRequestVersion);
                                 loadingStateActive = false;
                                 Debug.WriteLine("[MainForm ERROR] 播放失败");
@@ -1118,6 +1123,8 @@ private async Task PlaySongDirect(SongInfo song, CancellationToken cancellationT
                 }
 		finally
 		{
+			// Resolution may exit before the engine accepts ownership of a consumed preload.
+			if (preloadedData != null) await Task.Run(preloadedData.Dispose).ConfigureAwait(false);
 			if (loadingStateActive)
 			{
 				UpdateLoadingState(isLoading: false, null, playRequestVersion);

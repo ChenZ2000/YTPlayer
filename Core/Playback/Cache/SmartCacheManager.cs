@@ -59,6 +59,7 @@ namespace YTPlayer.Core.Playback.Cache
         private bool _isPreloadMode;
         private bool _initialBufferSignaled;
         private bool _isFullyCached;
+        private Exception? _sequentialFailure;
         private bool _rangePreloaderStarted;
         private readonly object _downloadLock = new object();
         private int _rangeFailureCount;
@@ -137,6 +138,8 @@ namespace YTPlayer.Core.Playback.Cache
                 {
                     int remainingInData = initialData.Length - offset;
                     int chunkDataSize = Math.Min(ChunkSize, remainingInData);
+                    long expectedSize = Math.Min(ChunkSize, _totalSize - (long)chunkIndex * ChunkSize);
+                    if (expectedSize <= 0 || chunkDataSize != expectedSize) break;
 
                     byte[] chunkData = new byte[chunkDataSize];
                     Array.Copy(initialData, offset, chunkData, 0, chunkDataSize);
@@ -867,6 +870,9 @@ namespace YTPlayer.Core.Playback.Cache
             }
 
             _disposed = true;
+            // Initialization may still be waiting for its first complete blocks.
+            // Releasing a cache must settle that waiter even if its worker never starts.
+            _initialBufferTcs?.TrySetCanceled();
 
             lock (_seekBoostLock)
             {
@@ -1053,20 +1059,21 @@ namespace YTPlayer.Core.Playback.Cache
 
             StartSequentialDownload(token, isPreload);
 
-            using (token.Register(() => _initialBufferTcs.TrySetCanceled()))
+            var completion = _initialBufferTcs;
+            using (token.Register(() => completion.TrySetCanceled(token)))
             {
                 try
                 {
-                    bool ready = await _initialBufferTcs.Task.ConfigureAwait(false);
+                    bool ready = await completion.Task.ConfigureAwait(false);
                     if (ready)
                     {
                         SetBufferingState(BufferingState.Ready);
                     }
-                    return ready;
+                    return ready && !_disposed;
                 }
-                catch (TaskCanceledException)
+                catch (TaskCanceledException) when (!token.IsCancellationRequested)
                 {
-                    return CheckCacheHealth(0).IsReady;
+                    return !_disposed && CheckCacheHealth(0).IsReady;
                 }
             }
         }
@@ -1078,7 +1085,7 @@ namespace YTPlayer.Core.Playback.Cache
                 _mainDownloadCts?.Cancel();
                 _mainDownloadCts?.Dispose();
 
-                _mainDownloadCts = CancellationTokenSource.CreateLinkedTokenSource(externalToken);
+                _mainDownloadCts = CancellationTokenSource.CreateLinkedTokenSource(externalToken, _lifecycleCts.Token);
                 var downloadToken = _mainDownloadCts.Token;
 
                 _isPreloadMode = preloadOnly;
@@ -1099,123 +1106,59 @@ namespace YTPlayer.Core.Playback.Cache
                     : "🚀 顺序下载任务启动（完整文件）");
 
             var tailChunks = new Dictionary<int, byte[]>();
-            int chunkIndex = 0;
-
+            var initialBuffer = _initialBufferTcs;
+            int receivedChunks = 0;
             try
             {
-                using var request = new HttpRequestMessage(HttpMethod.Get, _url);
-                request.ApplyCustomHeaders(_headers);
-
-                using var response = await _httpClient.SendAsync(
-                    request,
-                    HttpCompletionOption.ResponseHeadersRead,
-                    token).ConfigureAwait(false);
-
-                response.EnsureSuccessStatusCode();
-
-                using var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
-                var buffer = new byte[ChunkSize];
-
-                while (!token.IsCancellationRequested)
+                bool completed = await _downloader.DownloadAllChunksSequentialAsync((chunkIndex, chunk) =>
                 {
-                    int bytesRead = await ReadSequentialChunkAsync(stream, buffer, token).ConfigureAwait(false);
-                    if (bytesRead <= 0)
+                    token.ThrowIfCancellationRequested();
+                    if (_cache.TryAdd(chunkIndex, chunk))
                     {
-                        break;
-                    }
-
-                    var chunkCopy = new byte[bytesRead];
-                    Buffer.BlockCopy(buffer, 0, chunkCopy, 0, bytesRead);
-
-                    if (_cache.TryAdd(chunkIndex, chunkCopy))
-                    {
-                        Interlocked.Add(ref _cachedBytes, chunkCopy.Length);
+                        Interlocked.Add(ref _cachedBytes, chunk.Length);
                         ReportProgress();
                     }
-
+                    receivedChunks++;
                     TrySignalInitialBufferReady();
-                    TrackTailChunk(tailChunks, chunkIndex, chunkCopy);
+                    TrackTailChunk(tailChunks, chunkIndex, chunk);
+                    return Task.CompletedTask;
+                }, null, token, preloadOnly ? MinReadyChunks + 1 : null).ConfigureAwait(false);
 
-                    chunkIndex++;
-
-                    if (preloadOnly && chunkIndex >= MinReadyChunks + 1)
-                    {
-                        DebugLogger.Log(
-                            DebugLogger.LogLevel.Info,
-                            "SmartCache",
-                            $"✅ 预加载首段完成，共下载 {chunkIndex} 个块");
-                        break;
-                    }
-                }
-
-                if (!preloadOnly)
+                token.ThrowIfCancellationRequested();
+                if (completed && _cache.Count == _totalChunks && TotalCachedBytes == _totalSize)
                 {
                     if (tailChunks.Count > 0)
-                    {
                         LastChunkCacheManager.Instance.Add(_songId, _url, _totalSize, tailChunks);
-                    }
-
                     _isFullyCached = true;
                     ReportProgress();
-                    DebugLogger.Log(
-                        DebugLogger.LogLevel.Info,
-                        "SmartCache",
-                        "✅ 顺序下载完成，文件已全部缓存");
+                    DebugLogger.Log(DebugLogger.LogLevel.Info, "SmartCache", $"Sequential transfer complete: song={_songId}, bytes={TotalCachedBytes}");
+                }
+                else if (preloadOnly)
+                {
+                    DebugLogger.Log(DebugLogger.LogLevel.Info, "SmartCache", $"Preload prefix ready: song={_songId}, chunks={receivedChunks}");
                 }
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
-                DebugLogger.Log(
-                    DebugLogger.LogLevel.Info,
-                    "SmartCache",
-                    preloadOnly ? "⏹ 预加载任务取消" : "⏹ 顺序下载任务取消");
+                // An old preload must not cancel the completion source of its successor.
+                DebugLogger.Log(DebugLogger.LogLevel.Info, "SmartCache", $"Sequential transfer cancelled: song={_songId}, preload={preloadOnly}");
             }
             catch (Exception ex)
             {
-                DebugLogger.LogException("SmartCache", ex, "顺序下载任务异常");
-                _initialBufferTcs?.TrySetException(ex);
+                if (!token.IsCancellationRequested)
+                {
+                    _sequentialFailure = ex;
+                    DebugLogger.Log(DebugLogger.LogLevel.Warning, "SmartCache", $"Sequential transfer exhausted: song={_songId}, error={ex.GetType().Name}, cached={TotalCachedBytes}/{_totalSize}");
+                    initialBuffer?.TrySetException(ex);
+                }
             }
             finally
             {
-                if (!_initialBufferSignaled)
-                {
-                    _initialBufferTcs?.TrySetResult(_cache.ContainsKey(0));
-                }
-
-                if (preloadOnly)
-                {
-                    lock (_downloadLock)
-                    {
-                        _mainDownloadTask = null;
-                    }
-                }
+                // Keep the task identity: a completed old preload must never clear the
+                // handle of a newly started full download and spawn duplicate workers.
+                if (!_initialBufferSignaled && !token.IsCancellationRequested)
+                    initialBuffer?.TrySetResult(CheckCacheHealth(0).IsReady);
             }
-        }
-
-        private static async Task<int> ReadSequentialChunkAsync(
-            System.IO.Stream stream,
-            byte[] buffer,
-            CancellationToken token)
-        {
-            int totalRead = 0;
-
-            while (totalRead < buffer.Length)
-            {
-                int read = await stream.ReadAsync(
-                    buffer,
-                    totalRead,
-                    buffer.Length - totalRead,
-                    token).ConfigureAwait(false);
-
-                if (read == 0)
-                {
-                    break;
-                }
-
-                totalRead += read;
-            }
-
-            return totalRead;
         }
 
         private void TrySignalInitialBufferReady()
@@ -1225,7 +1168,7 @@ namespace YTPlayer.Core.Playback.Cache
                 return;
             }
 
-            for (int i = 0; i < MinReadyChunks; i++)
+            for (int i = 0; i < Math.Min(MinReadyChunks, _totalChunks); i++)
             {
                 if (!_cache.ContainsKey(i))
                 {
@@ -1352,9 +1295,11 @@ namespace YTPlayer.Core.Playback.Cache
                 byte[]? data = await _downloader.DownloadChunkAsync(chunkIndex, token).ConfigureAwait(false);
                 if (data != null)
                 {
-                    _cache.TryAdd(chunkIndex, data);
-                    Interlocked.Add(ref _cachedBytes, data.Length);
-                    ReportProgress();
+                    if (_cache.TryAdd(chunkIndex, data))
+                    {
+                        Interlocked.Add(ref _cachedBytes, data.Length);
+                        ReportProgress();
+                    }
                     _rangeFailureCount = 0; // 成功清零
                 }
                 else
@@ -1444,7 +1389,7 @@ namespace YTPlayer.Core.Playback.Cache
             {
                 // 检查前 MinReadyChunks 个块是否都存在（连续的块0, 1, 2, ...）
                 bool hasFirstChunks = true;
-                for (int i = 0; i < MinReadyChunks; i++)
+                for (int i = 0; i < Math.Min(MinReadyChunks, _totalChunks); i++)
                 {
                     if (!_cache.ContainsKey(i))
                     {
@@ -1499,7 +1444,7 @@ namespace YTPlayer.Core.Playback.Cache
             try
             {
                 var uri = new Uri(_url);
-                return uri.Host;
+                return $"{uri.Host}|sequential={_preferSequentialFull}|large={_totalSize > 50L * 1024 * 1024}";
             }
             catch
             {
@@ -1595,6 +1540,7 @@ namespace YTPlayer.Core.Playback.Cache
             CancellationToken token,
             bool waitIfNotReady = true)
         {
+            token.ThrowIfCancellationRequested();
             // Merge any staged pre-cache blocks before reading from primary cache.
             CheckAndMergePreCache(position);
 
@@ -1609,6 +1555,7 @@ namespace YTPlayer.Core.Playback.Cache
 
             try
             {
+                if (_sequentialFailure != null) throw new System.IO.IOException("Audio download exhausted its recovery budget", _sequentialFailure);
                 PrioritizeDestination(position);
                 EnsureActiveDownload();
                 await EnsurePositionAsync(position, linkedCts.Token, allowRangeRescue: true).ConfigureAwait(false);
@@ -1623,6 +1570,7 @@ namespace YTPlayer.Core.Playback.Cache
                 {
                     await Task.Delay(HealthPollDelayMs, linkedCts.Token).ConfigureAwait(false);
 
+                    if (_sequentialFailure != null) throw new System.IO.IOException("Audio download exhausted its recovery budget", _sequentialFailure);
                     // Retry after each poll and merge newly prepared pre-cache chunks.
                     CheckAndMergePreCache(position);
                     PrioritizeDestination(position);

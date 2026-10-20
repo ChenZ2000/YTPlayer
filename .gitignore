@@ -12,6 +12,13 @@
 /Tests/**/__pycache__/
 /Tests/**/test-data-*/
 /Tests/**/live-data/
+/DebugingProfile/
+# Local investigation reports, captures and release verification outputs
+/artifacts*/
+/artifacts-*
+/reports/
+/Docs/PlaybackRecovery.md
+/Docs/PlaybackReportingAndSeeking.md
 account.json
 account.json.bak
 account.json.tmp

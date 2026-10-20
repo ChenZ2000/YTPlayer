@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Threading;
@@ -14,7 +15,7 @@ namespace YTPlayer.Core.Playback.Cache
     /// </summary>
     public sealed class ChunkDownloadManager
     {
-        // 增加重试次数到 5 次，提高成功率
+        // One bounded transport policy for foreground blocks and sequential transfers.
         private const int MaxRetryCount = 5;
 
         // 基础重试延迟（毫秒），使用指数退避
@@ -52,6 +53,7 @@ namespace YTPlayer.Core.Playback.Cache
             for (int attempt = 0; attempt < MaxRetryCount; attempt++)
             {
                 token.ThrowIfCancellationRequested();
+                RetryConditionHeaderValue? retryAfter = null;
 
                 try
                 {
@@ -59,21 +61,9 @@ namespace YTPlayer.Core.Playback.Cache
                     request.Headers.Range = new RangeHeaderValue(start, end);
                     request.ApplyCustomHeaders(_headers);
 
-                    using var response = await _httpClient.SendAsync(
-                        request,
-                        HttpCompletionOption.ResponseHeadersRead,
-                        token).ConfigureAwait(false);
-
-                    if (!response.IsSuccessStatusCode)
-                    {
-                        DebugLogger.Log(
-                            DebugLogger.LogLevel.Warning,
-                            "ChunkDownload",
-                            $"Range download {chunkIndex} failed ({response.StatusCode}) attempt {attempt + 1}");
-
-                        await DelayBeforeRetryAsync(chunkIndex, attempt, token, response).ConfigureAwait(false);
-                        continue;
-                    }
+                    using var response = await SendHeadersAsync(request, token).ConfigureAwait(false);
+                    retryAfter = response.Headers.RetryAfter;
+                    response.EnsureSuccessStatusCode();
 
                     // Never cache the start of a whole-file 200 response at a requested
                     // middle offset. Incorrect ranges silently corrupt decoder input.
@@ -90,27 +80,21 @@ namespace YTPlayer.Core.Playback.Cache
                     byte[] data = await ReadChunkBodyAsync(response.Content, chunkIndex, (int)expectedLength, token).ConfigureAwait(false);
 
                     if (data.Length != expectedLength)
-                    {
-                        DebugLogger.Log(
-                            DebugLogger.LogLevel.Warning,
-                            "ChunkDownload",
-                            $"Range download {chunkIndex} returned 0 bytes");
-
-                        await DelayBeforeRetryAsync(chunkIndex, attempt, token).ConfigureAwait(false);
-                        continue;
-                    }
+                        throw new EndOfStreamException($"Chunk {chunkIndex} was truncated ({data.Length}/{expectedLength} bytes)");
 
                     return data;
                 }
-                catch (OperationCanceledException)
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
                 {
                     throw;
                 }
                 catch (Exception ex)
                 {
-                    DebugLogger.LogException("ChunkDownload", ex, $"下载块 {chunkIndex} 失败 (attempt {attempt + 1}/{MaxRetryCount})");
-                    await DelayBeforeRetryAsync(chunkIndex, attempt, token).ConfigureAwait(false);
+                    DebugLogger.Log(DebugLogger.LogLevel.Warning, "ChunkDownload",
+                        $"Block {chunkIndex}: {ex.GetType().Name}, status={(ex as HttpRequestException)?.StatusCode}, attempt={attempt + 1}/{MaxRetryCount}");
+                    if (!IsTransient(ex) || attempt + 1 == MaxRetryCount) return null;
                 }
+                await DelayBeforeRetryAsync(chunkIndex, attempt, token, retryAfter).ConfigureAwait(false);
             }
 
             return null;
@@ -154,9 +138,9 @@ namespace YTPlayer.Core.Playback.Cache
             }
         }
 
-        private async Task DelayBeforeRetryAsync(int chunkIndex, int attempt, CancellationToken token, HttpResponseMessage? response = null)
+        private async Task DelayBeforeRetryAsync(int chunkIndex, int attempt, CancellationToken token, RetryConditionHeaderValue? retryAfter = null)
         {
-            int delayMs = GetRetryDelayMs(attempt, response?.Headers?.RetryAfter);
+            int delayMs = GetRetryDelayMs(attempt, retryAfter);
             DebugLogger.Log(
                 DebugLogger.LogLevel.Info,
                 "ChunkDownload",
@@ -171,7 +155,7 @@ namespace YTPlayer.Core.Playback.Cache
             {
                 if (retryAfter.Delta.HasValue)
                 {
-                    return ClampRetryDelayMs((int)Math.Ceiling(retryAfter.Delta.Value.TotalMilliseconds));
+                    return ClampRetryDelayMs((int)Math.Min(30000, Math.Ceiling(retryAfter.Delta.Value.TotalMilliseconds)));
                 }
 
                 if (retryAfter.Date.HasValue)
@@ -179,7 +163,7 @@ namespace YTPlayer.Core.Playback.Cache
                     TimeSpan delta = retryAfter.Date.Value - DateTimeOffset.UtcNow;
                     if (delta.TotalMilliseconds > 0)
                     {
-                        return ClampRetryDelayMs((int)Math.Ceiling(delta.TotalMilliseconds));
+                        return ClampRetryDelayMs((int)Math.Min(30000, Math.Ceiling(delta.TotalMilliseconds)));
                     }
                 }
             }
@@ -200,89 +184,123 @@ namespace YTPlayer.Core.Playback.Cache
             return delayMs > maxDelay ? maxDelay : delayMs;
         }
 
-        public async Task DownloadAllChunksSequentialAsync(
+        private async Task<HttpResponseMessage> SendHeadersAsync(HttpRequestMessage request, CancellationToken token)
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+            timeout.CancelAfter(ChunkBodyReadTimeoutMs);
+            try
+            {
+                return await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!token.IsCancellationRequested)
+            {
+                // HttpClient.Timeout is not a user cancellation on modern .NET.
+                throw new TimeoutException("Audio response headers timed out");
+            }
+        }
+
+        private static bool IsTransient(Exception error) => error switch
+        {
+            InvalidDataException => false,
+            HttpRequestException http when http.StatusCode.HasValue =>
+                http.StatusCode == HttpStatusCode.RequestTimeout || (int)http.StatusCode == 429 || (int)http.StatusCode >= 500,
+            HttpRequestException http => http.HttpRequestError != HttpRequestError.SecureConnectionError,
+            IOException or TimeoutException or OperationCanceledException => true,
+            _ => false
+        };
+
+        /// <summary>
+        /// Publish complete blocks only. On interruption resume at the last committed block;
+        /// a server without Range support can restart with a full response and skip the prefix.
+        /// The return value indicates whether the entire file (rather than a preload prefix) completed.
+        /// </summary>
+        public async Task<bool> DownloadAllChunksSequentialAsync(
             Func<int, byte[], Task> onChunkReady,
             IProgress<double>? progress,
-            CancellationToken token)
+            CancellationToken token,
+            int? maxChunks = null)
         {
-            if (onChunkReady == null)
+            if (onChunkReady == null) throw new ArgumentNullException(nameof(onChunkReady));
+            int limit = Math.Min(_totalChunks, maxChunks ?? _totalChunks);
+            if (limit <= 0) throw new ArgumentOutOfRangeException(nameof(maxChunks));
+            int chunkIndex = 0;
+            string? entityTag = null;
+            var buffer = new byte[_chunkSize];
+            for (int attempt = 0; attempt < MaxRetryCount; attempt++)
             {
-                throw new ArgumentNullException(nameof(onChunkReady));
-            }
-
-            using var request = new HttpRequestMessage(HttpMethod.Get, _url);
-            request.ApplyCustomHeaders(_headers);
-            using var response = await _httpClient.SendAsync(
-                request,
-                HttpCompletionOption.ResponseHeadersRead,
-                token).ConfigureAwait(false);
-
-            response.EnsureSuccessStatusCode();
-
-            using (var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
-            {
-                var buffer = new byte[_chunkSize];
-                int chunkIndex = 0;
-                long totalBytesRead = 0;
-
-                while (totalBytesRead < _totalSize)
+                token.ThrowIfCancellationRequested();
+                RetryConditionHeaderValue? retryAfter = null;
+                try
                 {
-                    token.ThrowIfCancellationRequested();
-
-                    // ⭐⭐⭐ 关键修复：循环读取直到填满整个chunk
-                    // stream.ReadAsync可能返回少于请求的字节数，必须循环读取！
-                    int chunkBytesRead = 0;
-                    while (chunkBytesRead < buffer.Length)
+                    long start = (long)chunkIndex * _chunkSize;
+                    using var request = new HttpRequestMessage(HttpMethod.Get, _url);
+                    request.ApplyCustomHeaders(_headers);
+                    if (start > 0) request.Headers.Range = new RangeHeaderValue(start, null);
+                    using var response = await SendHeadersAsync(request, token).ConfigureAwait(false);
+                    retryAfter = response.Headers.RetryAfter;
+                    response.EnsureSuccessStatusCode();
+                    var range = response.Content.Headers.ContentRange;
+                    bool full = response.StatusCode == HttpStatusCode.OK;
+                    if (!full && (response.StatusCode != HttpStatusCode.PartialContent || range?.Unit != "bytes" ||
+                        range.From != start || range.To != _totalSize - 1 || range.Length != _totalSize))
+                        throw new InvalidDataException("Sequential response does not match the requested file interval");
+                    long expected = full ? _totalSize : _totalSize - start;
+                    if (response.Content.Headers.ContentLength is long length && length != expected)
+                        throw new InvalidDataException("Sequential response length differs from the resolved media size");
+                    string? currentTag = response.Headers.ETag?.ToString();
+                    if (entityTag != null && currentTag != null && entityTag != currentTag)
+                        throw new InvalidDataException("Media changed during a resumed transfer");
+                    entityTag ??= currentTag;
+                    await using var stream = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
+                    // If Range was ignored, discard the prefix; never place byte zero at a later block.
+                    for (long skip = full ? start : 0; skip > 0;)
                     {
-                        int read = await stream.ReadAsync(
-                            buffer,
-                            chunkBytesRead,
-                            buffer.Length - chunkBytesRead,
-                            token).ConfigureAwait(false);
-
-                        if (read == 0)
-                        {
-                            // ⭐⭐⭐ 流结束，检查是否真的完成了
-                            if (totalBytesRead < _totalSize)
-                            {
-                                DebugLogger.Log(
-                                    DebugLogger.LogLevel.Warning,
-                                    "ChunkDownload",
-                                    $"⚠️ HTTP stream提前结束: {totalBytesRead:N0}/{_totalSize:N0} (缺少 {_totalSize - totalBytesRead:N0} bytes)");
-                            }
-                            break;
-                        }
-
-                        chunkBytesRead += read;
-                        totalBytesRead += read;
-
-                        // 如果已经读取完整个文件，退出内层循环
-                        if (totalBytesRead >= _totalSize)
-                        {
-                            break;
-                        }
+                        int size = (int)Math.Min(buffer.Length, skip);
+                        await ReadExactlyAsync(stream, buffer, size, token).ConfigureAwait(false);
+                        skip -= size;
                     }
-
-                    // 如果这个chunk没有读取到任何数据，说明文件结束
-                    if (chunkBytesRead == 0)
+                    while (chunkIndex < limit)
                     {
-                        break;
+                        int size = (int)Math.Min(_chunkSize, _totalSize - (long)chunkIndex * _chunkSize);
+                        await ReadExactlyAsync(stream, buffer, size, token).ConfigureAwait(false);
+                        token.ThrowIfCancellationRequested();
+                        var chunk = new byte[size];
+                        Buffer.BlockCopy(buffer, 0, chunk, 0, size);
+                        await onChunkReady(chunkIndex, chunk).ConfigureAwait(false);
+                        chunkIndex++;
+                        progress?.Report(Math.Min(1.0, chunkIndex * (double)_chunkSize / _totalSize));
                     }
+                    return chunkIndex == _totalChunks;
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+                catch (Exception ex)
+                {
+                    DebugLogger.Log(DebugLogger.LogLevel.Warning, "ChunkDownload",
+                        $"Sequential transfer: {ex.GetType().Name}, status={(ex as HttpRequestException)?.StatusCode}, nextBlock={chunkIndex}, attempt={attempt + 1}/{MaxRetryCount}");
+                    if (!IsTransient(ex) || attempt + 1 == MaxRetryCount) throw;
+                }
+                // Response and stream have already been released before the backoff.
+                await DelayBeforeRetryAsync(chunkIndex, attempt, token, retryAfter).ConfigureAwait(false);
+            }
+            return false;
+        }
 
-                    // 创建实际大小的chunk副本
-                    var chunkCopy = new byte[chunkBytesRead];
-                    Buffer.BlockCopy(buffer, 0, chunkCopy, 0, chunkBytesRead);
-                    await onChunkReady(chunkIndex, chunkCopy).ConfigureAwait(false);
-
-                    DebugLogger.Log(
-                        DebugLogger.LogLevel.Info,
-                        "ChunkDownload",
-                        $"✓ 顺序下载块 {chunkIndex}: {chunkBytesRead} bytes (总进度: {totalBytesRead:N0}/{_totalSize:N0})");
-
-                    chunkIndex++;
-                    progress?.Report(Math.Min(1.0, totalBytesRead / (double)_totalSize));
+        private static async Task ReadExactlyAsync(Stream stream, byte[] buffer, int count, CancellationToken token)
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+            timeout.CancelAfter(ChunkBodyReadTimeoutMs);
+            try
+            {
+                int offset = 0;
+                while (offset < count)
+                {
+                    int read = await stream.ReadAsync(buffer.AsMemory(offset, count - offset), timeout.Token).ConfigureAwait(false);
+                    if (read == 0) throw new EndOfStreamException($"Audio block ended early ({offset}/{count} bytes)");
+                    offset += read;
                 }
             }
+            catch (OperationCanceledException) when (!token.IsCancellationRequested)
+            { throw new TimeoutException("Audio block body timed out"); }
         }
 
         public async Task<bool> DownloadAllChunksParallelAsync(

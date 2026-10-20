@@ -1303,6 +1303,7 @@ public partial class MainForm : Form
 	private string? _statusTextBeforeLoading = null;
 
 	private NextSongPreloader? _nextSongPreloader = null;
+	private long _preloadRequestVersion;
 
 	private bool _leftKeyPressed = false;
 
@@ -6595,6 +6596,11 @@ public partial class MainForm : Form
 			StartSongRecognitionAsync().SafeFireAndForget("Shortcut ListenRecognition");
 			return true;
 		}
+		if (keyData == (Keys.Control | Keys.Shift | Keys.T))
+		{
+			OpenListenTogetherDialog();
+			return true;
+		}
 		if (keyData == (Keys.Control | Keys.L))
 		{
 			if (TryHandleCollectShortcut())
@@ -8809,7 +8815,7 @@ public partial class MainForm : Form
 		{
 			string qualityName = _config?.DefaultQuality ?? "超清母带";
 			QualityLevel qualityLevelFromName = NeteaseApiClient.GetQualityLevelFromName(qualityName);
-			RecursivePreloadNextAvailableAsync(qualityLevelFromName);
+			RecursivePreloadNextAvailableAsync(qualityLevelFromName, Interlocked.Increment(ref _preloadRequestVersion));
 		}
 		catch (Exception ex)
 		{
@@ -8817,10 +8823,13 @@ public partial class MainForm : Form
 		}
 	}
 
-	private async Task<bool> RecursivePreloadNextAvailableAsync(QualityLevel quality, int maxAttempts = 10)
+	private async Task<bool> RecursivePreloadNextAvailableAsync(QualityLevel quality, long requestVersion, int maxAttempts = 10)
 	{
+		var originSong = _audioEngine?.CurrentSong;
+		bool IsCurrent() => requestVersion == Interlocked.Read(ref _preloadRequestVersion) && ReferenceEquals(originSong, _audioEngine?.CurrentSong);
 		for (int attempt = 0; attempt < maxAttempts; attempt++)
 		{
+			if (!IsCurrent()) return false;
 			SongInfo nextSong = PredictNextSong();
 			if (nextSong == null)
 			{
@@ -8834,6 +8843,7 @@ public partial class MainForm : Form
 				{
 					using CancellationTokenSource resolveCts = new CancellationTokenSource(TimeSpan.FromSeconds(20.0));
 					SongResolveResult resolveResult = await ResolveSongPlaybackAsync(nextSong, quality, resolveCts.Token, suppressStatusUpdates: true).ConfigureAwait(continueOnCapturedContext: false);
+					if (!IsCurrent()) return false;
 					if (resolveResult.Status == SongResolveStatus.NotAvailable)
 					{
 						nextSong.IsAvailable = false;
@@ -8842,19 +8852,19 @@ public partial class MainForm : Form
 					}
 					if (resolveResult.Status != SongResolveStatus.Success)
 					{
-						Debug.WriteLine("[MainForm] Preload resolve failed, try next song: " + nextSong.Name + ", status=" + resolveResult.Status);
-						continue;
+						Debug.WriteLine("[MainForm] Preload resolve deferred: " + nextSong.Name + ", status=" + resolveResult.Status);
+						return false;
 					}
 				}
 				catch (OperationCanceledException)
 				{
-					Debug.WriteLine("[MainForm] Preload resolve canceled/timeout, try next song: " + nextSong.Name);
-					continue;
+					Debug.WriteLine("[MainForm] Preload resolve canceled/timeout: " + nextSong.Name);
+					return false;
 				}
 				catch (Exception ex)
 				{
 					Debug.WriteLine("[MainForm] Preload resolve exception: " + nextSong.Name + ", " + ex.Message);
-					continue;
+					return false;
 				}
 			}
 			if (nextSong.IsAvailable == false)
@@ -8878,12 +8888,20 @@ public partial class MainForm : Form
 				PreloadedData gaplessData = _nextSongPreloader.TryGetPreloadedData(nextSong.Id);
 				if (gaplessData != null)
 				{
-					_audioEngine?.RegisterGaplessPreload(nextSong, gaplessData);
+					if (!IsCurrent() || _audioEngine == null)
+					{
+						await Task.Run(gaplessData.Dispose).ConfigureAwait(false);
+						return false;
+					}
+					_audioEngine?.RegisterGaplessPreload(nextSong, gaplessData, originSong);
 				}
 				Debug.WriteLine("[MainForm] Preload succeeded: " + nextSong.Name);
 				return true;
 			}
-			Debug.WriteLine("[MainForm] Preload failed, continue: " + nextSong.Name);
+			// Transport already retries transient failures. Avoid replaying the entire
+			// resolver/download pipeline ten times for the same temporary failure.
+			DebugLogger.Log(DebugLogger.LogLevel.Info, "Preload", $"Deferred to foreground playback: song={nextSong.Id}");
+			return false;
 		}
 		Debug.WriteLine($"[MainForm] Preload exhausted after {maxAttempts} attempts");
 		return false;

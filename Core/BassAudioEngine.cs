@@ -367,281 +367,131 @@ namespace YTPlayer.Core
         {
             if (song == null || string.IsNullOrEmpty(song.Url))
             {
+                if (preloadedData != null) await Task.Run(preloadedData.Dispose).ConfigureAwait(false);
                 OnPlaybackError("无效的歌曲信息或 URL");
                 return false;
             }
-
             preloadedData ??= ConsumeGaplessPreload(song.Id);
-
             if (!await TryEnterPlaySemaphoreAsync(cancellationToken).ConfigureAwait(false))
             {
+                if (preloadedData != null)
+                    await Task.Run(() => ReleasePreparedPlaybackResources(preloadedData.StreamHandle, preloadedData.StreamProvider, preloadedData.CacheManager)).ConfigureAwait(false);
                 return false;
             }
 
-            bool lockTaken = true;
-            bool transitionedToLoading = false;
-            bool committed = false;
-            int preparedStream = 0;
-            BassStreamProvider? preparedStreamProvider = null;
-            SmartCacheManager? preparedCacheManager = null;
-
+            bool transitionedToLoading = false, committed = false, started = false;
+            int preparedStream = preloadedData?.StreamHandle ?? 0;
+            BassStreamProvider? preparedStreamProvider = preloadedData?.StreamProvider;
+            SmartCacheManager? preparedCacheManager = preloadedData?.CacheManager;
+            string stage = "preload";
+            var elapsed = Stopwatch.StartNew();
             try
             {
                 cancellationToken.ThrowIfCancellationRequested();
-
-                bool hadCurrentStream = HasCurrentStream();
-                if (!hadCurrentStream)
+                if (!HasCurrentStream()) transitionedToLoading = _stateMachine.TransitionTo(PlaybackState.Loading);
+                DebugLogger.Log(DebugLogger.LogLevel.Info, "PlaybackStart", $"Begin song={song.Id}, preload={preloadedData != null}");
+                if (preloadedData != null)
                 {
-                    transitionedToLoading = _stateMachine.TransitionTo(PlaybackState.Loading);
-                }
-                else
-                {
-                    Debug.WriteLine("[BassAudioEngine] 当前已有播放流，延迟到新流启动成功后再切换");
-                }
-
-                // 检查是否有预加载的完整流对象（就绪状态）。旧流会一直保留到预加载流成功启动后。
-                if (preloadedData != null && preloadedData.IsReady && preloadedData.StreamHandle != 0)
-                {
-                    if (preloadedData.CacheManager == null || preloadedData.StreamProvider == null)
-                    {
-                        OnPlaybackError("预加载播放资源不完整");
-                        RestoreIdleAfterFailedPlayback(transitionedToLoading);
-                        return false;
-                    }
-
                     preparedStream = preloadedData.StreamHandle;
                     preparedStreamProvider = preloadedData.StreamProvider;
                     preparedCacheManager = preloadedData.CacheManager;
-
-                    Debug.WriteLine($"[BassAudioEngine] ✓✓✓ 使用预加载的完整流对象，句柄: {preparedStream}");
-                    Debug.WriteLine($"[BassAudioEngine] ⭐ 准备播放预加载流: stream={preparedStream}");
-
-                    EnsureDeviceContext();
-                    BASS_ChannelSetPosition(preparedStream, 0, BASS_POS_BYTE);
-                    BASS_ChannelSetAttribute(preparedStream, BASS_ATTRIB_VOL, _volume);
-                    Debug.WriteLine($"[BassAudioEngine] ✓ ApplyVolume完成，音量={_volume}");
-
-                    if (!ValidatePreparedStream(preparedStream, preloadedData.Size > 0 ? preloadedData.Size : song.Size))
+                    string failure = "incomplete, disposed or mismatched preload";
+                    if (preloadedData.IsReady && preparedStream != 0 && preparedStreamProvider != null &&
+                        preparedCacheManager != null && !preparedCacheManager.IsDisposed &&
+                        string.Equals(preloadedData.Url, song.Url, StringComparison.Ordinal) &&
+                        (song.Size <= 0 || preloadedData.Size == song.Size))
                     {
-                        ReleasePreparedPlaybackResources(preparedStream, preparedStreamProvider, preparedCacheManager);
-                        preparedStream = 0;
-                        preparedStreamProvider = null;
-                        preparedCacheManager = null;
-                        RestoreIdleAfterFailedPlayback(transitionedToLoading);
-                        return false;
+                        using (cancellationToken.Register(preparedStreamProvider.AbortPendingReads))
+                            started = await Task.Run(() => TryStartPreparedStream(preparedStream, song.Size, true, out failure), cancellationToken).ConfigureAwait(false);
                     }
-
-                    Debug.WriteLine($"[BassAudioEngine] ⭐⭐⭐ 调用 BASS_ChannelPlay (预加载流, stream={preparedStream})");
-                    bool preloadPlayResult = BASS_ChannelPlay(preparedStream, false);
-                    Debug.WriteLine($"[BassAudioEngine] BASS_ChannelPlay 返回: {preloadPlayResult}");
-
-                    if (!preloadPlayResult)
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!started)
                     {
-                        int errorCode = BASS_ErrorGetCode();
-                        Debug.WriteLine($"[BassAudioEngine] ❌ BASS_ChannelPlay失败: errorCode={errorCode}, msg={GetErrorMessage(errorCode)}");
-                        OnPlaybackError($"播放失败: {GetErrorMessage(errorCode)}");
-                        ReleasePreparedPlaybackResources(preparedStream, preparedStreamProvider, preparedCacheManager);
-                        preparedStream = 0;
-                        preparedStreamProvider = null;
-                        preparedCacheManager = null;
-                        RestoreIdleAfterFailedPlayback(transitionedToLoading);
-                        return false;
+                        DebugLogger.Log(DebugLogger.LogLevel.Warning, "PlaybackStart", $"Discard preload and reopen: song={song.Id}, reason={failure}");
+                        await Task.Run(() => ReleasePreparedPlaybackResources(preparedStream, preparedStreamProvider, preparedCacheManager)).ConfigureAwait(false);
+                        preparedStream = 0; preparedStreamProvider = null; preparedCacheManager = null;
                     }
-
-                    int preloadChannelState = BASS_ChannelIsActive(preparedStream);
-                    Debug.WriteLine($"[BassAudioEngine] BASS_ChannelIsActive 返回: {preloadChannelState} (1=Playing)");
-
-                    if (preloadChannelState != BASS_ACTIVE_PLAYING)
+                }
+                if (!started)
+                {
+                    stage = "cache";
+                    long totalSize = song.Size;
+                    if (totalSize <= 0)
                     {
-                        int errorCode = BASS_ErrorGetCode();
-                        Debug.WriteLine($"[BassAudioEngine] ❌❌❌ Channel未在播放状态！ errorCode={errorCode}");
-                        OnPlaybackError($"播放启动失败: Channel状态异常 (state={preloadChannelState})");
-                        ReleasePreparedPlaybackResources(preparedStream, preparedStreamProvider, preparedCacheManager);
-                        preparedStream = 0;
-                        preparedStreamProvider = null;
-                        preparedCacheManager = null;
-                        RestoreIdleAfterFailedPlayback(transitionedToLoading);
-                        return false;
+                        var (_, contentLength) = await HttpRangeHelper.CheckRangeSupportAsync(song.Url, _httpClient, cancellationToken, song.CustomHeaders).ConfigureAwait(false);
+                        totalSize = contentLength;
                     }
-
-                    CommitPreparedPlayback(song, preparedStream, preparedStreamProvider, preparedCacheManager);
-                    committed = true;
-                    preparedStream = 0;
-                    preparedStreamProvider = null;
-                    preparedCacheManager = null;
-
-                    bool preloadStateChanged = TransitionToPlayingAfterCommit();
-                    Debug.WriteLine($"[BassAudioEngine] 状态转换结果: {preloadStateChanged}");
-
-                    OnPlaybackStarted(song);
-                    Debug.WriteLine("[BassAudioEngine] ✓ PlayAsync完成（预加载流），返回true");
-                    return true;
-                }
-
-                // 回退：使用常规流程准备缓存和 BASS stream。准备阶段不改动当前播放流。
-                Debug.WriteLine("[BassAudioEngine] 无预加载完整流，使用延迟提交流程");
-
-                long totalSize = song.Size;
-                if (totalSize <= 0)
-                {
-                    var (_, contentLength) = await HttpRangeHelper.CheckRangeSupportAsync(
-                        song.Url,
-                        _httpClient,
-                        cancellationToken,
-                        song.CustomHeaders).ConfigureAwait(false);
-                    totalSize = contentLength;
-                }
-
-                if (totalSize <= 0)
-                {
-                    OnPlaybackError("无法获取音频文件大小");
-                    RestoreIdleAfterFailedPlayback(transitionedToLoading);
-                    return false;
-                }
-
-                cancellationToken.ThrowIfCancellationRequested();
-
-                if (preloadedData != null && preloadedData.CacheManager != null)
-                {
-                    Debug.WriteLine("[BassAudioEngine] ✓ 使用预加载的缓存管理器");
-                    preparedCacheManager = preloadedData.CacheManager;
-                }
-                else
-                {
-                    Debug.WriteLine("[BassAudioEngine] 创建新的缓存管理器");
+                    if (totalSize <= 0) throw new InvalidOperationException("无法获取音频文件大小");
                     preparedCacheManager = await GetOrCreateCacheManagerAsync(song, totalSize, cancellationToken, song.CustomHeaders).ConfigureAwait(false);
+                    if (!await preparedCacheManager.WaitForCacheReadyAsync(0, true, cancellationToken).ConfigureAwait(false))
+                        throw new TimeoutException("缓存加载超时");
+                    cancellationToken.ThrowIfCancellationRequested();
+                    stage = "decoder";
+                    preparedStreamProvider = new BassStreamProvider(preparedCacheManager);
+                    string failure = "";
+                    // FILEPROCS can synchronously fetch data. Keep native creation/start off the UI thread,
+                    // and abort those reads when a newer play request supersedes this attempt.
+                    using (cancellationToken.Register(preparedStreamProvider.AbortPendingReads))
+                        started = await Task.Run(() =>
+                        {
+                            EnsureDeviceContext();
+                            preparedStream = preparedStreamProvider.CreateStream();
+                            return TryStartPreparedStream(preparedStream, totalSize, false, out failure);
+                        }, cancellationToken).ConfigureAwait(false);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!started) throw new InvalidOperationException(failure);
                 }
 
-                bool ready = await preparedCacheManager.WaitForCacheReadyAsync(0, true, cancellationToken).ConfigureAwait(false);
-                if (!ready)
-                {
-                    OnPlaybackError("缓存加载超时");
-                    ReleasePreparedPlaybackResources(0, null, preparedCacheManager);
-                    preparedCacheManager = null;
-                    RestoreIdleAfterFailedPlayback(transitionedToLoading);
-                    return false;
-                }
-
+                stage = "commit";
                 cancellationToken.ThrowIfCancellationRequested();
-
-                preparedStreamProvider = new BassStreamProvider(preparedCacheManager);
-                EnsureDeviceContext();
-                preparedStream = preparedStreamProvider.CreateStream();
-
-                // BASS stream 句柄是 DWORD（无符号32位），C# 声明为 int；只有 0 表示失败。
-                if (preparedStream == 0)
-                {
-                    int errorCode = BASS_ErrorGetCode();
-                    DebugLogger.Log(
-                        DebugLogger.LogLevel.Error,
-                        "BassAudioEngine",
-                        $"创建播放流失败: handle={preparedStream}, error={GetErrorMessage(errorCode)}");
-                    OnPlaybackError($"创建播放流失败: {GetErrorMessage(errorCode)}");
-                    ReleasePreparedPlaybackResources(preparedStream, preparedStreamProvider, preparedCacheManager);
-                    preparedStream = 0;
-                    preparedStreamProvider = null;
-                    preparedCacheManager = null;
-                    RestoreIdleAfterFailedPlayback(transitionedToLoading);
-                    return false;
-                }
-
-                Debug.WriteLine($"[BassAudioEngine] ⭐ 准备播放: stream={preparedStream}");
-
-                BASS_ChannelSetAttribute(preparedStream, BASS_ATTRIB_VOL, _volume);
-                Debug.WriteLine($"[BassAudioEngine] ✓ ApplyVolume完成，音量={_volume}");
-
-                if (!ValidatePreparedStream(preparedStream, totalSize))
-                {
-                    ReleasePreparedPlaybackResources(preparedStream, preparedStreamProvider, preparedCacheManager);
-                    preparedStream = 0;
-                    preparedStreamProvider = null;
-                    preparedCacheManager = null;
-                    RestoreIdleAfterFailedPlayback(transitionedToLoading);
-                    return false;
-                }
-
-                Debug.WriteLine($"[BassAudioEngine] ⭐⭐⭐ 调用 BASS_ChannelPlay (stream={preparedStream})");
-                bool playResult = BASS_ChannelPlay(preparedStream, false);
-                Debug.WriteLine($"[BassAudioEngine] BASS_ChannelPlay 返回: {playResult}");
-
-                if (!playResult)
-                {
-                    int errorCode = BASS_ErrorGetCode();
-                    Debug.WriteLine($"[BassAudioEngine] ❌ BASS_ChannelPlay失败: errorCode={errorCode}, msg={GetErrorMessage(errorCode)}");
-                    OnPlaybackError($"播放失败: {GetErrorMessage(errorCode)}");
-                    ReleasePreparedPlaybackResources(preparedStream, preparedStreamProvider, preparedCacheManager);
-                    preparedStream = 0;
-                    preparedStreamProvider = null;
-                    preparedCacheManager = null;
-                    RestoreIdleAfterFailedPlayback(transitionedToLoading);
-                    return false;
-                }
-
-                int channelState = BASS_ChannelIsActive(preparedStream);
-                Debug.WriteLine($"[BassAudioEngine] BASS_ChannelIsActive 返回: {channelState} (1=Playing, 0=Stopped, 3=Paused)");
-
-                if (channelState != BASS_ACTIVE_PLAYING)
-                {
-                    int errorCode = BASS_ErrorGetCode();
-                    Debug.WriteLine($"[BassAudioEngine] ❌❌❌ Channel未在播放状态！ errorCode={errorCode}, msg={GetErrorMessage(errorCode)}");
-                    OnPlaybackError($"播放启动失败: Channel状态异常 (state={channelState})");
-                    ReleasePreparedPlaybackResources(preparedStream, preparedStreamProvider, preparedCacheManager);
-                    preparedStream = 0;
-                    preparedStreamProvider = null;
-                    preparedCacheManager = null;
-                    RestoreIdleAfterFailedPlayback(transitionedToLoading);
-                    return false;
-                }
-
-                CommitPreparedPlayback(song, preparedStream, preparedStreamProvider, preparedCacheManager);
+                CommitPreparedPlayback(song, preparedStream, preparedStreamProvider!, preparedCacheManager!);
                 committed = true;
-                preparedStream = 0;
-                preparedStreamProvider = null;
-                preparedCacheManager = null;
-
-                bool stateChanged = TransitionToPlayingAfterCommit();
-                Debug.WriteLine($"[BassAudioEngine] 状态转换结果: {stateChanged}");
-
+                TransitionToPlayingAfterCommit();
+                if (BASS_ChannelIsActive(preparedStream) == BASS_ACTIVE_STALLED)
+                    _stateMachine.TransitionTo(PlaybackState.Buffering);
                 OnPlaybackStarted(song);
-                Debug.WriteLine("[BassAudioEngine] ✓ PlayAsync完成，返回true");
+                DebugLogger.Log(DebugLogger.LogLevel.Info, "PlaybackStart", $"Committed song={song.Id}, elapsedMs={elapsed.ElapsedMilliseconds}");
                 return true;
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                if (!committed)
-                {
-                    ReleasePreparedPlaybackResources(preparedStream, preparedStreamProvider, preparedCacheManager);
-                    RestoreIdleAfterFailedPlayback(transitionedToLoading);
-                }
-
+                DebugLogger.Log(DebugLogger.LogLevel.Info, "PlaybackStart", $"Cancelled song={song.Id}, stage={stage}");
                 return false;
             }
             catch (Exception ex)
             {
-                if (!committed)
-                {
-                    ReleasePreparedPlaybackResources(preparedStream, preparedStreamProvider, preparedCacheManager);
-                    RestoreIdleAfterFailedPlayback(transitionedToLoading);
-                }
-
-                DebugLogger.LogException("BassAudioEngine", ex, "PlayAsync failure");
+                DebugLogger.Log(DebugLogger.LogLevel.Error, "PlaybackStart", $"Failed song={song.Id}, stage={stage}, error={ex.GetType().Name}, elapsedMs={elapsed.ElapsedMilliseconds}");
                 OnPlaybackError($"播放错误: {ex.Message}");
                 return false;
             }
             finally
             {
-                if (lockTaken)
+                if (!committed)
                 {
-                    try
-                    {
-                        _playSemaphore.Release();
-                    }
-                    catch (ObjectDisposedException)
-                    {
-                        // 已释放时忽略
-                    }
+                    await Task.Run(() => ReleasePreparedPlaybackResources(preparedStream, preparedStreamProvider, preparedCacheManager)).ConfigureAwait(false);
+                    RestoreIdleAfterFailedPlayback(transitionedToLoading);
                 }
+                try { _playSemaphore.Release(); } catch (ObjectDisposedException) { }
             }
+        }
+
+        private bool TryStartPreparedStream(int stream, long expectedSize, bool rewind, out string failure)
+        {
+            failure = "";
+            EnsureDeviceContext();
+            if (stream == 0 || !ValidatePreparedStream(stream, expectedSize, reportFailure: false))
+            { failure = $"音频流不可用 (BASS={BASS_ErrorGetCode()})"; return false; }
+            if (!BASS_ChannelSetDevice(stream, _currentDeviceIndex))
+            { failure = $"无法绑定输出设备 (BASS={BASS_ErrorGetCode()})"; return false; }
+            if (rewind && !BASS_ChannelSetPosition(stream, 0, BASS_POS_BYTE))
+            { failure = $"预加载定位失败 (BASS={BASS_ErrorGetCode()})"; return false; }
+            BASS_ChannelSetAttribute(stream, BASS_ATTRIB_VOL, _volume);
+            if (!BASS_ChannelPlay(stream, false))
+            { failure = $"播放启动失败 (BASS={BASS_ErrorGetCode()})"; return false; }
+            int state = BASS_ChannelIsActive(stream);
+            if (state != BASS_ACTIVE_PLAYING && state != BASS_ACTIVE_STALLED)
+            { failure = $"播放启动状态异常 (state={state}, BASS={BASS_ErrorGetCode()})"; return false; }
+            return true;
         }
 
         private bool HasCurrentStream()
@@ -684,7 +534,7 @@ namespace YTPlayer.Core
             return _stateMachine.TransitionTo(PlaybackState.Playing);
         }
 
-        private bool ValidatePreparedStream(int stream, long expectedSize)
+        private bool ValidatePreparedStream(int stream, long expectedSize, bool reportFailure = true)
         {
             BASS_CHANNELINFO channelInfo = new BASS_CHANNELINFO();
             bool infoSuccess = BASS_ChannelGetInfo(stream, ref channelInfo);
@@ -708,7 +558,7 @@ namespace YTPlayer.Core
             if (channelLength <= 0)
             {
                 Debug.WriteLine($"[BassAudioEngine] ❌❌❌ Channel长度无效: {channelLength}，无法播放");
-                OnPlaybackError($"音频格式识别失败: stream长度无效 ({channelLength} bytes)");
+                if (reportFailure) OnPlaybackError($"音频格式识别失败: stream长度无效 ({channelLength} bytes)");
                 return false;
             }
 
@@ -732,15 +582,11 @@ namespace YTPlayer.Core
             int oldStream = 0;
             int oldEndSyncHandle = 0;
             int oldNearEndSyncHandle = 0;
-            var pendingPreload = TakeGaplessPreload();
-
-            if (pendingPreload != null && pendingPreload.Data.StreamHandle != newStream)
-            {
-                ReleasePreloadedResources(pendingPreload);
-            }
+            GaplessPreloadEntry? pendingPreload;
 
             lock (_syncRoot)
             {
+                pendingPreload = TakeGaplessPreload();
                 _positionMonitorCts?.Cancel();
                 _positionMonitorCts?.Dispose();
                 _positionMonitorCts = null;
@@ -764,6 +610,9 @@ namespace YTPlayer.Core
                 _currentCacheManager = newCacheManager;
                 _currentSong = song;
             }
+
+            if (pendingPreload != null && pendingPreload.Data.StreamHandle != newStream)
+                _ = Task.Run(() => ReleasePreloadedResources(pendingPreload));
 
             RegisterStreamProviderCallbacks(newStreamProvider);
             AttachCacheManager(newCacheManager);
@@ -1263,6 +1112,10 @@ namespace YTPlayer.Core
             {
                 return false;
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return false;
+            }
         }
 
         private void LoadBassFlacPlugin()
@@ -1325,15 +1178,17 @@ namespace YTPlayer.Core
         private async Task<SmartCacheManager> GetOrCreateCacheManagerAsync(SongInfo song, long totalSize, CancellationToken token, IDictionary<string, string>? headers)
         {
             var manager = new SmartCacheManager(song.Id, song.Url, totalSize, _httpClient, PreferSequentialFull(song, totalSize), headers);
-            bool initialized = await manager.InitializeAsync(token).ConfigureAwait(false);
-
-            if (!initialized)
+            try
+            {
+                if (!await manager.InitializeAsync(token).ConfigureAwait(false))
+                    throw new InvalidOperationException("缓存初始化失败");
+                return manager;
+            }
+            catch
             {
                 manager.Dispose();
-                throw new InvalidOperationException("缓存初始化失败");
+                throw;
             }
-
-            return manager;
         }
 
         private bool PreferSequentialFull(SongInfo song, long totalSize)
@@ -1696,6 +1551,7 @@ namespace YTPlayer.Core
                 }
                 oldCacheManager = _currentCacheManager;
                 finishedSong = _currentSong;
+                DebugLogger.Log(DebugLogger.LogLevel.Info, "PlaybackStart", $"Natural end: song={finishedSong?.Id}");
 
                 _positionMonitorCts?.Cancel();
                 _positionMonitorCts?.Dispose();
@@ -1726,7 +1582,9 @@ namespace YTPlayer.Core
                 gaplessStarted = TryStartGaplessPlayback(gaplessEntry, finishedSong, out nextSong);
                 if (!gaplessStarted)
                 {
-                    RestoreGaplessPreload(gaplessEntry);
+                    // A failed native stream is not a reusable preload. The normal next-track
+                    // path reopens it; release outside the BASS sync callback.
+                    _ = Task.Run(() => ReleasePreloadedResources(gaplessEntry));
                 }
             }
 
@@ -1791,61 +1649,28 @@ namespace YTPlayer.Core
         private bool TryStartGaplessPlayback(GaplessPreloadEntry entry, SongInfo? previousSong, out SongInfo? nextSong)
         {
             nextSong = null;
-            if (entry == null || entry.Data == null || entry.Data.StreamHandle == 0 || entry.Data.StreamProvider == null || entry.Data.CacheManager == null)
-            {
-                return false;
-            }
-
             var data = entry.Data;
-            int newStreamHandle = data.StreamHandle;
-
-            lock (_syncRoot)
-            {
-                _currentStream = newStreamHandle;
-                _currentStreamProvider = data.StreamProvider;
-                _currentCacheManager = data.CacheManager;
-                _currentSong = entry.Song;
-            }
-
-            RegisterStreamProviderCallbacks(data.StreamProvider);
-            nextSong = entry.Song;
-
-            AttachCacheManager(data.CacheManager);
-
-            BASS_ChannelSetPosition(newStreamHandle, 0, BASS_POS_BYTE);
-            ApplyVolume();
-
-            _endSyncHandle = 0;
-            _nearEndSyncHandle = 0;
-            SetupSyncs();
-            StartPositionMonitor();
-
-            bool playResult = BASS_ChannelPlay(newStreamHandle, true);
-            if (!playResult)
-            {
-                int error = BASS_ErrorGetCode();
-                Debug.WriteLine($"[BassAudioEngine] ❌ Gapless 启动失败: error={error}");
-
-                lock (_syncRoot)
-                {
-                    _currentStream = 0;
-                    UnregisterStreamProviderCallbacks(_currentStreamProvider);
-                    _currentStreamProvider = null;
-                    _currentCacheManager = null;
-                    _currentSong = null;
-                }
-
-                DetachCacheManager(data.CacheManager);
+            if (data.StreamProvider == null || data.CacheManager == null || data.CacheManager.IsDisposed)
                 return false;
+            // Do not race a foreground track switch; its normal startup path owns recovery.
+            try { if (!_playSemaphore.Wait(0)) return false; }
+            catch (ObjectDisposedException) { return false; }
+            try
+            {
+                if (!TryStartPreparedStream(data.StreamHandle, data.Size, true, out string failure))
+                {
+                    DebugLogger.Log(DebugLogger.LogLevel.Warning, "PlaybackStart", $"Gapless fallback: song={entry.Song.Id}, reason={failure}");
+                    return false;
+                }
+                CommitPreparedPlayback(entry.Song, data.StreamHandle, data.StreamProvider, data.CacheManager);
+                TransitionToPlayingAfterCommit();
+                nextSong = entry.Song;
+                OnPlaybackStarted(entry.Song);
+                DebugLogger.Log(DebugLogger.LogLevel.Info, "PlaybackStart", $"Gapless committed: previous={previousSong?.Id}, song={entry.Song.Id}");
+                DispatchEvent(GaplessTransitionCompleted, this, new GaplessTransitionEventArgs(previousSong, entry.Song));
+                return true;
             }
-
-            data.CacheManager.SetPlayingState();
-            _stateMachine.TransitionTo(PlaybackState.Playing);
-            OnPlaybackStarted(entry.Song);
-
-            DispatchEvent(GaplessTransitionCompleted, this, new GaplessTransitionEventArgs(previousSong, entry.Song));
-
-            return true;
+            finally { try { _playSemaphore.Release(); } catch (ObjectDisposedException) { } }
         }
 
         private GaplessPreloadEntry? TakeGaplessPreload()
@@ -1858,30 +1683,11 @@ namespace YTPlayer.Core
             }
         }
 
-        private void RestoreGaplessPreload(GaplessPreloadEntry entry)
-        {
-            if (entry == null)
-            {
-                return;
-            }
-
-            lock (_gaplessPreloadLock)
-            {
-                if (_gaplessPreload == null)
-                {
-                    _gaplessPreload = entry;
-                }
-                else
-                {
-                    ReleasePreloadedResources(entry);
-                }
-            }
-        }
-
         private void ReleasePreloadedResources(GaplessPreloadEntry entry)
         {
             try
             {
+                entry.Data.StreamProvider?.AbortPendingReads();
                 if (entry.Data.StreamHandle != 0)
                 {
                     BASS_StreamFree(entry.Data.StreamHandle);
@@ -1900,29 +1706,28 @@ namespace YTPlayer.Core
             }
         }
 
-        public void RegisterGaplessPreload(SongInfo song, Playback.PreloadedData data)
+        public void RegisterGaplessPreload(SongInfo song, Playback.PreloadedData data, SongInfo? expectedCurrentSong = null)
         {
-            if (song == null || data == null)
+            if (song == null || data == null) return;
+            GaplessPreloadEntry? discard;
+            lock (_syncRoot)
             {
-                return;
-            }
-
-            if (_playMode == PlayMode.LoopOne)
-            {
-                // 单曲循环不需要预加载下一首，立即释放预加载资源
-                ReleasePreloadedResources(new GaplessPreloadEntry(song, data));
-                return;
-            }
-
-            lock (_gaplessPreloadLock)
-            {
-                if (_gaplessPreload != null)
+                if (_disposed || _playMode == PlayMode.LoopOne ||
+                    (expectedCurrentSong != null && !ReferenceEquals(expectedCurrentSong, _currentSong)))
                 {
-                    ReleasePreloadedResources(_gaplessPreload);
+                    discard = new GaplessPreloadEntry(song, data);
                 }
-
-                _gaplessPreload = new GaplessPreloadEntry(song, data);
+                else
+                {
+                    lock (_gaplessPreloadLock)
+                    {
+                        discard = _gaplessPreload;
+                        _gaplessPreload = new GaplessPreloadEntry(song, data);
+                    }
+                }
             }
+            // Native disposal may wait for reads; never perform it while holding ownership locks.
+            if (discard != null) _ = Task.Run(() => ReleasePreloadedResources(discard));
         }
 
         private BassDeviceDescriptor ResolvePreferredDescriptor(
@@ -2269,21 +2074,31 @@ namespace YTPlayer.Core
 
         private void OnStreamProviderReadFailure(object? sender, StreamReadFailureEventArgs e)
         {
-            bool isActiveProvider;
-            lock (_syncRoot)
+            // FILEPROCS runs inside native decoding. Stopping its channel inline can wait
+            // on that very callback. Let it unwind, then verify ownership under the play gate.
+            _ = Task.Run(async () =>
             {
-                isActiveProvider = ReferenceEquals(sender, _currentStreamProvider);
-            }
-
-            if (!isActiveProvider)
-            {
-                return;
-            }
-
-            Debug.WriteLine($"[BassAudioEngine] Stream read failure at {e.Position}: {e.Reason}");
-            StopInternal(raiseEvent: false);
-            _stateMachine.TransitionTo(PlaybackState.Idle);
-            OnPlaybackError($"音频流读取失败: {e.Reason}");
+                bool entered = false;
+                try
+                {
+                    await _playSemaphore.WaitAsync().ConfigureAwait(false);
+                    entered = true;
+                    lock (_syncRoot)
+                    {
+                        if (_disposed || !ReferenceEquals(sender, _currentStreamProvider)) return;
+                    }
+                    DebugLogger.Log(DebugLogger.LogLevel.Warning, "PlaybackRead", $"Read exhausted: song={_currentSong?.Id}, offset={e.Position}");
+                    StopInternal(raiseEvent: false);
+                    _stateMachine.TransitionTo(PlaybackState.Idle);
+                    OnPlaybackError($"音频流读取失败: {e.Reason}");
+                }
+                catch (ObjectDisposedException) { }
+                finally
+                {
+                    if (entered)
+                        try { _playSemaphore.Release(); } catch (ObjectDisposedException) { }
+                }
+            });
         }
 
         private void OnPlaybackStarted(SongInfo song)
@@ -2293,6 +2108,7 @@ namespace YTPlayer.Core
 
         private void OnPlaybackError(string message)
         {
+            DebugLogger.Log(DebugLogger.LogLevel.Error, "PlaybackStart", message);
             DispatchEvent(PlaybackError, this, message);
         }
 

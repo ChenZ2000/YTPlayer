@@ -19,6 +19,7 @@ internal static class Program
             if (args.Length == 0) { await RegressionTests.RunAsync(); Console.WriteLine($"PASS {Passed} assertions"); return 0; }
             if (args[0] == "--range") { await RangeProbe.RunAsync(args[1], args[2]); return 0; }
             if (args[0] == "--seek-tests") { await SeekTests.RunAsync(args[1]); Console.WriteLine($"PASS {Passed} seek assertions"); return 0; }
+            if (args[0] == "--recovery-tests") { await RecoveryTests.RunAsync(args[1]); Console.WriteLine($"PASS {Passed} recovery assertions"); return 0; }
             using var client = new NeteaseApiClient();
             JObject profile = JObject.Parse(File.ReadAllText(args[1]));
             client.SetCookieString(profile.Value<string>("Cookie")!);

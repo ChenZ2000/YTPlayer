@@ -1,6 +1,6 @@
 # 真实听歌上报与未缓存跳转
 
-完整修复和原始验证摘要见仓库 `Docs/PlaybackReportingAndSeeking.md`；协议代码在 `PlaybackReportingService.cs`、`NeteaseApiClient.Recommendations.cs`、`BassAudioEngine.cs`、`SeekManager.cs`。
+协议代码在 `PlaybackReportingService.cs`、`NeteaseApiClient.Recommendations.cs`、`BassAudioEngine.cs`、`SeekManager.cs`。实验报告及原始输出保存在被忽略的 `artifacts/` 目录，不作为产品文档提交。
 
 ## 听歌计数
 
