@@ -54,12 +54,12 @@ public partial class MainForm
 			{
 				if (string.Equals(searchType, "歌曲", StringComparison.OrdinalIgnoreCase))
 				{
-					return $"search:{keyword}:page1";
+					return $"search:song:{keyword}:page1";
 				}
 
 				string typeToken = SearchTypeToViewSourceToken(searchType);
 				return string.IsNullOrWhiteSpace(typeToken)
-					? $"search:{keyword}:page1"
+					? $"search:song:{keyword}:page1"
 					: $"search:{typeToken}:{keyword}:page1";
 			}
 		}
@@ -988,7 +988,7 @@ public partial class MainForm
 	{
 		int offset = 0;
 		int pageSize = Math.Max(1, _resultsPerPage);
-		string source = $"search:{keyword}:page1";
+		string source = $"search:song:{keyword}:page1";
 		for (int safety = 0; safety < 200; safety++)
 		{
 			SearchResult<SongInfo> page = await _apiClient.SearchSongsAsync(keyword, pageSize, offset, cancellationToken).ConfigureAwait(false);

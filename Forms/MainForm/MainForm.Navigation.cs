@@ -1,6 +1,7 @@
 #nullable disable
 using System;
 using System.Diagnostics;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using YTPlayer.Models;
@@ -10,13 +11,16 @@ namespace YTPlayer
 {
 public partial class MainForm
 {
+	private long _viewContentCancellationVersion;
+
 	private void SaveNavigationState()
 	{
 		if (_initialHomeLoadCts != null)
 		{
 			StopInitialHomeLoadLoop("保存导航状态前中断主页加载");
 		}
-		if (_currentSongs.Count == 0 && _currentPlaylists.Count == 0 && _currentAlbums.Count == 0 && _currentListItems.Count == 0 && _currentArtists.Count == 0 && _currentPodcasts.Count == 0 && _currentPodcastSounds.Count == 0)
+		// Empty results and retry pages still have a valid navigation identity.
+		if (string.IsNullOrWhiteSpace(_currentViewSource))
 		{
 			return;
 		}
@@ -61,6 +65,8 @@ public partial class MainForm
 
 	private NavigationHistoryItem CreateCurrentState()
 	{
+		string viewSource = IsListenMatchViewSource(_currentViewSource)
+			? NormalizeListenMatchViewSource(_currentViewSource) : (_currentViewSource ?? string.Empty);
 		int selectedListViewIndex = GetSelectedListViewIndex();
 		if (resultListView != null && resultListView.FocusedItem != null)
 		{
@@ -86,7 +92,7 @@ public partial class MainForm
 		}
 		NavigationHistoryItem navigationHistoryItem = new NavigationHistoryItem
 		{
-			ViewSource = _currentViewSource,
+			ViewSource = viewSource,
 			ViewName = resultListView.AccessibleName,
 			SelectedIndex = selectedListViewIndex,
 			SelectedDataIndex = -1
@@ -95,120 +101,122 @@ public partial class MainForm
 		{
 			navigationHistoryItem.SelectedDataIndex = num;
 		}
-		DebugLogListFocusState("CreateCurrentState", _currentViewSource, navigationHistoryItem);
-		if (_isHomePage || string.Equals(_currentViewSource, "homepage", StringComparison.OrdinalIgnoreCase))
+		DebugLogListFocusState("CreateCurrentState", viewSource, navigationHistoryItem);
+		if (_isHomePage || string.Equals(viewSource, "homepage", StringComparison.OrdinalIgnoreCase))
 		{
 			navigationHistoryItem.PageType = "homepage";
 		}
-		else if (_currentViewSource.StartsWith("playlist:", StringComparison.OrdinalIgnoreCase))
+		else if (viewSource.StartsWith("playlist:", StringComparison.OrdinalIgnoreCase))
 		{
 			navigationHistoryItem.PageType = "playlist";
-			navigationHistoryItem.PlaylistId = _currentViewSource.Substring("playlist:".Length);
+			navigationHistoryItem.PlaylistId = viewSource.Substring("playlist:".Length);
 		}
-		else if (_currentViewSource.StartsWith("album:", StringComparison.OrdinalIgnoreCase))
+		else if (viewSource.StartsWith("album:", StringComparison.OrdinalIgnoreCase))
 		{
 			navigationHistoryItem.PageType = "album";
-			navigationHistoryItem.AlbumId = _currentViewSource.Substring("album:".Length);
+			navigationHistoryItem.AlbumId = viewSource.Substring("album:".Length);
 		}
-		else if (_currentViewSource.StartsWith("search:", StringComparison.OrdinalIgnoreCase))
+		else if (viewSource.StartsWith("search:", StringComparison.OrdinalIgnoreCase))
 		{
 			navigationHistoryItem.PageType = "search";
-			ParseSearchViewSource(_currentViewSource, out var searchType, out var keyword, out var page);
+			ParseSearchViewSource(viewSource, out var searchType, out var keyword, out var page);
 			navigationHistoryItem.SearchType = ((!string.IsNullOrWhiteSpace(searchType)) ? searchType : _currentSearchType);
 			navigationHistoryItem.SearchKeyword = ((!string.IsNullOrWhiteSpace(keyword)) ? keyword : _lastKeyword);
 			navigationHistoryItem.CurrentPage = ((page > 0) ? page : _currentPage);
 		}
-		else if (_currentViewSource.StartsWith("artist_entries:", StringComparison.OrdinalIgnoreCase))
+		else if (viewSource.StartsWith("artist_entries:", StringComparison.OrdinalIgnoreCase))
 		{
 			navigationHistoryItem.PageType = "artist_entries";
-			navigationHistoryItem.ArtistId = ParseArtistIdFromViewSource(_currentViewSource, "artist_entries:");
+			navigationHistoryItem.ArtistId = ParseArtistIdFromViewSource(viewSource, "artist_entries:");
 			navigationHistoryItem.ArtistName = _currentArtist?.Name ?? _currentArtistDetail?.Name ?? string.Empty;
 		}
-		else if (_currentViewSource.StartsWith("artist_songs_top:", StringComparison.OrdinalIgnoreCase))
+		else if (viewSource.StartsWith("artist_songs_top:", StringComparison.OrdinalIgnoreCase)
+			|| viewSource.StartsWith("artist_top:", StringComparison.OrdinalIgnoreCase))
 		{
 			navigationHistoryItem.PageType = "artist_top";
-			navigationHistoryItem.ArtistId = ParseArtistIdFromViewSource(_currentViewSource, "artist_songs_top:");
+			navigationHistoryItem.ArtistId = ParseArtistIdFromViewSource(viewSource,
+				viewSource.StartsWith("artist_top:", StringComparison.OrdinalIgnoreCase) ? "artist_top:" : "artist_songs_top:");
 			navigationHistoryItem.ArtistName = _currentArtist?.Name ?? _currentArtistDetail?.Name ?? string.Empty;
 		}
-		else if (_currentViewSource.StartsWith("artist_songs:", StringComparison.OrdinalIgnoreCase))
+		else if (viewSource.StartsWith("artist_songs:", StringComparison.OrdinalIgnoreCase))
 		{
 			navigationHistoryItem.PageType = "artist_songs";
-			ParseArtistListViewSource(_currentViewSource, out var artistId, out var offset, out var order);
+			ParseArtistListViewSource(viewSource, out var artistId, out var offset, out var order);
 			navigationHistoryItem.ArtistId = artistId;
 			navigationHistoryItem.ArtistOffset = offset;
 			navigationHistoryItem.ArtistOrder = order;
 			navigationHistoryItem.ArtistName = _currentArtist?.Name ?? _currentArtistDetail?.Name ?? string.Empty;
 		}
-		else if (_currentViewSource.StartsWith("artist_albums:", StringComparison.OrdinalIgnoreCase))
+		else if (viewSource.StartsWith("artist_albums:", StringComparison.OrdinalIgnoreCase))
 		{
 			navigationHistoryItem.PageType = "artist_albums";
-			ParseArtistListViewSource(_currentViewSource, out var artistId2, out var offset2, out var order2, "latest");
+			ParseArtistListViewSource(viewSource, out var artistId2, out var offset2, out var order2, "latest");
 			navigationHistoryItem.ArtistId = artistId2;
 			navigationHistoryItem.ArtistOffset = offset2;
 			navigationHistoryItem.ArtistAlbumSort = order2;
 			navigationHistoryItem.ArtistName = _currentArtist?.Name ?? _currentArtistDetail?.Name ?? string.Empty;
 		}
-		else if (string.Equals(_currentViewSource, "artist_favorites", StringComparison.OrdinalIgnoreCase))
+		else if (string.Equals(viewSource, "artist_favorites", StringComparison.OrdinalIgnoreCase))
 		{
 			navigationHistoryItem.PageType = "artist_favorites";
 		}
-		else if (string.Equals(_currentViewSource, "artist_category_types", StringComparison.OrdinalIgnoreCase))
+		else if (string.Equals(viewSource, "artist_category_types", StringComparison.OrdinalIgnoreCase))
 		{
 			navigationHistoryItem.PageType = "artist_category_types";
 		}
-		else if (_currentViewSource.StartsWith("artist_category_type:", StringComparison.OrdinalIgnoreCase))
+		else if (viewSource.StartsWith("artist_category_type:", StringComparison.OrdinalIgnoreCase))
 		{
 			navigationHistoryItem.PageType = "artist_category_type";
-			navigationHistoryItem.ArtistType = checked((int)ParseArtistIdFromViewSource(_currentViewSource, "artist_category_type:"));
+			navigationHistoryItem.ArtistType = checked((int)ParseArtistIdFromViewSource(viewSource, "artist_category_type:"));
 		}
-		else if (_currentViewSource.StartsWith("artist_category_list:", StringComparison.OrdinalIgnoreCase))
+		else if (viewSource.StartsWith("artist_category_list:", StringComparison.OrdinalIgnoreCase))
 		{
 			navigationHistoryItem.PageType = "artist_category_list";
-			ParseArtistCategoryListViewSource(_currentViewSource, out var typeCode, out var areaCode, out var offset3);
+			ParseArtistCategoryListViewSource(viewSource, out var typeCode, out var areaCode, out var offset3);
 			navigationHistoryItem.ArtistType = typeCode;
 			navigationHistoryItem.ArtistArea = areaCode;
 			navigationHistoryItem.ArtistOffset = offset3;
 		}
-		else if (string.Equals(_currentViewSource, "new_album_category_periods", StringComparison.OrdinalIgnoreCase))
+		else if (string.Equals(viewSource, "new_album_category_periods", StringComparison.OrdinalIgnoreCase))
 		{
 			navigationHistoryItem.PageType = "new_album_category_periods";
 		}
-		else if (_currentViewSource.StartsWith("new_album_category_period:", StringComparison.OrdinalIgnoreCase))
+		else if (viewSource.StartsWith("new_album_category_period:", StringComparison.OrdinalIgnoreCase))
 		{
 			navigationHistoryItem.PageType = "new_album_category_period";
-			navigationHistoryItem.AlbumCategoryType = checked((int)ParseArtistIdFromViewSource(_currentViewSource, "new_album_category_period:"));
+			navigationHistoryItem.AlbumCategoryType = checked((int)ParseArtistIdFromViewSource(viewSource, "new_album_category_period:"));
 		}
-		else if (_currentViewSource.StartsWith("new_album_category_list:", StringComparison.OrdinalIgnoreCase))
+		else if (viewSource.StartsWith("new_album_category_list:", StringComparison.OrdinalIgnoreCase))
 		{
 			navigationHistoryItem.PageType = "new_album_category_list";
-			ParseAlbumCategoryListViewSource(_currentViewSource, out var typeCode2, out var areaCode2, out var offset4);
+			ParseAlbumCategoryListViewSource(viewSource, out var typeCode2, out var areaCode2, out var offset4);
 			navigationHistoryItem.AlbumCategoryType = typeCode2;
 			navigationHistoryItem.AlbumCategoryArea = areaCode2;
 			navigationHistoryItem.AlbumCategoryOffset = offset4;
 		}
-		else if (_currentViewSource.StartsWith("podcast:", StringComparison.OrdinalIgnoreCase))
+		else if (viewSource.StartsWith("podcast:", StringComparison.OrdinalIgnoreCase))
 		{
 			navigationHistoryItem.PageType = "podcast";
-			ParsePodcastViewSource(_currentViewSource, out var radioId, out var offset5, out var ascending);
+			ParsePodcastViewSource(viewSource, out var radioId, out var offset5, out var ascending);
 			navigationHistoryItem.PodcastRadioId = radioId;
 			navigationHistoryItem.PodcastOffset = offset5;
 			navigationHistoryItem.PodcastRadioName = _currentPodcast?.Name ?? string.Empty;
 			navigationHistoryItem.PodcastAscending = ascending;
 		}
-		else if (_currentViewSource.StartsWith("url:mixed", StringComparison.OrdinalIgnoreCase))
+		else if (viewSource.StartsWith("url:mixed:", StringComparison.OrdinalIgnoreCase))
 		{
 			navigationHistoryItem.PageType = "url_mixed";
-			navigationHistoryItem.MixedQueryKey = _currentMixedQueryKey ?? string.Empty;
+			navigationHistoryItem.MixedQueryKey = viewSource.Substring("url:mixed:".Length);
 		}
-		else if (_currentViewSource.StartsWith("url:song:", StringComparison.OrdinalIgnoreCase))
+		else if (viewSource.StartsWith("url:song:", StringComparison.OrdinalIgnoreCase))
 		{
 			navigationHistoryItem.PageType = "url_song";
-			navigationHistoryItem.SongId = _currentViewSource.Substring("url:song:".Length);
+			navigationHistoryItem.SongId = viewSource.Substring("url:song:".Length);
 		}
 		else
 		{
 			navigationHistoryItem.PageType = "category";
-			navigationHistoryItem.CategoryId = _currentViewSource;
+			navigationHistoryItem.CategoryId = viewSource;
 		}
 		return navigationHistoryItem;
 	}
@@ -224,7 +232,12 @@ public partial class MainForm
 		}
 		string text = viewSource.Substring("search:".Length);
 		string text2 = null;
-		if (text.StartsWith("artist:", StringComparison.OrdinalIgnoreCase))
+		if (text.StartsWith("song:", StringComparison.OrdinalIgnoreCase))
+		{
+			text2 = "song";
+			text = text.Substring("song:".Length);
+		}
+		else if (text.StartsWith("artist:", StringComparison.OrdinalIgnoreCase))
 		{
 			text2 = "artist";
 			text = text.Substring("artist:".Length);
@@ -244,11 +257,7 @@ public partial class MainForm
 			text2 = "podcast";
 			text = text.Substring("podcast:".Length);
 		}
-		bool flag = false;
-		if (1 == 0)
-		{
-		}
-		string text3 = text2 switch
+		searchType = text2 switch
 		{
 			"artist" => "歌手", 
 			"album" => "专辑", 
@@ -256,12 +265,6 @@ public partial class MainForm
 			"podcast" => "播客", 
 			_ => "歌曲", 
 		};
-		if (1 == 0)
-		{
-		}
-		string text4 = text3;
-		bool flag2 = false;
-		searchType = text4;
 		int num = text.LastIndexOf(":page", StringComparison.OrdinalIgnoreCase);
 		checked
 		{
@@ -276,6 +279,30 @@ public partial class MainForm
 			}
 			keyword = (string.IsNullOrWhiteSpace(text) ? string.Empty : text);
 		}
+	}
+
+	private static string NormalizeNavigationViewSource(string source)
+	{
+		if (string.IsNullOrWhiteSpace(source))
+		{
+			return string.Empty;
+		}
+		if (IsListenMatchViewSource(source))
+		{
+			return NormalizeListenMatchViewSource(source);
+		}
+		if (source.StartsWith("artist_top:", StringComparison.OrdinalIgnoreCase))
+		{
+			return "artist_songs_top:" + source.Substring("artist_top:".Length);
+		}
+		if (IsSearchViewSource(source))
+		{
+			ParseSearchViewSource(source, out var searchType, out var keyword, out var page);
+			string typeToken = SearchTypeToViewSourceToken(searchType);
+			return $"search:{(string.IsNullOrEmpty(typeToken) ? "song" : typeToken)}:{keyword}:page{page}";
+		}
+		string baseSource = StripOffsetSuffix(source, out int offset);
+		return offset == 0 ? baseSource : source;
 	}
 
 	private static bool IsSameNavigationState(NavigationHistoryItem a, NavigationHistoryItem b)
@@ -293,7 +320,7 @@ public partial class MainForm
 		case "homepage":
 			return true;
 		case "category":
-			return string.Equals(a.CategoryId, b.CategoryId, StringComparison.OrdinalIgnoreCase);
+			return string.Equals(NormalizeNavigationViewSource(a.CategoryId), NormalizeNavigationViewSource(b.CategoryId), StringComparison.OrdinalIgnoreCase);
 		case "playlist":
 			return string.Equals(a.PlaylistId, b.PlaylistId, StringComparison.OrdinalIgnoreCase);
 		case "album":
@@ -333,69 +360,75 @@ public partial class MainForm
 
 	private async Task GoBackAsync()
 	{
-		DateTime now = DateTime.UtcNow;
-		double elapsed = (now - _lastBackTime).TotalMilliseconds;
-		if (elapsed < 300.0)
-		{
-			Debug.WriteLine($"[Navigation] \ud83d\uded1 防抖拦截：距上次后退仅 {elapsed:F0}ms");
-			return;
-		}
 		if (_isNavigating)
 		{
-			Debug.WriteLine("[Navigation] \ud83d\uded1 并发拦截：已有导航操作正在执行，标记 pendingBack 并尝试取消当前视图");
 			_pendingBackNavigation = true;
 			CancelViewContentOperation();
 			CancelNavigationOperation();
 			return;
 		}
+		DateTime now = DateTime.UtcNow;
+		if ((now - _lastBackTime).TotalMilliseconds < 300.0)
+		{
+			return;
+		}
+		_isNavigating = true;
+		_lastBackTime = now;
 		try
 		{
-			_isNavigating = true;
-			_lastBackTime = now;
-			if (_navigationHistory.Count == 0)
+			do
 			{
-				Debug.WriteLine("[Navigation] 导航历史为空，返回主页");
-				if (!_isHomePage)
+				_pendingBackNavigation = false;
+				if (_navigationHistory.Count == 0)
 				{
-					await LoadHomePageAsync();
+					if (!_isHomePage)
+					{
+						await LoadHomePageAsync();
+					}
+					else
+					{
+						UpdateStatusBar("已经在主页了");
+					}
+					continue;
 				}
-				else
+				NavigationHistoryItem state = _navigationHistory.Peek();
+				Debug.WriteLine($"[Navigation] 尝试后退到: {state.ViewName}, 类型={state.PageType}, 当前历史={_navigationHistory.Count}");
+				bool restored = await RestoreNavigationStateAsync(state);
+				// A forward navigation or Home may have replaced/cleared the stack
+				// while this restore was awaiting data. Never pop that newer entry.
+				if (_navigationHistory.Count == 0 || !ReferenceEquals(_navigationHistory.Peek(), state))
 				{
-					UpdateStatusBar("已经在主页了");
+					_pendingBackNavigation = false;
+					break;
 				}
-				return;
-			}
-			NavigationHistoryItem state = _navigationHistory.Peek();
-			Debug.WriteLine($"[Navigation] 尝试后退到: {state.ViewName}, 类型={state.PageType}, 当前历史={_navigationHistory.Count}");
-			if (await RestoreNavigationStateAsync(state))
-			{
-				_navigationHistory.Pop();
-				Debug.WriteLine($"[Navigation] 后退成功: {state.ViewName}, 剩余历史={_navigationHistory.Count}");
-			}
-			else
-			{
-				UpdateStatusBar("返回失败，已保持当前页面");
-			}
+				if (restored && !_pendingBackNavigation)
+				{
+					_navigationHistory.Pop();
+					Debug.WriteLine($"[Navigation] 后退成功: {state.ViewName}, 剩余历史={_navigationHistory.Count}");
+				}
+				else if (!_pendingBackNavigation)
+				{
+					UpdateStatusBar("返回未完成，请重试");
+				}
+				// Retry a cancelled restore on the UI context, without applying the
+				// key-repeat debounce again or losing the original history entry.
+			} while (_pendingBackNavigation && !IsDisposed);
 		}
 		finally
 		{
 			_isNavigating = false;
-			if (_pendingBackNavigation)
-			{
-				_pendingBackNavigation = false;
-				Debug.WriteLine("[Navigation] 处理 pendingBack");
-				Task.Run(async delegate
-				{
-					await GoBackAsync();
-				});
-			}
+			_pendingBackNavigation = false;
 		}
 	}
 
 	private async Task<bool> RestoreNavigationStateAsync(NavigationHistoryItem state)
 	{
-		string previousViewSource = _currentViewSource ?? string.Empty;
+		if (state == null)
+		{
+			return false;
+		}
 		int previousAutoFocusDepth = _autoFocusSuppressionDepth;
+		long cancellationVersion = Interlocked.Read(ref _viewContentCancellationVersion);
 		checked
 		{
 			_autoFocusSuppressionDepth++;
@@ -430,72 +463,7 @@ public partial class MainForm
 					await LoadHomePageAsync(skipSave: true);
 					break;
 				case "category":
-					int pendingCategoryIndex = (state.SelectedDataIndex >= 0) ? state.SelectedDataIndex : state.SelectedIndex;
-					string normalizedCategoryId = StripOffsetSuffix(state.CategoryId ?? string.Empty, out int categoryOffset);
-					if (string.Equals(normalizedCategoryId, "toplist", StringComparison.OrdinalIgnoreCase))
-					{
-						await LoadToplist(pendingCategoryIndex, categoryOffset, skipSave: true);
-					}
-					else if (string.Equals(state.CategoryId, "daily_recommend", StringComparison.OrdinalIgnoreCase))
-					{
-						await LoadDailyRecommend(pendingCategoryIndex);
-					}
-					else if (string.Equals(state.CategoryId, "personalized", StringComparison.OrdinalIgnoreCase))
-					{
-						await LoadPersonalized(pendingCategoryIndex);
-					}
-					else if (string.Equals(normalizedCategoryId, PersonalFmCategoryId, StringComparison.OrdinalIgnoreCase))
-					{
-						await LoadPersonalFm(pendingCategoryIndex);
-					}
-					else if (string.Equals(state.CategoryId, "daily_recommend_songs", StringComparison.OrdinalIgnoreCase))
-					{
-						await LoadDailyRecommendSongs(pendingCategoryIndex);
-					}
-					else if (string.Equals(state.CategoryId, "daily_recommend_playlists", StringComparison.OrdinalIgnoreCase))
-					{
-						await LoadDailyRecommendPlaylists(pendingCategoryIndex);
-					}
-					else if (string.Equals(state.CategoryId, "personalized_playlists", StringComparison.OrdinalIgnoreCase))
-					{
-						await LoadPersonalizedPlaylists(pendingCategoryIndex);
-					}
-					else if (string.Equals(state.CategoryId, "personalized_newsongs", StringComparison.OrdinalIgnoreCase))
-					{
-						await LoadPersonalizedNewSongs(pendingCategoryIndex);
-					}
-					else if (string.Equals(state.CategoryId, "personalized_newsong", StringComparison.OrdinalIgnoreCase))
-					{
-						await LoadPersonalizedNewSong(pendingCategoryIndex);
-					}
-					else if (string.Equals(normalizedCategoryId, "highquality_playlists", StringComparison.OrdinalIgnoreCase))
-					{
-						await LoadHighQualityPlaylists(categoryOffset, skipSave: true, pendingFocusIndex: pendingCategoryIndex);
-					}
-					else if (string.Equals(state.CategoryId, "recent_listened", StringComparison.OrdinalIgnoreCase))
-					{
-						await LoadRecentListenedCategoryAsync(skipSave: true, pendingFocusIndex: pendingCategoryIndex);
-					}
-					else if (string.Equals(state.CategoryId, "recent_play", StringComparison.OrdinalIgnoreCase))
-					{
-						await LoadRecentPlayedSongsAsync(pendingCategoryIndex);
-					}
-					else if (string.Equals(state.CategoryId, "recent_playlists", StringComparison.OrdinalIgnoreCase))
-					{
-						await LoadRecentPlaylistsAsync(pendingCategoryIndex);
-					}
-					else if (string.Equals(state.CategoryId, "recent_albums", StringComparison.OrdinalIgnoreCase))
-					{
-						await LoadRecentAlbumsAsync(pendingCategoryIndex);
-					}
-					else if (string.Equals(state.CategoryId, "recent_podcasts", StringComparison.OrdinalIgnoreCase))
-					{
-						await LoadRecentPodcastsAsync(pendingCategoryIndex);
-					}
-					else
-					{
-						await LoadCategoryContent(state.CategoryId, skipSave: true);
-					}
+					await LoadCategoryContent(state.CategoryId, skipSave: true, pendingRestoreIndex);
 					break;
 				case "playlist":
 					await LoadPlaylistById(state.PlaylistId, skipSave: true);
@@ -587,7 +555,8 @@ public partial class MainForm
 					UpdateStatusBar("无法恢复页面");
 					return false;
 				}
-				if (!IsNavigationStateApplied(state))
+				if (cancellationVersion != Interlocked.Read(ref _viewContentCancellationVersion)
+					|| GetCurrentViewContentToken().IsCancellationRequested || !IsNavigationStateApplied(state))
 				{
 					Debug.WriteLine("[Navigation] 页面状态未切换，当前 view=" + _currentViewSource + ", 期望=" + state.ViewSource);
 					ClearPendingNavigationRestoreFocus();
@@ -653,14 +622,16 @@ public partial class MainForm
 				UpdateStatusBar("返回到: " + state.ViewName);
 				return true;
 			}
+			catch (OperationCanceledException)
+			{
+				ClearPendingNavigationRestoreFocus();
+				return false;
+			}
 			catch (Exception ex)
 			{
-				Exception ex2 = ex;
-				Exception ex3 = ex2;
-				Debug.WriteLine($"[Navigation] 恢复状态失败: {ex3}");
-				MessageBox.Show("返回失败: " + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+				Debug.WriteLine($"[Navigation] 恢复状态失败: {ex}");
+				MessageBox.Show("返回失败: " + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 				UpdateStatusBar("返回失败");
-				_currentViewSource = previousViewSource;
 				ClearPendingNavigationRestoreFocus();
 				return false;
 			}
@@ -677,7 +648,7 @@ public partial class MainForm
 		{
 			return false;
 		}
-		if (!string.IsNullOrWhiteSpace(state.ViewSource) && string.Equals(_currentViewSource, state.ViewSource, StringComparison.OrdinalIgnoreCase))
+		if (!string.IsNullOrWhiteSpace(state.ViewSource) && string.Equals(NormalizeNavigationViewSource(_currentViewSource), NormalizeNavigationViewSource(state.ViewSource), StringComparison.OrdinalIgnoreCase))
 		{
 			return true;
 		}
@@ -686,39 +657,38 @@ public partial class MainForm
 		case "homepage":
 			return _isHomePage || string.Equals(_currentViewSource, "homepage", StringComparison.OrdinalIgnoreCase);
 		case "category":
-			return string.Equals(_currentViewSource, state.CategoryId, StringComparison.OrdinalIgnoreCase);
+			return string.Equals(NormalizeNavigationViewSource(_currentViewSource), NormalizeNavigationViewSource(state.CategoryId), StringComparison.OrdinalIgnoreCase);
 		case "playlist":
 			return string.Equals(_currentViewSource, "playlist:" + state.PlaylistId, StringComparison.OrdinalIgnoreCase);
 		case "album":
 			return string.Equals(_currentViewSource, "album:" + state.AlbumId, StringComparison.OrdinalIgnoreCase);
 		case "artist_entries":
+			return state.ArtistId > 0 && string.Equals(_currentViewSource, $"artist_entries:{state.ArtistId}", StringComparison.OrdinalIgnoreCase);
 		case "artist_top":
-			return state.ArtistId > 0 && (_currentViewSource ?? string.Empty).IndexOf(state.ArtistId.ToString(), StringComparison.OrdinalIgnoreCase) >= 0;
+			return state.ArtistId > 0 && string.Equals(NormalizeNavigationViewSource(_currentViewSource), $"artist_songs_top:{state.ArtistId}", StringComparison.OrdinalIgnoreCase);
+		case "search":
+			ParseSearchViewSource(_currentViewSource, out var searchType, out var keyword, out var page);
+			return IsSearchViewSource(_currentViewSource) && string.Equals(searchType, state.SearchType, StringComparison.OrdinalIgnoreCase)
+				&& string.Equals(keyword, state.SearchKeyword, StringComparison.OrdinalIgnoreCase) && page == state.CurrentPage;
 		case "artist_songs":
 		{
-			if (state.ArtistId <= 0)
+			if (state.ArtistId <= 0 || !(_currentViewSource?.StartsWith("artist_songs:", StringComparison.OrdinalIgnoreCase) ?? false))
 			{
 				return false;
 			}
-			string b = $"artist_songs:{state.ArtistId}:order{state.ArtistOrder}:offset{state.ArtistOffset}";
-			if (string.Equals(_currentViewSource, b, StringComparison.OrdinalIgnoreCase))
-			{
-				return true;
-			}
-			return string.Equals(_currentViewSource, $"artist_songs:{state.ArtistId}:offset{state.ArtistOffset}", StringComparison.OrdinalIgnoreCase);
+			ParseArtistListViewSource(_currentViewSource, out var artistId, out var offset, out var order);
+			return artistId == state.ArtistId && offset == state.ArtistOffset
+				&& ResolveArtistSongsOrder(order) == ResolveArtistSongsOrder(state.ArtistOrder);
 		}
 		case "artist_albums":
 		{
-			if (state.ArtistId <= 0)
+			if (state.ArtistId <= 0 || !(_currentViewSource?.StartsWith("artist_albums:", StringComparison.OrdinalIgnoreCase) ?? false))
 			{
 				return false;
 			}
-			string b2 = $"artist_albums:{state.ArtistId}:order{state.ArtistAlbumSort}:offset{state.ArtistOffset}";
-			if (string.Equals(_currentViewSource, b2, StringComparison.OrdinalIgnoreCase))
-			{
-				return true;
-			}
-			return string.Equals(_currentViewSource, $"artist_albums:{state.ArtistId}:offset{state.ArtistOffset}", StringComparison.OrdinalIgnoreCase);
+			ParseArtistListViewSource(_currentViewSource, out var artistId, out var offset, out var order, "latest");
+			return artistId == state.ArtistId && offset == state.ArtistOffset
+				&& ResolveArtistAlbumSort(order) == ResolveArtistAlbumSort(state.ArtistAlbumSort);
 		}
 		case "artist_favorites":
 			return string.Equals(_currentViewSource, "artist_favorites", StringComparison.OrdinalIgnoreCase);
@@ -742,7 +712,7 @@ public partial class MainForm
 		case "url_song":
 			return string.Equals(_currentViewSource, "url:song:" + state.SongId, StringComparison.OrdinalIgnoreCase);
 		case "url_mixed":
-			return string.Equals(_currentMixedQueryKey, state.MixedQueryKey, StringComparison.OrdinalIgnoreCase);
+			return string.Equals(_currentViewSource, "url:mixed:" + state.MixedQueryKey, StringComparison.OrdinalIgnoreCase);
 		default:
 			return string.Equals(_currentViewSource, state.ViewSource, StringComparison.OrdinalIgnoreCase);
 		}

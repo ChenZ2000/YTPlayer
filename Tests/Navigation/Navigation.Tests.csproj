@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <PlatformTarget>x64</PlatformTarget>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="YTPlayer.App"><HintPath>../../bin/Debug/libs/YTPlayer.App.dll</HintPath></Reference>
+    <Reference Include="Newtonsoft.Json"><HintPath>../../bin/Debug/libs/Newtonsoft.Json.dll</HintPath></Reference>
+  </ItemGroup>
+  <Target Name="BuildPlayerForTests" BeforeTargets="ResolveAssemblyReferences">
+    <MSBuild Projects="../../YTPlayer.csproj" Targets="Build" Properties="Configuration=Debug;Platform=x64" />
+  </Target>
+  <Target Name="CopyRuntime" AfterTargets="Build">
+    <ItemGroup><RuntimeFiles Include="../../bin/Debug/libs/*.dll;../../bin/Debug/runtimes/win-x64/native/*.dll" /></ItemGroup>
+    <Copy SourceFiles="@(RuntimeFiles)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+</Project>

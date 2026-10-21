@@ -1373,7 +1373,7 @@ public partial class MainForm
 		{
 			return string.Empty;
 		}
-		if (normalizedViewSource.StartsWith("listen-match", StringComparison.OrdinalIgnoreCase))
+		if (IsListenMatchViewSource(normalizedViewSource))
 		{
 			return "听歌识曲";
 		}

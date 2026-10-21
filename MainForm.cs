@@ -2139,9 +2139,19 @@ public partial class MainForm : Form
 		}
 	}
 
-        public MainForm()
+        public MainForm() : this(initializeRuntime: true)
+        {
+        }
+
+        // Allow offline UI regression tests to create the real controls without starting
+        // audio, account services, timers or the application's startup network requests.
+        internal MainForm(bool initializeRuntime)
         {
                 InitializeComponent();
+                if (!initializeRuntime)
+                {
+                        return;
+                }
                 MenuNavigationBoundaryHelper.Attach(menuStrip1);
                 InitializeMainMenuKeyboardRouting();
                 IconAssetProvider.TryApplyFormIcon(this);
@@ -11587,10 +11597,10 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		}
 		if (string.IsNullOrWhiteSpace(playlist.Id))
 		{
-			throw new InvalidOperationException("\ufffd赥ȱ\ufffd\ufffd\ufffd\ufffdЧ\ufffdı\ufffdʶ\ufffd\ufffd");
+			throw new InvalidOperationException("歌单缺少有效的标识。");
 		}
 		string playlistId = playlist.Id;
-		string playlistName = (string.IsNullOrWhiteSpace(playlist.Name) ? ("\ufffd赥 " + playlistId) : playlist.Name);
+		string playlistName = string.IsNullOrWhiteSpace(playlist.Name) ? ("歌单 " + playlistId) : playlist.Name;
 		          string viewSource = (string.IsNullOrWhiteSpace(operationName) ? ("playlist:" + playlistId) : operationName);
           List<SongInfo> skeletonSongs = playlist.Songs ?? new List<SongInfo>();
           int loadedCount = skeletonSongs.Count;
@@ -11672,10 +11682,10 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		}
 		if (string.IsNullOrWhiteSpace(album.Id))
 		{
-			throw new InvalidOperationException("ר\ufffd\ufffdȱ\ufffd\ufffd\ufffd\ufffdЧ\ufffdı\ufffdʶ\ufffd\ufffd");
+			throw new InvalidOperationException("专辑缺少有效的标识。");
 		}
 		string albumId = album.Id;
-		string albumName = (string.IsNullOrWhiteSpace(album.Name) ? ("ר\ufffd\ufffd " + albumId) : album.Name);
+		string albumName = string.IsNullOrWhiteSpace(album.Name) ? ("专辑 " + albumId) : album.Name;
 		string viewSource = (string.IsNullOrWhiteSpace(operationName) ? ("album:" + albumId) : operationName);
 		List<SongInfo> skeletonSongs = album.Songs ?? new List<SongInfo>();
 		foreach (SongInfo song in skeletonSongs)
@@ -11685,7 +11695,9 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 				song.ViewSource = viewSource;
 			}
 		}
-		string statusText = ((skeletonSongs.Count != 0) ? $"ר\ufffd\ufffd: {albumName}\ufffd\ufffd\ufffd\ufffd {skeletonSongs.Count} \ufffd\u05f8\ufffd\ufffd\ufffd (\ufffdǼ\ufffd)" : ((album.TrackCount > 0) ? $"ר\ufffd\ufffd: {albumName}\ufffd\ufffd\ufffd\ufffd {album.TrackCount} \ufffd\u05f8\ufffd\ufffd\ufffd (\ufffdǼ\ufffd, \ufffd\ufffdȱ\ufffd\ufffd\ufffd\ufffd)" : ("ר\ufffd\ufffd: " + albumName + "\ufffd\ufffd\u05fc\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd")));
+		string statusText = skeletonSongs.Count > 0
+			? $"专辑: {albumName} · 共 {skeletonSongs.Count} 首"
+			: (album.TrackCount > 0 ? $"专辑: {albumName} · 共 {album.TrackCount} 首，正在加载歌曲..." : $"专辑: {albumName} 暂无歌曲");
 		return (album, skeletonSongs, statusText);
 	}
 
@@ -13926,8 +13938,8 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
                         return true;
                 }
 
-                string normalizedFirst = StripOffsetSuffix(first, out _);
-                string normalizedSecond = StripOffsetSuffix(second, out _);
+                string normalizedFirst = StripOffsetSuffix(NormalizeNavigationViewSource(first), out _);
+                string normalizedSecond = StripOffsetSuffix(NormalizeNavigationViewSource(second), out _);
                 return string.Equals(normalizedFirst, normalizedSecond, StringComparison.OrdinalIgnoreCase);
         }
 
@@ -14263,9 +14275,18 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		{
 			return false;
 		}
+        string previousViewSource = _currentViewSource;
+        int previousHistoryCount = _navigationHistory.Count;
+        NavigationHistoryItem addedHistoryEntry = null;
+        bool navigated = false;
+        long cancellationVersion = Interlocked.Read(ref _viewContentCancellationVersion);
                 try
                 {
                         SaveNavigationState();
+                        if (_navigationHistory.Count > previousHistoryCount)
+                        {
+                                addedHistoryEntry = _navigationHistory.Peek();
+                        }
 			string normalizedViewSource = StripOffsetSuffix(viewSource, out _);
                 bool isPersonalFmSource = string.Equals(normalizedViewSource, PersonalFmCategoryId, StringComparison.OrdinalIgnoreCase);
                 int personalFmFocusIndex = -1;
@@ -14324,7 +14345,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 			{
 				await LoadAlbumById(viewSource.Substring("album:".Length), skipSave: true);
 			}
-			else if (viewSource.StartsWith("listen-match:", StringComparison.OrdinalIgnoreCase) || string.Equals(viewSource, "listen-match", StringComparison.OrdinalIgnoreCase))
+			else if (IsListenMatchViewSource(viewSource))
 			{
 				string normalized = NormalizeListenMatchViewSource(viewSource);
 				await LoadListenMatchAsync(normalized, skipSave: true);
@@ -14431,31 +14452,35 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 			{
 				await LoadPersonalFm((personalFmFocusIndex >= 0) ? personalFmFocusIndex : ResolvePersonalFmFocusIndexForViewSourceNavigation(currentSong));
 			}
-			else if (string.Equals(normalizedViewSource, "recent_play", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "recent_playlists", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "recent_albums", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "recent_listened", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "recent_podcasts", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "daily_recommend", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "personalized", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "toplist", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "daily_recommend_songs", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "daily_recommend_playlists", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "personalized_playlists", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "personalized_newsongs", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, PersonalFmCategoryId, StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "highquality_playlists", StringComparison.OrdinalIgnoreCase) || normalizedViewSource.StartsWith("playlist_cat_", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "playlist_category", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "new_songs", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "new_songs_all", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "new_songs_chinese", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "new_songs_western", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "new_songs_japan", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "new_songs_korea", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "new_albums", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "user_liked_songs", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "user_playlists", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "user_albums", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "user_podcasts", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "user_cloud", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "artist_favorites", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "artist_categories", StringComparison.OrdinalIgnoreCase) || normalizedViewSource.StartsWith("artist_top_", StringComparison.OrdinalIgnoreCase) || normalizedViewSource.StartsWith("artist_songs_", StringComparison.OrdinalIgnoreCase) || normalizedViewSource.StartsWith("artist_albums_", StringComparison.OrdinalIgnoreCase) || normalizedViewSource.StartsWith("artist_type_", StringComparison.OrdinalIgnoreCase) || normalizedViewSource.StartsWith("artist_area_", StringComparison.OrdinalIgnoreCase) || string.Equals(normalizedViewSource, "new_album_categories", StringComparison.OrdinalIgnoreCase) || normalizedViewSource.StartsWith("new_album_period_", StringComparison.OrdinalIgnoreCase) || normalizedViewSource.StartsWith("new_album_area_", StringComparison.OrdinalIgnoreCase))
+			else if (string.Equals(normalizedViewSource, "user_cloud", StringComparison.OrdinalIgnoreCase))
 			{
-				if (!string.Equals(viewSource, "user_cloud", StringComparison.OrdinalIgnoreCase))
-				{
-					await LoadCategoryContent(viewSource, skipSave: true);
-				}
-				else
-				{
-					await LoadCloudSongsAsync(skipSave: true, await JumpToCloudSongAsync(currentSong));
-				}
+				await LoadCloudSongsAsync(skipSave: true, await JumpToCloudSongAsync(currentSong));
 			}
 			else if (viewSource.StartsWith("url:song:", StringComparison.OrdinalIgnoreCase))
 			{
-				await LoadSongFromUrlAsync(viewSource.Substring("url:song:".Length), skipSave: true);
-			}
-			else
-			{
-				if (!viewSource.StartsWith("url:mixed:", StringComparison.OrdinalIgnoreCase))
+				if (!await LoadSongFromUrlAsync(viewSource.Substring("url:song:".Length), skipSave: true))
 				{
-					UpdateStatusBar("未找到匹配的来源页面");
 					return false;
 				}
-				await RestoreMixedUrlStateAsync(viewSource.Substring("url:mixed:".Length));
+			}
+			else if (viewSource.StartsWith("url:mixed:", StringComparison.OrdinalIgnoreCase))
+			{
+				if (!await RestoreMixedUrlStateAsync(viewSource.Substring("url:mixed:".Length)))
+				{
+					return false;
+				}
+			}
+			else if (!await TryLoadCategoryContentAsync(viewSource))
+			{
+				UpdateStatusBar("未找到匹配的来源页面");
+				return false;
+			}
+			if (cancellationVersion != Interlocked.Read(ref _viewContentCancellationVersion))
+			{
+				return false;
 			}
 			FocusSongInCurrentView(currentSong);
+			navigated = true;
 			return true;
 		}
 		catch (Exception ex)
@@ -14463,6 +14488,15 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 			Debug.WriteLine($"[ViewSource] 跳转失败: {ex}");
 			MessageBox.Show("无法跳转到来源: " + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 			return false;
+		}
+		finally
+		{
+			if (!navigated && addedHistoryEntry != null && _navigationHistory.Count > 0
+				&& ReferenceEquals(_navigationHistory.Peek(), addedHistoryEntry)
+				&& string.Equals(_currentViewSource, previousViewSource, StringComparison.OrdinalIgnoreCase))
+			{
+				_navigationHistory.Pop();
+			}
 		}
 	}
 
@@ -17739,7 +17773,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 	private async Task ShowRecognitionResultsAsync(SongRecognitionResult result)
 	{
 		List<SongInfo> newSongs = result.Matches?.ToList() ?? new List<SongInfo>();
-		bool isListeningView = !string.IsNullOrWhiteSpace(_currentViewSource) && _currentViewSource.StartsWith("listen-match", StringComparison.OrdinalIgnoreCase) && _currentSongs != null && _currentSongs.Count > 0;
+		bool isListeningView = IsListenMatchViewSource(_currentViewSource);
 		if (!isListeningView)
 		{
 			SaveNavigationState();
@@ -17755,7 +17789,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		string viewSource = NormalizeListenMatchViewSource("listen-match");
 		foreach (SongInfo song in mergedAggregate)
 		{
-			if (song != null && (string.IsNullOrWhiteSpace(song.ViewSource) || song.ViewSource.StartsWith("listen-match", StringComparison.OrdinalIgnoreCase)))
+			if (song != null && (string.IsNullOrWhiteSpace(song.ViewSource) || IsListenMatchViewSource(song.ViewSource)))
 			{
 				song.ViewSource = viewSource;
 			}
@@ -17790,10 +17824,10 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		}).ConfigureAwait(continueOnCapturedContext: true);
 	}
 
-	private async Task LoadListenMatchAsync(string viewSource, bool skipSave = false)
+	private async Task LoadListenMatchAsync(string viewSource, bool skipSave = false, int pendingFocusIndex = -1)
 	{
 		string normalized = NormalizeListenMatchViewSource(viewSource);
-		ViewLoadRequest request = new ViewLoadRequest(normalized, "听歌识曲", "正在载入听歌识曲结果...", !skipSave, -1);
+		ViewLoadRequest request = new ViewLoadRequest(normalized, "听歌识曲", "正在载入听歌识曲结果...", !skipSave, pendingFocusIndex);
 		List<SongInfo> cached;
 		List<SongInfo> songs = (_listenMatchCache.TryGetValue("listen-match", out cached) ? CloneList(cached) : CloneList(_listenMatchAggregate));
 		if ((await RunViewLoadAsync(request, (CancellationToken _) => Task.FromResult(songs), "听歌识曲已取消").ConfigureAwait(continueOnCapturedContext: true)).IsCanceled)
@@ -17805,7 +17839,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		_currentMixedQueryKey = null;
 		await ExecuteOnUiThreadAsync(delegate
 		{
-			DisplaySongs(_currentSongs, showPagination: false, hasNextPage: false, 1, preserveSelection: false, viewSource, "听歌识曲");
+			DisplaySongs(_currentSongs, showPagination: false, hasNextPage: false, 1, preserveSelection: false, normalized, "听歌识曲");
 			string message = ((_currentSongs.Count <= 0) ? "未能识别出歌曲" : $"听歌识曲结果：{_currentSongs.Count} 首");
 			UpdateStatusBar(message);
 			AnnounceListViewHeaderIfNeeded("听歌识曲");
@@ -17884,13 +17918,19 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		return cancellationTokenSource.Token;
 	}
 
-	private string NormalizeListenMatchViewSource(string viewSource)
+	private static bool IsListenMatchViewSource(string viewSource)
+	{
+		return string.Equals(viewSource, "listen-match", StringComparison.OrdinalIgnoreCase)
+			|| (viewSource?.StartsWith("listen-match:", StringComparison.OrdinalIgnoreCase) ?? false);
+	}
+
+	private static string NormalizeListenMatchViewSource(string viewSource)
 	{
 		if (string.IsNullOrWhiteSpace(viewSource))
 		{
 			return "listen-match";
 		}
-		if (viewSource.StartsWith("listen-match", StringComparison.OrdinalIgnoreCase))
+		if (IsListenMatchViewSource(viewSource))
 		{
 			return "listen-match";
 		}
@@ -17917,6 +17957,9 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 
 	private void CancelViewContentOperation()
 	{
+		// Cancellation disposes and clears the CTS. Keep its occurrence observable
+		// to a pending history restore even after GetCurrentViewContentToken returns None.
+		Interlocked.Increment(ref _viewContentCancellationVersion);
 		CancellationTokenSource viewContentCts;
 		lock (_viewContentLock)
 		{
@@ -18589,6 +18632,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		this.fileMenuItem.DropDownItems.AddRange(this.homeMenuItem, this.loginMenuItem, this.currentPlayingMenuItem, this.toolStripSeparatorDownload1, this.openDownloadDirMenuItem, this.changeDownloadDirMenuItem, this.downloadManagerMenuItem, this.refreshMenuItem, this.toolStripSeparatorDownload2, this.hideMenuItem, this.exitMenuItem);
 		this.fileMenuItem.DropDownOpening += new System.EventHandler(fileMenuItem_DropDownOpening);
 		this.homeMenuItem.Name = "homeMenuItem";
+		this.homeMenuItem.ShortcutKeys = System.Windows.Forms.Keys.Control | System.Windows.Forms.Keys.Shift | System.Windows.Forms.Keys.H;
 		this.homeMenuItem.Size = new System.Drawing.Size(178, 26);
 		this.homeMenuItem.Text = "主页(&H)";
 		this.homeMenuItem.Click += new System.EventHandler(homeMenuItem_Click);

@@ -252,22 +252,21 @@ private void ActivateMixedSearchTypeOption()
 		{
 			return false;
 		}
-		string[] array = key.Split(new char[1] { ';' }, StringSplitOptions.RemoveEmptyEntries);
-		string[] array2 = array;
-		string[] array3 = array2;
-		foreach (string text in array3)
+		foreach (string entry in key.Split(';', StringSplitOptions.RemoveEmptyEntries))
 		{
-			string[] array4 = text.Split(new char[1] { ':' }, 2);
-			if (array4.Length != 2)
+			string[] parts = entry.Split(':', 2);
+			if (parts.Length != 2)
 			{
 				return false;
 			}
-			if (!int.TryParse(array4[0], out var result) || !Enum.IsDefined(typeof(NeteaseUrlType), result))
+			// BuildMixedQueryKey writes enum names; also accept older numeric keys.
+			if (!Enum.TryParse<NeteaseUrlType>(parts[0], ignoreCase: true, out var type)
+				|| !Enum.IsDefined(typeof(NeteaseUrlType), type) || type == NeteaseUrlType.Unknown
+				|| !long.TryParse(parts[1], out long resourceId) || resourceId <= 0)
 			{
 				return false;
 			}
-			string text2 = array4[1];
-			matches.Add(new NeteaseUrlMatch((NeteaseUrlType)result, text2, text2));
+			matches.Add(new NeteaseUrlMatch(type, parts[1], parts[1]));
 		}
 		return matches.Count > 0;
 	}
@@ -558,7 +557,7 @@ private void ActivateMixedSearchTypeOption()
 		checked
 		{
 			int offset = Math.Max(0, (page - 1) * _resultsPerPage);
-			string viewSource = $"search:{keyword}:page{page}";
+			string viewSource = $"search:song:{keyword}:page{page}";
 			string accessibleName = "搜索: " + keyword;
 			ViewLoadRequest request = new ViewLoadRequest(viewSource, accessibleName, "正在搜索 " + keyword + "...", !skipSaveNavigation, (pendingFocusIndex >= 0) ? pendingFocusIndex : 0);
 			ViewLoadResult<SearchViewData<SongInfo>> loadResult = await RunViewLoadAsync(request, delegate

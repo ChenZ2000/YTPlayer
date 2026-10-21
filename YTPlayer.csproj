@@ -101,6 +101,7 @@
     </Compile>
     <Compile Include="MainForm.Accessibility.cs" />
     <Compile Include="Forms\MainForm\MainForm.Navigation.cs" />
+    <Compile Include="Forms\MainForm\MainForm.CategoryNavigation.cs" />
     <Compile Include="Forms\MainForm\MainForm.ContextMenus.cs" />
     <Compile Include="Forms\MainForm\MainForm.Search.cs" />
     <Compile Include="Forms\MainForm\MainForm.Downloads.cs" />
