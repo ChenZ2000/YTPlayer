@@ -22,6 +22,12 @@ namespace YTPlayer
 {
 public partial class MainForm
 {
+	internal static int GetPlayRequestDelayMs(TimeSpan elapsed)
+	{
+		// Clamp before narrowing, including when the system clock moves backwards.
+		return (int)Math.Ceiling(Math.Clamp(MIN_PLAY_REQUEST_INTERVAL_MS - elapsed.TotalMilliseconds, 0d, MIN_PLAY_REQUEST_INTERVAL_MS));
+	}
+
 	private void DisposeAudioEngineInBackground(BassAudioEngine? audioEngine)
 	{
 		if (audioEngine == null)
@@ -779,9 +785,9 @@ private Task PlaySongByIndex(int index)
 		(CancellationToken cancellationToken, long requestVersion) = BeginPlaybackRequestScope(parentToken);
 
 		TimeSpan timeSinceLastRequest = DateTime.Now - _lastPlayRequestTime;
-		if (timeSinceLastRequest.TotalMilliseconds < MIN_PLAY_REQUEST_INTERVAL_MS)
+		int delayMs = GetPlayRequestDelayMs(timeSinceLastRequest);
+		if (delayMs > 0)
 		{
-			int delayMs = checked(MIN_PLAY_REQUEST_INTERVAL_MS - (int)timeSinceLastRequest.TotalMilliseconds);
 			Debug.WriteLine($"[MainForm] Play request throttled by {delayMs}ms");
 			try
 			{

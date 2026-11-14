@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using YTPlayer.Utils;
 using MessageBox = YTPlayer.MessageBox;
 using System.ComponentModel;
@@ -25,16 +24,14 @@ namespace YTPlayer.Forms
                 : versionLabel!;
 
             summaryLabel.Text = $"发现新版本 {_versionLabel}";
-            resultTextBox.Text = BuildSummaryText();
-            resultTextBox.SelectionStart = 0;
-            resultTextBox.SelectionLength = 0;
+            resultView.SetDocument(BuildSummaryDocument());
         }
 
         [Browsable(false)]
         [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
         public Func<UpdatePlan, bool>? UpdateLauncher { get; set; }
 
-        private string BuildSummaryText()
+        private SemanticDocument BuildSummaryDocument()
         {
             var lines = new List<string>
             {
@@ -58,8 +55,8 @@ namespace YTPlayer.Forms
                 lines.Add($"发布页：{_plan.ReleasePage}");
             }
 
-            lines.Add("选择“立即更新”将启动更新程序，或点击“关闭”稍后再说。");
-            return string.Join(Environment.NewLine, lines.Where(l => !string.IsNullOrWhiteSpace(l)));
+            return new SemanticDocumentBuilder("更新信息").List(lines)
+                .Paragraph("选择“立即更新”将启动更新程序，或点击“关闭”稍后再说。").Build();
         }
 
         private void updateButton_Click(object sender, EventArgs e)

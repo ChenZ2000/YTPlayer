@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Globalization;
 using System.Linq;
-using System.Text;
 using System.Windows.Forms;
 using YTPlayer.Models;
 using YTPlayer.Utils;
@@ -271,18 +270,8 @@ namespace YTPlayer.Forms
                 Margin = new Padding(0, 0, 0, 12)
             };
 
-            var contentBox = new RichTextBox
-            {
-                Dock = DockStyle.Fill,
-                ReadOnly = true,
-                BorderStyle = BorderStyle.None,
-                BackColor = SystemColors.Window,
-                Font = Font,
-                Text = BuildDetailedNarrative(),
-                ScrollBars = RichTextBoxScrollBars.Vertical,
-                DetectUrls = true,
-                WordWrap = true
-            };
+            var contentBox = new AccessibleDocumentView { Dock = DockStyle.Fill, TabIndex = 0 };
+            contentBox.SetDocument(BuildDetailedDocument());
 
             group.Controls.Add(contentBox);
             return group;
@@ -429,9 +418,9 @@ namespace YTPlayer.Forms
                 : "--";
         }
 
-        private string BuildDetailedNarrative()
+        private SemanticDocument BuildDetailedDocument()
         {
-            var builder = new StringBuilder();
+            var builder = new SemanticDocumentBuilder("艺人详细介绍");
             bool hasWrittenBlock = false;
 
             void AppendBlock(string? title, string? content)
@@ -441,17 +430,12 @@ namespace YTPlayer.Forms
                     return;
                 }
 
-                if (hasWrittenBlock)
-                {
-                    builder.AppendLine();
-                }
-
                 if (!string.IsNullOrWhiteSpace(title))
                 {
-                    builder.AppendLine(title!.Trim());
+                    builder.Heading(title!.Trim());
                 }
 
-                builder.AppendLine(content!.Trim());
+                builder.Paragraph(content!.Trim());
                 hasWrittenBlock = true;
             }
 
@@ -488,10 +472,10 @@ namespace YTPlayer.Forms
 
             if (!hasWrittenBlock)
             {
-                builder.AppendLine("暂无详细介绍。");
+                builder.Paragraph("暂无详细介绍。");
             }
 
-            return builder.ToString().TrimEnd('\r', '\n');
+            return builder.Build();
         }
 
         private void LoadCoverImage(PictureBox pictureBox)

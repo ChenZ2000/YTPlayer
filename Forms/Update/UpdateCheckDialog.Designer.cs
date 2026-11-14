@@ -23,7 +23,7 @@ namespace YTPlayer.Forms
             this.statusLabel = new System.Windows.Forms.Label();
             this.progressBar = new YTPlayer.Utils.ThemedProgressBar();
             this.resultLabel = new System.Windows.Forms.Label();
-            this.resultTextBox = new System.Windows.Forms.TextBox();
+            this.resultView = new AccessibleDocumentView();
             this.buttonPanel = new System.Windows.Forms.FlowLayoutPanel();
             this.updateButton = new System.Windows.Forms.Button();
             this.retryButton = new System.Windows.Forms.Button();
@@ -95,15 +95,12 @@ namespace YTPlayer.Forms
             this.resultLabel.TabIndex = 6;
             this.resultLabel.Text = "检查结果：";
             // 
-            // resultTextBox
+            // resultView
             // 
-            this.resultTextBox.Location = new System.Drawing.Point(20, 225);
-            this.resultTextBox.Multiline = true;
-            this.resultTextBox.Name = "resultTextBox";
-            this.resultTextBox.ReadOnly = true;
-            this.resultTextBox.ScrollBars = System.Windows.Forms.ScrollBars.Vertical;
-            this.resultTextBox.Size = new System.Drawing.Size(540, 150);
-            this.resultTextBox.TabIndex = 6;
+            this.resultView.Location = new System.Drawing.Point(20, 225);
+            this.resultView.Name = "resultView";
+            this.resultView.Size = new System.Drawing.Size(540, 150);
+            this.resultView.TabIndex = 6;
             // 
             // buttonPanel
             // 
@@ -164,11 +161,11 @@ namespace YTPlayer.Forms
                 button.AutoSize = true;
                 button.MinimumSize = new System.Drawing.Size(97, 32);
             }
-            this.resultTextBox.MinimumSize = new System.Drawing.Size(0, 100);
+            this.resultView.MinimumSize = new System.Drawing.Size(0, 100);
             this.progressBar.MinimumSize = new System.Drawing.Size(0, 18);
             YTPlayer.Utils.DialogLayout.CreateVertical(this, 7, this.titleLabel, this.currentVersionLabel,
                 this.latestVersionLabel, this.assetLabel, this.statusLabel, this.progressBar,
-                this.resultLabel, this.resultTextBox, this.buttonPanel);
+                this.resultLabel, this.resultView, this.buttonPanel);
             this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.Sizable;
             this.MinimumSize = new System.Drawing.Size(420, 380);
             this.MaximizeBox = false;
@@ -192,7 +189,7 @@ namespace YTPlayer.Forms
         private System.Windows.Forms.Label statusLabel;
         private YTPlayer.Utils.ThemedProgressBar progressBar;
         private System.Windows.Forms.Label resultLabel;
-        private System.Windows.Forms.TextBox resultTextBox;
+        private AccessibleDocumentView resultView;
         private System.Windows.Forms.FlowLayoutPanel buttonPanel;
         private System.Windows.Forms.Button updateButton;
         private System.Windows.Forms.Button retryButton;

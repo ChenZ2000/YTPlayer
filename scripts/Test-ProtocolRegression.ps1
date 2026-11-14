@@ -41,7 +41,7 @@ try {
     # Serialize builds: each test project builds the same production application.
     $buildArgs = @('/restore', '/t:Build', '/p:Configuration=Debug', '/p:Platform=x64', '/m', '/nologo', '/v:normal', '/warnaserror')
     Invoke-Checked 'debug-build' $MSBuild (@('YTPlayer.sln') + $buildArgs)
-    foreach ($suite in @('ListenTogether', 'Recognition', 'Playback')) {
+    foreach ($suite in @('Auth', 'ListenTogether', 'Recognition', 'Playback')) {
         Invoke-Checked ($suite + '-build') $MSBuild (@("Tests/$suite/$suite.Tests.csproj") + $buildArgs)
         Invoke-Checked ($suite + '-tests') (Join-Path $repoRoot "Tests/$suite/bin/x64/Debug/net10.0-windows/$suite.Tests.exe") @()
     }

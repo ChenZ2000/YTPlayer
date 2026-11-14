@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
-using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
 using MessageBox = YTPlayer.MessageBox;
@@ -51,24 +50,20 @@ namespace YTPlayer.Forms
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-            var infoBox = new RichTextBox
+            var infoBox = new AccessibleDocumentView
             {
-                ReadOnly = true,
-                DetectUrls = true,
                 BorderStyle = BorderStyle.FixedSingle,
-                BackColor = SystemColors.Window,
                 Dock = DockStyle.Fill,
-                Font = new Font("Consolas", 10F),
-                Text = document.BuildDisplayText(),
-                WordWrap = false,
-                ScrollBars = RichTextBoxScrollBars.Both
+                TabIndex = 0
             };
+            infoBox.SetDocument(document.BuildContent());
 
             var buttonPanel = new FlowLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 FlowDirection = FlowDirection.RightToLeft,
-                AutoSize = true
+                AutoSize = true,
+                TabIndex = 1
             };
 
             Button? acceptButton = null;
@@ -150,7 +145,6 @@ namespace YTPlayer.Forms
         private sealed class AboutDocument
         {
             private static readonly Regex TokenRegex = new(@"\{\{(?<token>[A-Za-z0-9_]+)\}\}", RegexOptions.Compiled);
-            private static readonly Regex InlineLinkRegex = new(@"\[(?<text>[^\]]+)\]\((?<url>[^)]+)\)", RegexOptions.Compiled);
 
             private AboutDocument(string windowTitle, IReadOnlyList<string> bodyLines, IReadOnlyList<ButtonSpec> buttons)
             {
@@ -184,16 +178,8 @@ namespace YTPlayer.Forms
                 }
             }
 
-            public string BuildDisplayText()
-            {
-                var builder = new StringBuilder();
-                foreach (var line in BodyLines)
-                {
-                    builder.AppendLine(line);
-                }
-
-                return builder.ToString();
-            }
+            public SemanticDocument BuildContent() => new SemanticDocumentBuilder(WindowTitle)
+                .Markdown(string.Join("\n", BodyLines)).Build();
 
             private static AboutDocument Parse(string markdown)
             {
@@ -241,8 +227,7 @@ namespace YTPlayer.Forms
                     }
 
                     var resolved = ResolveTokens(rawLine, replacements);
-                    var normalized = NormalizeLine(ReplaceInlineLinks(resolved));
-                    bodyLines.Add(normalized);
+                    bodyLines.Add(resolved);
                 }
 
                 if (bodyLines.Count == 0)
@@ -351,65 +336,6 @@ namespace YTPlayer.Forms
                     var token = match.Groups["token"].Value;
                     return replacements.TryGetValue(token, out var value) ? value : match.Value;
                 });
-            }
-
-            private static string ReplaceInlineLinks(string text)
-            {
-                return InlineLinkRegex.Replace(text, match =>
-                {
-                    var linkText = match.Groups["text"].Value;
-                    var url = match.Groups["url"].Value;
-                    return $"{linkText} ({url})";
-                });
-            }
-
-            private static string NormalizeLine(string text)
-            {
-                var trimmed = text.TrimEnd();
-                if (trimmed.Length == 0)
-                {
-                    return string.Empty;
-                }
-
-                if (IsHorizontalRule(trimmed))
-                {
-                    return "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━";
-                }
-
-                if (trimmed.StartsWith("- ", StringComparison.Ordinal))
-                {
-                    return $"• {trimmed.Substring(2).Trim()}";
-                }
-
-                if (trimmed.StartsWith("> ", StringComparison.Ordinal))
-                {
-                    return trimmed.Substring(2).Trim();
-                }
-
-                if (trimmed.StartsWith("## ", StringComparison.Ordinal))
-                {
-                    return trimmed.Substring(3).Trim();
-                }
-
-                return trimmed;
-            }
-
-            private static bool IsHorizontalRule(string text)
-            {
-                if (text.Length < 3)
-                {
-                    return false;
-                }
-
-                foreach (var ch in text)
-                {
-                    if (ch != '-')
-                    {
-                        return false;
-                    }
-                }
-
-                return true;
             }
 
             private static bool TryParseLinkLine(string line, out string text, out string target)

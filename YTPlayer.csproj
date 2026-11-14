@@ -97,6 +97,8 @@
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="Utils\DialogLayout.cs" />
+    <Compile Include="Utils\SemanticDocument.cs" />
+    <Compile Include="Forms\AccessibleDocumentView.cs" />
     <Compile Include="MainForm.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -176,6 +178,13 @@
     <Compile Include="Core\NeteaseApiClient\NeteaseApiClient.Infrastructure.cs" />
     <Compile Include="Core\NeteaseApiClient\NeteaseApiClient.Transport.cs" />
     <Compile Include="Core\NeteaseApiClient\NeteaseApiClient.Auth.cs" />
+    <Compile Include="Core\NeteaseApiClient\NeteaseApiClient.InteractiveLogin.cs" />
+    <Compile Include="Core\Auth\LoginProtocolClient.cs" />
+    <Compile Include="Core\Auth\OfficialLoginSecurityContext.cs" />
+    <Compile Include="Core\Auth\LoginDiagnostics.cs" />
+    <Compile Include="Models\Auth\WeChatLoginModels.cs" />
+    <Compile Include="Forms\LoginForm.Interactive.cs" />
+    <Compile Include="Forms\LoginForm.WebDiagnostics.cs" />
     <Compile Include="Core\NeteaseApiClient\NeteaseApiClient.Search.cs" />
     <Compile Include="Core\NeteaseApiClient\NeteaseApiClient.Songs.cs" />
     <Compile Include="Core\NeteaseApiClient\NeteaseApiClient.Playlists.cs" />

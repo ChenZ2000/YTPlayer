@@ -71,8 +71,8 @@ namespace YTPlayer.Forms
                 DateTime now = DateTime.UtcNow;
                 if (_suppressControlRoleUntil > now)
                 {
-                    int remaining = (int)Math.Ceiling((_suppressControlRoleUntil - now).TotalMilliseconds);
-                    _restoreControlRoleTimer.Interval = Math.Max(ControlRoleRestoreDelayMs, Math.Min(remaining, 1000));
+                    _restoreControlRoleTimer.Interval = (int)Math.Ceiling(Math.Clamp(
+                        (_suppressControlRoleUntil - now).TotalMilliseconds, ControlRoleRestoreDelayMs, 1000d));
                     _restoreControlRoleTimer.Start();
                     return;
                 }
@@ -96,8 +96,8 @@ namespace YTPlayer.Forms
                 DateTime now = DateTime.UtcNow;
                 if (_suppressAccessibleTextUntil > now)
                 {
-                    int remaining = (int)Math.Ceiling((_suppressAccessibleTextUntil - now).TotalMilliseconds);
-                    _restoreAccessibleTextTimer.Interval = Math.Max(AccessibleTextRestoreDelayMs, Math.Min(remaining, 1000));
+                    _restoreAccessibleTextTimer.Interval = (int)Math.Ceiling(Math.Clamp(
+                        (_suppressAccessibleTextUntil - now).TotalMilliseconds, AccessibleTextRestoreDelayMs, 1000d));
                     _restoreAccessibleTextTimer.Start();
                     return;
                 }

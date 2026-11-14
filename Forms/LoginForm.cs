@@ -66,6 +66,7 @@ namespace YTPlayer.Forms
 
             _apiClient = apiClient;
             InitializeComponent();
+            InitializeInteractiveLogin();
             ThemeManager.ApplyTheme(this);
             InitializeCustomComponents();
         }
@@ -119,6 +120,8 @@ namespace YTPlayer.Forms
             System.Diagnostics.Debug.WriteLine($"[LoginForm] DialogResult={this.DialogResult}");
             System.Diagnostics.Debug.WriteLine($"[LoginForm] CloseReason={e.CloseReason}");
 
+            CancelInteractiveOperation();
+            _smsTimer.Stop();
             // 取消二维码检查任务
             if (_qrCheckCancellation != null && !_qrCheckCancellation.IsCancellationRequested)
             {
@@ -127,23 +130,13 @@ namespace YTPlayer.Forms
             }
             System.Diagnostics.Debug.WriteLine($"[LoginForm] ========== 窗口关闭处理完成 ==========");
 
-            // 删除临时 WebView 用户数据目录，避免残留历史 Cookie
-            try
-            {
-                if (!string.IsNullOrEmpty(_webUserDataFolder) && Directory.Exists(_webUserDataFolder))
-                {
-                    Directory.Delete(_webUserDataFolder, true);
-                    System.Diagnostics.Debug.WriteLine($"[LoginForm] 已清理 WebView 用户数据目录: {_webUserDataFolder}");
-                }
-            }
-            catch (Exception cleanEx)
-            {
-                System.Diagnostics.Debug.WriteLine($"[LoginForm] 清理 WebView 用户数据目录失败: {cleanEx.Message}");
-            }
+            // The per-window InPrivate profile is removed after its browser process exits.
         }
 
         private void LoginTabControl_SelectedIndexChanged(object? sender, EventArgs e)
         {
+            CancelInteractiveOperation();
+            ResetWeChatView();
             // 切换到二维码登录
             if (loginTabControl.SelectedTab == qrTabPage)
             {
@@ -169,21 +162,24 @@ namespace YTPlayer.Forms
         private async Task LoadQrCodeAsync()
         {
             System.Diagnostics.Debug.WriteLine($"[LoginForm] ========== LoadQrCodeAsync开始 ==========");
+            _qrCheckCancellation?.Cancel();
+            _qrCheckCancellation?.Dispose();
+            _qrCheckCancellation = new CancellationTokenSource();
+            var cancellationToken = _qrCheckCancellation.Token;
             try
             {
-                // 取消之前的检查任务
-                _qrCheckCancellation?.Cancel();
-                _qrCheckCancellation = new CancellationTokenSource();
                 _riskLinkPromptShown = false;
 
                 // 显示加载状态
-                qrPictureBox.Image = null;
+                SetQrImage(null);
                 qrStatusLabel.Text = "正在加载二维码...";
                 qrStatusLabel.ForeColor = GetStatusTextColor(muted: true);
                 refreshQrButton.Enabled = false;
 
                 System.Diagnostics.Debug.WriteLine("[LoginForm] 调用_apiClient.CreateQrLoginSessionAsync()...");
-                _qrSession = await _apiClient.CreateQrLoginSessionAsync();
+                var session = await _apiClient.CreateQrLoginSessionAsync();
+                if (cancellationToken.IsCancellationRequested || IsDisposed || Disposing) return;
+                _qrSession = session;
                 if (_qrSession == null || string.IsNullOrEmpty(_qrSession.Key))
                 {
                     qrStatusLabel.Text = "获取二维码失败，请刷新重试";
@@ -205,10 +201,11 @@ namespace YTPlayer.Forms
 
                 // 开始轮询检查二维码状态
                 System.Diagnostics.Debug.WriteLine($"[LoginForm] 开始轮询检查二维码状态...");
-                await CheckQrCodeStatusAsync(qrKey, _qrCheckCancellation.Token);
+                await CheckQrCodeStatusAsync(qrKey, cancellationToken);
             }
             catch (Exception ex)
             {
+                if (cancellationToken.IsCancellationRequested || IsDisposed || Disposing) return;
                 System.Diagnostics.Debug.WriteLine($"[LoginForm] LoadQrCodeAsync异常: {ex.Message}");
                 qrStatusLabel.Text = $"加载失败: {ex.Message}";
                 qrStatusLabel.ForeColor = GetStatusTextColor();
@@ -238,7 +235,11 @@ namespace YTPlayer.Forms
                     QrLoginPollResult result;
                     try
                     {
-                        result = await _apiClient.PollQrLoginAsync(qrKey);
+                        result = await _apiClient.PollQrLoginAsync(qrKey, cancellationToken);
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        throw;
                     }
                     catch (Exception pollEx)
                     {
@@ -469,7 +470,7 @@ namespace YTPlayer.Forms
             }
         }
 
-        private void SetQrImage(Bitmap qrImage)
+        private void SetQrImage(Bitmap? qrImage)
         {
             var old = qrPictureBox.Image;
             qrPictureBox.Image = null;
@@ -601,38 +602,23 @@ namespace YTPlayer.Forms
             }
 
             string libsDir = Utils.PathHelper.LibsDirectory;
-            _webUserDataFolder = Path.Combine(libsDir, "YTPlayer.exe.WebView2");
-
-            Directory.CreateDirectory(libsDir);
-
-            // 确保之前残留的数据被清理，保证干净登录
-            try
-            {
-                // 额外清理历史默认位置（程序根目录下的 YTPlayer.exe.WebView2）
-                string legacyFolder = Path.Combine(Utils.PathHelper.ApplicationRootDirectory, "YTPlayer.exe.WebView2");
-                if (Directory.Exists(legacyFolder))
-                {
-                    Directory.Delete(legacyFolder, true);
-                }
-
-                if (Directory.Exists(_webUserDataFolder))
-                {
-                    Directory.Delete(_webUserDataFolder, true);
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[WebLogin] 清理旧 WebView 用户数据目录失败（忽略继续）: {ex.Message}");
-            }
-
+            _webUserDataFolder = Path.Combine(libsDir, "LoginSessions", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(_webUserDataFolder);
-
             _webEnvironment = await CoreWebView2Environment.CreateAsync(null, _webUserDataFolder);
-            await webLoginView.EnsureCoreWebView2Async(_webEnvironment);
+            string ownedFolder = _webUserDataFolder;
+            _webEnvironment.BrowserProcessExited += (_, _) =>
+            {
+                try { Directory.Delete(ownedFolder, true); }
+                catch (IOException) { } catch (UnauthorizedAccessException) { }
+            };
+            var options = _webEnvironment.CreateCoreWebView2ControllerOptions();
+            options.IsInPrivateModeEnabled = true;
+            await webLoginView.EnsureCoreWebView2Async(_webEnvironment, options);
         }
 
         /// <summary>
-        /// 清理当前 WebView 会话的所有浏览数据与 Cookie，保证每次登录流程干净。
+        /// The initial profile is already isolated. A manual refresh clears this session's
+        /// cookies and web login cache without asynchronously clearing the entire browser profile.
         /// </summary>
         private async Task ClearWebViewDataAsync()
         {
@@ -640,12 +626,9 @@ namespace YTPlayer.Forms
             {
                 if (webLoginView.CoreWebView2 != null)
                 {
-                    // 清除全部浏览数据（缓存、存储、历史等）
-                    await webLoginView.CoreWebView2.Profile.ClearBrowsingDataAsync(
-                        CoreWebView2BrowsingDataKinds.AllProfile);
-
-                    // 再保险地清空 Cookie
                     webLoginView.CoreWebView2.CookieManager.DeleteAllCookies();
+                    if (Uri.TryCreate(webLoginView.CoreWebView2.Source, UriKind.Absolute, out var source) && source.Host == "music.163.com")
+                        await webLoginView.CoreWebView2.ExecuteScriptAsync("(()=>{try{localStorage.clear();sessionStorage.clear();}catch(_){}return true;})()");
                 }
             }
             catch (Exception ex)
@@ -672,7 +655,10 @@ namespace YTPlayer.Forms
                     _webLoginInitialized = true;
                 }
 
-                if (forceNavigate || webLoginView.Source == null)
+                // Current WebView2 initializes Source to about:blank. That is still an
+                // uninitialized login page, not a reason to skip the first navigation.
+                if (forceNavigate || webLoginView.Source == null ||
+                    string.Equals(webLoginView.Source.AbsoluteUri, "about:blank", StringComparison.OrdinalIgnoreCase))
                 {
                     _webLoginCompleted = false;
                     _webLoginProcessing = false;
@@ -796,10 +782,10 @@ namespace YTPlayer.Forms
             core.Settings.AreDevToolsEnabled = false;
             core.Settings.IsStatusBarEnabled = false;
             core.Settings.IsWebMessageEnabled = false;
-            core.Settings.UserAgent = AuthConstants.DesktopUserAgent;
 
             core.WebResourceResponseReceived += WebLoginView_WebResourceResponseReceived;
             core.NavigationCompleted += WebLoginView_NavigationCompleted;
+            core.NewWindowRequested += WebLoginView_NewWindowRequested;
         }
 
         private async void WebLoginView_NavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
@@ -911,12 +897,13 @@ namespace YTPlayer.Forms
         {
             try
             {
+                await RecordWebLoginResponseAsync(e);
                 if (_webLoginCompleted) return;
 
-                if (_webCookieDomains.Any(domain =>
-                        e.Request.Uri.StartsWith(domain, StringComparison.OrdinalIgnoreCase)))
+                if (Uri.TryCreate(e.Request.Uri, UriKind.Absolute, out var responseUri) && responseUri.Scheme == "https" &&
+                    _webCookieDomains.Any(domain => new Uri(domain).Host == responseUri.Host))
                 {
-                    await TryCaptureLoginCookiesAsync($"resp:{e.Request.Uri}");
+                    await TryCaptureLoginCookiesAsync("resp:" + LoginDiagnostics.SafeRoute(responseUri));
                 }
             }
             catch (Exception ex)

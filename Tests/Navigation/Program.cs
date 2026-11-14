@@ -380,7 +380,7 @@ internal static class Program
         Check(homeMenu.Text == "主页(&H)", "home menu retains its name and mnemonic");
         using (var help = new YTPlayer.Forms.KeyboardShortcutsDialog())
         {
-            var text = help.Controls.OfType<TableLayoutPanel>().Single().Controls.OfType<RichTextBox>().Single().Text;
+            var text = help.Controls.OfType<TableLayoutPanel>().Single().Controls.OfType<YTPlayer.Forms.AccessibleDocumentView>().Single().Document!.PlainText;
             Check(text.Contains("Ctrl + Shift + H") && text.Contains("返回主页"), "embedded shortcut help includes home action");
         }
 

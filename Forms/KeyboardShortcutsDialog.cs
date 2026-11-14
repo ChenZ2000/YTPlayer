@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Linq;
 using System.Text;
 using System.Windows.Forms;
 using MessageBox = YTPlayer.MessageBox;
@@ -50,24 +51,20 @@ namespace YTPlayer.Forms
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-            var infoBox = new RichTextBox
+            var infoBox = new AccessibleDocumentView
             {
-                ReadOnly = true,
-                DetectUrls = false,
                 BorderStyle = BorderStyle.FixedSingle,
-                BackColor = SystemColors.Window,
                 Dock = DockStyle.Fill,
-                Font = new Font("Consolas", 10F),
-                WordWrap = false,
-                ScrollBars = RichTextBoxScrollBars.Both,
-                Text = document.BuildDisplayText()
+                TabIndex = 0
             };
+            infoBox.SetDocument(document.BuildContent());
 
             var buttonPanel = new FlowLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 FlowDirection = FlowDirection.RightToLeft,
-                AutoSize = true
+                AutoSize = true,
+                TabIndex = 1
             };
             Button? acceptButton = null;
             Button? fallbackButton = null;
@@ -182,33 +179,16 @@ namespace YTPlayer.Forms
                 }
             }
 
-            public string BuildDisplayText()
+            public SemanticDocument BuildContent()
             {
-                var builder = new StringBuilder();
-                builder.AppendLine(WindowTitle);
-                builder.AppendLine("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-
-                if (!string.IsNullOrWhiteSpace(Tip))
-                {
-                    builder.AppendLine(Tip);
-                    builder.AppendLine();
-                }
-
+                var builder = new SemanticDocumentBuilder(WindowTitle).Paragraph(Tip);
                 foreach (var group in Groups)
                 {
-                    builder.AppendLine(group.Name);
-
-                    foreach (var entry in group.Entries)
-                    {
-                        builder.AppendLine($"  {entry.Shortcut.PadRight(18)} {entry.Action}");
-                        builder.AppendLine($"      {entry.Description}");
-                    }
-
-                    builder.AppendLine();
+                    builder.Heading(group.Name).Table(group.Name + "快捷键",
+                        new[] { "功能", "快捷键", "说明" },
+                        group.Entries.Select(entry => new[] { entry.Action, entry.Shortcut, entry.Description }), keyboardColumn: 1);
                 }
-
-                builder.AppendLine("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                return builder.ToString();
+                return builder.Build();
             }
 
             private static ShortcutDocument Parse(string markdown)

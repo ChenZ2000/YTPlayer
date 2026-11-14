@@ -375,6 +375,8 @@ namespace YTPlayer.Core
                     _simplifiedClient?.Dispose();
                     _eapiClient?.Dispose();
                     _iOSLoginClient?.Dispose();
+                    _phoneLogin?.Dispose();
+                    _weChatLogin?.Dispose();
                 }
                 _disposed = true;
             }

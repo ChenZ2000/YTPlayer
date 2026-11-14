@@ -30,7 +30,7 @@ namespace YTPlayer.Forms
         private void InitializeComponent()
         {
             this.summaryLabel = new System.Windows.Forms.Label();
-            this.resultTextBox = new System.Windows.Forms.TextBox();
+            this.resultView = new AccessibleDocumentView();
             this.updateButton = new System.Windows.Forms.Button();
             this.closeButton = new System.Windows.Forms.Button();
             this.SuspendLayout();
@@ -45,20 +45,16 @@ namespace YTPlayer.Forms
             this.summaryLabel.TabIndex = 0;
             this.summaryLabel.Text = "发现新版本";
             // 
-            // resultTextBox
+            // resultView
             // 
-            this.resultTextBox.Anchor = ((System.Windows.Forms.AnchorStyles)((((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Bottom) 
+            this.resultView.Anchor = ((System.Windows.Forms.AnchorStyles)((((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Bottom)
             | System.Windows.Forms.AnchorStyles.Left) 
             | System.Windows.Forms.AnchorStyles.Right)));
-            this.resultTextBox.BackColor = System.Drawing.Color.White;
-            this.resultTextBox.Location = new System.Drawing.Point(29, 63);
-            this.resultTextBox.Multiline = true;
-            this.resultTextBox.Name = "resultTextBox";
-            this.resultTextBox.ReadOnly = true;
-            this.resultTextBox.ScrollBars = System.Windows.Forms.ScrollBars.Vertical;
-            this.resultTextBox.Size = new System.Drawing.Size(522, 211);
-            this.resultTextBox.TabIndex = 1;
-            this.resultTextBox.TabStop = false;
+            this.resultView.BackColor = System.Drawing.Color.White;
+            this.resultView.Location = new System.Drawing.Point(29, 63);
+            this.resultView.Name = "resultView";
+            this.resultView.Size = new System.Drawing.Size(522, 211);
+            this.resultView.TabIndex = 1;
             // 
             // updateButton
             // 
@@ -91,10 +87,10 @@ namespace YTPlayer.Forms
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Dpi;
             this.CancelButton = this.closeButton;
             this.ClientSize = new System.Drawing.Size(576, 345);
-            this.resultTextBox.MinimumSize = new System.Drawing.Size(0, 100);
+            this.resultView.MinimumSize = new System.Drawing.Size(0, 100);
             var buttons = YTPlayer.Utils.DialogLayout.CreateButtonRow(this.closeButton, this.updateButton);
             buttons.TabIndex = 2;
-            YTPlayer.Utils.DialogLayout.CreateVertical(this, 1, this.summaryLabel, this.resultTextBox, buttons);
+            YTPlayer.Utils.DialogLayout.CreateVertical(this, 1, this.summaryLabel, this.resultView, buttons);
             this.Font = new System.Drawing.Font("Microsoft YaHei UI", 10F);
             this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.Sizable;
             this.MinimumSize = new System.Drawing.Size(420, 300);
@@ -111,7 +107,7 @@ namespace YTPlayer.Forms
         #endregion
 
         private System.Windows.Forms.Label summaryLabel;
-        private System.Windows.Forms.TextBox resultTextBox;
+        private AccessibleDocumentView resultView;
         private System.Windows.Forms.Button updateButton;
         private System.Windows.Forms.Button closeButton;
     }

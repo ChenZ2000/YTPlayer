@@ -1,6 +1,6 @@
 using System;
 using System.Drawing;
-using System.Text;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using YTPlayer.Utils;
@@ -11,7 +11,7 @@ using YTPlayer.Models;
 namespace YTPlayer.Forms
 {
     /// <summary>
-    /// 用户信息对话框 - 纯文本样式
+    /// 用户信息对话框 - 语义化网页阅读区域
     /// </summary>
     public partial class UserInfoForm : Form
     {
@@ -64,107 +64,17 @@ namespace YTPlayer.Forms
             try
             {
                 loadingLabel.Visible = true;
-                infoTextBox.Visible = false;
+                infoView.Visible = false;
 
                 _userInfo = await _apiClient.GetUserAccountAsync();
+                if (IsDisposed || Disposing) return;
 
                 if (_userInfo != null)
                 {
-                    // 构建纯文本信息
-                    var sb = new StringBuilder();
-                    sb.AppendLine("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                    sb.AppendLine($"昵称: {_userInfo.Nickname ?? "未知用户"}");
-                    sb.AppendLine($"用户ID: {_userInfo.UserId}");
-
-                    // 如果是音乐人，显示艺人信息
-                    if (!string.IsNullOrEmpty(_userInfo.ArtistName))
-                    {
-                        sb.AppendLine($"艺人名: {_userInfo.ArtistName}");
-                        if (_userInfo.ArtistId.HasValue)
-                        {
-                            sb.AppendLine($"艺人ID: {_userInfo.ArtistId.Value}");
-                        }
-                    }
-
-                    sb.AppendLine("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                    sb.AppendLine();
-
-                    // 用户类型和认证
-                    sb.AppendLine($"用户类型: {_userInfo.UserTypeName}");
-                    if (!string.IsNullOrEmpty(_userInfo.AuthTypeDesc))
-                    {
-                        sb.AppendLine($"认证信息: {_userInfo.AuthTypeDesc}");
-                    }
-                    sb.AppendLine();
-
-                    // 会员状态
-                    sb.AppendLine($"会员状态: {_userInfo.VipTypeName}");
-                    sb.AppendLine($"等级: Lv.{_userInfo.Level}");
-                    sb.AppendLine($"性别: {_userInfo.GenderName}");
-                    sb.AppendLine();
-
-                    // 个性签名
-                    string signature = string.IsNullOrWhiteSpace(_userInfo.Signature)
-                        ? "这个人很懒，什么都没留下..."
-                        : _userInfo.Signature;
-                    sb.AppendLine($"个性签名: {signature}");
-                    sb.AppendLine();
-
-                    // 统计信息
-                    sb.AppendLine("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                    sb.AppendLine("统计信息:");
-                    sb.AppendLine($"  关注: {_userInfo.Follows}");
-                    sb.AppendLine($"  粉丝: {_userInfo.Followers}");
-                    sb.AppendLine($"  动态: {_userInfo.EventCount}");
-                    sb.AppendLine($"  听歌数: {_userInfo.ListenSongs}");
-                    if (_userInfo.PlaylistCount > 0)
-                    {
-                        sb.AppendLine($"  歌单数: {_userInfo.PlaylistCount}");
-                    }
-                    if (_userInfo.PlaylistBeSubscribedCount > 0)
-                    {
-                        sb.AppendLine($"  歌单被收藏: {_userInfo.PlaylistBeSubscribedCount}");
-                    }
-                    if (_userInfo.DjProgramCount > 0)
-                    {
-                        sb.AppendLine($"  DJ节目: {_userInfo.DjProgramCount}");
-                    }
-                    sb.AppendLine("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                    sb.AppendLine();
-
-                    // 生日
-                    if (_userInfo.Birthday.HasValue && _userInfo.Birthday.Value.Year > 1900)
-                    {
-                        sb.AppendLine($"生日: {_userInfo.Birthday.Value:yyyy-MM-dd}");
-                    }
-                    else
-                    {
-                        sb.AppendLine("生日: 未设置");
-                    }
-
-                    // 注册时间和天数
-                    if (_userInfo.CreateTime.HasValue)
-                    {
-                        sb.AppendLine($"注册时间: {_userInfo.CreateTime.Value:yyyy-MM-dd HH:mm:ss}");
-                    }
-                    else
-                    {
-                        sb.AppendLine("注册时间: 未知");
-                    }
-
-                    if (_userInfo.CreateDays > 0)
-                    {
-                        sb.AppendLine($"注册天数: {_userInfo.CreateDays} 天");
-                    }
-
-                    // 显示信息
-                    infoTextBox.Text = sb.ToString();
+                    infoView.SetDocument(BuildUserDocument(_userInfo));
                     loadingLabel.Visible = false;
-                    infoTextBox.Visible = true;
-
-                    // 自动聚焦到信息文本框，方便屏幕阅读器用户
-                    infoTextBox.Focus();
-                    infoTextBox.Select(0, 0); // 将光标移到开头
+                    infoView.Visible = true;
+                    infoView.FocusDocument();
 
                     System.Diagnostics.Debug.WriteLine($"[UserInfoForm] 已加载用户: {_userInfo.Nickname}");
                 }
@@ -177,11 +87,44 @@ namespace YTPlayer.Forms
             }
             catch (Exception ex)
             {
+                if (IsDisposed || Disposing) return;
                 System.Diagnostics.Debug.WriteLine($"[UserInfoForm] 异常: {ex.Message}");
                 MessageBox.Show($"加载用户信息失败: {ex.Message}", "错误",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
                 this.Close();
             }
+        }
+
+        internal static SemanticDocument BuildUserDocument(UserAccountInfo info)
+        {
+            var basic = new List<string> { $"昵称：{info.Nickname ?? "未知用户"}", $"用户 ID：{info.UserId}" };
+            if (!string.IsNullOrEmpty(info.ArtistName))
+            {
+                basic.Add($"艺人名：{info.ArtistName}");
+                if (info.ArtistId.HasValue) basic.Add($"艺人 ID：{info.ArtistId.Value}");
+            }
+            basic.Add($"性别：{info.GenderName}");
+            var identity = new List<string> { $"用户类型：{info.UserTypeName}" };
+            if (!string.IsNullOrEmpty(info.AuthTypeDesc)) identity.Add($"认证信息：{info.AuthTypeDesc}");
+            identity.Add($"会员状态：{info.VipTypeName}");
+            identity.Add($"等级：Lv.{info.Level}");
+            var statistics = new List<string> { $"关注：{info.Follows}", $"粉丝：{info.Followers}",
+                $"动态：{info.EventCount}", $"听歌数：{info.ListenSongs}" };
+            if (info.PlaylistCount > 0) statistics.Add($"歌单数：{info.PlaylistCount}");
+            if (info.PlaylistBeSubscribedCount > 0) statistics.Add($"歌单被收藏：{info.PlaylistBeSubscribedCount}");
+            if (info.DjProgramCount > 0) statistics.Add($"DJ 节目：{info.DjProgramCount}");
+            var dates = new List<string>
+            {
+                info.Birthday.HasValue && info.Birthday.Value.Year > 1900 ? $"生日：{info.Birthday.Value:yyyy-MM-dd}" : "生日：未设置",
+                info.CreateTime.HasValue ? $"注册时间：{info.CreateTime.Value:yyyy-MM-dd HH:mm:ss}" : "注册时间：未知"
+            };
+            if (info.CreateDays > 0) dates.Add($"注册天数：{info.CreateDays} 天");
+            return new SemanticDocumentBuilder("用户信息")
+                .Heading("基本资料").List(basic)
+                .Heading("身份与会员").List(identity)
+                .Heading("个性签名").Paragraph(string.IsNullOrWhiteSpace(info.Signature) ? "这个人很懒，什么都没留下..." : info.Signature)
+                .Heading("统计信息").List(statistics)
+                .Heading("时间信息").List(dates).Build();
         }
 
         /// <summary>

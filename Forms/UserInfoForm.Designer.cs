@@ -30,7 +30,7 @@ namespace YTPlayer.Forms
         private void InitializeComponent()
         {
             this.loadingLabel = new System.Windows.Forms.Label();
-            this.infoTextBox = new System.Windows.Forms.TextBox();
+            this.infoView = new AccessibleDocumentView();
             this.buttonPanel = new System.Windows.Forms.Panel();
             this.logoutButton = new System.Windows.Forms.Button();
             this.closeButton = new System.Windows.Forms.Button();
@@ -48,20 +48,16 @@ namespace YTPlayer.Forms
             this.loadingLabel.Text = "正在加载用户信息...";
             this.loadingLabel.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
             //
-            // infoTextBox
+            // infoView
             //
-            this.infoTextBox.BackColor = System.Drawing.SystemColors.Window;
-            this.infoTextBox.Dock = System.Windows.Forms.DockStyle.Fill;
-            this.infoTextBox.Font = new System.Drawing.Font("Microsoft YaHei UI", 9.75F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.infoTextBox.Location = new System.Drawing.Point(0, 0);
-            this.infoTextBox.Multiline = true;
-            this.infoTextBox.Name = "infoTextBox";
-            this.infoTextBox.ReadOnly = true;
-            this.infoTextBox.ScrollBars = System.Windows.Forms.ScrollBars.Vertical;
-            this.infoTextBox.Size = new System.Drawing.Size(484, 301);
-            this.infoTextBox.TabIndex = 0;
-            this.infoTextBox.TabStop = true;
-            this.infoTextBox.Visible = false;
+            this.infoView.BackColor = System.Drawing.SystemColors.Window;
+            this.infoView.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.infoView.Font = new System.Drawing.Font("Microsoft YaHei UI", 9.75F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
+            this.infoView.Location = new System.Drawing.Point(0, 0);
+            this.infoView.Name = "infoView";
+            this.infoView.Size = new System.Drawing.Size(484, 301);
+            this.infoView.TabIndex = 0;
+            this.infoView.Visible = false;
             //
             // buttonPanel
             //
@@ -100,7 +96,7 @@ namespace YTPlayer.Forms
             this.AutoScaleDimensions = new System.Drawing.SizeF(120F, 120F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Dpi;
             this.ClientSize = new System.Drawing.Size(484, 361);
-            this.Controls.Add(this.infoTextBox);
+            this.Controls.Add(this.infoView);
             this.Controls.Add(this.buttonPanel);
             this.Controls.Add(this.loadingLabel);
             this.Font = new System.Drawing.Font("Microsoft YaHei UI", 10F);
@@ -115,7 +111,7 @@ namespace YTPlayer.Forms
         #endregion
 
         private System.Windows.Forms.Label loadingLabel;
-        private System.Windows.Forms.TextBox infoTextBox;
+        private AccessibleDocumentView infoView;
         private System.Windows.Forms.Panel buttonPanel;
         private System.Windows.Forms.Button logoutButton;
         private System.Windows.Forms.Button closeButton;

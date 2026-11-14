@@ -112,7 +112,9 @@ namespace YTPlayer.Utils
             BigInteger encrypted = BigInteger.ModPow(textNum, e, n);
 
             // 转换为十六进制字符串，并补齐到256位（Python: return format(enc, "x").zfill(256)）
-            string encryptedHex = encrypted.ToString("x");
+            // BigInteger's signed hex format may prepend a sign nibble (257 chars).
+            // WEAPI requires the unsigned 128-byte RSA block, exactly 256 hex digits.
+            string encryptedHex = Convert.ToHexString(encrypted.ToByteArray(isUnsigned: true, isBigEndian: true)).ToLowerInvariant();
             return encryptedHex.PadLeft(256, '0');
         }
 

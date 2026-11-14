@@ -347,16 +347,8 @@ namespace YTPlayer.Forms
 
         private void SetResultText(params string[] lines)
         {
-            if (lines == null || lines.Length == 0)
-            {
-                resultTextBox.Clear();
-                return;
-            }
-
-            string content = string.Join(Environment.NewLine, lines.Where(l => !string.IsNullOrWhiteSpace(l)));
-            resultTextBox.Text = content;
-            resultTextBox.SelectionStart = 0;
-            resultTextBox.SelectionLength = 0;
+            resultView.SetDocument(new SemanticDocumentBuilder("更新检查结果")
+                .List((lines ?? Array.Empty<string>()).Where(line => !string.IsNullOrWhiteSpace(line))).Build());
         }
 
         private void SetResultText(IEnumerable<string> lines)

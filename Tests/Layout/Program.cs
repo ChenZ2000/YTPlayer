@@ -264,7 +264,8 @@ public class LayoutTests
         form.Show();
         Application.DoEvents();
         if (name == "AboutDialog")
-            Assert.That(Descendants(form).OfType<RichTextBox>().Single().Text, Does.Contain("zjncn (https://github.com/zjncn)"));
+            Assert.That(Descendants(form).OfType<YTPlayer.Forms.AccessibleDocumentView>().Single().Document!.PlainText,
+                Does.Contain("zjncn (https://github.com/zjncn)"));
         if (scale != 1f)
         {
             form.Font = new Font(form.Font.FontFamily, form.Font.SizeInPoints * scale);

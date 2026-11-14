@@ -17,9 +17,11 @@ using System.Runtime.Versioning;
 
 [assembly: SupportedOSPlatform("windows7.0")]
 [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("Recognition.Tests")]
+[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("Auth.Tests")]
 [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("Playback.Tests")]
 [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("Navigation.Tests")]
 [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("Layout.Tests")]
+[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("Documents.Tests")]
 
 [assembly: AssemblyVersion(YTPlayer.VersionInfo.AssemblyVersion)]
 [assembly: AssemblyFileVersion(YTPlayer.VersionInfo.AssemblyVersion)]

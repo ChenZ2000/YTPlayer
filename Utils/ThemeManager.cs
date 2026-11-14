@@ -7,6 +7,13 @@ using System.Windows.Forms;
 
 namespace YTPlayer.Utils
 {
+    // This source is also compiled into the .NET Framework launcher and updater.
+    // Keep custom control theme notifications independent of the main application's controls.
+    internal interface IThemeAwareControl
+    {
+        void RefreshTheme();
+    }
+
     internal enum ThemeScheme
     {
         GrassFresh,
@@ -382,6 +389,10 @@ namespace YTPlayer.Utils
             }
 
             ApplyWebViewBackground(control, palette);
+            if (control is IThemeAwareControl themeAwareControl)
+            {
+                themeAwareControl.RefreshTheme();
+            }
 
             if (control.ContextMenuStrip != null)
             {

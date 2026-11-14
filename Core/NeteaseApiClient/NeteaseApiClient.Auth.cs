@@ -180,7 +180,7 @@ namespace YTPlayer.Core
         /// <summary>
         /// 轮询二维码登录状态。
         /// </summary>
-        public async Task<QrLoginPollResult> PollQrLoginAsync(string key)
+        public async Task<QrLoginPollResult> PollQrLoginAsync(string key, CancellationToken cancellationToken = default)
         {
             if (string.IsNullOrEmpty(key))
             {
@@ -236,6 +236,7 @@ namespace YTPlayer.Core
                 };
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
             int statusCode = result["code"]?.Value<int>() ?? -1;
             string message = result["message"]?.Value<string>() ?? result["msg"]?.Value<string>() ?? string.Empty;
             string redirectUrl = result["redirectUrl"]?.Value<string>();
@@ -463,143 +464,6 @@ namespace YTPlayer.Core
 
                 System.Diagnostics.Debug.WriteLine("[Logout] ✅✅✅ 退出登录完成，已切换到匿名会话");
             }
-        }
-
-        /// <summary>
-        /// 发送短信验证码（手机号登录）
-        /// 1.7.3 行为：iOS UA + 访客 Cookie（过滤桌面字段）
-        public async Task<bool> SendCaptchaAsync(string phone, string ctcode = "86")
-        {
-            var payload = new Dictionary<string, object>
-            {
-                { "cellphone", phone },
-                { "ctcode", ctcode }
-            };
-
-            System.Diagnostics.Debug.WriteLine($"[SMS] 发送验证码请求: phone={phone}, ctcode={ctcode}");
-
-            // 使用 iOS 通道，发送纯移动端访客 Cookie，避免桌面指纹干扰
-            var result = await PostWeApiWithiOSAsync<JObject>("/sms/captcha/sent", payload, maxRetries: 3, sendCookies: true);
-
-            int code = result["code"]?.Value<int>() ?? -1;
-            string message = result["message"]?.Value<string>() ?? result["msg"]?.Value<string>() ?? "未知错误";
-
-            System.Diagnostics.Debug.WriteLine($"[SMS] 发送验证码结果: code={code}, msg={message}");
-            System.Diagnostics.Debug.WriteLine($"[SMS] 完整响应: {result.ToString(Newtonsoft.Json.Formatting.Indented)}");
-
-            if (code != 200)
-            {
-                throw new Exception($"发送验证码失败: {message} (code={code})");
-            }
-
-            return true;
-        }
-
-        /// <summary>
-        /// 验证短信验证码并登录
-        /// ⭐ 参考 netease-music-simple-player/Net/NetClasses.cs:2521-2541
-        /// 关键: 使用 iOS User-Agent 避免 -462 风控错误
-        /// </summary>
-        public async Task<LoginResult> LoginByCaptchaAsync(string phone, string captcha, string ctcode = "86")
-        {
-            // 刷新移动端访客会话，确保 MUSIC_A/NMTID 最新，降低 -462
-            try
-            {
-                await EnsureMobileVisitorSessionAsync().ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[LOGIN] 获取访客会话失败（忽略继续）: {ex.Message}");
-            }
-            // ⭐ 重要：不再在 Cookie 中设置 os=ios 和 appver=8.7.01
-            // 因为 PostWeApiWithiOSAsync 已经使用 iOS User-Agent
-            // 在 Cookie 中设置 os=ios 会与桌面系统的其他 Cookie 冲突，触发风控
-
-            // ⭐ 核心修复：使用与发码阶段一致的访客指纹和 Cookie，保持会话连续性
-            // 参考项目 netease-music-simple-player/Net/NetClasses.cs:2525-2530
-            // 附带 rememberLogin 与官方行为一致，避免服务端强制登出
-            var payload = new Dictionary<string, object>
-            {
-                { "phone", phone },
-                { "countrycode", ctcode },
-                { "captcha", captcha },
-                { "rememberLogin", true }
-            };
-
-            System.Diagnostics.Debug.WriteLine($"[LOGIN] 短信登录请求: phone={phone}, captcha={captcha}, countrycode={ctcode}");
-            System.Diagnostics.Debug.WriteLine("[LOGIN] 使用 iOS User-Agent + 移动访客Cookie模式，保持验证码链路一致");
-
-            // ⭐ 核心修复：登录请求发送移动端访客Cookie（sendCookies=true）
-            // 模拟真实iPhone首次登录场景，避免桌面Cookie与iOS UA的设备指纹不匹配
-            var result = await PostWeApiWithiOSAsync<JObject>("/login/cellphone", payload, maxRetries: 3, sendCookies: true);
-
-            System.Diagnostics.Debug.WriteLine($"[LOGIN] 短信登录完整响应: {result.ToString(Formatting.Indented)}");
-            int code = result["code"]?.Value<int>() ?? -1;
-
-            var loginResult = new LoginResult
-            {
-                Code = code,
-                Message = result["message"]?.Value<string>() ?? result["msg"]?.Value<string>() ?? ""
-            };
-
-            if (code == 200)
-            {
-                System.Diagnostics.Debug.WriteLine("[LOGIN] 短信登录成功，提取Cookie...");
-
-                string cookieString = result["cookie"]?.Value<string>();
-                if (!string.IsNullOrEmpty(cookieString))
-                {
-                    System.Diagnostics.Debug.WriteLine($"[LOGIN] 收到Cookie: {cookieString.Substring(0, Math.Min(100, cookieString.Length))}...");
-                }
-
-                cookieString = FinalizeLoginCookies(cookieString);
-                loginResult.Cookie = cookieString;
-
-                if (!string.IsNullOrEmpty(_musicU))
-                {
-                    System.Diagnostics.Debug.WriteLine($"[LOGIN] 已缓存MUSIC_U，长度={_musicU.Length}");
-                }
-                else
-                {
-                    System.Diagnostics.Debug.WriteLine("[LOGIN] ⚠️ 登录成功但未能捕获MUSIC_U");
-                }
-
-                if (string.IsNullOrEmpty(cookieString))
-                {
-                    System.Diagnostics.Debug.WriteLine("[LOGIN] ⚠️ Cookie 快照为空，后续请求可能无法使用登录态");
-                }
-
-                // 提取用户信息
-                var account = result["account"];
-                if (account != null)
-                {
-                    loginResult.UserId = account["id"]?.Value<string>();
-                    loginResult.Nickname = account["userName"]?.Value<string>();
-                    loginResult.VipType = account["vipType"]?.Value<int>() ?? 0;
-                    System.Diagnostics.Debug.WriteLine($"[LOGIN] 用户信息: ID={loginResult.UserId}, 昵称={loginResult.Nickname}, VipType={loginResult.VipType}");
-                }
-
-                var profile = result["profile"];
-                if (profile != null)
-                {
-                    if (string.IsNullOrEmpty(loginResult.Nickname))
-                    {
-                        var profileNickname = profile["nickname"]?.Value<string>();
-                        if (!string.IsNullOrEmpty(profileNickname))
-                        {
-                            loginResult.Nickname = profileNickname;
-                        }
-                    }
-
-                    loginResult.AvatarUrl = profile["avatarUrl"]?.Value<string>();
-                    if (loginResult.VipType == 0)
-                    {
-                        loginResult.VipType = profile["vipType"]?.Value<int>() ?? 0;
-                    }
-                }
-            }
-
-            return loginResult;
         }
 
         /// <summary>
