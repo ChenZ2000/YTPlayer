@@ -3,8 +3,8 @@ AppUrl: https://yt.chenz.cloud
 ProjectUrl: https://github.com/ChenZ2000/YTPlayer
 AuthorName: ChenZ
 AuthorUrl: https://github.com/ChenZ2000
-ContributorName: ZJN046
-ContributorUrl: https://github.com/zjn046
+ContributorName: zjncn
+ContributorUrl: https://github.com/zjncn
 ---
 
 # 关于易听

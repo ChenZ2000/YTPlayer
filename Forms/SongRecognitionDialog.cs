@@ -31,13 +31,18 @@ namespace YTPlayer.Forms
             CancellationToken ownerToken = default)
         {
             if (devices.Count == 0) throw new ArgumentException("设备列表不能为空。", nameof(devices));
+            SuspendLayout();
             _recognize = recognize; _ownerToken = ownerToken;
             Text = "听歌识曲"; AccessibleName = Text;
             AccessibleDescription = "识别过程中按 Esc 可取消；首次未匹配时会继续聆听。";
             StartPosition = FormStartPosition.CenterParent; MinimizeBox = MaximizeBox = false; ShowInTaskbar = false;
-            AutoScaleMode = AutoScaleMode.Font; Font = new Font("Microsoft YaHei UI", 10F);
+            AutoScaleDimensions = new SizeF(96F, 96F);
+            AutoScaleMode = AutoScaleMode.Dpi; Font = new Font("Microsoft YaHei UI", 10F);
             ClientSize = new Size(500, 290); MinimumSize = new Size(480, 320);
             var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(14), ColumnCount = 1, RowCount = 6 };
+            layout.AutoScroll = true;
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            _status.MinimumSize = new Size(0, 60);
             for (int i = 0; i < 6; i++) layout.RowStyles.Add(new RowStyle(i == 4 ? SizeType.Percent : SizeType.AutoSize, i == 4 ? 100 : 0));
             layout.Controls.Add(new Label { Text = "聆听设备", AutoSize = true }, 0, 0);
             layout.Controls.Add(_device, 0, 1);
@@ -46,6 +51,7 @@ namespace YTPlayer.Forms
             _status.Margin = new Padding(0, 12, 0, 12); layout.Controls.Add(_status, 0, 4);
             var buttons = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft };
             buttons.Controls.Add(_cancel); buttons.Controls.Add(_start); layout.Controls.Add(buttons, 0, 5);
+            DialogLayout.EnableVerticalScrolling(layout, 4);
             Controls.Add(layout); AcceptButton = _start; CancelButton = _cancel;
             foreach (var d in devices.GroupBy(d => d.DeviceId).Select(g => g.First())) _device.Items.Add(d);
             int selected = devices.ToList().FindIndex(d => d.DeviceId == preferredDeviceId);
@@ -56,6 +62,7 @@ namespace YTPlayer.Forms
             _duration.SelectedIndex = 1;
             _start.Click += async (_, _) => await RecognizeAsync();
             Shown += (_, _) => _device.Focus();
+            ResumeLayout(true);
             ThemeManager.ApplyTheme(this);
         }
 

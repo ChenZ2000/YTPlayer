@@ -38,13 +38,15 @@ namespace YTPlayer.Forms
 
         private void InitializeComponent()
         {
+            SuspendLayout();
             Text = "跳转";
             StartPosition = FormStartPosition.CenterParent;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             MinimizeBox = false;
             ShowInTaskbar = false;
-            AutoScaleMode = AutoScaleMode.Font;
+            AutoScaleDimensions = new SizeF(96F, 96F);
+            AutoScaleMode = AutoScaleMode.Dpi;
             Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Regular, GraphicsUnit.Point, 134);
             ClientSize = new Size(380, 140);
 
@@ -95,11 +97,9 @@ namespace YTPlayer.Forms
             };
             _cancelButton.Click += (_, _) => Close();
 
-            Controls.Add(_pageTextBox);
-            Controls.Add(_jumpButton);
-            Controls.Add(_firstButton);
-            Controls.Add(_lastButton);
-            Controls.Add(_cancelButton);
+            var buttons = DialogLayout.CreateButtonRow(_lastButton, _firstButton, _jumpButton, _cancelButton);
+            buttons.TabIndex = 1;
+            DialogLayout.CreateVertical(this, -1, _pageTextBox, buttons);
 
             AcceptButton = _jumpButton;
             CancelButton = _cancelButton;
@@ -109,6 +109,7 @@ namespace YTPlayer.Forms
                 _pageTextBox.Focus();
                 _pageTextBox.SelectAll();
             };
+            ResumeLayout(true);
         }
 
         private void ApplyCueBanner()

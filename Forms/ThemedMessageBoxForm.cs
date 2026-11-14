@@ -60,7 +60,9 @@ namespace YTPlayer.Forms
                 BackColor = palette.SurfaceBackground,
                 AutoSize = true,
                 AutoSizeMode = AutoSizeMode.GrowAndShrink,
-                Dock = DockStyle.Top,
+                // A top-docked child does not contribute its width to Panel.AutoSize.
+                // Keep both containers content-sized so the form includes the message and buttons.
+                Location = new Point(Padding.Left, Padding.Top),
                 Padding = new Padding(16)
             };
             Controls.Add(contentPanel);
@@ -70,7 +72,7 @@ namespace YTPlayer.Forms
                 AutoSizeMode = AutoSizeMode.GrowAndShrink,
                 ColumnCount = 2,
                 RowCount = 2,
-                Dock = DockStyle.Top,
+                Location = new Point(contentPanel.Padding.Left, contentPanel.Padding.Top),
                 Margin = Padding.Empty
             };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -127,6 +129,8 @@ namespace YTPlayer.Forms
             ThemeManager.ApplyTheme(this);
             ApplyMessageTextBoxTheme(palette);
             UpdateMessageLayout();
+            _messageTextBox.FontChanged += (_, __) => UpdateMessageLayout();
+            DpiChanged += (_, __) => UpdateMessageLayout();
             _focusRetryTimer = new Timer
             {
                 Interval = FocusRetryIntervalMs
@@ -137,8 +141,8 @@ namespace YTPlayer.Forms
         private void UpdateMessageLayout()
         {
             Size messageSize = MeasureMessageSize(_messageTextBox, MessageMinWidth, MessageMaxWidth, MessageMaxVisibleLines);
-            _messageTextBox.Size = messageSize;
             _messageTextBox.MinimumSize = messageSize;
+            _messageTextBox.Size = messageSize;
             _messageColumnStyle.Width = messageSize.Width;
         }
         private void ThemedMessageBoxForm_Shown(object? sender, EventArgs e)

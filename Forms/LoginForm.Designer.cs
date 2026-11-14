@@ -159,9 +159,9 @@ namespace YTPlayer.Forms
             //
             // LoginForm
             //
-            this.AutoScaleDimensions = new System.Drawing.SizeF(9F, 18F);
-            this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(484, 561);
+            this.AutoScaleDimensions = new System.Drawing.SizeF(96F, 96F);
+            this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Dpi;
+            this.ClientSize = new System.Drawing.Size(1000, 650);
             this.Controls.Add(this.loginTabControl);
             this.Name = "LoginForm";
             this.Text = "登录";

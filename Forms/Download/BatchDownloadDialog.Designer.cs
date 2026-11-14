@@ -122,13 +122,12 @@ namespace YTPlayer.Forms.Download
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.CancelButton = this.btnCancel;
             this.ClientSize = new System.Drawing.Size(584, 436);
-            this.Controls.Add(this.btnCancel);
-            this.Controls.Add(this.btnOk);
-            this.Controls.Add(this.btnInvertSelection);
-            this.Controls.Add(this.btnUnselectAll);
-            this.Controls.Add(this.btnSelectAll);
-            this.Controls.Add(this.lblInfo);
-            this.Controls.Add(this.checkedListBox);
+            this.checkedListBox.IntegralHeight = false;
+            this.checkedListBox.MinimumSize = new System.Drawing.Size(0, 100);
+            var buttons = YTPlayer.Utils.DialogLayout.CreateButtonRow(this.btnCancel, this.btnOk,
+                this.btnInvertSelection, this.btnUnselectAll, this.btnSelectAll);
+            buttons.TabIndex = 2;
+            YTPlayer.Utils.DialogLayout.CreateVertical(this, 1, this.lblInfo, this.checkedListBox, buttons);
             this.MinimumSize = new System.Drawing.Size(400, 300);
             this.Name = "BatchDownloadDialog";
             this.ShowIcon = false;

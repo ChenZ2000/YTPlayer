@@ -2148,6 +2148,7 @@ public partial class MainForm : Form
         internal MainForm(bool initializeRuntime)
         {
                 InitializeComponent();
+                InitializeControlVisuals();
                 if (!initializeRuntime)
                 {
                         return;
@@ -2498,8 +2499,7 @@ public partial class MainForm : Form
                 }
 
                 RegisterRoundedControl(playPauseButton, DefaultControlCornerRadius);
-                RegisterRoundedControl(progressTrackBar, DefaultControlCornerRadius);
-                RegisterRoundedControl(volumeTrackBar, DefaultControlCornerRadius);
+                if (_playbackLayoutHost != null) _playbackLayoutHost.BackColor = palette.SurfaceAlt;
                 RegisterRoundedControl(lyricsLabel, DefaultControlCornerRadius);
         }
 
@@ -5308,14 +5308,16 @@ public partial class MainForm : Form
                 _roundedControls[control] = radius;
                 control.SizeChanged -= RoundedControl_SizeChanged;
                 control.SizeChanged += RoundedControl_SizeChanged;
-                ApplyRoundedRegion(control, radius);
+                control.DpiChangedAfterParent -= RoundedControl_SizeChanged;
+                control.DpiChangedAfterParent += RoundedControl_SizeChanged;
+                ApplyRoundedRegion(control, (int)Math.Round(radius * control.DeviceDpi / 96f));
         }
 
         private void RoundedControl_SizeChanged(object? sender, EventArgs e)
         {
                 if (sender is Control control && _roundedControls.TryGetValue(control, out int radius))
                 {
-                        ApplyRoundedRegion(control, radius);
+                        ApplyRoundedRegion(control, (int)Math.Round(radius * control.DeviceDpi / 96f));
                 }
         }
 
@@ -5328,6 +5330,8 @@ public partial class MainForm : Form
 
                 control.SizeChanged -= CircularControl_SizeChanged;
                 control.SizeChanged += CircularControl_SizeChanged;
+                control.DpiChangedAfterParent -= CircularControl_SizeChanged;
+                control.DpiChangedAfterParent += CircularControl_SizeChanged;
                 CircularControl_SizeChanged(control, EventArgs.Empty);
         }
 
@@ -5351,7 +5355,9 @@ public partial class MainForm : Form
                 Rectangle bounds = new Rectangle(0, 0, control.Width, control.Height);
                 using (GraphicsPath path = BuildRoundedRectanglePath(bounds, safeRadius))
                 {
+                        Region? previous = control.Region;
                         control.Region = new Region(path);
+                        previous?.Dispose();
                 }
         }
 
@@ -5577,7 +5583,6 @@ public partial class MainForm : Form
 		base.KeyPreview = true;
 		base.KeyDown += MainForm_KeyDown;
 		base.KeyUp += MainForm_KeyUp;
-		base.Deactivate += MainForm_Deactivate;
 		base.SizeChanged += MainForm_SizeChanged;
 		base.LocationChanged += MainForm_LocationChanged;
 	}
@@ -5727,7 +5732,7 @@ public partial class MainForm : Form
                 int y = hasLocation ? configModel.WindowY!.Value : base.Location.Y;
                 Rectangle targetBounds = EnsureWindowBoundsVisible(new Rectangle(x, y, width, height));
                 StartPosition = FormStartPosition.Manual;
-                Bounds = targetBounds;
+                ConstrainPlayerWindow(targetBounds);
             }
 
             if (hasState)
@@ -6566,6 +6571,9 @@ public partial class MainForm : Form
 
 	private void MainForm_Deactivate(object? sender, EventArgs e)
 	{
+		bool hadMouseGesture = progressTrackBar.IsDragging;
+		progressTrackBar.EndGesture(true);
+		volumeTrackBar.EndGesture(true);
 		_isMainMenuKeyboardActive = false;
 		_leftKeyPressed = false;
 		_rightKeyPressed = false;
@@ -6574,7 +6582,7 @@ public partial class MainForm : Form
 		_leftKeyDownTime = DateTime.MinValue;
 		_rightKeyDownTime = DateTime.MinValue;
 		StopScrubKeyTimerIfIdle();
-		if (!_isFormClosing)
+		if (!_isFormClosing && !hadMouseGesture)
 		{
 			_seekManager?.FinishSeek();
 		}
@@ -7456,6 +7464,8 @@ public partial class MainForm : Form
 
 	private void StopPlayback()
 	{
+		CancelProgressGestureForTrackChange();
+		_seekManager?.CancelPendingSeeks();
 		if (_audioEngine != null)
 		{
 			NotifyListenTogetherLocalControl();
@@ -7665,7 +7675,7 @@ public partial class MainForm : Form
 
 	private void UpdateProgressTrackBarDisplay(double positionSeconds, double durationSeconds, bool announceWhenFocused)
 	{
-		if (progressTrackBar == null)
+		if (progressTrackBar == null || progressTrackBar.IsDragging)
 		{
 			return;
 		}
@@ -7675,6 +7685,8 @@ public partial class MainForm : Form
 		double duration = timeline.Duration;
 		if (duration > 0.0)
 		{
+			progressTrackBar.Enabled = true;
+			progressTrackBar.VisualMaximum = duration;
 			int maximum = Math.Max(1, checked((int)Math.Ceiling(duration)));
 			int value = Math.Max(0, Math.Min(maximum, checked((int)Math.Round(position))));
 			string text = FormatTimeFromSeconds(position) + " / " + FormatTimeFromSeconds(duration);
@@ -7690,14 +7702,18 @@ public partial class MainForm : Form
 				progressTrackBar.Value = value;
 			}
 			timeLabel.Text = text;
+			progressTrackBar.SetVisualPosition(position);
 		}
 		else
 		{
 			const string emptyProgressText = "00:00 / 00:00";
+			progressTrackBar.Enabled = false;
+			progressTrackBar.VisualMaximum = 0;
 			bool willChangeValue = progressTrackBar.Value != 0;
 			SetProgressTrackBarAccessibleValue(emptyProgressText, announceWhenFocused && !willChangeValue);
 			progressTrackBar.Maximum = 1000;
 			progressTrackBar.Value = 0;
+			progressTrackBar.SetVisualPosition(0);
 			progressTrackBar.TickFrequency = 50;
 			timeLabel.Text = emptyProgressText;
 		}
@@ -7705,6 +7721,7 @@ public partial class MainForm : Form
 
         private void UpdateTimer_Tick(object sender, EventArgs e)
         {
+		if (_isUserDragging && !IsProgressGestureCurrent()) progressTrackBar.EndGesture(true);
 		RefreshListenTogetherPlaybackDisplay();
 		if (_audioEngine == null || _isUserDragging)
 		{
@@ -7735,34 +7752,27 @@ public partial class MainForm : Form
 		UpdateTrayPlayPauseMenuTextForState(cachedPlaybackState);
 	}
 
-        private void progressTrackBar_MouseDown(object sender, MouseEventArgs e)
-        {
-                _isUserDragging = true;
-                Debug.WriteLine("[MainForm] 进度条拖动开始");
-        }
-
         private void progressTrackBar_Scroll(object sender, EventArgs e)
         {
+                if (_isUserDragging && !IsProgressGestureCurrent())
+                {
+                        progressTrackBar.EndGesture(true);
+                        return;
+                }
                 if (_audioEngine != null)
                 {
                         double cachedDuration = GetCachedDuration();
                         if (cachedDuration > 0.0)
                         {
                                 double num = progressTrackBar.Value;
-                                UpdateProgressTrackBarDisplay(num, cachedDuration, announceWhenFocused: true);
+                                if (!progressTrackBar.IsDragging)
+                                        UpdateProgressTrackBarDisplay(num, cachedDuration, announceWhenFocused: true);
+                                else
+                                        SetProgressTrackBarAccessibleValue(FormatTimeFromSeconds(num) + " / " + FormatTimeFromSeconds(cachedDuration), announceWhenFocused: true);
                                 Debug.WriteLine($"[MainForm] 进度条 Scroll: {num:F1}s");
                                 RequestSeekAndResetLyrics(num);
+                                if (_isUserDragging) _progressLastRequestedTarget = num;
                         }
-                }
-        }
-
-        private void progressTrackBar_MouseUp(object sender, MouseEventArgs e)  
-        {
-                _isUserDragging = false;
-                Debug.WriteLine("[MainForm] 进度条拖动结束");
-                if (_seekManager != null)
-                {
-                        _seekManager.FinishSeek();
                 }
         }
 
@@ -8324,7 +8334,7 @@ public partial class MainForm : Form
 		SetVolumeTrackBarAccessibleValue(text, announceWhenFocused);
 		volumeLabel.Text = text;
 		_config.Volume = num;
-		SaveConfig();
+		_volumeSaveScheduler?.Request();
 	}
 
 	private void AdjustVolumeByStep(int delta)
@@ -8686,6 +8696,8 @@ public partial class MainForm : Form
 
 	private void AudioEngine_GaplessTransitionCompleted(object sender, GaplessTransitionEventArgs e)
 	{
+		CancelProgressGestureForTrackChange();
+		_seekManager?.CancelPendingSeeks();
 		if (base.IsDisposed)
 		{
 			return;
@@ -8696,7 +8708,7 @@ public partial class MainForm : Form
 			{
 				BeginInvoke(delegate
 				{
-					AudioEngine_GaplessTransitionCompleted(sender, e);
+					ApplyGaplessTransitionUi(sender, e);
 				});
 				return;
 			}
@@ -8709,6 +8721,12 @@ public partial class MainForm : Form
 				return;
 			}
 		}
+		ApplyGaplessTransitionUi(sender, e);
+	}
+
+	private void ApplyGaplessTransitionUi(object sender, GaplessTransitionEventArgs e)
+	{
+		if (IsDisposed) return;
 		if (e?.NextSong != null)
 		{
 			if (e.PreviousSong != null)
@@ -11080,7 +11098,8 @@ private void searchTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
                         string text3 = Path.Combine(text2, Path.GetFileName(updaterPath));
                         File.Copy(updaterPath, text3, overwrite: true);
 
-                        CopyUpdaterDependency(Path.Combine(installRoot, "libs", "YTPlayer.Updater.exe.config"), text2);
+                        // Prefer the configuration paired with this executable; the helper also supports legacy libs layouts.
+                        CopyUpdaterDependency(updaterPath + ".config", text2);
                         string text4 = Path.Combine(text2, "libs");
                         CopyUpdaterDependency("Newtonsoft.Json.dll", text4);
                         CopyUpdaterDependency("Newtonsoft.Json.xml", text4);
@@ -11405,7 +11424,7 @@ private void searchTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
 
 	private void UpdateThemeMenuChecks()
 	{
-		ThemeScheme scheme = ThemeManager.Current.Scheme;
+		ThemeScheme scheme = ThemeManager.SelectedScheme;
 		SetMenuItemCheckedState(themeGrassFreshMenuItem, scheme == ThemeScheme.GrassFresh);
 		SetMenuItemCheckedState(themeGrassSoftMenuItem, scheme == ThemeScheme.GrassSoft);
 		SetMenuItemCheckedState(themeGrassWarmMenuItem, scheme == ThemeScheme.GrassWarm);
@@ -16949,6 +16968,9 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 	{
         if (DeferCloseForListenTogether(e)) return;
         if (DeferCloseForPlaybackReporting(e)) return;
+        progressTrackBar.EndGesture(true);
+        volumeTrackBar.EndGesture(true);
+        _volumeSaveScheduler?.Flush();
         _recognitionCancellation?.Cancel();
 		_isFormClosing = true;
 		_isApplicationExitRequested = true;
@@ -18434,6 +18456,13 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 
 	protected override void Dispose(bool disposing)
 	{
+		if (disposing)
+		{
+			progressTrackBar?.EndGesture(true);
+			volumeTrackBar?.EndGesture(true);
+			_volumeSaveScheduler?.Dispose();
+			_controlTextToolTip?.Dispose();
+		}
 		if (disposing && components != null)
 		{
 			components.Dispose();
@@ -19044,8 +19073,6 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
         this.progressTrackBar.SmallChange = 1;
         this.progressTrackBar.Scroll += new System.EventHandler(progressTrackBar_Scroll);
         this.progressTrackBar.KeyDown += new System.Windows.Forms.KeyEventHandler(progressTrackBar_KeyDown);
-        this.progressTrackBar.MouseDown += new System.Windows.Forms.MouseEventHandler(progressTrackBar_MouseDown);
-        this.progressTrackBar.MouseUp += new System.Windows.Forms.MouseEventHandler(progressTrackBar_MouseUp);
 		this.playPauseButton.Font = new System.Drawing.Font("Microsoft YaHei UI", 11f, System.Drawing.FontStyle.Bold);
 		this.playPauseButton.Location = new System.Drawing.Point(12, 32);
 		this.playPauseButton.Name = "playPauseButton";

@@ -78,7 +78,6 @@ namespace YTPlayer.Forms
             this.MaximizeBox = false;
             this.MinimizeBox = false;
             this.StartPosition = FormStartPosition.CenterParent;
-            this.Size = new Size(1100, 720);
             this.KeyPreview = true;
 
             // 默认显示二维码登录标签页
@@ -93,6 +92,10 @@ namespace YTPlayer.Forms
                 UpdateQrLayout();
                 UpdateWebLayout();
             };
+            // The tab pages finish laying out after the form's SizeChanged event.
+            qrTabPage.ClientSizeChanged += (_, _) => UpdateQrLayout();
+            qrStatusLabel.TextChanged += (_, _) => UpdateQrLayout();
+            webTopPanel.ClientSizeChanged += (_, _) => UpdateWebLayout();
 
             UpdateQrLayout();
             UpdateWebLayout();
@@ -475,7 +478,7 @@ namespace YTPlayer.Forms
                 old.Dispose();
             }
 
-            qrPictureBox.SizeMode = PictureBoxSizeMode.CenterImage;
+            qrPictureBox.SizeMode = PictureBoxSizeMode.Zoom;
             qrPictureBox.Image = qrImage;
         }
 
@@ -489,24 +492,29 @@ namespace YTPlayer.Forms
             int pageWidth = Math.Max(1, qrTabPage.ClientSize.Width);
             int pageHeight = Math.Max(1, qrTabPage.ClientSize.Height);
 
-            int topPadding = 30;
-            int sidePadding = 40;
-            int bottomArea = 120; // 状态标签 + 按钮
+            int gap = LogicalToDeviceUnits(12);
+            int topPadding = LogicalToDeviceUnits(20);
+            int sidePadding = LogicalToDeviceUnits(20);
+            int labelWidth = Math.Max(1, pageWidth - sidePadding * 2);
+            int labelHeight = Math.Max(LogicalToDeviceUnits(30), TextRenderer.MeasureText(
+                qrStatusLabel.Text, qrStatusLabel.Font, new Size(labelWidth, int.MaxValue), TextFormatFlags.WordBreak).Height);
+            int buttonHeight = Math.Max(LogicalToDeviceUnits(40), refreshQrButton.PreferredSize.Height);
+            int bottomArea = labelHeight + buttonHeight + gap * 3;
 
-            int availableWidth = Math.Max(200, pageWidth - sidePadding * 2);
-            int availableHeight = Math.Max(200, pageHeight - topPadding - bottomArea);
-            int size = Math.Max(320, Math.Min(availableWidth, availableHeight));
+            int availableWidth = Math.Max(1, pageWidth - sidePadding * 2);
+            int availableHeight = Math.Max(1, pageHeight - topPadding - bottomArea);
+            int size = Math.Min(availableWidth, availableHeight);
 
             qrPictureBox.Size = new Size(size, size);
             qrPictureBox.Location = new Point((pageWidth - size) / 2, topPadding);
 
-            int labelY = qrPictureBox.Bottom + 24;
-            qrStatusLabel.Location = new Point(20, labelY);
-            qrStatusLabel.Size = new Size(Math.Max(100, pageWidth - 40), 30);
+            int labelY = qrPictureBox.Bottom + gap;
+            qrStatusLabel.Location = new Point(sidePadding, labelY);
+            qrStatusLabel.Size = new Size(labelWidth, labelHeight);
 
-            int buttonY = labelY + 44;
-            int buttonWidth = Math.Max(180, Math.Min(260, pageWidth / 4));
-            refreshQrButton.Size = new Size(buttonWidth, 44);
+            int buttonY = labelY + labelHeight + gap;
+            int buttonWidth = Math.Min(labelWidth, Math.Max(LogicalToDeviceUnits(180), refreshQrButton.PreferredSize.Width));
+            refreshQrButton.Size = new Size(buttonWidth, buttonHeight);
             refreshQrButton.Location = new Point((pageWidth - buttonWidth) / 2, buttonY);
         }
 
@@ -521,8 +529,8 @@ namespace YTPlayer.Forms
             webStatusLabel.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
 
             int panelWidth = Math.Max(1, webTopPanel.ClientSize.Width);
-            int rightPadding = 16;
-            int leftPadding = 12;
+            int rightPadding = LogicalToDeviceUnits(16);
+            int leftPadding = LogicalToDeviceUnits(12);
 
             webReloadButton.Location = new Point(panelWidth - webReloadButton.Width - rightPadding, webReloadButton.Location.Y);
             webStatusLabel.Location = new Point(leftPadding, webStatusLabel.Location.Y);

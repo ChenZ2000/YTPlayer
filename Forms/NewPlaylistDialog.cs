@@ -22,7 +22,7 @@ namespace YTPlayer.Forms
 
         public NewPlaylistDialog(string? initialName = null)
         {
-            ThemeManager.ApplyTheme(this);
+            SuspendLayout();
             AutoScaleDimensions = new SizeF(96F, 96F);
             AutoScaleMode = AutoScaleMode.Dpi;
             ClientSize = new Size(420, 150);
@@ -52,6 +52,7 @@ namespace YTPlayer.Forms
             _confirmButton = new Button
             {
                 Text = "确认",
+                TabIndex = 0,
                 DialogResult = DialogResult.OK,
                 Location = new Point(236, 96),
                 Size = new Size(80, 30)
@@ -61,15 +62,17 @@ namespace YTPlayer.Forms
             _cancelButton = new Button
             {
                 Text = "取消",
+                TabIndex = 1,
                 DialogResult = DialogResult.Cancel,
                 Location = new Point(322, 96),
                 Size = new Size(80, 30)
             };
 
-            Controls.Add(_promptLabel);
-            Controls.Add(_nameTextBox);
-            Controls.Add(_confirmButton);
-            Controls.Add(_cancelButton);
+            var buttons = DialogLayout.CreateButtonRow(_cancelButton, _confirmButton);
+            buttons.TabIndex = 2;
+            _promptLabel.TabIndex = 0;
+            _nameTextBox.TabIndex = 1;
+            DialogLayout.CreateVertical(this, -1, _promptLabel, _nameTextBox, buttons);
 
             AcceptButton = _confirmButton;
             CancelButton = _cancelButton;
@@ -82,6 +85,8 @@ namespace YTPlayer.Forms
             }
 
             UpdateConfirmState();
+            ResumeLayout(true);
+            ThemeManager.ApplyTheme(this);
         }
 
         private void ConfirmButton_Click(object? sender, EventArgs e)

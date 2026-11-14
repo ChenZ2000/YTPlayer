@@ -19,7 +19,7 @@ namespace YTPlayer.Forms
 
         public CommentsDialog(NeteaseApiClient apiClient, CommentTarget target, string? currentUserId, bool isLoggedIn)
         {
-            ThemeManager.ApplyTheme(this);
+            SuspendLayout();
             _ = apiClient ?? throw new ArgumentNullException(nameof(apiClient));
             _ = target ?? throw new ArgumentNullException(nameof(target));
             _apiClient = apiClient;
@@ -33,7 +33,8 @@ namespace YTPlayer.Forms
             ShowInTaskbar = false;
             MinimizeBox = false;
             MaximizeBox = false;
-            AutoScaleMode = AutoScaleMode.Font;
+            AutoScaleDimensions = new SizeF(96F, 96F);
+            AutoScaleMode = AutoScaleMode.Dpi;
             Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Regular, GraphicsUnit.Point, 134);
             Width = 720;
             Height = 520;
@@ -176,6 +177,8 @@ namespace YTPlayer.Forms
             InitializeState();
             InitializeAccessibilityAnnouncements();
             InitializeEvents();
+            ResumeLayout(true);
+            ThemeManager.ApplyTheme(this);
         }
 
         private sealed class AccessibilitySwitchScope : IDisposable

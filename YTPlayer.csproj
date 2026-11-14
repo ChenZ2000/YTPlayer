@@ -96,9 +96,13 @@
     <Compile Include="Program.cs">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="Utils\DialogLayout.cs" />
     <Compile Include="MainForm.cs">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="Forms\MainForm\MainForm.ControlVisuals.cs" />
+    <Compile Include="Utils\VolumeSaveScheduler.cs" />
+    <Compile Include="Utils\ControlVisibilityObserver.cs" />
     <Compile Include="MainForm.Accessibility.cs" />
     <Compile Include="Forms\MainForm\MainForm.Navigation.cs" />
     <Compile Include="Forms\MainForm\MainForm.CategoryNavigation.cs" />
@@ -466,6 +470,7 @@
       <ManagedDeps Include="$(OutDir)*.*"
                    Exclude="$(OutDir)YTPlayer.exe;
                             $(OutDir)YTPlayer.Updater.exe;
+                            $(OutDir)YTPlayer.Updater.exe.config;
                             $(OutDir)account.json;
                             $(OutDir)config.json;
                             $(OutDir)Logs\**\*.*;
@@ -492,6 +497,8 @@
       <UpdaterOutputFiles Include="$(UpdaterOutputDir)YTPlayer.Updater.exe.config" Condition="Exists('$(UpdaterOutputDir)YTPlayer.Updater.exe.config')" />
     </ItemGroup>
     <Copy SourceFiles="@(UpdaterOutputFiles)" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" Condition="'@(UpdaterOutputFiles)' != ''" />
+    <!-- CLR/WinForms configuration must stay beside the executable, including for direct launches. -->
+    <Delete Files="$(OutDir)libs\YTPlayer.Updater.exe.config" Condition="Exists('$(OutDir)YTPlayer.Updater.exe.config')" />
   </Target>
 
   <Target Name="CopyUpdaterSupportFiles" AfterTargets="CopyUpdaterBinary">
@@ -521,8 +528,6 @@
                    Condition="Exists('$(OutDir)YTPlayer.Updater.runtimeconfig.json')" />
       <UpdaterDeps Include="$(OutDir)YTPlayer.Updater.deps.json"
                    Condition="Exists('$(OutDir)YTPlayer.Updater.deps.json')" />
-      <UpdaterDeps Include="$(OutDir)YTPlayer.Updater.exe.config"
-                   Condition="Exists('$(OutDir)YTPlayer.Updater.exe.config')" />
     </ItemGroup>
     <Copy SourceFiles="@(UpdaterDeps)" DestinationFolder="$(OutDir)libs" SkipUnchangedFiles="true" Condition="'@(UpdaterDeps)' != ''" />
     <Delete Files="@(UpdaterDeps)" Condition="'@(UpdaterDeps)' != ''" />

@@ -47,7 +47,6 @@ namespace YTPlayer.Updater
 
             InitializeComponent();
             IconAssetProvider.TryApplyFormIcon(this);
-            Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Regular);
             ThemeManager.ApplyTheme(this);
             logPlaceholderLabel.ForeColor = ThemeManager.Current.TextSecondary;
             UpdateLogPlaceholder();
@@ -82,7 +81,7 @@ namespace YTPlayer.Updater
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing)
+            if (disposing && !IsDisposed)
             {
                 components?.Dispose();
                 _cts.Cancel();
@@ -143,7 +142,7 @@ namespace YTPlayer.Updater
             string fileName = string.IsNullOrWhiteSpace(_plan.AssetName) ? "YTPlayer-update.zip" : _plan.AssetName;
             string destinationPath = Path.Combine(_packageDirectory, fileName);
 
-            var progress = new Progress<UpdateDownloadProgress>(ReportDownloadProgress);
+            var progress = new DownloadProgressReporter(new Progress<UpdateDownloadProgress>(ReportDownloadProgress));
             await _updateClient.DownloadAssetAsync(_plan.AssetDownloadUrl, destinationPath, progress, token).ConfigureAwait(true);
 
             AppendLog("下载完成");
@@ -426,6 +425,30 @@ namespace YTPlayer.Updater
             else
             {
                 UpdateStage("正在下载更新包...");
+            }
+        }
+
+        // DownloadAssetAsync reports once per buffer. Bound UI work before Progress<T>
+        // posts to the UI thread, especially now that long status text can reflow the layout.
+        private sealed class DownloadProgressReporter : IProgress<UpdateDownloadProgress>
+        {
+            private readonly IProgress<UpdateDownloadProgress> _target;
+            private long _lastReport;
+
+            public DownloadProgressReporter(IProgress<UpdateDownloadProgress> target)
+            {
+                _target = target;
+            }
+
+            public void Report(UpdateDownloadProgress value)
+            {
+                long now = Stopwatch.GetTimestamp();
+                bool complete = value.TotalBytes.HasValue && value.BytesReceived >= value.TotalBytes.Value;
+                if (_lastReport == 0 || complete || now - _lastReport >= Stopwatch.Frequency / 10)
+                {
+                    _lastReport = now;
+                    _target.Report(value);
+                }
             }
         }
 

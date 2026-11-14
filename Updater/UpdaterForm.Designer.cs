@@ -77,6 +77,8 @@ namespace YTPlayer.Updater
             // 
             this.logListBox.Dock = System.Windows.Forms.DockStyle.Fill;
             this.logListBox.FormattingEnabled = true;
+            this.logListBox.IntegralHeight = false;
+            this.logListBox.AccessibleName = "更新日志";
             this.logListBox.HorizontalScrollbar = true;
             this.logListBox.ItemHeight = 20;
             this.logListBox.Name = "logListBox";
@@ -118,18 +120,19 @@ namespace YTPlayer.Updater
             //
             // UpdaterForm
             //
-            this.AutoScaleDimensions = new System.Drawing.SizeF(8F, 20F);
-            this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
+            this.Font = new System.Drawing.Font("Microsoft YaHei UI", 10F);
+            this.AutoScaleDimensions = new System.Drawing.SizeF(96F, 96F);
+            this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Dpi;
             this.CancelButton = this.cancelButton;
             this.ClientSize = new System.Drawing.Size(550, 380);
-            this.Controls.Add(this.resumeButton);
-            this.Controls.Add(this.cancelButton);
-            this.Controls.Add(this.logPanel);
-            this.Controls.Add(this.progressBar);
-            this.Controls.Add(this.statusLabel);
-            this.Controls.Add(this.versionLabel);
-            this.Controls.Add(this.headingLabel);
-            this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedDialog;
+            this.logPanel.MinimumSize = new System.Drawing.Size(0, 100);
+            this.progressBar.MinimumSize = new System.Drawing.Size(0, 18);
+            var buttons = YTPlayer.Utils.DialogLayout.CreateButtonRow(this.cancelButton, this.resumeButton);
+            buttons.TabIndex = 5;
+            YTPlayer.Utils.DialogLayout.CreateVertical(this, 4,
+                this.headingLabel, this.versionLabel, this.statusLabel, this.progressBar, this.logPanel, buttons);
+            this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.Sizable;
+            this.MinimumSize = new System.Drawing.Size(400, 320);
             this.MaximizeBox = false;
             this.MinimizeBox = false;
             this.Name = "UpdaterForm";

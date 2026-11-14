@@ -34,6 +34,7 @@ namespace YTPlayer.Utils
         public Color AccentSoft { get; }
         public Color AccentText { get; }
         public Color FocusRing { get; }
+        public Color ControlBorder => TextSecondary;
 
         public ThemePalette(
             ThemeScheme scheme,
@@ -91,12 +92,12 @@ namespace YTPlayer.Utils
                 Color.FromArgb(230, 234, 228),
                 Color.FromArgb(238, 242, 239),
                 Color.FromArgb(196, 230, 210),
-                Color.FromArgb(47, 182, 106),
-                Color.FromArgb(37, 161, 92),
-                Color.FromArgb(33, 145, 84),
+                Color.FromArgb(27, 124, 65),
+                Color.FromArgb(23, 110, 57),
+                Color.FromArgb(18, 92, 47),
                 Color.FromArgb(223, 243, 231),
                 Color.FromArgb(255, 255, 255),
-                Color.FromArgb(122, 210, 161)),
+                Color.FromArgb(27, 112, 63)),
             new ThemePalette(
                 ThemeScheme.GrassSoft,
                 "草绿柔和",
@@ -109,12 +110,12 @@ namespace YTPlayer.Utils
                 Color.FromArgb(231, 234, 230),
                 Color.FromArgb(237, 239, 236),
                 Color.FromArgb(202, 224, 210),
-                Color.FromArgb(94, 158, 111),
-                Color.FromArgb(78, 138, 95),
-                Color.FromArgb(68, 122, 85),
+                Color.FromArgb(65, 119, 80),
+                Color.FromArgb(55, 105, 69),
+                Color.FromArgb(46, 90, 59),
                 Color.FromArgb(227, 239, 230),
                 Color.FromArgb(255, 255, 255),
-                Color.FromArgb(144, 194, 162)),
+                Color.FromArgb(57, 110, 73)),
             new ThemePalette(
                 ThemeScheme.GrassWarm,
                 "草绿暖意",
@@ -127,12 +128,12 @@ namespace YTPlayer.Utils
                 Color.FromArgb(234, 231, 222),
                 Color.FromArgb(240, 241, 233),
                 Color.FromArgb(216, 228, 197),
-                Color.FromArgb(122, 155, 77),
-                Color.FromArgb(107, 139, 68),
-                Color.FromArgb(96, 125, 61),
+                Color.FromArgb(87, 116, 49),
+                Color.FromArgb(76, 102, 42),
+                Color.FromArgb(63, 85, 34),
                 Color.FromArgb(237, 243, 224),
                 Color.FromArgb(255, 255, 255),
-                Color.FromArgb(182, 213, 142)),
+                Color.FromArgb(79, 106, 44)),
             new ThemePalette(
                 ThemeScheme.GrassMuted,
                 "草绿静雅",
@@ -150,7 +151,7 @@ namespace YTPlayer.Utils
                 Color.FromArgb(46, 92, 68),
                 Color.FromArgb(224, 236, 229),
                 Color.FromArgb(255, 255, 255),
-                Color.FromArgb(127, 182, 154))
+                Color.FromArgb(52, 105, 77))
         };
 
         private static readonly HashSet<Form> ThemedForms = new HashSet<Form>();
@@ -158,7 +159,18 @@ namespace YTPlayer.Utils
         private static bool _initialized;
         private static ThemePalette _current = Palettes[0];
 
-        public static ThemePalette Current => _current;
+        private static readonly ThemePalette HighContrastPalette = new ThemePalette(
+            ThemeScheme.GrassFresh, "系统高对比度", SystemColors.Window, SystemColors.Window,
+            SystemColors.Control, SystemColors.WindowText, SystemColors.WindowText,
+            SystemColors.WindowText, SystemColors.GrayText, SystemColors.Control,
+            SystemColors.Control, SystemColors.Highlight, SystemColors.Highlight,
+            SystemColors.Highlight, SystemColors.Control, SystemColors.HighlightText,
+            SystemColors.WindowText);
+        internal static bool? HighContrastOverride { get; set; }
+        private static bool _lastHighContrast;
+        internal static bool IsHighContrast => HighContrastOverride ?? SystemInformation.HighContrast;
+        public static ThemePalette Current => IsHighContrast ? HighContrastPalette : _current;
+        internal static ThemeScheme SelectedScheme => _current.Scheme;
         public static IReadOnlyList<ThemePalette> AvailablePalettes => Palettes;
 
         public static void Initialize(ThemeScheme scheme = ThemeScheme.GrassFresh)
@@ -208,6 +220,11 @@ namespace YTPlayer.Utils
 
         private static void OnApplicationIdle(object? sender, EventArgs e)
         {
+            if (_lastHighContrast != IsHighContrast)
+            {
+                _lastHighContrast = IsHighContrast;
+                ThemedForms.Clear();
+            }
             ApplyThemeToOpenForms();
         }
 
@@ -221,13 +238,17 @@ namespace YTPlayer.Utils
                 }
 
                 ApplyTheme(form);
-                form.FormClosed += (_, _) => ThemedForms.Remove(form);
+                form.FormClosed -= ThemedFormClosed;
+                form.FormClosed += ThemedFormClosed;
             }
         }
 
+        private static void ThemedFormClosed(object? sender, FormClosedEventArgs e)
+        { if (sender is Form form) ThemedForms.Remove(form); }
+
         private static void ApplyThemeToControl(Control control)
         {
-            ThemePalette palette = _current;
+            ThemePalette palette = Current;
 
             if (control is Form form)
             {
@@ -245,7 +266,7 @@ namespace YTPlayer.Utils
                 control.BackColor = palette.SurfaceAlt;
                 control.ForeColor = palette.TextPrimary;
             }
-            else if (control is Label label)
+            else if (control is Label label && !(control is LinkLabel))
             {
                 label.BackColor = Color.Transparent;
                 label.ForeColor = palette.TextPrimary;
@@ -262,14 +283,15 @@ namespace YTPlayer.Utils
             {
                 bool isPrimary = IsPrimaryButton(button);
                 button.FlatStyle = FlatStyle.Flat;
-                button.FlatAppearance.BorderSize = 1;
-                button.FlatAppearance.BorderColor = isPrimary ? palette.Accent : palette.Border;
+                button.FlatAppearance.BorderSize = Math.Max(1, (int)Math.Round(button.DeviceDpi / 96f));
+                button.FlatAppearance.BorderColor = isPrimary ? palette.Accent : palette.ControlBorder;
                 button.FlatAppearance.MouseOverBackColor = isPrimary ? palette.AccentHover : palette.Highlight;
                 button.FlatAppearance.MouseDownBackColor = isPrimary ? palette.AccentPressed : palette.Focus;
                 button.BackColor = isPrimary ? palette.Accent : palette.SurfaceBackground;
                 button.ForeColor = isPrimary ? palette.AccentText : palette.TextPrimary;
                 button.UseVisualStyleBackColor = false;
                 TryApplyRounded(button, DefaultCornerRadius);
+                ButtonFeedback.Attach(button);
             }
             else if (control is TextBoxBase textBox)
             {
@@ -369,7 +391,7 @@ namespace YTPlayer.Utils
 
         private static void ApplyToolStripTheme(ToolStrip toolStrip)
         {
-            ThemePalette palette = _current;
+            ThemePalette palette = Current;
             toolStrip.BackColor = palette.SurfaceAlt;
             toolStrip.ForeColor = palette.TextPrimary;
             toolStrip.Renderer = new ThemedToolStripRenderer(palette);
@@ -436,6 +458,8 @@ namespace YTPlayer.Utils
             RoundedControls[control] = radius;
             control.SizeChanged -= RoundedControl_SizeChanged;
             control.SizeChanged += RoundedControl_SizeChanged;
+            control.DpiChangedAfterParent -= RoundedControl_SizeChanged;
+            control.DpiChangedAfterParent += RoundedControl_SizeChanged;
             control.Disposed -= RoundedControl_Disposed;
             control.Disposed += RoundedControl_Disposed;
             ApplyRoundedRegion(control, radius);
@@ -464,11 +488,67 @@ namespace YTPlayer.Utils
                 return;
             }
 
-            int safeRadius = Math.Max(0, Math.Min(radius, Math.Min(control.Width, control.Height) / 2));
+            int safeRadius = Math.Max(0, Math.Min((int)Math.Round(radius * control.DeviceDpi / 96f), Math.Min(control.Width, control.Height) / 2));
             Rectangle bounds = new Rectangle(0, 0, control.Width, control.Height);
             using (GraphicsPath path = BuildRoundedRectanglePath(bounds, safeRadius))
             {
+                Region? previous = control.Region;
                 control.Region = new Region(path);
+                previous?.Dispose();
+            }
+        }
+
+        // Decorate existing Button instances so Enter/Esc, mnemonics, DialogResult,
+        // default-button behavior and native accessibility remain owned by WinForms.
+        private sealed class ButtonFeedback
+        {
+            private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Button, ButtonFeedback> States =
+                new System.Runtime.CompilerServices.ConditionalWeakTable<Button, ButtonFeedback>();
+            private bool _pressed;
+            internal static void Attach(Button button) => States.GetValue(button, b => new ButtonFeedback(b));
+            private ButtonFeedback(Button button)
+            {
+                void SizeForText()
+                {
+                    if (!button.IsHandleCreated) return;
+                    int minimum = Math.Max((int)Math.Ceiling(32 * button.DeviceDpi / 96f), button.Font.Height + (int)Math.Ceiling(8 * button.DeviceDpi / 96f));
+                    button.MinimumSize = new Size(button.MinimumSize.Width, minimum);
+                    button.FlatAppearance.BorderSize = Math.Max(1, (int)Math.Round(button.DeviceDpi / 96f));
+                }
+                button.HandleCreated += (_, _) => SizeForText();
+                button.DpiChangedAfterParent += (_, _) => SizeForText();
+                button.FontChanged += (_, _) => SizeForText();
+                SizeForText();
+                button.MouseDown += (_, e) => { if (e.Button == MouseButtons.Left) { _pressed = true; button.Invalidate(); } };
+                button.MouseUp += (_, _) => { _pressed = false; button.Invalidate(); };
+                button.MouseMove += (_, e) =>
+                {
+                    if (!button.Capture || e.Button != MouseButtons.Left) return;
+                    bool pressed = button.ClientRectangle.Contains(e.Location);
+                    if (_pressed != pressed) { _pressed = pressed; button.Invalidate(); }
+                };
+                button.MouseCaptureChanged += (_, _) => { if (!button.Capture) { _pressed = false; button.Invalidate(); } };
+                button.KeyDown += (_, e) => { if (e.KeyCode == Keys.Space) { _pressed = true; button.Invalidate(); } };
+                button.KeyUp += (_, e) => { if (e.KeyCode == Keys.Space) { _pressed = false; button.Invalidate(); } };
+                button.GotFocus += (_, _) => button.Invalidate();
+                button.LostFocus += (_, _) => { _pressed = false; button.Invalidate(); };
+                button.EnabledChanged += (_, _) => { _pressed = false; button.Invalidate(); };
+                button.Paint += (_, e) =>
+                {
+                    if (!button.Enabled || (!button.Focused && !_pressed)) return;
+                    float scale = button.DeviceDpi / 96f;
+                    int inset = Math.Max(3, (int)Math.Ceiling(4 * scale));
+                    Rectangle bounds = Rectangle.Inflate(button.ClientRectangle, -inset, -inset);
+                    if (bounds.Width < 1 || bounds.Height < 1) return;
+                    Color color = IsPrimaryButton(button) ? Current.AccentText : Current.FocusRing;
+                    using (var pen = new Pen(color, Math.Max(1, (_pressed ? 2 : 1.5f) * scale)))
+                    using (var path = BuildRoundedRectanglePath(bounds, (int)(4 * scale)))
+                    {
+                        // Pressed has a solid inset border; keyboard focus has a dashed outline.
+                        pen.DashStyle = _pressed ? DashStyle.Solid : DashStyle.Dash;
+                        e.Graphics.DrawPath(pen, path);
+                    }
+                };
             }
         }
 

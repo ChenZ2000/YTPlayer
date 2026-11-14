@@ -18,7 +18,9 @@ namespace YTPlayer.Forms
 
         public PurchaseLinkDialog(string songName, string albumName, string purchaseUrl)
         {
-            ThemeManager.ApplyTheme(this);
+            SuspendLayout();
+            AutoScaleDimensions = new SizeF(96F, 96F);
+            AutoScaleMode = AutoScaleMode.Dpi;
             _purchaseUrl = purchaseUrl ?? throw new ArgumentNullException(nameof(purchaseUrl));
             PurchaseRequested = false;
 
@@ -33,7 +35,7 @@ namespace YTPlayer.Forms
             MinimizeBox = false;
             MaximizeBox = false;
             ShowInTaskbar = false;
-            ClientSize = new Size(420, 200);
+            ClientSize = new Size(460, 260);
 
             _messageLabel = new Label
             {
@@ -47,6 +49,7 @@ namespace YTPlayer.Forms
             _openButton = new Button
             {
                 Text = "购买",
+                TabIndex = 0,
                 DialogResult = DialogResult.OK,
                 Location = new Point(220, 130),
                 Size = new Size(90, 30)
@@ -56,6 +59,7 @@ namespace YTPlayer.Forms
             _cancelButton = new Button
             {
                 Text = "取消",
+                TabIndex = 1,
                 DialogResult = DialogResult.Cancel,
                 Location = new Point(320, 130),
                 Size = new Size(90, 30)
@@ -66,7 +70,16 @@ namespace YTPlayer.Forms
                 Close();
             };
 
-            Controls.AddRange(new Control[] { _messageLabel, _openButton, _cancelButton });
+            var messagePanel = new Panel { AutoScroll = true, MinimumSize = new Size(0, 100) };
+            _messageLabel.AutoSize = true;
+            _messageLabel.Dock = DockStyle.Top;
+            messagePanel.Controls.Add(_messageLabel);
+            // Keep the focusable label and its accessible text while allowing arbitrarily long titles.
+            messagePanel.ClientSizeChanged += (_, __) =>
+                _messageLabel.MaximumSize = new Size(System.Math.Max(1, messagePanel.ClientSize.Width - SystemInformation.VerticalScrollBarWidth), 0);
+            var buttons = DialogLayout.CreateButtonRow(_cancelButton, _openButton);
+            buttons.TabIndex = 1;
+            DialogLayout.CreateVertical(this, 0, messagePanel, buttons);
             AcceptButton = _openButton;
             CancelButton = _cancelButton;
             Shown += (_, __) =>
@@ -81,6 +94,8 @@ namespace YTPlayer.Forms
                     Debug.WriteLine($"[PurchaseLinkDialog] Focus failed: {ex.Message}");
                 }
             };
+            ResumeLayout(true);
+            ThemeManager.ApplyTheme(this);
         }
 
         private void OpenPurchaseLink(bool closeAfterLaunch)

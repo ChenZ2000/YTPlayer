@@ -4,6 +4,7 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net48</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
     <RootNamespace>YTPlayer.Updater</RootNamespace>
     <AssemblyName>YTPlayer.Updater</AssemblyName>
     <Nullable>enable</Nullable>
@@ -61,6 +62,8 @@
 
   <ItemGroup>
     <Compile Include="Program.cs" />
+    <Compile Include="..\Utils\DialogLayout.cs" Link="Utils\DialogLayout.cs" />
+    <Compile Include="..\Utils\ControlVisibilityObserver.cs" Link="Utils\ControlVisibilityObserver.cs" />
     <Compile Include="UpdaterForm.cs">
       <SubType>Form</SubType>
     </Compile>

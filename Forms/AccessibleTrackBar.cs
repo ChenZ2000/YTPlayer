@@ -2,485 +2,340 @@ using System;
 using System.ComponentModel;
 using System.Drawing;
 using System.Drawing.Drawing2D;
-using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using YTPlayer.Utils;
 
 namespace YTPlayer
 {
-    [DefaultEvent(nameof(Scroll))]
-    [DefaultProperty(nameof(Value))]
+    internal sealed class SliderGestureEventArgs : EventArgs
+    {
+        internal double Position { get; }
+        internal bool Canceled { get; }
+        internal SliderGestureEventArgs(double position, bool canceled = false)
+        { Position = position; Canceled = canceled; }
+    }
+
+    // Keep the native trackbar handle, integer range and accessibility provider.
+    // UserPaint gives both WM_PAINT and WM_PRINTCLIENT the same buffered renderer.
+    [DefaultEvent(nameof(Scroll)), DefaultProperty(nameof(Value))]
     internal sealed class AccessibleTrackBar : TrackBar
     {
-        private const int WM_PAINT = 0x000F;
-        private const int WM_MOUSEMOVE = 0x0200;
-        private const int WM_LBUTTONDOWN = 0x0201;
-        private const int WM_LBUTTONUP = 0x0202;
-        private const int WM_CAPTURECHANGED = 0x0215;
-        private const int MinimumTrackLength = 1;
-
         private string _accessibleValueText = string.Empty;
+        private double _visualPosition;
+        private double _visualMaximum = double.NaN;
+        private double _gestureOrigin;
+        private double _hoverPosition;
+        private float _grabOffset;
         private bool _isDragging;
+        private bool _hovered;
+        private bool _settingPointerValue;
+        private readonly SolidBrush _brush = new SolidBrush(Color.Black);
+        private readonly Pen _pen = new Pen(Color.Black);
+        private readonly ControlVisibilityObserver _visibilityObserver;
 
-        [Browsable(false)]
-        [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+        [Browsable(false), DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
         public Func<bool>? ShouldYieldNavigationKeys { get; set; }
+        internal event EventHandler<SliderGestureEventArgs>? GestureStarted;
+        internal event EventHandler<SliderGestureEventArgs>? GesturePreview;
+        internal event EventHandler<SliderGestureEventArgs>? GestureEnded;
+        internal bool IsDragging => _isDragging;
+        [Browsable(false), DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+        internal Func<double, double?, string>? PreviewText { get; set; }
+        // Geometry-only injection; never changes Windows' actual DPI or accessibility.
+        [Browsable(false), DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+        internal int? GeometryDpi { get; set; }
+        private float ScaleFactor => (GeometryDpi ?? DeviceDpi) / 96f;
+        internal int PreferredVisualHeight => Font.Height + (int)Math.Ceiling(38 * ScaleFactor);
+        [Browsable(false), DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+        internal double VisualMaximum
+        {
+            get => double.IsNaN(_visualMaximum) ? Maximum : _visualMaximum;
+            set { if (_visualMaximum == value) return; _visualMaximum = value; Invalidate(); }
+        }
+        internal double VisualPosition => Clamp(_visualPosition);
 
         public AccessibleTrackBar()
         {
-            SetStyle(
-                ControlStyles.OptimizedDoubleBuffer |
-                ControlStyles.ResizeRedraw |
-                ControlStyles.Selectable,
-                true);
-
+            _visibilityObserver = new ControlVisibilityObserver(this, () =>
+            {
+                if (!Visible || !Enabled || FindForm()?.WindowState == FormWindowState.Minimized)
+                { _hovered = false; EndGesture(canceled: true); }
+            });
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
             AutoSize = false;
             AccessibleRole = AccessibleRole.Slider;
             TickStyle = TickStyle.None;
         }
 
-        [Browsable(false)]
-        [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+        internal void SetVisualPosition(double value)
+        {
+            if (!_isDragging) SetVisualPositionCore(value);
+        }
+
+        private void SetVisualPositionCore(double value)
+        {
+            double next = Clamp(value);
+            if (Math.Abs(next - _visualPosition) < 0.000001) return;
+            _visualPosition = next;
+            Invalidate();
+        }
+
+        private double Clamp(double value) => double.IsNaN(value) || double.IsInfinity(value)
+            ? Minimum : Math.Max(Minimum, Math.Min(Math.Max(Minimum, VisualMaximum), value));
+
+        [Browsable(false), DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
         public string AccessibleValueText
         {
             get => _accessibleValueText;
-            set => SetAccessibleValueText(value, raiseValueChanged: ContainsFocus);
+            set => SetAccessibleValueText(value, ContainsFocus);
         }
-
-        public void RaiseNameChanged()
-        {
-            NotifyAccessibleClients(AccessibleEvents.NameChange);
-        }
-
-        public void RaiseFocusChanged()
-        {
-            NotifyAccessibleClients(AccessibleEvents.Focus);
-        }
-
-        public void RaiseValueChanged()
-        {
-            NotifyAccessibleClients(AccessibleEvents.ValueChange);
-        }
-
-        public void RaiseDescriptionChanged()
-        {
-            NotifyAccessibleClients(AccessibleEvents.DescriptionChange);
-        }
+        public void RaiseNameChanged() => NotifyAccessibleClients(AccessibleEvents.NameChange);
+        public void RaiseFocusChanged() => NotifyAccessibleClients(AccessibleEvents.Focus);
+        public void RaiseValueChanged() => NotifyAccessibleClients(AccessibleEvents.ValueChange);
+        public void RaiseDescriptionChanged() => NotifyAccessibleClients(AccessibleEvents.DescriptionChange);
 
         public void SetAccessibleValueText(string? value, bool raiseValueChanged)
         {
             string next = value ?? string.Empty;
-            if (string.Equals(_accessibleValueText, next, StringComparison.Ordinal))
-            {
-                return;
-            }
-
+            if (_accessibleValueText == next) return;
             _accessibleValueText = next;
-            if (raiseValueChanged)
-            {
-                RaiseValueChanged();
-            }
+            if (raiseValueChanged) RaiseValueChanged();
+        }
+
+        private void NotifyAccessibleClients(AccessibleEvents accEvent)
+        {
+            try { AccessibilityNotifyClients(accEvent, 0); AccessibilityNotifyClients(accEvent, -1); }
+            catch (InvalidOperationException) { }
         }
 
         protected override bool IsInputKey(Keys keyData)
         {
-            Keys keyCode = keyData & Keys.KeyCode;
-            if (keyCode == Keys.Left ||
-                keyCode == Keys.Right ||
-                keyCode == Keys.Up ||
-                keyCode == Keys.Down ||
-                keyCode == Keys.Home ||
-                keyCode == Keys.End ||
-                keyCode == Keys.PageUp ||
-                keyCode == Keys.PageDown)
+            switch (keyData & Keys.KeyCode)
             {
-                if (ShouldYieldNavigationKeys?.Invoke() == true)
-                {
-                    return false;
-                }
-
-                return true;
+                case Keys.Left: case Keys.Right: case Keys.Up: case Keys.Down:
+                case Keys.Home: case Keys.End: case Keys.PageUp: case Keys.PageDown:
+                    return ShouldYieldNavigationKeys?.Invoke() != true;
+                default: return base.IsInputKey(keyData);
             }
-
-            return base.IsInputKey(keyData);
         }
 
         protected override void OnGotFocus(EventArgs e)
         {
             base.OnGotFocus(e);
-            RaiseFocusChanged();
-            RaiseValueChanged();
-            RaiseNameChanged();
+            RaiseFocusChanged(); RaiseValueChanged(); RaiseNameChanged(); Invalidate();
         }
-
+        protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); Invalidate(); }
         protected override void OnValueChanged(EventArgs e)
         {
+            if (!_settingPointerValue && !_isDragging) _visualPosition = Value;
             base.OnValueChanged(e);
             Invalidate();
         }
-
         protected override void OnEnabledChanged(EventArgs e)
         {
-            base.OnEnabledChanged(e);
-            Invalidate();
+            if (!Enabled) { _hovered = false; EndGesture(canceled: true); }
+            base.OnEnabledChanged(e); Invalidate();
         }
-
-        protected override void OnResize(EventArgs e)
+        protected override void OnVisibleChanged(EventArgs e)
         {
-            base.OnResize(e);
-            Invalidate();
+            if (!Visible) { _hovered = false; EndGesture(canceled: true); }
+            base.OnVisibleChanged(e);
+        }
+        protected override void OnHandleDestroyed(EventArgs e)
+        { EndGesture(canceled: true); base.OnHandleDestroyed(e); }
+        protected override void OnMouseLeave(EventArgs e)
+        { _hovered = false; base.OnMouseLeave(e); Invalidate(); }
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            if (!Enabled || _isDragging) return;
+            bool wasHovered = _hovered;
+            _hovered = GetHitBounds().Contains(e.Location);
+            double next = PositionFromPoint(e.Location, 0);
+            if (wasHovered != _hovered || (_hovered && next != _hoverPosition))
+            { _hoverPosition = next; Invalidate(); }
         }
 
         protected override void WndProc(ref Message m)
         {
+            Point point;
             switch (m.Msg)
             {
-                case WM_LBUTTONDOWN:
-                    if (HandleDirectMouseDown(m))
-                    {
-                        return;
-                    }
-                    break;
-                case WM_MOUSEMOVE:
-                    if (HandleDirectMouseMove(m))
-                    {
-                        return;
-                    }
-                    break;
-                case WM_LBUTTONUP:
-                    if (HandleDirectMouseUp(m))
-                    {
-                        return;
-                    }
-                    break;
-                case WM_CAPTURECHANGED:
-                    _isDragging = false;
+                case 0x201: // WM_LBUTTONDOWN
+                case 0x203: // WM_LBUTTONDBLCLK: don't start a native second gesture.
+                    point = PointFromLParam(m.LParam);
+                    if (!Enabled || VisualMaximum <= Minimum || !GetHitBounds().Contains(point)) return;
+                    Focus();
+                    PointF center = GetThumbCenter();
+                    float radius = 12 * ScaleFactor;
+                    bool onThumb = Math.Abs(point.X - center.X) <= radius && Math.Abs(point.Y - center.Y) <= radius;
+                    _grabOffset = onThumb ? (Orientation == Orientation.Vertical ? point.Y - center.Y : point.X - center.X) : 0;
+                    _gestureOrigin = VisualPosition;
+                    _isDragging = true;
+                    Capture = true;
+                    GestureStarted?.Invoke(this, new SliderGestureEventArgs(VisualPosition));
+                    OnMouseDown(new MouseEventArgs(MouseButtons.Left, 1, point.X, point.Y, 0));
+                    if (_isDragging) UpdatePointer(point);
+                    return;
+                case 0x200: // WM_MOUSEMOVE
+                    if (!_isDragging) break;
+                    point = PointFromLParam(m.LParam);
+                    UpdatePointer(point);
+                    OnMouseMove(new MouseEventArgs(MouseButtons.Left, 0, point.X, point.Y, 0));
+                    return;
+                case 0x202: // WM_LBUTTONUP
+                    if (!_isDragging) break;
+                    point = PointFromLParam(m.LParam);
+                    UpdatePointer(point);
+                    EndGesture(canceled: false);
+                    OnMouseUp(new MouseEventArgs(MouseButtons.Left, 1, point.X, point.Y, 0));
+                    return;
+                case 0x215: // WM_CAPTURECHANGED
+                case 0x1F:  // WM_CANCELMODE
+                    EndGesture(canceled: true);
                     break;
             }
-
             base.WndProc(ref m);
-
-            if (m.Msg == WM_PAINT)
-            {
-                DrawThemedOverlay();
-            }
         }
 
-        private bool HandleDirectMouseDown(Message m)
+        internal void EndGesture(bool canceled)
         {
-            if (!Enabled)
-            {
-                return false;
-            }
-
-            Point point = GetPointFromLParam(m.LParam);
-            Focus();
-            _isDragging = true;
-            Capture = true;
-            OnMouseDown(new MouseEventArgs(MouseButtons.Left, 1, point.X, point.Y, 0));
-            SetValueFromPoint(point, raiseScroll: true);
-            return true;
-        }
-
-        private bool HandleDirectMouseMove(Message m)
-        {
-            if (!_isDragging)
-            {
-                return false;
-            }
-
-            Point point = GetPointFromLParam(m.LParam);
-            SetValueFromPoint(point, raiseScroll: true);
-            OnMouseMove(new MouseEventArgs(MouseButtons.Left, 0, point.X, point.Y, 0));
-            return true;
-        }
-
-        private bool HandleDirectMouseUp(Message m)
-        {
-            if (!_isDragging)
-            {
-                return false;
-            }
-
-            Point point = GetPointFromLParam(m.LParam);
-            SetValueFromPoint(point, raiseScroll: true);
+            if (!_isDragging) return;
+            // Clear first: releasing capture reenters WndProc synchronously.
             _isDragging = false;
-            Capture = false;
-            OnMouseUp(new MouseEventArgs(MouseButtons.Left, 1, point.X, point.Y, 0));
-            return true;
+            _hovered = false;
+            if (Capture) Capture = false;
+            GestureEnded?.Invoke(this, new SliderGestureEventArgs(VisualPosition, canceled));
+            Invalidate();
         }
 
-        private void SetValueFromPoint(Point point, bool raiseScroll)
+        private void UpdatePointer(Point point)
         {
-            RectangleF track = GetTrackBounds();
-            if (track.Width < MinimumTrackLength || track.Height < MinimumTrackLength || Maximum <= Minimum)
+            double position = PositionFromPoint(point, _grabOffset);
+            SetVisualPositionCore(position);
+            int next = Math.Max(Minimum, Math.Min(Maximum, (int)Math.Round(position, MidpointRounding.AwayFromZero)));
+            if (Value != next)
             {
-                return;
+                _settingPointerValue = true;
+                try { Value = next; }
+                finally { _settingPointerValue = false; }
+                OnScroll(EventArgs.Empty);
             }
+            if (_isDragging) GesturePreview?.Invoke(this, new SliderGestureEventArgs(position));
+        }
 
-            double percent;
+        internal RectangleF GetTrackBounds()
+        {
+            float margin = 16 * ScaleFactor; // Stable travel bounds for every thumb state.
+            float thickness = 6 * ScaleFactor;
             if (Orientation == Orientation.Vertical)
+                return new RectangleF((Width - thickness) / 2, margin, thickness, Math.Max(1, Height - 2 * margin));
+            float band = Math.Min(Font.Height + 4 * ScaleFactor, Math.Max(0, Height - 32 * ScaleFactor));
+            float y = band + (Height - band) / 2;
+            return new RectangleF(margin, y - thickness / 2, Math.Max(1, Width - 2 * margin), thickness);
+        }
+
+        internal RectangleF GetHitBounds()
+        {
+            var track = GetTrackBounds();
+            return Orientation == Orientation.Vertical
+                ? new RectangleF(track.Left + track.Width / 2 - 16 * ScaleFactor, 0, 32 * ScaleFactor, Height)
+                : new RectangleF(0, track.Top + track.Height / 2 - 16 * ScaleFactor, Width, 32 * ScaleFactor);
+        }
+
+        internal PointF GetThumbCenter()
+        {
+            var track = GetTrackBounds();
+            double range = VisualMaximum - Minimum;
+            float percent = range > 0 ? (float)((VisualPosition - Minimum) / range) : 0;
+            return Orientation == Orientation.Vertical
+                ? new PointF(track.Left + track.Width / 2, track.Bottom - track.Height * percent)
+                : new PointF(track.Left + track.Width * percent, track.Top + track.Height / 2);
+        }
+
+        private double PositionFromPoint(Point point, float offset)
+        {
+            var track = GetTrackBounds();
+            double percent = Orientation == Orientation.Vertical
+                ? (track.Bottom - point.Y + offset) / track.Height : (point.X - offset - track.Left) / track.Width;
+            return Clamp(Minimum + (VisualMaximum - Minimum) * percent);
+        }
+
+        protected override void OnPaintBackground(PaintEventArgs e) { }
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            DrawTrackBar(e.Graphics);
+            base.OnPaint(e);
+        }
+
+        private void FillCapsule(Graphics graphics, RectangleF bounds, Color color)
+        {
+            if (bounds.Width <= 0 || bounds.Height <= 0) return;
+            _brush.Color = color;
+            float diameter = Math.Min(bounds.Width, bounds.Height);
+            if (bounds.Width >= bounds.Height)
             {
-                double y = Math.Max(track.Top, Math.Min(track.Bottom, point.Y));
-                percent = 1.0 - ((y - track.Top) / track.Height);
+                graphics.FillRectangle(_brush, bounds.X + diameter / 2, bounds.Y, Math.Max(0, bounds.Width - diameter), bounds.Height);
+                graphics.FillEllipse(_brush, bounds.X, bounds.Y, diameter, diameter);
+                graphics.FillEllipse(_brush, bounds.Right - diameter, bounds.Y, diameter, diameter);
             }
             else
             {
-                double x = Math.Max(track.Left, Math.Min(track.Right, point.X));
-                percent = (x - track.Left) / track.Width;
-            }
-
-            int next = Minimum + (int)Math.Round((Maximum - Minimum) * percent, MidpointRounding.AwayFromZero);
-            next = Math.Max(Minimum, Math.Min(Maximum, next));
-            if (Value == next)
-            {
-                return;
-            }
-
-            Value = next;
-            if (raiseScroll)
-            {
-                OnScroll(EventArgs.Empty);
-            }
-        }
-
-        private void NotifyAccessibleClients(AccessibleEvents accEvent)
-        {
-            NotifyAccessibleClients(accEvent, 0);
-            NotifyAccessibleClients(accEvent, -1);
-        }
-
-        private void NotifyAccessibleClients(AccessibleEvents accEvent, int childId)
-        {
-            try
-            {
-                AccessibilityNotifyClients(accEvent, childId);
-            }
-            catch
-            {
-            }
-        }
-
-        private void DrawThemedOverlay()
-        {
-            if (!IsHandleCreated || Width <= 0 || Height <= 0)
-            {
-                return;
-            }
-
-            try
-            {
-                using (Graphics graphics = Graphics.FromHwnd(Handle))
-                {
-                    DrawTrackBar(graphics);
-                }
-            }
-            catch
-            {
+                graphics.FillRectangle(_brush, bounds.X, bounds.Y + diameter / 2, bounds.Width, Math.Max(0, bounds.Height - diameter));
+                graphics.FillEllipse(_brush, bounds.X, bounds.Y, diameter, diameter);
+                graphics.FillEllipse(_brush, bounds.X, bounds.Bottom - diameter, diameter, diameter);
             }
         }
 
         private void DrawTrackBar(Graphics graphics)
         {
             var palette = ThemeManager.Current;
-            Color background = Parent?.BackColor ?? BackColor;
-            Color trackColor = Enabled ? palette.Divider : palette.Border;
-            Color fillColor = Enabled ? palette.Accent : palette.Border;
-            Color thumbColor = Enabled ? palette.Accent : palette.Border;
-            Color thumbBorder = BlendColor(thumbColor, palette.TextPrimary, 0.35f);
-            Color thumbHighlight = BlendColor(thumbColor, Color.White, 0.35f);
-
-            using (var backgroundBrush = new SolidBrush(background))
-            {
-                graphics.FillRectangle(backgroundBrush, ClientRectangle);
-            }
-
+            graphics.Clear(Parent?.BackColor ?? BackColor);
             graphics.SmoothingMode = SmoothingMode.AntiAlias;
-            graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
-
-            RectangleF trackBounds = GetTrackBounds();
-            if (trackBounds.Width < MinimumTrackLength || trackBounds.Height < MinimumTrackLength)
+            var track = GetTrackBounds();
+            PointF center = GetThumbCenter();
+            FillCapsule(graphics, track, Enabled ? palette.ControlBorder : palette.Divider);
+            RectangleF fill = Orientation == Orientation.Vertical
+                ? RectangleF.FromLTRB(track.Left, center.Y, track.Right, track.Bottom)
+                : RectangleF.FromLTRB(track.Left, track.Top, center.X, track.Bottom);
+            FillCapsule(graphics, fill, Enabled ? palette.Accent : palette.TextSecondary);
+            float diameter = (_isDragging || _hovered ? 20 : 16) * ScaleFactor;
+            var thumb = new RectangleF(center.X - diameter / 2, center.Y - diameter / 2, diameter, diameter);
+            _brush.Color = Enabled ? palette.Accent : palette.SurfaceAlt;
+            graphics.FillEllipse(_brush, thumb);
+            _pen.Color = Enabled ? palette.AccentText : palette.TextSecondary;
+            _pen.Width = 2 * ScaleFactor;
+            graphics.DrawEllipse(_pen, thumb);
+            if (Focused)
             {
-                return;
+                thumb.Inflate(3 * ScaleFactor, 3 * ScaleFactor);
+                _pen.Color = palette.FocusRing;
+                graphics.DrawEllipse(_pen, thumb);
             }
-
-            float trackRadius = Math.Min(trackBounds.Width, trackBounds.Height) / 2f;
-            using (GraphicsPath trackPath = BuildRoundedPath(trackBounds, trackRadius))
-            using (var trackBrush = new SolidBrush(trackColor))
+            if ((_hovered || _isDragging) && Enabled && PreviewText != null && Orientation == Orientation.Horizontal)
             {
-                graphics.FillPath(trackBrush, trackPath);
-            }
-
-            DrawFill(graphics, trackBounds, trackRadius, fillColor);
-            DrawThumb(graphics, trackBounds, thumbColor, thumbBorder, thumbHighlight, palette.FocusRing);
-        }
-
-        private RectangleF GetTrackBounds()
-        {
-            int thumbDiameter = GetThumbDiameter();
-            int trackThickness = GetTrackThickness();
-            float margin = thumbDiameter / 2f + 4f;
-
-            if (Orientation == Orientation.Vertical)
-            {
-                float left = (Width - trackThickness) / 2f;
-                float top = margin;
-                float height = Math.Max(MinimumTrackLength, Height - (margin * 2f));
-                return new RectangleF(left, top, trackThickness, height);
-            }
-
-            float x = margin;
-            float y = (Height - trackThickness) / 2f;
-            float width = Math.Max(MinimumTrackLength, Width - (margin * 2f));
-            return new RectangleF(x, y, width, trackThickness);
-        }
-
-        private float GetValuePercent()
-        {
-            int range = Math.Max(1, Maximum - Minimum);
-            return (Value - Minimum) / (float)range;
-        }
-
-        private PointF GetThumbCenter(RectangleF trackBounds)
-        {
-            float percent = GetValuePercent();
-            if (Orientation == Orientation.Vertical)
-            {
-                float y = trackBounds.Bottom - (trackBounds.Height * percent);
-                return new PointF(trackBounds.Left + (trackBounds.Width / 2f), y);
-            }
-
-            float x = trackBounds.Left + (trackBounds.Width * percent);
-            return new PointF(x, trackBounds.Top + (trackBounds.Height / 2f));
-        }
-
-        private int GetTrackThickness()
-        {
-            int basis = Orientation == Orientation.Vertical ? Width : Height;
-            return Math.Max(7, Math.Min(9, Math.Max(1, basis) / 3));
-        }
-
-        private int GetThumbDiameter()
-        {
-            int basis = Orientation == Orientation.Vertical ? Width : Height;
-            return Math.Max(14, Math.Min(18, Math.Max(1, basis) - 12));
-        }
-
-        private void DrawFill(Graphics graphics, RectangleF trackBounds, float trackRadius, Color fillColor)
-        {
-            PointF center = GetThumbCenter(trackBounds);
-            RectangleF fillBounds;
-            if (Orientation == Orientation.Vertical)
-            {
-                fillBounds = RectangleF.FromLTRB(trackBounds.Left, center.Y, trackBounds.Right, trackBounds.Bottom);
-            }
-            else
-            {
-                fillBounds = RectangleF.FromLTRB(trackBounds.Left, trackBounds.Top, center.X, trackBounds.Bottom);
-            }
-
-            if (fillBounds.Width <= 0.5f || fillBounds.Height <= 0.5f)
-            {
-                return;
-            }
-
-            using (GraphicsPath fillPath = BuildRoundedPath(fillBounds, trackRadius))
-            using (var fillBrush = new SolidBrush(fillColor))
-            {
-                graphics.FillPath(fillBrush, fillPath);
+                double value = _isDragging ? VisualPosition : _hoverPosition;
+                string text = PreviewText(value, _isDragging ? value - _gestureOrigin : (double?)null);
+                TextRenderer.DrawText(graphics, text, Font, GetHintBounds(text, value), palette.TextPrimary,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
             }
         }
 
-        private void DrawThumb(
-            Graphics graphics,
-            RectangleF trackBounds,
-            Color thumbColor,
-            Color thumbBorder,
-            Color thumbHighlight,
-            Color focusRing)
+        internal Rectangle GetHintBounds(string text, double value)
         {
-            PointF center = GetThumbCenter(trackBounds);
-            float size = GetThumbDiameter();
-            RectangleF thumbBounds = new RectangleF(
-                center.X - (size / 2f),
-                center.Y - (size / 2f),
-                size,
-                size);
-
-            using (var thumbBrush = new SolidBrush(thumbColor))
-            {
-                graphics.FillEllipse(thumbBrush, thumbBounds);
-            }
-
-            using (var borderPen = new Pen(thumbBorder))
-            {
-                graphics.DrawEllipse(borderPen, thumbBounds);
-            }
-
-            RectangleF highlightBounds = thumbBounds;
-            highlightBounds.Inflate(-4f, -4f);
-            if (highlightBounds.Width > 0f && highlightBounds.Height > 0f)
-            {
-                using (var highlightBrush = new SolidBrush(thumbHighlight))
-                {
-                    graphics.FillEllipse(highlightBrush, highlightBounds);
-                }
-            }
-
-            if (Focused || ContainsFocus)
-            {
-                RectangleF focusBounds = thumbBounds;
-                focusBounds.Inflate(3f, 3f);
-                using (var focusPen = new Pen(focusRing, 2f))
-                {
-                    graphics.DrawEllipse(focusPen, focusBounds);
-                }
-            }
+            var track = GetTrackBounds();
+            int width = Math.Min(Width, TextRenderer.MeasureText(text, Font, Size.Empty, TextFormatFlags.SingleLine).Width);
+            double ratio = VisualMaximum > Minimum ? (Clamp(value) - Minimum) / (VisualMaximum - Minimum) : 0;
+            int x = (int)Math.Round(track.Left + track.Width * ratio - width / 2.0);
+            return new Rectangle(Math.Max(0, Math.Min(Width - width, x)), 0, width, Font.Height + (int)(4 * ScaleFactor));
         }
 
-        private static GraphicsPath BuildRoundedPath(RectangleF bounds, float radius)
+        private static Point PointFromLParam(IntPtr value) => new Point(unchecked((short)value.ToInt64()), unchecked((short)(value.ToInt64() >> 16)));
+        protected override void Dispose(bool disposing)
         {
-            GraphicsPath path = new GraphicsPath();
-            if (bounds.Width <= 0f || bounds.Height <= 0f)
-            {
-                return path;
-            }
-
-            radius = Math.Max(0f, Math.Min(radius, Math.Min(bounds.Width, bounds.Height) / 2f));
-            if (radius <= 0f)
-            {
-                path.AddRectangle(bounds);
-                return path;
-            }
-
-            float diameter = radius * 2f;
-            RectangleF arc = new RectangleF(bounds.Left, bounds.Top, diameter, diameter);
-            path.AddArc(arc, 180f, 90f);
-            arc.X = bounds.Right - diameter;
-            path.AddArc(arc, 270f, 90f);
-            arc.Y = bounds.Bottom - diameter;
-            path.AddArc(arc, 0f, 90f);
-            arc.X = bounds.Left;
-            path.AddArc(arc, 90f, 90f);
-            path.CloseFigure();
-            return path;
-        }
-
-        private static Color BlendColor(Color baseColor, Color overlay, float amount)
-        {
-            amount = Math.Max(0f, Math.Min(1f, amount));
-            int r = (int)(baseColor.R + ((overlay.R - baseColor.R) * amount));
-            int g = (int)(baseColor.G + ((overlay.G - baseColor.G) * amount));
-            int b = (int)(baseColor.B + ((overlay.B - baseColor.B) * amount));
-            return Color.FromArgb(baseColor.A, r, g, b);
-        }
-
-        private static Point GetPointFromLParam(IntPtr lParam)
-        {
-            int value = lParam.ToInt32();
-            int x = unchecked((short)(value & 0xFFFF));
-            int y = unchecked((short)((value >> 16) & 0xFFFF));
-            return new Point(x, y);
+            if (disposing) { _visibilityObserver.Dispose(); EndGesture(canceled: true); _brush.Dispose(); _pen.Dispose(); }
+            base.Dispose(disposing);
         }
     }
 }

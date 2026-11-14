@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFrameworks>net48;net10.0-windows</TargetFrameworks>
+    <UseWindowsForms>true</UseWindowsForms>
+    <PlatformTarget>x64</PlatformTarget>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <RestorePackagesPath>../../artifacts/layout/packages</RestorePackagesPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="NUnitLite" Version="5.0.0" />
+    <None Include="../../bin/Debug/YTPlayer.Updater.exe.config" Link="Fixtures/YTPlayer.Updater.exe.config" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../bin/Debug/libs/nvdaControllerClient64.dll" Link="nvdaControllerClient64.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('../../bin/Debug/libs/nvdaControllerClient64.dll')" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
+    <Reference Include="YTPlayer.Updater"><HintPath>../../Updater/bin/Debug/YTPlayer.Updater.exe</HintPath></Reference>
+    <Reference Include="Newtonsoft.Json"><HintPath>../../Updater/bin/Debug/Newtonsoft.Json.dll</HintPath></Reference>
+  </ItemGroup>
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net48'">
+    <AppConfig>../../Updater/App.config</AppConfig>
+    <ApplicationManifest>../../Updater/app.manifest</ApplicationManifest>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(TargetFramework)' != 'net48'">
+    <Reference Include="YTPlayer.App"><HintPath>../../bin/Debug/libs/YTPlayer.App.dll</HintPath></Reference>
+    <Reference Include="Newtonsoft.Json"><HintPath>../../bin/Debug/libs/Newtonsoft.Json.dll</HintPath></Reference>
+  </ItemGroup>
+  <PropertyGroup Condition="'$(TargetFramework)' != 'net48'">
+    <UseWPF>true</UseWPF>
+  </PropertyGroup>
+  <Target Name="CopyPlayerRuntime" AfterTargets="Build" Condition="'$(TargetFramework)' == 'net10.0-windows'">
+    <ItemGroup><PlayerRuntime Include="../../bin/Debug/libs/*.dll" /></ItemGroup>
+    <Copy SourceFiles="@(PlayerRuntime)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+</Project>

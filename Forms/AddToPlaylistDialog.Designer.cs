@@ -164,16 +164,19 @@ namespace YTPlayer.Forms
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Dpi;
             this.CancelButton = this.cancelButton;
             this.ClientSize = new System.Drawing.Size(584, 411);
-            this.Controls.Add(this.loadingLabel);
-            this.Controls.Add(this.cancelButton);
-            this.Controls.Add(this.confirmButton);
-            this.Controls.Add(this.createPlaylistButton);
-            this.Controls.Add(this.btnInvertSelection);
-            this.Controls.Add(this.btnUnselectAll);
-            this.Controls.Add(this.btnSelectAll);
-            this.Controls.Add(this.playlistCheckedListBox);
-            this.Controls.Add(this.selectionInfoLabel);
-            this.Controls.Add(this.titleLabel);
+            this.playlistCheckedListBox.IntegralHeight = false;
+            this.playlistCheckedListBox.MinimumSize = new System.Drawing.Size(0, 120);
+            var selectionButtons = YTPlayer.Utils.DialogLayout.CreateButtonRow(this.btnInvertSelection,
+                this.btnUnselectAll, this.btnSelectAll);
+            selectionButtons.FlowDirection = System.Windows.Forms.FlowDirection.LeftToRight;
+            selectionButtons.Controls.SetChildIndex(this.btnSelectAll, 0);
+            selectionButtons.Controls.SetChildIndex(this.btnUnselectAll, 1);
+            selectionButtons.TabIndex = 3;
+            var actionButtons = YTPlayer.Utils.DialogLayout.CreateButtonRow(this.cancelButton,
+                this.confirmButton, this.createPlaylistButton);
+            actionButtons.TabIndex = 6;
+            YTPlayer.Utils.DialogLayout.CreateVertical(this, 2, this.titleLabel, this.selectionInfoLabel,
+                this.playlistCheckedListBox, selectionButtons, this.loadingLabel, actionButtons);
             this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
             this.MinimizeBox = false;

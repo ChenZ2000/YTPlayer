@@ -153,20 +153,24 @@ namespace YTPlayer.Forms
             // 
             // UpdateCheckDialog
             // 
-            this.AutoScaleDimensions = new System.Drawing.SizeF(8F, 20F);
-            this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
+            this.Font = new System.Drawing.Font("Microsoft YaHei UI", 10F);
+            this.AutoScaleDimensions = new System.Drawing.SizeF(96F, 96F);
+            this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Dpi;
             this.CancelButton = this.cancelButton;
             this.ClientSize = new System.Drawing.Size(580, 435);
-            this.Controls.Add(this.buttonPanel);
-            this.Controls.Add(this.resultTextBox);
-            this.Controls.Add(this.resultLabel);
-            this.Controls.Add(this.progressBar);
-            this.Controls.Add(this.statusLabel);
-            this.Controls.Add(this.assetLabel);
-            this.Controls.Add(this.latestVersionLabel);
-            this.Controls.Add(this.currentVersionLabel);
-            this.Controls.Add(this.titleLabel);
-            this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedDialog;
+            this.buttonPanel.AutoSize = true;
+            foreach (Button button in this.buttonPanel.Controls)
+            {
+                button.AutoSize = true;
+                button.MinimumSize = new System.Drawing.Size(97, 32);
+            }
+            this.resultTextBox.MinimumSize = new System.Drawing.Size(0, 100);
+            this.progressBar.MinimumSize = new System.Drawing.Size(0, 18);
+            YTPlayer.Utils.DialogLayout.CreateVertical(this, 7, this.titleLabel, this.currentVersionLabel,
+                this.latestVersionLabel, this.assetLabel, this.statusLabel, this.progressBar,
+                this.resultLabel, this.resultTextBox, this.buttonPanel);
+            this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.Sizable;
+            this.MinimumSize = new System.Drawing.Size(420, 380);
             this.MaximizeBox = false;
             this.MinimizeBox = false;
             this.Name = "UpdateCheckDialog";

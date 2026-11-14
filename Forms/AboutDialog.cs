@@ -22,6 +22,7 @@ namespace YTPlayer.Forms
 
         private void InitializeComponent()
         {
+            SuspendLayout();
             var document = Document.Value;
 
             Text = document.WindowTitle;
@@ -31,7 +32,8 @@ namespace YTPlayer.Forms
             MinimizeBox = false;
             ShowIcon = false;
             ShowInTaskbar = false;
-            AutoScaleMode = AutoScaleMode.Font;
+            AutoScaleDimensions = new SizeF(96F, 96F);
+            AutoScaleMode = AutoScaleMode.Dpi;
             KeyPreview = true;
             Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Regular, GraphicsUnit.Point, 134);
             ClientSize = new Size(560, 420);
@@ -45,6 +47,7 @@ namespace YTPlayer.Forms
                 RowCount = 2,
                 Padding = new Padding(16)
             };
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
@@ -94,6 +97,7 @@ namespace YTPlayer.Forms
 
             Controls.Add(layout);
             AcceptButton = acceptButton ?? fallbackButton;
+            ResumeLayout(true);
         }
 
         private Button CreateButton(ButtonSpec spec)
@@ -263,8 +267,8 @@ namespace YTPlayer.Forms
                     ["ProjectUrl"] = "https://github.com/ChenZ2000/YTPlayer",
                     ["AuthorName"] = "ChenZ",
                     ["AuthorUrl"] = "https://github.com/ChenZ2000",
-                    ["ContributorName"] = "ZJN046",
-                    ["ContributorUrl"] = "https://github.com/zjn046"
+                    ["ContributorName"] = "zjncn",
+                    ["ContributorUrl"] = "https://github.com/zjncn"
                 };
 
                 foreach (var pair in metadata)

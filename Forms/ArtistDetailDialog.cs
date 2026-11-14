@@ -61,7 +61,8 @@ namespace YTPlayer.Forms
         {
             SuspendLayout();
 
-            AutoScaleMode = AutoScaleMode.Font;
+            AutoScaleDimensions = new SizeF(96F, 96F);
+            AutoScaleMode = AutoScaleMode.Dpi;
             Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Regular, GraphicsUnit.Point, 134, false);
             StartPosition = FormStartPosition.CenterParent;
             FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -85,7 +86,8 @@ namespace YTPlayer.Forms
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
                 RowCount = 0,
-                AutoSize = false
+                AutoSize = false,
+                AutoScroll = true
             };
             mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
 
@@ -102,6 +104,7 @@ namespace YTPlayer.Forms
 
             AddRow(mainLayout, BuildIntroductionSection(), SizeType.Percent, 100F);
             AddRow(mainLayout, BuildButtonSection(), SizeType.AutoSize);
+            DialogLayout.EnableVerticalScrolling(mainLayout, mainLayout.RowCount - 2);
 
             ResumeLayout(performLayout: true);
         }
@@ -263,6 +266,7 @@ namespace YTPlayer.Forms
             {
                 Text = "详细介绍",
                 Dock = DockStyle.Fill,
+                MinimumSize = new Size(0, 120),
                 Padding = new Padding(12),
                 Margin = new Padding(0, 0, 0, 12)
             };
@@ -286,20 +290,13 @@ namespace YTPlayer.Forms
 
         private Control BuildButtonSection()
         {
-            var panel = new Panel
+            var flow = new FlowLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 AutoSize = true,
                 AutoSizeMode = AutoSizeMode.GrowAndShrink,
                 Padding = new Padding(0, 8, 0, 0),
-                Margin = new Padding(0)
-            };
-
-            var flow = new FlowLayoutPanel
-            {
-                Dock = DockStyle.Right,
-                AutoSize = true,
-                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Margin = new Padding(0),
                 FlowDirection = FlowDirection.RightToLeft,
                 WrapContents = false
             };
@@ -314,10 +311,9 @@ namespace YTPlayer.Forms
             closeButton.Click += (_, __) => Close();
 
             flow.Controls.Add(closeButton);
-            panel.Controls.Add(flow);
             CancelButton = closeButton;
 
-            return panel;
+            return flow;
         }
 
         private Control CreateStatPanel(string caption, string value)
@@ -368,7 +364,7 @@ namespace YTPlayer.Forms
                 Font = _boldLabelFont,
                 AutoSize = true,
                 Margin = new Padding(0, 4, 8, 4),
-                TextAlign = ContentAlignment.MiddleLeft,
+                TextAlign = ContentAlignment.TopLeft,
                 Dock = DockStyle.Fill
             };
 

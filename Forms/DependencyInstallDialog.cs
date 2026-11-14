@@ -18,6 +18,9 @@ namespace YTPlayer.Forms
 
         public DependencyInstallDialog(string title, string initialStatus)
         {
+            SuspendLayout();
+            AutoScaleDimensions = new SizeF(96F, 96F);
+            AutoScaleMode = AutoScaleMode.Dpi;
             Text = string.IsNullOrWhiteSpace(title) ? "正在准备运行环境" : title;
             AccessibleName = Text;
             AccessibleDescription = "运行时依赖安装提示";
@@ -48,9 +51,11 @@ namespace YTPlayer.Forms
             {
                 Dock = DockStyle.Fill,
                 AutoSize = false,
+                AutoScroll = true,
                 ColumnCount = 1,
                 RowCount = 4
             };
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
@@ -70,7 +75,7 @@ namespace YTPlayer.Forms
             _statusLabel = new Label
             {
                 AutoSize = true,
-                MaximumSize = new Size(520, 0),
+                Dock = DockStyle.Fill,
                 Text = string.IsNullOrWhiteSpace(initialStatus) ? "正在处理，请稍候..." : initialStatus,
                 Margin = new Padding(0, 0, 0, 12),
                 AccessibleName = "安装状态"
@@ -80,6 +85,7 @@ namespace YTPlayer.Forms
             _logPanel = new Panel
             {
                 Dock = DockStyle.Fill,
+                MinimumSize = new Size(0, 80),
                 Margin = new Padding(0, 0, 0, 12)
             };
             layout.Controls.Add(_logPanel);
@@ -108,6 +114,7 @@ namespace YTPlayer.Forms
 
             _progressBar = new ThemedProgressBar
             {
+                Dock = DockStyle.Fill,
                 Width = 520,
                 Height = 18,
                 Style = ProgressBarStyle.Marquee,
@@ -115,7 +122,9 @@ namespace YTPlayer.Forms
                 AccessibleName = "安装进度"
             };
             layout.Controls.Add(_progressBar);
+            DialogLayout.EnableVerticalScrolling(layout, 2);
 
+            ResumeLayout(true);
             ThemeManager.ApplyTheme(this);
 
             AppendMessage(_statusLabel.Text);

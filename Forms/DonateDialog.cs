@@ -26,6 +26,7 @@ namespace YTPlayer.Forms
 
         private void InitializeComponent()
         {
+            SuspendLayout();
             Text = DonatePrompt;
             StartPosition = FormStartPosition.CenterParent;
             FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -33,7 +34,8 @@ namespace YTPlayer.Forms
             MinimizeBox = false;
             ShowIcon = false;
             ShowInTaskbar = false;
-            AutoScaleMode = AutoScaleMode.Font;
+            AutoScaleDimensions = new SizeF(96F, 96F);
+            AutoScaleMode = AutoScaleMode.Dpi;
             Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Regular, GraphicsUnit.Point, 134);
             ClientSize = new Size(420, 520);
             KeyPreview = true;
@@ -46,6 +48,7 @@ namespace YTPlayer.Forms
                 RowCount = 3,
                 Padding = new Padding(20)
             };
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -84,6 +87,7 @@ namespace YTPlayer.Forms
 
             Controls.Add(layout);
             AcceptButton = closeButton;
+            ResumeLayout(true);
         }
 
         private void TryLoadQrImage()

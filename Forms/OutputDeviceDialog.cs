@@ -42,13 +42,15 @@ namespace YTPlayer.Forms
 
         private void InitializeComponent()
         {
+            SuspendLayout();
             Text = "输出设备";
             StartPosition = FormStartPosition.CenterParent;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             MinimizeBox = false;
             ShowInTaskbar = false;
-            AutoScaleMode = AutoScaleMode.Font;
+            AutoScaleDimensions = new SizeF(96F, 96F);
+            AutoScaleMode = AutoScaleMode.Dpi;
             KeyPreview = true;
             Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Regular, GraphicsUnit.Point, 134);
             ClientSize = new Size(420, 150);
@@ -73,6 +75,7 @@ namespace YTPlayer.Forms
             _confirmButton = new Button
             {
                 Text = "确认(&O)",
+                TabIndex = 0,
                 DialogResult = DialogResult.OK,
                 Location = new Point(230, 95),
                 Size = new Size(80, 30)
@@ -82,22 +85,25 @@ namespace YTPlayer.Forms
             _cancelButton = new Button
             {
                 Text = "取消(&C)",
+                TabIndex = 1,
                 DialogResult = DialogResult.Cancel,
                 Location = new Point(320, 95),
                 Size = new Size(80, 30)
             };
             _cancelButton.Click += (_, _) => Close();
 
-            Controls.Add(instructionLabel);
-            Controls.Add(_deviceComboBox);
-            Controls.Add(_confirmButton);
-            Controls.Add(_cancelButton);
+            var buttons = DialogLayout.CreateButtonRow(_cancelButton, _confirmButton);
+            buttons.TabIndex = 2;
+            instructionLabel.TabIndex = 0;
+            _deviceComboBox.TabIndex = 1;
+            DialogLayout.CreateVertical(this, -1, instructionLabel, _deviceComboBox, buttons);
 
             AcceptButton = _confirmButton;
             CancelButton = _cancelButton;
 
             KeyDown += HandleDialogKeyDown;
             Shown += (_, _) => _deviceComboBox.Focus();
+            ResumeLayout(true);
         }
 
         private void PopulateDevices()

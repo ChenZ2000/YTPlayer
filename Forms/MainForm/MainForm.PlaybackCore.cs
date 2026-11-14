@@ -759,6 +759,7 @@ private Task PlaySongByIndex(int index)
 			return;
 		}
 
+		CancelProgressGestureForTrackChange();
 		CancelPendingPlaceholderPlayback("new playback");
 
 		ResetBufferingRecoveryTracking();

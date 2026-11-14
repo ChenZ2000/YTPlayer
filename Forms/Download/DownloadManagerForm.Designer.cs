@@ -170,6 +170,8 @@ namespace YTPlayer.Forms.Download
             this.AutoScaleDimensions = new System.Drawing.SizeF(9F, 19F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.ClientSize = new System.Drawing.Size(984, 521);
+            this.Padding = new System.Windows.Forms.Padding(12);
+            this.tabControl.Dock = System.Windows.Forms.DockStyle.Fill;
             this.Controls.Add(this.tabControl);
             this.MinimumSize = new System.Drawing.Size(800, 400);
             this.Name = "DownloadManagerForm";

@@ -18,6 +18,9 @@ namespace YTPlayer
 
         public ListenTogetherDialog()
         {
+            SuspendLayout();
+            AutoScaleDimensions = new SizeF(96F, 96F);
+            AutoScaleMode = AutoScaleMode.Dpi;
             Text = "一起听";
             AccessibleName = "一起听";
             AccessibleDescription = "使用网易云一起听房间。创建房间分享邀请，或粘贴一起听完整链接加入。按 Esc 关闭此窗口，房间保持连接。";
@@ -31,10 +34,12 @@ namespace YTPlayer
             var root = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
+                AutoScroll = true,
                 Padding = new Padding(12),
                 ColumnCount = 1,
                 RowCount = 7
             };
+            root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -142,10 +147,13 @@ namespace YTPlayer
             var connectPanel = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
                 ColumnCount = 1,
                 RowCount = 3,
                 Margin = new Padding(0)
             };
+            connectPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             connectPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             connectPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             connectPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -158,6 +166,7 @@ namespace YTPlayer
             _playbackTextBox = new TextBox
             {
                 ReadOnly = true, Multiline = true, Dock = DockStyle.Fill,
+                MinimumSize = new Size(0, 60),
                 ScrollBars = ScrollBars.Vertical, AccessibleName = "房间播放状态",
                 Text = "加入房间后显示歌曲、播放状态和进度。",
                 Margin = new Padding(0, 8, 0, 8)
@@ -171,6 +180,7 @@ namespace YTPlayer
             closeButton.Click += (_, _) => Close();
             CancelButton = closeButton;
             root.Controls.Add(closeButton, 0, 6);
+            Utils.DialogLayout.EnableVerticalScrolling(root, 5);
             Controls.Add(root);
 
             _startHostButton.Click += (_, _) => StartHostingRequested?.Invoke(this, EventArgs.Empty);
@@ -178,6 +188,7 @@ namespace YTPlayer
             _stopHostButton.Click += (_, _) => StopHostingRequested?.Invoke(this, EventArgs.Empty);
             _connectButton.Click += (_, _) => ConnectRequested?.Invoke(this, _connectUrlTextBox.Text);
             _disconnectButton.Click += (_, _) => DisconnectRequested?.Invoke(this, EventArgs.Empty);
+            ResumeLayout(true);
         }
 
         public event EventHandler? StartHostingRequested;

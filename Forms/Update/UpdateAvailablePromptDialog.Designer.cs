@@ -87,16 +87,17 @@ namespace YTPlayer.Forms
             // UpdateAvailablePromptDialog
             // 
             this.AcceptButton = this.updateButton;
-            this.AutoScaleDimensions = new System.Drawing.SizeF(9F, 19F);
-            this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
+            this.AutoScaleDimensions = new System.Drawing.SizeF(96F, 96F);
+            this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Dpi;
             this.CancelButton = this.closeButton;
             this.ClientSize = new System.Drawing.Size(576, 345);
-            this.Controls.Add(this.closeButton);
-            this.Controls.Add(this.updateButton);
-            this.Controls.Add(this.resultTextBox);
-            this.Controls.Add(this.summaryLabel);
+            this.resultTextBox.MinimumSize = new System.Drawing.Size(0, 100);
+            var buttons = YTPlayer.Utils.DialogLayout.CreateButtonRow(this.closeButton, this.updateButton);
+            buttons.TabIndex = 2;
+            YTPlayer.Utils.DialogLayout.CreateVertical(this, 1, this.summaryLabel, this.resultTextBox, buttons);
             this.Font = new System.Drawing.Font("Microsoft YaHei UI", 10F);
-            this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedDialog;
+            this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.Sizable;
+            this.MinimumSize = new System.Drawing.Size(420, 300);
             this.MaximizeBox = false;
             this.MinimizeBox = false;
             this.Name = "UpdateAvailablePromptDialog";

@@ -19,6 +19,7 @@ using System.Runtime.Versioning;
 [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("Recognition.Tests")]
 [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("Playback.Tests")]
 [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("Navigation.Tests")]
+[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("Layout.Tests")]
 
 [assembly: AssemblyVersion(YTPlayer.VersionInfo.AssemblyVersion)]
 [assembly: AssemblyFileVersion(YTPlayer.VersionInfo.AssemblyVersion)]

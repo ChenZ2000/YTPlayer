@@ -35,7 +35,6 @@ namespace YTPlayer.Forms
             this.MinimizeBox = false;
             this.ShowIcon = false;
             this.Text = "用户信息";
-            this.Size = new Size(500, 400);
             this.KeyPreview = true;
             this.KeyDown += UserInfoForm_KeyDown;
 

@@ -16,9 +16,11 @@ namespace YTPlayer.Utils
         private int _marqueeAnimationSpeed = 30;
         private int _marqueeOffset;
         private Timer? _marqueeTimer;
+        private readonly ControlVisibilityObserver _visibilityObserver;
 
         public ThemedProgressBar()
         {
+            _visibilityObserver = new ControlVisibilityObserver(this, UpdateMarqueeState);
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
                      ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             TabStop = false;
@@ -114,7 +116,17 @@ namespace YTPlayer.Utils
         protected override void OnEnabledChanged(EventArgs e)
         {
             base.OnEnabledChanged(e);
+            UpdateMarqueeState();
             Invalidate();
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        { base.OnHandleCreated(e); UpdateMarqueeState(); }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) { _visibilityObserver.Dispose(); _marqueeTimer?.Stop(); _marqueeTimer?.Dispose(); _marqueeTimer = null; }
+            base.Dispose(disposing);
         }
 
         protected override void OnHandleDestroyed(EventArgs e)
@@ -134,10 +146,11 @@ namespace YTPlayer.Utils
                 return;
             }
 
-            int radius = Math.Min(DefaultCornerRadius, Math.Max(2, bounds.Height / 2));
+            float scale = DeviceDpi / 96f;
+            int radius = Math.Min((int)Math.Round(DefaultCornerRadius * scale), Math.Max(2, bounds.Height / 2));
             Color trackColor = Enabled ? palette.SurfaceAlt : palette.Divider;
             Color fillColor = Enabled ? palette.Accent : palette.Border;
-            Color borderColor = palette.Border;
+            Color borderColor = Enabled ? palette.ControlBorder : palette.TextSecondary;
 
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
 
@@ -157,7 +170,7 @@ namespace YTPlayer.Utils
                     DrawContinuous(e.Graphics, bounds, radius, fillColor);
                 }
 
-                using (var borderPen = new Pen(borderColor))
+                using (var borderPen = new Pen(borderColor, Math.Max(1, scale)))
                 {
                     e.Graphics.DrawPath(borderPen, trackPath);
                 }
@@ -184,7 +197,7 @@ namespace YTPlayer.Utils
 
         private void DrawMarquee(Graphics graphics, Rectangle bounds, int radius, Color fillColor)
         {
-            int segmentWidth = Math.Max(36, bounds.Width / 4);
+            int segmentWidth = Math.Max((int)(36 * DeviceDpi / 96f), bounds.Width / 4);
             int travel = bounds.Width + segmentWidth;
             int offset = _marqueeOffset % Math.Max(1, travel);
             int x = bounds.X - segmentWidth + offset;
@@ -205,7 +218,8 @@ namespace YTPlayer.Utils
 
         private void UpdateMarqueeState()
         {
-            if (_style == ProgressBarStyle.Marquee && Visible && _marqueeAnimationSpeed > 0)
+            if (_style == ProgressBarStyle.Marquee && Visible && Enabled && IsHandleCreated && !IsDisposed &&
+                FindForm()?.WindowState != FormWindowState.Minimized && _marqueeAnimationSpeed > 0)
             {
                 StartMarquee();
             }
@@ -222,7 +236,7 @@ namespace YTPlayer.Utils
                 _marqueeTimer = new Timer();
                 _marqueeTimer.Tick += (_, _) =>
                 {
-                    _marqueeOffset += 6;
+                    _marqueeOffset = (_marqueeOffset + Math.Max(1, (int)(6 * DeviceDpi / 96f))) % Math.Max(1, Width * 2);
                     Invalidate();
                 };
             }
@@ -248,6 +262,8 @@ namespace YTPlayer.Utils
         private static GraphicsPath BuildRoundedPath(Rectangle bounds, int radius)
         {
             GraphicsPath path = new GraphicsPath();
+            // Near 0% (or at the edge of a marquee), a segment can be narrower than its corners.
+            radius = Math.Max(0, Math.Min(radius, Math.Min(bounds.Width, bounds.Height) / 2));
             if (radius <= 0)
             {
                 path.AddRectangle(bounds);
