@@ -9,7 +9,6 @@
 
 # User-specific files and sensitive data
 /DebugingProfiles/
-/Tests/**/__pycache__/
 /Tests/**/test-data-*/
 /Tests/**/live-data/
 /DebugingProfile/
@@ -17,8 +16,10 @@
 /artifacts*/
 /artifacts-*
 /reports/
-/Docs/PlaybackRecovery.md
-/Docs/PlaybackReportingAndSeeking.md
+# Only application-embedded help documents belong in version control.
+/Docs/*
+!/Docs/About.md
+!/Docs/KeyboardShortcuts.md
 /NetA/
 account.json
 account.json.bak
@@ -26,6 +27,36 @@ account.json.tmp
 config.json
 config.json.bak
 config.json.tmp
+config.corrupted.*.json
+YTPlayer.storage.json
+
+# Runtime browser profiles and downloaded media
+*.WebView2/
+LoginSessions/
+/Downloads/
+
+# Local environment overrides (keep shareable templates)
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+
+# Python diagnostic tooling caches and virtual environments
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.pytest_cache/
+
+# Local crash dumps and network captures
+*.dmp
+*.mdmp
+*.har
+*.pcap
+*.pcapng
+*.saz
 
 # Build results
 [Dd]ebug/
@@ -118,6 +149,10 @@ project.fragment.lock.json
 artifacts/
 release-local/
 
+# Release packaging outputs from .github/workflows/release.yml
+/dist/
+/YTPlayer-*.zip
+
 # ASP.NET Scaffolding
 ScaffoldingReadMe.txt
 
@@ -176,4 +211,4 @@ CodeCoverage/
 !changelog.md
 
 # Generated version info
-Properties/VersionInfo.g.cs
+**/Properties/VersionInfo.g.cs
