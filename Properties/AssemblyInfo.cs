@@ -22,6 +22,7 @@ using System.Runtime.Versioning;
 [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("Navigation.Tests")]
 [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("Layout.Tests")]
 [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("Documents.Tests")]
+[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("MenuAccessibility.Tests")]
 
 [assembly: AssemblyVersion(YTPlayer.VersionInfo.AssemblyVersion)]
 [assembly: AssemblyFileVersion(YTPlayer.VersionInfo.AssemblyVersion)]

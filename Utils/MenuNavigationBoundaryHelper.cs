@@ -18,6 +18,8 @@ namespace YTPlayer.Utils
                 return;
             }
 
+            ContextMenuAccessibilityHelper.Attach(menu);
+
             menu.PreviewKeyDown -= OnMenuPreviewKeyDown;
             menu.PreviewKeyDown += OnMenuPreviewKeyDown;
             menu.KeyDown -= OnMenuKeyDown;
@@ -269,7 +271,12 @@ namespace YTPlayer.Utils
                 targetItem = movePrevious ? items[items.Count - 1] : items[0];
             }
 
+            bool wasSelected = targetItem.Selected;
             SuppressAndSelectItem(targetItem, e);
+            if (items.Count == 1)
+            {
+                ContextMenuAccessibilityHelper.NotifySingleItemNavigation(menu, targetItem, wasSelected);
+            }
         }
 
         private static List<ToolStripItem> GetNavigableItems(ToolStrip menu)
@@ -282,7 +289,7 @@ namespace YTPlayer.Utils
                     continue;
                 }
 
-                if (!item.Available || !item.Visible || !item.Enabled)
+                if (!item.Available || !item.Visible || !item.Enabled || !item.CanSelect)
                 {
                     continue;
                 }
@@ -326,14 +333,6 @@ namespace YTPlayer.Utils
             e.SuppressKeyPress = true;
 
             selectedItem.Select();
-            try
-            {
-                selectedItem.AccessibilityObject?.Select(AccessibleSelection.TakeFocus | AccessibleSelection.TakeSelection);
-            }
-            catch
-            {
-                // 某些宿主不支持无障碍显式选中，忽略即可。
-            }
         }
     }
 }

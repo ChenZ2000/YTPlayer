@@ -1,199 +1,197 @@
 using System;
-using System.Threading.Tasks;
+using System.Diagnostics;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace YTPlayer.Utils
 {
     internal static class ContextMenuAccessibilityHelper
     {
-        private const int FocusWarmupDelayMs = 32;
-        private const int FocusStabilizeAttempts = 8;
-        private const int FocusStabilizeDelayMs = 20;
-        private const int MinimumFocusPushAttempts = 2;
+        private const int InitialSelectionDelayMs = 32;
+        private const uint EventObjectFocus = 0x8005;
+        private const int ObjIdClient = -4;
+        private static readonly ConditionalWeakTable<ToolStripDropDown, OpeningState> States = new();
 
-        public static ToolStripItem? FindFirstNavigableItem(ToolStripItemCollection? items)
+        [DllImport("user32.dll", ExactSpelling = true)]
+        private static extern void NotifyWinEvent(uint eventId, IntPtr hwnd, int objectId, int childId);
+
+        private static ToolStripItem? FindFirstNavigableItem(ToolStripItemCollection? items)
         {
-            if (items == null || items.Count == 0)
-            {
-                return null;
-            }
-
+            if (items == null) return null;
             foreach (ToolStripItem item in items)
             {
-                if (item is ToolStripSeparator)
-                {
-                    continue;
-                }
-
-                if (!item.Available || !item.Visible || !item.Enabled)
-                {
-                    continue;
-                }
-
-                return item;
+                if (IsNavigable(item)) return item;
             }
-
             return null;
+        }
+
+        private static bool IsNavigable(ToolStripItem item) => !item.IsDisposed && item is not ToolStripSeparator &&
+            item.Available && item.Visible && item.Enabled && item.CanSelect;
+
+        private static ToolStripItem? FindSelectedItem(ToolStripDropDown menu)
+        {
+            foreach (ToolStripItem item in menu.Items)
+            {
+                if (item.Selected && IsNavigable(item)) return item;
+            }
+            return null;
+        }
+
+        /// <summary>Also handles nested and dynamically created drop-downs. Registration is idempotent.</summary>
+        public static void Attach(ToolStrip? menu)
+        {
+            if (menu is ToolStripDropDown dropDown && !dropDown.IsDisposed)
+                _ = States.GetValue(dropDown, value => new OpeningState(value));
         }
 
         public static void EnsureFirstItemFocusedOnOpen(Control owner, ContextMenuStrip menu, string menuName, Action<string>? log = null)
         {
-            if (owner == null || menu == null || owner.IsDisposed || menu.IsDisposed)
-            {
-                return;
-            }
-
-            _ = EnsureFirstItemFocusedOnOpenAsync(owner, menu, menuName, log);
+            if (owner == null || owner.IsDisposed || menu == null || menu.IsDisposed) return;
+            Attach(menu);
+            States.GetValue(menu, value => new OpeningState(value)).Schedule(menuName, log);
         }
 
-        public static void PrimeForAccessibility(ContextMenuStrip? menu)
+        public static void PrimeForAccessibility(ToolStripDropDown? menu)
         {
-            if (menu == null || menu.IsDisposed)
-            {
-                return;
-            }
-
+            if (menu == null || menu.IsDisposed) return;
+            Attach(menu);
             try
             {
-                if (!menu.IsHandleCreated)
+                _ = menu.Handle;
+                _ = menu.AccessibilityObject;
+                foreach (ToolStripItem item in menu.Items)
                 {
-                    _ = menu.Handle;
+                    if (!item.IsDisposed && item.Available) _ = item.AccessibilityObject;
                 }
             }
-            catch
-            {
-                // 某些宿主阶段可能尚不允许创建句柄，忽略即可。
-            }
-
-            PrimeItemsForAccessibility(menu.Items);
+            catch (Exception ex) { Debug.WriteLine("[MenuAccessibility] Priming: " + ex.Message); }
         }
 
-        public static bool TrySelectFirstNavigableItem(ContextMenuStrip? menu, out ToolStripItem? selectedItem)
+        /// <summary>An Up/Down key in a one-item menu is still a navigation request. Report its
+        /// actual item without toggling selection, adding fake items, or invoking a speech API.</summary>
+        public static void NotifySingleItemNavigation(ToolStrip menu, ToolStripItem item, bool wasSelected)
         {
-            selectedItem = null;
-
-            if (menu == null || menu.IsDisposed || menu.Items.Count == 0)
-            {
-                return false;
-            }
-
-            if (menu.CanFocus)
-            {
-                menu.Focus();
-            }
-
-            menu.Select();
-            selectedItem = FindFirstNavigableItem(menu.Items);
-
-            if (selectedItem == null)
-            {
-                return false;
-            }
-
-            selectedItem.Select();
-            return true;
+            if (menu is not ToolStripDropDown dropDown) return;
+            if (States.TryGetValue(dropDown, out var state)) state.CancelPending();
+            if (wasSelected) NotifyItemFocus(dropDown, item);
         }
 
-        private static async Task EnsureFirstItemFocusedOnOpenAsync(Control owner, ContextMenuStrip menu, string menuName, Action<string>? log)
+        private static bool NotifyItemFocus(ToolStripDropDown menu, ToolStripItem item)
         {
-            if (FocusWarmupDelayMs > 0)
+            if (menu.IsDisposed || !menu.Visible || !menu.IsHandleCreated || !IsNavigable(item) || !item.Selected ||
+                item.GetCurrentParent() != menu) return false;
+            try
             {
-                await Task.Delay(FocusWarmupDelayMs).ConfigureAwait(continueOnCapturedContext: true);
-            }
-
-            ToolStripItem? lastSelectedItem = null;
-
-            for (int attempt = 1; attempt <= FocusStabilizeAttempts; attempt++)
-            {
-                if (owner.IsDisposed || menu.IsDisposed || !menu.Visible)
+                // MSAA child IDs follow the accessible tree, NOT Items.IndexOf: hidden items,
+                // alignment, overflow and custom providers can change the exposed child order.
+                var parent = menu.AccessibilityObject;
+                var target = item.AccessibilityObject;
+                for (int index = 0; index < parent.GetChildCount(); index++)
                 {
-                    return;
-                }
-
-                try
-                {
-                    if (TrySelectFirstNavigableItem(menu, out ToolStripItem? selectedItem) && selectedItem != null)
+                    if (ReferenceEquals(parent.GetChild(index), target))
                     {
-                        if (attempt >= MinimumFocusPushAttempts)
-                        {
-                            // 第二轮开始再强制推送无障碍焦点，避开菜单首次进入时的系统初始化竞争。
-                            TrySelectItemAccessibilityFocus(selectedItem);
-                        }
-
-                        if (attempt >= MinimumFocusPushAttempts && selectedItem.Selected)
-                        {
-                            if (attempt > MinimumFocusPushAttempts)
-                            {
-                                log?.Invoke($"[{menuName}] 首项焦点在第 {attempt} 次尝试后稳定。");
-                            }
-
-                            return;
-                        }
-
-                        lastSelectedItem = selectedItem;
+                        // WinForms retains its UIA focus provider. Supply the standard legacy
+                        // focus event only after state is queryable, with the same item identity.
+                        NotifyWinEvent(EventObjectFocus, menu.Handle, ObjIdClient, index + 1);
+                        return true;
                     }
                 }
-                catch (Exception ex)
-                {
-                    log?.Invoke($"[{menuName}] 尝试设置首项焦点失败: {ex.Message}");
-                }
-
-                if (attempt < FocusStabilizeAttempts)
-                {
-                    await Task.Delay(FocusStabilizeDelayMs).ConfigureAwait(continueOnCapturedContext: true);
-                }
             }
-
-            if (lastSelectedItem != null)
-            {
-                TrySelectItemAccessibilityFocus(lastSelectedItem);
-            }
+            catch (Exception ex) { Debug.WriteLine("[MenuAccessibility] Focus notification: " + ex.Message); }
+            return false;
         }
 
-        private static void PrimeItemsForAccessibility(ToolStripItemCollection? items)
+        private sealed class OpeningState
         {
-            if (items == null || items.Count == 0)
+            private readonly ToolStripDropDown _menu;
+            private Timer? _timer;
+            private int _generation;
+            private bool _scheduled;
+            private ToolStripItem? _target;
+
+            internal OpeningState(ToolStripDropDown menu)
             {
-                return;
+                _menu = menu;
+                menu.Opening += (_, _) => { Reset(); PrimeForAccessibility(menu); };
+                menu.Opened += (_, _) => Schedule(menu.Name, null);
+                menu.Closed += (_, _) => Reset();
+                menu.Disposed += (_, _) => Reset();
             }
 
-            foreach (ToolStripItem item in items)
+            internal void Schedule(string menuName, Action<string>? log)
             {
-                if (item == null)
-                {
-                    continue;
-                }
-
+                if (_scheduled || _menu.IsDisposed || !_menu.Visible || !_menu.IsHandleCreated) return;
+                _scheduled = true;
+                _target = FindSelectedItem(_menu) ?? FindFirstNavigableItem(_menu.Items);
+                if (_target == null) return;
+                int generation = _generation;
                 try
                 {
-                    _ = item.AccessibilityObject;
+                    // Leave the opening callback before focusing. The menu must finish showing
+                    // and constructing its providers before an accessibility client queries them.
+                    _menu.BeginInvoke(new Action(() =>
+                    {
+                        if (!IsCurrent(generation)) return;
+                        try
+                        {
+                            var current = FindSelectedItem(_menu);
+                            if (current != null && current != _target) return;
+                            if (HasOpenChild()) return;
+                            // ToolStrip's modal menu filter already routes keyboard input here.
+                            // Focusing the popup HWND creates extra container-focus events; it
+                            // also leaves UIA's focused element pointing at the menu container.
+                            // Let the opening event finish before selecting the first item once.
+                            var timer = new Timer { Interval = InitialSelectionDelayMs };
+                            _timer = timer;
+                            timer.Tick += (_, _) =>
+                            {
+                                if (!ReferenceEquals(_timer, timer)) return;
+                                StopTimer();
+                                try
+                                {
+                                    if (!IsCurrent(generation)) return;
+                                    var selected = FindSelectedItem(_menu);
+                                    if (selected != null && selected != _target) return;
+                                    // Do not re-enter a parent when its child menu has opened.
+                                    if (HasOpenChild()) return;
+                                    // A genuine selection raises WinForms' MSAA and UIA focus
+                                    // events, just like arrow navigation. Do not replay it later.
+                                    if (!_target!.Selected) _target.Select();
+                                }
+                                catch (Exception ex) { log?.Invoke($"[{menuName}] 菜单首项选择失败: {ex.Message}"); }
+                            };
+                            timer.Start();
+                        }
+                        catch (Exception ex) { log?.Invoke($"[{menuName}] 菜单焦点初始化失败: {ex.Message}"); }
+                    }));
                 }
-                catch
-                {
-                    // 忽略单个项的预热异常，避免影响菜单整体逻辑。
-                }
-
-                if (item is ToolStripDropDownItem dropDownItem && dropDownItem.HasDropDownItems)
-                {
-                    PrimeItemsForAccessibility(dropDownItem.DropDownItems);
-                }
-            }
-        }
-
-        private static void TrySelectItemAccessibilityFocus(ToolStripItem item)
-        {
-            if (item == null)
-            {
-                return;
+                catch (InvalidOperationException) { /* The menu may have closed/disposed before posting. */ }
             }
 
-            try
+            private bool IsCurrent(int generation) => generation == _generation && !_menu.IsDisposed && _menu.Visible &&
+                _target != null && IsNavigable(_target) && _target.GetCurrentParent() == _menu;
+
+            private bool HasOpenChild() => _target is ToolStripDropDownItem child && child.HasDropDownItems && child.DropDown.Visible;
+
+            internal void CancelPending()
             {
-                item.AccessibilityObject?.Select(AccessibleSelection.TakeFocus | AccessibleSelection.TakeSelection);
+                unchecked { _generation++; }
+                StopTimer();
             }
-            catch
+
+            private void Reset()
             {
-                // 某些自定义菜单项可能不支持该调用，忽略即可。
+                CancelPending();
+                _scheduled = false;
+                _target = null;
+            }
+
+            private void StopTimer()
+            {
+                _timer?.Stop();
+                _timer?.Dispose();
+                _timer = null;
             }
         }
     }
