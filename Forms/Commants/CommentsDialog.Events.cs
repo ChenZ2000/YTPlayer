@@ -91,7 +91,7 @@ namespace YTPlayer.Forms
             var replyItem = new ToolStripMenuItem("回复");
             replyItem.Click += (_, _) => ReplyToSelectedNode();
 
-            var deleteItem = new ToolStripMenuItem("删除");
+            var deleteItem = new ToolStripMenuItem("删除(&R)") { ShortcutKeyDisplayString = "Delete" };
             deleteItem.Click += async (_, _) => await DeleteSelectedCommentAsync();
 
             var refreshItem = new ToolStripMenuItem("刷新");
@@ -239,9 +239,10 @@ namespace YTPlayer.Forms
                 }
             }
 
-            if (e.KeyCode == Keys.Delete)
+            if (e.KeyData == Keys.Delete)
             {
                 e.Handled = true;
+                e.SuppressKeyPress = true;
                 _ = DeleteSelectedCommentAsync();
             }
         }
@@ -352,7 +353,7 @@ namespace YTPlayer.Forms
                         case "回复":
                             menuItem.Enabled = hasComment;
                             break;
-                        case "删除":
+                        case "删除(&R)":
                             menuItem.Enabled = canDelete;
                             break;
                         case "刷新":

@@ -10,7 +10,7 @@ namespace YTPlayer.Forms
     internal sealed class PurchaseLinkDialog : Form
     {
         private readonly string _purchaseUrl;
-        private readonly Label _messageLabel;
+        private readonly ReadOnlyTextBox _messageTextBox;
         private readonly Button _openButton;
         private readonly Button _cancelButton;
 
@@ -29,7 +29,7 @@ namespace YTPlayer.Forms
             string description = $"{albumDisplay} 属于网易云数字专辑，{songDisplay} 需要购买后才能播放。\n\n" +
                                  "点击“购买”将打开网易云音乐官网的支付页面，请在浏览器中登录当前账号并完成购买后返回本应用重新播放。";
 
-            Text = description;
+            Text = "购买数字专辑";
             FormBorderStyle = FormBorderStyle.FixedDialog;
             StartPosition = FormStartPosition.CenterParent;
             MinimizeBox = false;
@@ -37,19 +37,22 @@ namespace YTPlayer.Forms
             ShowInTaskbar = false;
             ClientSize = new Size(460, 260);
 
-            _messageLabel = new Label
+            _messageTextBox = new ReadOnlyTextBox
             {
                 AutoSize = false,
                 Location = new Point(15, 15),
                 Size = new Size(390, 100),
+                MinimumSize = new Size(0, 100),
                 Text = description,
+                AccessibleName = "购买说明",
+                TabIndex = 0,
                 TabStop = true
             };
 
             _openButton = new Button
             {
                 Text = "购买",
-                TabIndex = 0,
+                TabIndex = 1,
                 DialogResult = DialogResult.OK,
                 Location = new Point(220, 130),
                 Size = new Size(90, 30)
@@ -59,7 +62,7 @@ namespace YTPlayer.Forms
             _cancelButton = new Button
             {
                 Text = "取消",
-                TabIndex = 1,
+                TabIndex = 2,
                 DialogResult = DialogResult.Cancel,
                 Location = new Point(320, 130),
                 Size = new Size(90, 30)
@@ -70,29 +73,15 @@ namespace YTPlayer.Forms
                 Close();
             };
 
-            var messagePanel = new Panel { AutoScroll = true, MinimumSize = new Size(0, 100) };
-            _messageLabel.AutoSize = true;
-            _messageLabel.Dock = DockStyle.Top;
-            messagePanel.Controls.Add(_messageLabel);
-            // Keep the focusable label and its accessible text while allowing arbitrarily long titles.
-            messagePanel.ClientSizeChanged += (_, __) =>
-                _messageLabel.MaximumSize = new Size(System.Math.Max(1, messagePanel.ClientSize.Width - SystemInformation.VerticalScrollBarWidth), 0);
             var buttons = DialogLayout.CreateButtonRow(_cancelButton, _openButton);
             buttons.TabIndex = 1;
-            DialogLayout.CreateVertical(this, 0, messagePanel, buttons);
+            DialogLayout.CreateVertical(this, 0, _messageTextBox, buttons);
             AcceptButton = _openButton;
             CancelButton = _cancelButton;
-            Shown += (_, __) =>
+            Load += (_, __) =>
             {
-                try
-                {
-                    ActiveControl = _messageLabel;
-                    _messageLabel.Focus();
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine($"[PurchaseLinkDialog] Focus failed: {ex.Message}");
-                }
+                ActiveControl = _messageTextBox;
+                _messageTextBox.Select(0, 0);
             };
             ResumeLayout(true);
             ThemeManager.ApplyTheme(this);

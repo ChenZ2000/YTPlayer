@@ -473,6 +473,8 @@ public partial class MainForm : Form
 
 		public int SelectedDataIndex { get; set; }
 
+		public string? SelectedItemKey { get; set; }
+
 		public string PageType { get; set; } = string.Empty;
 
 		public string CategoryId { get; set; } = string.Empty;
@@ -608,6 +610,7 @@ public partial class MainForm : Form
 	private readonly object _personalFmStateLock = new object();
 
 	private readonly List<SongInfo> _personalFmSongsCache = new List<SongInfo>();
+	private readonly HashSet<string> _pendingSongDislikes = new HashSet<string>(StringComparer.Ordinal);
 
 	private readonly HashSet<string> _personalFmSongKeySet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -642,6 +645,7 @@ public partial class MainForm : Form
 	private bool _recentSummaryReady = false;
 
 	private List<SongInfo> _recentSongsCache = new List<SongInfo>();
+	private readonly HashSet<string> _pendingRecentPlayDeletes = new HashSet<string>(StringComparer.Ordinal);
 
 	private List<PlaylistInfo> _recentPlaylistsCache = new List<PlaylistInfo>();
 
@@ -1610,9 +1614,6 @@ public partial class MainForm : Form
 
         private string? _pendingSongFocusSatisfiedViewSource;
 
-        private string? _pendingNavigationRestoreFocusViewSource;
-
-        private int _pendingNavigationRestoreFocusIndex = -1;
 
         private int _pendingPlaceholderPlaybackIndex = -1;
 
@@ -6335,6 +6336,7 @@ public partial class MainForm : Form
 
 	private void ClearLoginState(bool persist, bool alreadyLoggedOut = false)
 	{
+		ResetPersonalFmSession();
 		if (!alreadyLoggedOut && _apiClient != null)
 		{
 			try
@@ -6633,6 +6635,13 @@ public partial class MainForm : Form
 				return true;
 			}
 		}
+		if (keyData == (Keys.Control | Keys.D))
+		{
+			if (TryHandleNotInterestedShortcut())
+			{
+				return true;
+			}
+		}
 		if (keyData == (Keys.Control | Keys.A))
 		{
 			if (TryHandleAddToPlaylistShortcut())
@@ -6659,6 +6668,13 @@ public partial class MainForm : Form
 			if (resultListView != null && resultListView.ContainsFocus)
 			{
 				TryHandleCommentShortcut();
+				return true;
+			}
+		}
+		if (keyData == Keys.Delete)
+		{
+			if (TryHandleRemoveShortcut())
+			{
 				return true;
 			}
 		}
@@ -6887,9 +6903,9 @@ public partial class MainForm : Form
 		ResetVirtualItemCache();
 		if (resultListView != null)
 		{
-			ResetListViewSelectionState();
 			if (resultListView.VirtualMode)
 			{
+				ResetListViewSelectionState();
 				resultListView.VirtualMode = false;
 			}
 			resultListView.VirtualListSize = 0;
@@ -6918,6 +6934,7 @@ public partial class MainForm : Form
 				resultListView.VirtualMode = true;
 			}
 			resultListView.VirtualListSize = virtualSongListSize;
+			QueuePendingNavigationFocus();
 			resultListView.Invalidate();
 			ScheduleResultListViewLayoutUpdate();
 		}
@@ -9434,7 +9451,7 @@ private void searchTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
 			return false;
 		}
 		MenuContextSnapshot menuContextSnapshot = BuildMenuContextSnapshot(isCurrentPlayingRequest: false);
-		if (!menuContextSnapshot.IsValid)
+		if (!menuContextSnapshot.IsValid || menuContextSnapshot.PrimaryEntity == MenuEntityKind.None)
 		{
 			return false;
 		}
@@ -9588,6 +9605,23 @@ private void searchTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
 			return false;
 		}
 	}
+
+	private bool TryHandleNotInterestedShortcut()
+	{
+		if (!TryBuildListShortcutSnapshot(out MenuContextSnapshot snapshot, requireListFocus: true) ||
+			!snapshot.IsLoggedIn || snapshot.PrimaryEntity != MenuEntityKind.Song)
+		{
+			return false;
+		}
+		SongInfo song = ResolveSongFromShortcutSnapshot(snapshot);
+		if (song == null || song.IsPodcastEpisode || !CanSongUseLibraryFeatures(song))
+		{
+			return false;
+		}
+		dislikeSongMenuItem_Click(song, EventArgs.Empty);
+		return true;
+	}
+
 
 	private bool TryHandleAddToPlaylistShortcut()
 	{
@@ -9947,6 +9981,14 @@ private void searchTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
 		if (unlikeSongMenuItem != null)
 		{
 			unlikeSongMenuItem.ShowShortcutKeys = showShortcuts;
+		}
+		if (dislikeSongMenuItem != null)
+		{
+			dislikeSongMenuItem.ShowShortcutKeys = showShortcuts;
+		}
+		if (deleteRecentPlayMenuItem != null)
+		{
+			deleteRecentPlayMenuItem.ShowShortcutKeys = showShortcuts;
 		}
 		if (addToPlaylistMenuItem != null)
 		{
@@ -12043,6 +12085,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 
 	private async Task EnrichCurrentPlaylistSongsAsync(PlaylistInfo playlist, List<SongInfo> skeleton, string viewSource, string accessibleName)
 	{
+		using var population = TrackListPopulation();
 		CancellationToken viewToken = GetCurrentViewContentToken();
 		checked
 		{
@@ -12116,7 +12159,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 							bool isCurrentView = true;
 							await ExecuteOnUiThreadAsync(delegate
 							{
-								if (!string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
+								if (viewToken.IsCancellationRequested || !string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
 								{
 									isCurrentView = false;
 								}
@@ -12249,7 +12292,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 								bool viewStillCurrent = true;
 								await ExecuteOnUiThreadAsync(delegate
 								{
-									if (!string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
+									if (viewToken.IsCancellationRequested || !string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
 									{
 										viewStillCurrent = false;
 									}
@@ -12306,7 +12349,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 							}
 							await ExecuteOnUiThreadAsync(delegate
 							{
-								if (string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
+								if (!viewToken.IsCancellationRequested && string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
 								{
 									UpdateStatusBar(BuildPlaylistStatusText(playlist, _currentSongs.Count, enriched: true));
 									ScheduleAvailabilityCheck(_currentSongs);
@@ -12330,7 +12373,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 				List<SongInfo> merged = MergeSongsById(skeleton ?? new List<SongInfo>(), songs, viewSource);
 				await ExecuteOnUiThreadAsync(delegate
 				{
-					if (string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
+					if (!viewToken.IsCancellationRequested && string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
 					{
 						int pendingFocusIndex = ((resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : (-1));
 						bool flag = _currentSongs != null && _currentSongs.Count == merged.Count;
@@ -12375,6 +12418,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 
 	private async Task EnrichCurrentAlbumSongsAsync(AlbumInfo album, List<SongInfo> skeleton, string viewSource, string accessibleName)
 	{
+		using var population = TrackListPopulation();
 		CancellationToken viewToken = GetCurrentViewContentToken();
 		try
 		{
@@ -12392,7 +12436,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 			List<SongInfo> merged = MergeSongsById(skeleton ?? new List<SongInfo>(), songs, viewSource);
 			await ExecuteOnUiThreadAsync(delegate
 			{
-				if (string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
+				if (!viewToken.IsCancellationRequested && string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
 				{
 					int pendingFocusIndex = ((resultListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : (-1));
 					bool flag = _currentSongs != null && _currentSongs.Count == merged.Count;
@@ -12770,6 +12814,9 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 
 	private void songContextMenu_Opening(object sender, CancelEventArgs e)
 	{
+		RestorePersonalFmMenuItems();
+		EnsurePersonalFmModeMenu();
+		UpdatePersonalFmModeMenu(!IsCurrentPlayingMenuContextRequest() && IsPersonalFmViewSource(_currentViewSource));
 		if (songContextMenu != null && !songContextMenu.ShowCheckMargin)
 		{
 			songContextMenu.ShowCheckMargin = true;
@@ -12780,6 +12827,12 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		MenuContextSnapshot menuContextSnapshot = BuildMenuContextSnapshot(flag);
 		if (!menuContextSnapshot.IsValid)
 		{
+			if (!flag && IsPersonalFmViewSource(_currentViewSource))
+			{
+				ShowPersonalFmModeOnlyMenu();
+				e.Cancel = false;
+				return;
+			}
 			viewSourceMenuItem.Visible = false;
 			viewSourceMenuItem.Tag = null;
 			ResetViewSourceMenuCaptionToBase(invalidatePendingRequest: true);
@@ -12870,6 +12923,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 				return;
 			}
 		}
+		ConfigureRecentResourceRemovalMenu(menuContextSnapshot);
 		if (contextCommentTarget != null && !isPodcastEpisodeContext)
 		{
 			commentMenuItem.Visible = true;
@@ -12897,6 +12951,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 
 	private void songContextMenu_Closed(object sender, ToolStripDropDownClosedEventArgs e)
 	{
+		RestorePersonalFmMenuItems();
 		_isCurrentPlayingMenuActive = false;
 		_currentPlayingMenuSong = null;
 		_pendingShareShortcutRootMenuItem = null;
@@ -13661,7 +13716,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
                 return Math.Max(0, Math.Min(focusedIndex, totalCount - 1));
         }
 
-        private void CapturePersonalFmSnapshotOnViewLeave(string? nextViewSource)
+        private void CapturePersonalFmFocusOnViewLeave(string? nextViewSource)
         {
                 if (!IsPersonalFmViewSource(_currentViewSource))
                 {
@@ -13671,67 +13726,45 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
                 {
                         return;
                 }
-                if (_currentSongs == null || _currentSongs.Count <= 0)
-                {
-                        return;
-                }
-                List<SongInfo> snapshot = new List<SongInfo>();
-                foreach (SongInfo song in _currentSongs)
-                {
-                        if (!IsPersonalFmSongCandidate(song))
-                        {
-                                continue;
-                        }
-                        song.ViewSource = PersonalFmCategoryId;
-                        snapshot.Add(song);
-                }
-                if (snapshot.Count <= 0)
-                {
-                        return;
-                }
-                int focusedIndex = ResolvePersonalFmFocusedIndexFromUi(snapshot.Count);
-                ResetPersonalFmCache(snapshot, focusedIndex);
-                Debug.WriteLine($"[PersonalFM] 快照保存: songs={snapshot.Count}, focus={focusedIndex}, next={nextViewSource ?? "<null>"}");
+                // Every feed mutation already updates the cache. Copying UI rows back here
+                // would resurrect a signed-out account's songs or clear rejected-song keys.
+                int count;
+                lock (_personalFmStateLock) count = _personalFmSongsCache.Count;
+                if (count <= 0) return;
+                UpdatePersonalFmFocusedIndexFromSelection(ResolvePersonalFmFocusedIndexFromUi(count));
         }
 
         private async Task<SongInfo?> FetchNextPersonalFmSongAsync(CancellationToken cancellationToken, bool allowDuplicateFallback = false)
         {
-                SongInfo fallbackSong = null;
+                var mode = CapturePersonalFmMode();
+                using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, mode.Token);
+                cancellationToken = linked.Token;
+                SongInfo? fallbackSong = null;
                 const int maxUniqueAttempts = 4;
-                for (int attempt = 1; attempt <= maxUniqueAttempts; attempt++)
+                for (int attempt = 0; attempt <= maxUniqueAttempts; attempt++)
                 {
                         cancellationToken.ThrowIfCancellationRequested();
-                        List<SongInfo> fetchedSongs = (await FetchWithRetryUntilCancel((CancellationToken _) => _apiClient.GetPersonalFMAsync(), $"personal_fm:next:{attempt}", cancellationToken, maxAttempts: 2).ConfigureAwait(continueOnCapturedContext: false)) ?? new List<SongInfo>();
-                        cancellationToken.ThrowIfCancellationRequested();
-                        if (fetchedSongs.Count <= 0)
-                        {
-                                continue;
-                        }
-                        ApplyViewSourceToSongs(fetchedSongs, PersonalFmCategoryId);
-                        HashSet<string> existingKeys;
                         lock (_personalFmStateLock)
                         {
-                                existingKeys = new HashSet<string>(_personalFmSongKeySet, StringComparer.OrdinalIgnoreCase);
-                        }
-                        foreach (SongInfo song in fetchedSongs)
-                        {
-                                if (!IsPersonalFmSongCandidate(song))
+                                cancellationToken.ThrowIfCancellationRequested();
+                                while (_personalFmFetchedSongs.Count > 0)
                                 {
-                                        continue;
-                                }
-                                if (fallbackSong == null)
-                                {
-                                        fallbackSong = song;
-                                }
-                                string key = BuildPersonalFmSongKey(song);
-                                if (string.IsNullOrWhiteSpace(key) || !existingKeys.Contains(key))
-                                {
-                                        return song;
+                                        SongInfo song = _personalFmFetchedSongs.Dequeue();
+                                        if (!IsPersonalFmSongCandidate(song)) continue;
+                                        fallbackSong ??= song;
+                                        if (!_personalFmSongKeySet.Contains(BuildPersonalFmSongKey(song))) return song;
                                 }
                         }
-                        if (attempt < maxUniqueAttempts)
+                        if (attempt == maxUniqueAttempts) break;
+                        List<SongInfo> fetched = await FetchWithRetryUntilCancel(
+                                ct => _apiClient.GetPersonalFMAsync(mode.Mode, ct), "personal_fm:" + mode.Mode.Key,
+                                cancellationToken, maxAttempts: 2).ConfigureAwait(false);
+                        lock (_personalFmStateLock)
                         {
-                                await Task.Delay(120, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+                                cancellationToken.ThrowIfCancellationRequested();
+                                if (mode.Generation != _personalFmModeGeneration) throw new OperationCanceledException(cancellationToken);
+                                ApplyViewSourceToSongs(fetched, PersonalFmCategoryId);
+                                foreach (SongInfo song in fetched) _personalFmFetchedSongs.Enqueue(song);
                         }
                 }
                 return allowDuplicateFallback ? fallbackSong : null;
@@ -13802,91 +13835,39 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 
         private async Task<int> AppendPersonalFmSongsToCacheAndQueueAsync(int needAppendCount, CancellationToken cancellationToken = default(CancellationToken))
         {
-                if (needAppendCount <= 0)
-                {
-                        return 0;
-                }
-                if (Interlocked.CompareExchange(ref _personalFmAppendInFlight, 1, 0) != 0)
-                {
-                        return 0;
-                }
-                List<(SongInfo Song, int DataIndex)> addedSongs = new List<(SongInfo, int)>();
+                if (needAppendCount <= 0 || !IsUserLoggedIn() || Volatile.Read(ref _personalFmModeSwitchInFlight) != 0) return 0;
+                if (Interlocked.CompareExchange(ref _personalFmAppendInFlight, 1, 0) != 0) return 0;
+                var mode = CapturePersonalFmMode();
+                using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, mode.Token);
+                cancellationToken = linked.Token;
                 try
                 {
-                        int attempts = 0;
+                        if (Volatile.Read(ref _personalFmModeSwitchInFlight) != 0) return 0;
+                        var addedSongs = new List<SongInfo>();
+                        var addedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                         int maxAttempts = Math.Max(6, needAppendCount * 4);
-                        while (addedSongs.Count < needAppendCount && attempts < maxAttempts)
+                        for (int attempt = 0; addedSongs.Count < needAppendCount && attempt < maxAttempts; attempt++)
                         {
-                                attempts++;
                                 cancellationToken.ThrowIfCancellationRequested();
-                                SongInfo nextSong = await FetchNextPersonalFmSongAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-                                if (nextSong == null)
-                                {
-                                        continue;
-                                }
-                                if (TryAppendPersonalFmSongToCache(nextSong, out int dataIndex))
-                                {
-                                        addedSongs.Add((nextSong, dataIndex));
-                                }
+                                SongInfo? song = await FetchNextPersonalFmSongAsync(cancellationToken).ConfigureAwait(false);
+                                if (song == null) break;
+                                if (addedKeys.Add(BuildPersonalFmSongKey(song))) addedSongs.Add(song);
                         }
-                        if (addedSongs.Count <= 0)
+                        int added = 0;
+                        await ExecuteOnUiThreadAsync(() =>
                         {
-                                return 0;
-                        }
-                        addedSongs.Sort((left, right) => left.DataIndex.CompareTo(right.DataIndex));
-                        List<SongInfo> queueAppendSongs = new List<SongInfo>(addedSongs.Count);
-                        foreach ((SongInfo Song, int DataIndex) in addedSongs)
-                        {
-                                queueAppendSongs.Add(Song);
-                        }
-                        _playbackQueue?.TryAppendQueueSongs(queueAppendSongs, PersonalFmCategoryId);
-                        await ExecuteOnUiThreadAsync(delegate
-                        {
-                                if (!IsPersonalFmViewSource(_currentViewSource) || resultListView == null || _currentSongs == null)
-                                {
-                                        return;
-                                }
-                                foreach ((SongInfo song, int dataIndex) in addedSongs)
-                                {
-                                        if (dataIndex < 0)
-                                        {
-                                                continue;
-                                        }
-                                        song.ViewSource = PersonalFmCategoryId;
-                                        if (dataIndex > _currentSongs.Count)
-                                        {
-                                                continue;
-                                        }
-                                        if (dataIndex == _currentSongs.Count)
-                                        {
-                                                _currentSongs.Add(song);
-                                        }
-                                        else if (_currentSongs[dataIndex] == null)
-                                        {
-                                                _currentSongs[dataIndex] = song;
-                                        }
-                                        if (dataIndex >= resultListView.Items.Count)
-                                        {
-                                                AppendPersonalFmListViewItem(song, dataIndex);
-                                        }
-                                }
-                                UpdateStatusBar($"私人 FM，已扩展到 {_currentSongs.Count} 首");
-                        }).ConfigureAwait(continueOnCapturedContext: false);
-                        return addedSongs.Count;
+                                if (cancellationToken.IsCancellationRequested || mode.Generation != _personalFmModeGeneration) return;
+                                added = ApplyPersonalFmBatch(addedSongs);
+                        }).ConfigureAwait(false);
+                        return added;
                 }
-                catch (OperationCanceledException)
-                {
-                        return 0;
-                }
+                catch (OperationCanceledException) { return 0; }
                 catch (Exception ex)
                 {
                         Debug.WriteLine("[PersonalFM] 缓存扩展失败: " + ex);
                         return 0;
                 }
-                finally
-                {
-                        Interlocked.Exchange(ref _personalFmAppendInFlight, 0);
-                }
+                finally { Interlocked.Exchange(ref _personalFmAppendInFlight, 0); }
         }
 
         private async Task AppendPersonalFmSongIfNeededAsync()
@@ -14086,77 +14067,6 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
                         _pendingListFocusViewSource = null;
                         _pendingListFocusFromPlayback = false;
                 }
-        }
-
-        private void SetPendingNavigationRestoreFocus(string? viewSource, int index)
-        {
-                if (string.IsNullOrWhiteSpace(viewSource) || index < 0)
-                {
-                        ClearPendingNavigationRestoreFocus();
-                        return;
-                }
-
-                _pendingNavigationRestoreFocusViewSource = viewSource;
-                _pendingNavigationRestoreFocusIndex = index;
-        }
-
-        private bool HasPendingNavigationRestoreFocus(string? viewSource)
-        {
-                return TryGetPendingNavigationRestoreFocus(viewSource, out _);
-        }
-
-        private bool TryGetPendingNavigationRestoreFocus(string? viewSource, out int index)
-        {
-                index = -1;
-                if (string.IsNullOrWhiteSpace(viewSource) ||
-                        string.IsNullOrWhiteSpace(_pendingNavigationRestoreFocusViewSource) ||
-                        _pendingNavigationRestoreFocusIndex < 0 ||
-                        !IsSameViewSourceForFocus(_pendingNavigationRestoreFocusViewSource, viewSource))
-                {
-                        return false;
-                }
-
-                index = _pendingNavigationRestoreFocusIndex;
-                return true;
-        }
-
-        private void ClearPendingNavigationRestoreFocus(string? viewSource = null)
-        {
-                if (string.IsNullOrWhiteSpace(viewSource) ||
-                        string.IsNullOrWhiteSpace(_pendingNavigationRestoreFocusViewSource) ||
-                        IsSameViewSourceForFocus(_pendingNavigationRestoreFocusViewSource, viewSource))
-                {
-                        _pendingNavigationRestoreFocusViewSource = null;
-                        _pendingNavigationRestoreFocusIndex = -1;
-                }
-        }
-
-        private bool ApplyPendingNavigationRestoreFocus(string? viewSource, bool consume = true)
-        {
-                if (!TryGetPendingNavigationRestoreFocus(viewSource, out int index) ||
-                        resultListView == null ||
-                        resultListView.Items.Count == 0)
-                {
-                        return false;
-                }
-
-                int targetIndex = Math.Max(0, Math.Min(index, resultListView.Items.Count - 1));
-                if (!IsListSelectionAndFocusAt(targetIndex))
-                {
-                        EnsureListSelectionWithoutFocus(targetIndex);
-                }
-                _lastListViewFocusedIndex = targetIndex;
-                if (!IsListAutoFocusSuppressed && resultListView.CanFocus && !resultListView.Focused)
-                {
-                        resultListView.Focus();
-                }
-
-                if (consume)
-                {
-                        ClearPendingNavigationRestoreFocus(viewSource);
-                }
-
-                return true;
         }
 
         private void RememberPlaybackFocusForSource(string? sourceView, SongInfo? song, int listIndexHint = -1)
@@ -15714,46 +15624,35 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 
 	private async void deletePlaylistMenuItem_Click(object sender, EventArgs e)
 	{
-		object obj = GetSelectedListViewItemSafe()?.Tag;
-		if (!(obj is PlaylistInfo playlist))
-		{
-			return;
-		}
-		DialogResult confirm = MessageBox.Show("确定要删除歌单：" + playlist.Name + "？\n删除后将无法恢复。", "确认删除", MessageBoxButtons.YesNo, MessageBoxIcon.Exclamation);
-		if (confirm != DialogResult.Yes)
-		{
-			return;
-		}
+		PlaylistInfo playlist = GetSelectedPlaylistFromContextMenu(sender);
+		if (!CanDeletePlaylistFromView(playlist, _currentViewSource)) return;
+		long accountId = GetCurrentUserId();
+		string viewSource = _currentViewSource;
+		string requestKey = $"{accountId}:playlist:{playlist.Id}";
+		if (_pendingListRemovals.Contains(requestKey)) return;
+		if (MessageBox.Show("确定要删除歌单：" + playlist.Name + "？\n删除后将无法恢复。", "确认删除", MessageBoxButtons.YesNo, MessageBoxIcon.Exclamation) != DialogResult.Yes) return;
+		if (!_pendingListRemovals.Add(requestKey)) return;
 		try
 		{
 			AnnounceStatusBarMessage("正在删除歌单...");
 			if (await _apiClient.DeletePlaylistAsync(playlist.Id))
 			{
+				if (accountId != GetCurrentUserId()) return;
 				UpdatePlaylistOwnershipState(playlist.Id, isOwned: false);
 				UpdatePlaylistSubscriptionState(playlist.Id, isSubscribed: false);
-				MessageBox.Show("已删除歌单：" + playlist.Name, "成功", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
-				UpdateStatusBar("删除歌单成功");
-				try
-				{
-					await RefreshUserPlaylistsIfActiveAsync();
-					return;
-				}
-				catch (Exception ex)
-				{
-					Exception ex2 = ex;
-					Exception refreshEx = ex2;
-					Debug.WriteLine($"[UI] 刷新创建和收藏的歌单列表失败: {refreshEx}");
-					return;
-				}
+				if (IsRemovalViewCurrent(viewSource, accountId)) RemovePlaylistFromVisibleList(playlist);
+				AnnounceStatusBarMessage("已删除歌单：" + playlist.Name);
+				return;
 			}
 			MessageBox.Show("删除歌单失败，请检查网络或稍后重试。", "失败", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 			UpdateStatusBar("删除歌单失败");
 		}
-		catch (Exception ex3)
+		catch (Exception ex)
 		{
-			MessageBox.Show("删除歌单失败: " + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+			MessageBox.Show("删除歌单失败: " + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 			UpdateStatusBar("删除歌单失败");
 		}
+		finally { _pendingListRemovals.Remove(requestKey); }
 	}
 
 	private async void subscribeAlbumMenuItem_Click(object sender, EventArgs e)
@@ -16331,6 +16230,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 	{
 		if (userId > 0)
 		{
+			if (_loggedInUserId != userId) ResetPersonalFmSession();
 			_loggedInUserId = userId;
 		}
 	}
@@ -17181,12 +17081,21 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		{
 			return;
 		}
+		bool fromCurrentPlayback = _isCurrentPlayingMenuActive || (sender is ToolStripItem && IsCurrentPlayingMenuContextRequest());
+		string source = fromCurrentPlayback ? ResolveCurrentPlayingViewSource(song) : _currentViewSource;
+		bool isPersonalFm = IsPersonalFmViewSource(source);
+		string requestKey = (isPersonalFm ? "fm:" : "recommend:") + targetSongId;
+		if (!_pendingSongDislikes.Add(requestKey)) return;
 		try
 		{
 			AnnounceStatusBarMessage("正在标记歌曲为不感兴趣...");
-			if (await _apiClient.MarkSongNotInterestedAsync(targetSongId))
+			bool success = isPersonalFm
+				? await _apiClient.MarkPersonalFmSongNotInterestedAsync(targetSongId, song.RecommendationAlgorithm, GetSongDislikePlayedMilliseconds(targetSongId))
+				: await _apiClient.MarkSongNotInterestedAsync(targetSongId);
+			if (success)
 			{
-				bool removedFromList = TryRemoveSongFromCurrentRecommendationList(song);
+				if (isPersonalFm) RemoveNotInterestedSongFromPersonalFmCache(song);
+				bool removedFromList = string.Equals(source, _currentViewSource, StringComparison.OrdinalIgnoreCase) && TryRemoveSongFromCurrentRecommendationList(song);
 				string statusText = removedFromList ? "已标记为不感兴趣，已从列表移除" : "已标记为不感兴趣";
 				AnnounceStatusBarMessage(statusText);
 				return;
@@ -17199,10 +17108,43 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 			MessageBox.Show("标记不感兴趣失败: " + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 			UpdateStatusBar("标记不感兴趣失败");
 		}
+		finally
+		{
+			_pendingSongDislikes.Remove(requestKey);
+		}
+	}
+
+	private int GetSongDislikePlayedMilliseconds(string songId)
+	{
+		lock (_playbackReportingLock)
+		{
+			var session = _activePlaybackReport;
+			if (session == null || session.HasCompleted || session.SongId != songId || !double.IsFinite(session.PlayedSeconds)) return 0;
+			return (int)Math.Clamp(Math.Floor(session.PlayedSeconds * 1000), 0, int.MaxValue);
+		}
+	}
+
+	private void RemoveNotInterestedSongFromPersonalFmCache(SongInfo song)
+	{
+		lock (_personalFmStateLock)
+		{
+			int removedIndex = _personalFmSongsCache.FindIndex(candidate => candidate.Id == song.Id);
+			_personalFmSongsCache.RemoveAll(candidate => candidate.Id == song.Id);
+			// Keep the key so an in-flight FM batch cannot append the discarded song again.
+			_personalFmSongKeySet.Add(BuildPersonalFmSongKey(song));
+			if (removedIndex >= 0 && removedIndex < _personalFmLastFocusedIndex) _personalFmLastFocusedIndex--;
+			_personalFmLastFocusedIndex = _personalFmSongsCache.Count == 0 ? -1 : Math.Clamp(_personalFmLastFocusedIndex, 0, _personalFmSongsCache.Count - 1);
+		}
 	}
 
 	private async void deleteRecentPlayMenuItem_Click(object sender, EventArgs e)
 	{
+		var recentResource = sender as RecentResourceRemovalTarget ?? (sender as ToolStripItem)?.Tag as RecentResourceRemovalTarget;
+		if (recentResource != null)
+		{
+			await DeleteRecentResourceAsync(recentResource);
+			return;
+		}
 		if (!IsUserLoggedIn())
 		{
 			MessageBox.Show("请先登录后再删除最近播放记录", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
@@ -17219,6 +17161,9 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		{
 			return;
 		}
+		long accountId = GetCurrentUserId();
+		string requestKey = accountId.ToString(CultureInfo.InvariantCulture) + ":" + targetSongId;
+		if (_pendingRecentPlayDeletes.Contains(requestKey)) return;
 
 		string songTitle = string.IsNullOrWhiteSpace(song.Name) ? "未知歌曲" : song.Name.Trim();
 		string artistTitle = string.IsNullOrWhiteSpace(song.Artist) ? "未知歌手" : song.Artist.Trim();
@@ -17227,11 +17172,13 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 			return;
 		}
 
+		if (!_pendingRecentPlayDeletes.Add(requestKey)) return;
 		try
 		{
 			AnnounceStatusBarMessage("正在删除最近播放记录...");
 			if (await _apiClient.DeleteRecentPlayedSongAsync(targetSongId))
 			{
+				if (accountId != GetCurrentUserId()) return;
 				TryRemoveRecentPlayedSongLocally(song, targetSongId);
 				string statusText = _recentPlayCount <= 0 ? "最近播放记录已删除，当前列表为空" : $"最近播放记录已删除，剩余 {_recentPlayCount} 首";
 				AnnounceStatusBarMessage(statusText);
@@ -17245,6 +17192,10 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		{
 			MessageBox.Show("删除最近播放记录失败: " + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 			UpdateStatusBar("删除最近播放记录失败");
+		}
+		finally
+		{
+			_pendingRecentPlayDeletes.Remove(requestKey);
 		}
 	}
 
@@ -17271,11 +17222,8 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 			return false;
 		}
 
-		List<SongInfo> updated = new List<SongInfo>(_currentSongs);
-		updated.RemoveAt(index);
-		int nextFocusIndex = updated.Count > 0 ? Math.Min(index, updated.Count - 1) : -1;
-		PatchSongs(updated, 1, skipAvailabilityCheck: false, showPagination: false, hasPreviousPage: false, hasNextPage: false, pendingFocusIndex: nextFocusIndex, allowSelection: updated.Count > 0);
-		return true;
+		BeginViewContentOperation(cancelNavigation: false);
+		return RemoveSongFromVisibleList(candidate => string.Equals(ResolveSongIdForLibraryState(candidate) ?? candidate?.Id, targetId, StringComparison.OrdinalIgnoreCase));
 	}
 
 	private static bool ShouldAutoRemoveNotInterestedSong(string viewSource)
@@ -17312,15 +17260,8 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 			return removed;
 		}
 
-		int index = RemoveSongByResolvedId(_currentSongs, targetSongId);
-		if (index < 0)
-		{
-			return removed;
-		}
-
-		int nextFocusIndex = _currentSongs.Count > 0 ? Math.Min(index, _currentSongs.Count - 1) : -1;
-		PatchSongs(_currentSongs, 1, skipAvailabilityCheck: false, showPagination: false, hasPreviousPage: false, hasNextPage: false, pendingFocusIndex: nextFocusIndex, allowSelection: _currentSongs.Count > 0);
-		return true;
+		BeginViewContentOperation(cancelNavigation: false);
+		return RemoveSongFromVisibleList(candidate => string.Equals(ResolveSongIdForLibraryState(candidate) ?? candidate?.Id, targetSongId, StringComparison.OrdinalIgnoreCase)) || removed;
 	}
 
 	private int RemoveSongByResolvedId(List<SongInfo> songs, string targetSongId)
@@ -17365,27 +17306,20 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		{
 			return false;
 		}
+		long accountId = GetCurrentUserId();
+		string viewSource = _currentViewSource;
+		string requestKey = $"{accountId}:unlike:{targetSongId}";
+		if (!_pendingListRemovals.Add(requestKey)) return false;
 		try
 		{
 			AnnounceStatusBarMessage("正在取消收藏...");
 			if (await _apiClient.LikeSongAsync(targetSongId, like: false))
 			{
+				if (accountId != GetCurrentUserId()) return false;
 				UpdateSongLikeState(song, isLiked: false);
-				MessageBox.Show("已取消收藏：" + song.Name + " - " + song.Artist, "成功", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
-				UpdateStatusBar("取消收藏成功");
-				if (IsCurrentLikedSongsView())
-				{
-					try
-					{
-						await LoadUserLikedSongs(preserveSelection: true, skipSaveNavigation: true);
-					}
-					catch (Exception ex)
-					{
-						Exception ex2 = ex;
-						Exception refreshEx = ex2;
-						Debug.WriteLine($"[UI] 刷新我喜欢的音乐列表失败: {refreshEx}");
-					}
-				}
+				if (IsRemovalViewCurrent(viewSource, accountId) && IsCurrentLikedSongsView())
+					RemoveSongFromVisibleList(candidate => string.Equals(ResolveSongIdForLibraryState(candidate) ?? candidate?.Id, targetSongId, StringComparison.OrdinalIgnoreCase), playlistChanged: true);
+				AnnounceStatusBarMessage("已取消收藏：" + song.Name + " - " + song.Artist);
 				return true;
 			}
 			MessageBox.Show("取消收藏失败，请检查网络或稍后重试。", "失败", MessageBoxButtons.OK, MessageBoxIcon.Hand);
@@ -17396,6 +17330,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 			MessageBox.Show("取消收藏失败: " + ex3.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 			UpdateStatusBar("取消收藏失败");
 		}
+		finally { _pendingListRemovals.Remove(requestKey); }
 		return false;
 	}
 
@@ -17406,79 +17341,23 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 			await UnlikeSelectedSongAsync(sender);
 			return;
 		}
-		if (!IsUserLoggedIn())
-		{
-			MessageBox.Show("请先登录", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
-			return;
-		}
-		string playlistId = _currentPlaylist?.Id;
-		if (string.IsNullOrEmpty(playlistId) && _currentViewSource.StartsWith("playlist:"))
-		{
-			playlistId = _currentViewSource.Substring("playlist:".Length);
-		}
-		if (string.IsNullOrEmpty(playlistId))
-		{
-			MessageBox.Show("无法获取歌单信息", "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
-			return;
-		}
-		string playlistIdValue = playlistId;
-		ListViewItem selectedItem = GetSelectedListViewItemSafe();
-		if (selectedItem == null)
-		{
-			return;
-		}
-		SongInfo song = null;
-		object tag = selectedItem.Tag;
-		int index = 0;
-		int num;
-		if (tag is int)
-		{
-			index = (int)tag;
-			if (index >= 0)
-			{
-				num = ((index < _currentSongs.Count) ? 1 : 0);
-				goto IL_0215;
-			}
-		}
-		num = 0;
-		goto IL_0215;
-		IL_0215:
-		if (num != 0)
-		{
-			song = _currentSongs[index];
-		}
-		else
-		{
-			tag = selectedItem.Tag;
-			if (tag is SongInfo songInfo)
-			{
-				song = songInfo;
-			}
-		}
-		if (song == null || !TryResolveSongIdForLibraryActions(song, "从歌单中移除歌曲", out var targetSongId))
-		{
-			return;
-		}
+		if (!IsUserLoggedIn() || !CanRemovePlaylistSong(_currentViewSource)) return;
+		SongInfo song = GetSelectedSongFromContextMenu(sender);
+		if (song == null || !TryResolveSongIdForLibraryActions(song, "从歌单中移除歌曲", out var targetSongId)) return;
+		string playlistId = _currentPlaylist.Id;
+		string viewSource = _currentViewSource;
+		long accountId = GetCurrentUserId();
+		string requestKey = $"{accountId}:playlist:{playlistId}:song:{targetSongId}";
+		if (!_pendingListRemovals.Add(requestKey)) return;
 		try
 		{
 			AnnounceStatusBarMessage("正在从歌单中移除歌曲...");
-			if (await _apiClient.RemoveTracksFromPlaylistAsync(playlistIdValue, new string[1] { targetSongId }))
+			if (await _apiClient.RemoveTracksFromPlaylistAsync(playlistId, new string[] { targetSongId }))
 			{
-				MessageBox.Show("已将歌曲 \"" + song.Name + "\" 从歌单中移除", "成功", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
-				UpdateStatusBar("移除成功");
-				if (_currentPlaylist != null)
-				{
-					try
-					{
-						await OpenPlaylist(_currentPlaylist, skipSave: true, preserveSelection: true);
-						return;
-					}
-					catch (Exception value)
-					{
-						Debug.WriteLine($"[UI] 刷新歌单失败: {value}");
-						return;
-					}
-				}
+				if (accountId != GetCurrentUserId()) return;
+				if (IsRemovalViewCurrent(viewSource, accountId))
+					RemoveSongFromVisibleList(candidate => string.Equals(ResolveSongIdForLibraryState(candidate) ?? candidate?.Id, targetSongId, StringComparison.OrdinalIgnoreCase), playlistChanged: true);
+				AnnounceStatusBarMessage("已从歌单中移除：" + song.Name);
 			}
 			else
 			{
@@ -17491,6 +17370,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 			MessageBox.Show("从歌单中移除歌曲失败: " + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 			UpdateStatusBar("移除失败");
 		}
+		finally { _pendingListRemovals.Remove(requestKey); }
 	}
 
 	private async void addToPlaylistMenuItem_Click(object sender, EventArgs e)
@@ -18184,7 +18064,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 
 	private void ResetCurrentViewDataForLoading(string? nextViewSource = null)
 	{
-		CapturePersonalFmSnapshotOnViewLeave(nextViewSource);
+		CapturePersonalFmFocusOnViewLeave(nextViewSource);
 		_currentSongs.Clear();
 		_currentPlaylists.Clear();
 		_currentAlbums.Clear();
@@ -18256,6 +18136,13 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
                 }
                 else
                 {
+                        if (!fromPlayback && pendingIndex > 0 && !HasPendingNavigationRestoreFocus(viewSource))
+                        {
+                                string? itemKey = IsSameViewSourceForFocus(_currentViewSource, viewSource)
+                                        ? GetNavigationItemKey(pendingIndex) : null;
+                                SetPendingNavigationRestoreFocus(viewSource, pendingIndex, itemKey);
+                                BindPendingNavigationFocus(viewSource, GetCurrentViewContentToken());
+                        }
                         _pendingListFocusViewSource = viewSource;
                         _pendingListFocusIndex = pendingIndex;
                         _pendingListFocusFromPlayback = fromPlayback;
@@ -18264,9 +18151,9 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 
 	private int ResolvePendingListFocusIndex(int fallbackIndex)
 	{
-                if (TryGetPendingNavigationRestoreFocus(_currentViewSource, out int navigationRestoreFocusIndex))
+                if (HasPendingNavigationRestoreFocus(_currentViewSource))
                 {
-                        return navigationRestoreFocusIndex;
+                        return ResolveNavigationFocusIndex();
                 }
 		if (IsPlaybackFocusSatisfiedForView(_currentViewSource))
 		{
@@ -18390,6 +18277,8 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 			throw new ArgumentNullException("loader");
 		}
 		CancellationToken viewToken = BeginViewContentOperation(request.CancelActiveNavigation);
+		BindPendingNavigationFocus(request.ViewSource, viewToken);
+		using var population = TrackListPopulation();
 		CancellationToken navigationToken = BeginNavigationOperation();
 		CancellationTokenSource linkedCts = null;
 		CancellationToken effectiveToken = LinkCancellationTokens(viewToken, navigationToken, out linkedCts);
@@ -18458,6 +18347,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 	{
 		if (disposing)
 		{
+			DisposePersonalFmRequests();
 			progressTrackBar?.EndGesture(true);
 			volumeTrackBar?.EndGesture(true);
 			_volumeSaveScheduler?.Dispose();
@@ -19133,12 +19023,14 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		this.unlikeSongMenuItem.Click += new System.EventHandler(unlikeSongMenuItem_Click);
 		this.dislikeSongMenuItem.Name = "dislikeSongMenuItem";
 		this.dislikeSongMenuItem.Size = new System.Drawing.Size(210, 24);
-		this.dislikeSongMenuItem.Text = "不感兴趣(&I)";
+		this.dislikeSongMenuItem.ShortcutKeyDisplayString = "Ctrl+D";
+		this.dislikeSongMenuItem.Text = "不感兴趣(&D)";
 		this.dislikeSongMenuItem.Visible = false;
 		this.dislikeSongMenuItem.Click += new System.EventHandler(dislikeSongMenuItem_Click);
 		this.deleteRecentPlayMenuItem.Name = "deleteRecentPlayMenuItem";
 		this.deleteRecentPlayMenuItem.Size = new System.Drawing.Size(210, 24);
-		this.deleteRecentPlayMenuItem.Text = "从最近播放中删除(&E)";
+		this.deleteRecentPlayMenuItem.ShortcutKeyDisplayString = "Delete";
+		this.deleteRecentPlayMenuItem.Text = "从最近播放中删除(&R)";
 		this.deleteRecentPlayMenuItem.Visible = false;
 		this.deleteRecentPlayMenuItem.Click += new System.EventHandler(deleteRecentPlayMenuItem_Click);
 		this.addToPlaylistMenuItem.Name = "addToPlaylistMenuItem";
@@ -19149,6 +19041,7 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		this.removeFromPlaylistMenuItem.Name = "removeFromPlaylistMenuItem";
 		this.removeFromPlaylistMenuItem.Size = new System.Drawing.Size(210, 24);
 		this.removeFromPlaylistMenuItem.Text = "从歌单中移除(&R)";
+		this.removeFromPlaylistMenuItem.ShortcutKeyDisplayString = "Delete";
 		this.removeFromPlaylistMenuItem.Click += new System.EventHandler(removeFromPlaylistMenuItem_Click);
 		this.cloudMenuSeparator.Name = "cloudMenuSeparator";
 		this.cloudMenuSeparator.Size = new System.Drawing.Size(207, 6);
@@ -19160,7 +19053,8 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		this.uploadToCloudMenuItem.Click += new System.EventHandler(uploadToCloudMenuItem_Click);
 		this.deleteFromCloudMenuItem.Name = "deleteFromCloudMenuItem";
 		this.deleteFromCloudMenuItem.Size = new System.Drawing.Size(210, 24);
-		this.deleteFromCloudMenuItem.Text = "从云盘删除(&D)";
+		this.deleteFromCloudMenuItem.Text = "从云盘删除(&R)";
+		this.deleteFromCloudMenuItem.ShortcutKeyDisplayString = "Delete";
 		this.deleteFromCloudMenuItem.Visible = false;
 		this.deleteFromCloudMenuItem.Click += new System.EventHandler(deleteFromCloudMenuItem_Click);
 		this.toolStripSeparatorCollection.Name = "toolStripSeparatorCollection";
@@ -19177,7 +19071,8 @@ private void AnnounceFocusedListViewItemAfterSequenceToggle()
 		this.unsubscribePlaylistMenuItem.Click += new System.EventHandler(unsubscribePlaylistMenuItem_Click);
 		this.deletePlaylistMenuItem.Name = "deletePlaylistMenuItem";
 		this.deletePlaylistMenuItem.Size = new System.Drawing.Size(210, 24);
-		this.deletePlaylistMenuItem.Text = "删除歌单(&D)";
+		this.deletePlaylistMenuItem.Text = "删除歌单(&R)";
+		this.deletePlaylistMenuItem.ShortcutKeyDisplayString = "Delete";
 		this.deletePlaylistMenuItem.Click += new System.EventHandler(deletePlaylistMenuItem_Click);
 		this.createPlaylistMenuItem.Name = "createPlaylistMenuItem";
 		this.createPlaylistMenuItem.Size = new System.Drawing.Size(210, 24);

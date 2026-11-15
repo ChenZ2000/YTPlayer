@@ -613,6 +613,8 @@ namespace YTPlayer
         private void EnsureListSelectionWithoutFocus(int targetIndex)
 
         {
+                if (!_applyingNavigationFocus && HasPendingNavigationRestoreFocus(_currentViewSource))
+                        targetIndex = ResolveNavigationFocusIndex();
 
                 if (targetIndex < 0 || resultListView.Items.Count == 0)
 
@@ -1330,6 +1332,7 @@ namespace YTPlayer
 	{
 
 		resultListView.EndUpdate();
+		QueuePendingNavigationFocus();
 
 		ScheduleResultListViewLayoutUpdate();
 
@@ -4689,6 +4692,8 @@ namespace YTPlayer
 	private void resultListView_KeyDown(object sender, KeyEventArgs e)
 
 	{
+		if (IsListViewNavigationKey(e.KeyCode) || e.KeyCode == Keys.Enter || e.KeyCode == Keys.Space || e.KeyCode == Keys.Delete)
+			CancelNavigationFocusForUserInput();
 
 		if (e.KeyCode == Keys.Up || e.KeyCode == Keys.Down || e.KeyCode == Keys.Left || e.KeyCode == Keys.Right ||
 
@@ -4810,6 +4815,8 @@ namespace YTPlayer
 	private void resultListView_KeyPress(object sender, KeyPressEventArgs e)
 
 	{
+		if (!char.IsControl(e.KeyChar) && !char.IsWhiteSpace(e.KeyChar))
+			CancelNavigationFocusForUserInput();
 
 		if (resultListView == null || !resultListView.ContainsFocus)
 

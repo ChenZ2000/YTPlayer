@@ -974,6 +974,30 @@ namespace YTPlayer.Forms.Download
                 return;
             }
 
+            if (e.KeyData == Keys.Delete && listView.ContainsFocus && listView.SelectedItems.Count > 0)
+            {
+                object? task = listView.SelectedItems[0].Tag;
+                bool removed = false;
+                if (task is DownloadTask download && (listView == lvActive || listView == lvCompleted))
+                {
+                    if (listView == lvCompleted) _downloadManager.RemoveCompletedTask(download);
+                    else _downloadManager.CancelTask(download);
+                    removed = true;
+                }
+                else if (task is UploadTask upload && (listView == lvUpload || listView == lvCompleted))
+                {
+                    if (listView == lvCompleted) _uploadManager.RemoveCompletedTask(upload);
+                    else _uploadManager.CancelTask(upload);
+                    removed = true;
+                }
+                if (removed)
+                {
+                    e.Handled = true;
+                    e.SuppressKeyPress = true;
+                    return;
+                }
+            }
+
             bool openContextMenu = e.KeyCode == Keys.Apps || (e.KeyCode == Keys.F10 && e.Shift);
             if (!openContextMenu)
             {
@@ -1200,7 +1224,7 @@ namespace YTPlayer.Forms.Download
                 }
 
                 // 删除
-                var cancelItem = new ToolStripMenuItem("删除");
+                var cancelItem = new ToolStripMenuItem("删除(&R)") { ShortcutKeyDisplayString = "Delete" };
                 cancelItem.Click += (s, e) =>
                 {
                     if (_selectedDownloadTask != null)
@@ -1230,7 +1254,7 @@ namespace YTPlayer.Forms.Download
 
             if (isDownload && _selectedDownloadTask != null)
             {
-                var removeItem = new ToolStripMenuItem("清除");
+                var removeItem = new ToolStripMenuItem("清除(&R)") { ShortcutKeyDisplayString = "Delete" };
                 removeItem.Click += (s, e) =>
                 {
                     if (_selectedDownloadTask != null)
@@ -1251,7 +1275,7 @@ namespace YTPlayer.Forms.Download
             }
             else if (!isDownload && _selectedUploadTask != null)
             {
-                var removeItem = new ToolStripMenuItem("清除");
+                var removeItem = new ToolStripMenuItem("清除(&R)") { ShortcutKeyDisplayString = "Delete" };
                 removeItem.Click += (s, e) =>
                 {
                     if (_selectedUploadTask != null)
@@ -1310,6 +1334,8 @@ namespace YTPlayer.Forms.Download
         /// </summary>
         private void RefreshActiveList()
         {
+            var selectedItem = lvActive.SelectedItems.Count > 0 ? lvActive.SelectedItems[0] : lvActive.FocusedItem;
+            int selectedIndex = selectedItem?.Index ?? -1;
             lvActive.BeginUpdate();
 
             try
@@ -1356,6 +1382,7 @@ namespace YTPlayer.Forms.Download
             finally
             {
                 lvActive.EndUpdate();
+                ListRemovalSelection.RestoreAfterRefresh(lvActive, selectedItem, selectedIndex);
             }
         }
 
@@ -1364,6 +1391,8 @@ namespace YTPlayer.Forms.Download
         /// </summary>
         private void RefreshUploadList()
         {
+            var selectedItem = lvUpload.SelectedItems.Count > 0 ? lvUpload.SelectedItems[0] : lvUpload.FocusedItem;
+            int selectedIndex = selectedItem?.Index ?? -1;
             lvUpload.BeginUpdate();
 
             try
@@ -1410,6 +1439,7 @@ namespace YTPlayer.Forms.Download
             finally
             {
                 lvUpload.EndUpdate();
+                ListRemovalSelection.RestoreAfterRefresh(lvUpload, selectedItem, selectedIndex);
             }
         }
 
@@ -1418,6 +1448,8 @@ namespace YTPlayer.Forms.Download
         /// </summary>
         private void RefreshCompletedList()
         {
+            var selectedItem = lvCompleted.SelectedItems.Count > 0 ? lvCompleted.SelectedItems[0] : lvCompleted.FocusedItem;
+            int selectedIndex = selectedItem?.Index ?? -1;
             lvCompleted.BeginUpdate();
 
             try
@@ -1468,6 +1500,7 @@ namespace YTPlayer.Forms.Download
             finally
             {
                 lvCompleted.EndUpdate();
+                ListRemovalSelection.RestoreAfterRefresh(lvCompleted, selectedItem, selectedIndex);
             }
         }
 
@@ -2568,7 +2601,7 @@ namespace YTPlayer.Forms.Download
                 }
 
                 // 删除
-                var cancelItem = new ToolStripMenuItem("删除");
+                var cancelItem = new ToolStripMenuItem("删除(&R)") { ShortcutKeyDisplayString = "Delete" };
                 cancelItem.Click += (s, e) =>
                 {
                     if (_selectedUploadTask != null)

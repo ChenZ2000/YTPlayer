@@ -62,6 +62,7 @@ public partial class MainForm
 
 	private async Task EnrichRecentListenedAsync(string viewSource, string accessibleName)
 	{
+		using var population = TrackListPopulation();
 		CancellationToken viewToken = GetCurrentViewContentToken();
 		try
 		{
@@ -74,7 +75,7 @@ public partial class MainForm
 			string status = BuildRecentListenedStatus();
 			await ExecuteOnUiThreadAsync(delegate
 			{
-				if (string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
+				if (!viewToken.IsCancellationRequested && string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
 				{
 					SafeListView safeListView = resultListView;
 					int num = ((safeListView != null && safeListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : (-1));
@@ -153,6 +154,7 @@ public partial class MainForm
 
 	private async Task EnrichRecentSongsAsync(string viewSource, string accessibleName)
 	{
+		using var population = TrackListPopulation();
 		CancellationToken viewToken = GetCurrentViewContentToken();
 		try
 		{
@@ -161,12 +163,13 @@ public partial class MainForm
 			{
 				return;
 			}
-			_recentSongsCache = new List<SongInfo>(list);
-			_recentPlayCount = list.Count;
 			string status = ((list.Count == 0) ? "暂无最近播放记录" : $"最近播放，共 {list.Count} 首歌曲");
 			await ExecuteOnUiThreadAsync(delegate
 			{
-				if (string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
+				if (viewToken.IsCancellationRequested) return;
+				_recentSongsCache = new List<SongInfo>(list);
+				_recentPlayCount = list.Count;
+				if (!viewToken.IsCancellationRequested && string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
 				{
 					SafeListView safeListView = resultListView;
 					int num = ((safeListView != null && safeListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : (-1));
@@ -307,6 +310,7 @@ public partial class MainForm
 
 	private async Task LoadRemainingUserPodcastsAsync(int generation)
 	{
+		using var population = TrackListPopulation();
 		try
 		{
 			while (generation == _userPodcastsProactiveLoadGeneration &&
@@ -365,7 +369,7 @@ public partial class MainForm
 			}
 			await ExecuteOnUiThreadAsync(delegate
 			{
-				if (!string.Equals(_currentViewSource, "user_podcasts", StringComparison.OrdinalIgnoreCase))
+				if (viewToken.IsCancellationRequested || !string.Equals(_currentViewSource, "user_podcasts", StringComparison.OrdinalIgnoreCase))
 				{
 					return;
 				}
@@ -385,7 +389,7 @@ public partial class MainForm
 				Debug.WriteLine($"[LoadUserPodcasts] 自动加载更多失败: {ex}");
 				await ExecuteOnUiThreadAsync(delegate
 				{
-					if (string.Equals(_currentViewSource, "user_podcasts", StringComparison.OrdinalIgnoreCase))
+					if (!viewToken.IsCancellationRequested && string.Equals(_currentViewSource, "user_podcasts", StringComparison.OrdinalIgnoreCase))
 					{
 						UpdateStatusBar("加载更多收藏播客失败，请稍后刷新重试");
 					}
@@ -395,7 +399,7 @@ public partial class MainForm
 		}
 		finally
 		{
-			_userPodcastsLoadMoreInFlight = false;
+			if (!viewToken.IsCancellationRequested) _userPodcastsLoadMoreInFlight = false;
 		}
 	}
 
@@ -446,6 +450,7 @@ public partial class MainForm
 
 	private async Task EnrichRecentPodcastsAsync(string viewSource, string accessibleName)
 	{
+		using var population = TrackListPopulation();
 		CancellationToken viewToken = GetCurrentViewContentToken();
 		try
 		{
@@ -454,12 +459,13 @@ public partial class MainForm
 			{
 				return;
 			}
-			_recentPodcastsCache = new List<PodcastRadioInfo>(list);
-			_recentPodcastCount = list.Count;
 			string status = ((list.Count == 0) ? "暂无最近播放的播客" : $"最近播客，共 {list.Count} 个");
 			await ExecuteOnUiThreadAsync(delegate
 			{
-				if (string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
+				if (viewToken.IsCancellationRequested) return;
+				_recentPodcastsCache = new List<PodcastRadioInfo>(list);
+				_recentPodcastCount = list.Count;
+				if (!viewToken.IsCancellationRequested && string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
 				{
 					SafeListView safeListView = resultListView;
 					int num = ((safeListView != null && safeListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : (-1));
@@ -614,6 +620,7 @@ public partial class MainForm
 
 	private async Task LoadRemainingPodcastEpisodesAsync(long radioId, bool isAscending, string viewSource, string accessibleName, List<PodcastEpisodeInfo> seedEpisodes, int nextOffset, int totalCount)
 	{
+		using var population = TrackListPopulation();
 		CancellationToken token = GetCurrentViewContentToken();
 		List<PodcastEpisodeInfo> allEpisodes = CloneList(seedEpisodes ?? new List<PodcastEpisodeInfo>());
 		int offset = Math.Max(0, nextOffset);
@@ -652,7 +659,7 @@ public partial class MainForm
 					bool currentHasMore = hasMore;
 					await ExecuteOnUiThreadAsync(delegate
 					{
-						if (string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
+						if (!token.IsCancellationRequested && string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
 						{
 							_currentPodcastHasMore = false;
 							_currentPodcastEpisodeTotalCount = totalForStatus;
@@ -672,7 +679,7 @@ public partial class MainForm
 				Debug.WriteLine($"[Podcast] 自动加载更多节目失败: {ex}");
 				await ExecuteOnUiThreadAsync(delegate
 				{
-					if (string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
+					if (!token.IsCancellationRequested && string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
 					{
 						UpdateStatusBar("加载更多播客节目失败，请稍后刷新重试");
 					}
@@ -821,6 +828,7 @@ public partial class MainForm
 
 	private async Task EnrichRecentPlaylistsAsync(string viewSource, string accessibleName)
 	{
+		using var population = TrackListPopulation();
 		CancellationToken viewToken = GetCurrentViewContentToken();
 		try
 		{
@@ -829,12 +837,13 @@ public partial class MainForm
 			{
 				return;
 			}
-			_recentPlaylistsCache = new List<PlaylistInfo>(list);
-			_recentPlaylistCount = list.Count;
 			string status = ((list.Count == 0) ? "暂无最近播放的歌单" : $"最近歌单，共 {list.Count} 个");
 			await ExecuteOnUiThreadAsync(delegate
 			{
-				if (string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
+				if (viewToken.IsCancellationRequested) return;
+				_recentPlaylistsCache = new List<PlaylistInfo>(list);
+				_recentPlaylistCount = list.Count;
+				if (!viewToken.IsCancellationRequested && string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
 				{
 					SafeListView safeListView = resultListView;
 					int num = ((safeListView != null && safeListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : (-1));
@@ -864,7 +873,7 @@ public partial class MainForm
 				{
 					await ExecuteOnUiThreadAsync(delegate
 					{
-						if (string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
+						if (!viewToken.IsCancellationRequested && string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
 						{
 							SafeListView safeListView = resultListView;
 							int num = ((safeListView != null && safeListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : (-1));
@@ -1020,6 +1029,7 @@ public partial class MainForm
 
 	private async Task EnrichRecentAlbumsAsync(string viewSource, string accessibleName)
 	{
+		using var population = TrackListPopulation();
 		CancellationToken viewToken = GetCurrentViewContentToken();
 		try
 		{
@@ -1028,12 +1038,13 @@ public partial class MainForm
 			{
 				return;
 			}
-			_recentAlbumsCache = new List<AlbumInfo>(list);
-			_recentAlbumCount = list.Count;
 			string status = ((list.Count == 0) ? "暂无最近播放的专辑" : $"最近专辑，共 {list.Count} 张");
 			await ExecuteOnUiThreadAsync(delegate
 			{
-				if (string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
+				if (viewToken.IsCancellationRequested) return;
+				_recentAlbumsCache = new List<AlbumInfo>(list);
+				_recentAlbumCount = list.Count;
+				if (!viewToken.IsCancellationRequested && string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
 				{
 					SafeListView safeListView = resultListView;
 					int num = ((safeListView != null && safeListView.SelectedIndices.Count > 0) ? resultListView.SelectedIndices[0] : (-1));

@@ -209,6 +209,7 @@ namespace YTPlayer.Core
                     {
                         Id = id,
                         Name = name,
+                        RecommendationAlgorithm = song["alg"]?.Value<string>() ?? string.Empty,
                         Duration = SanitizeDurationSeconds(song["dt"]?.Value<long>() ?? song["duration"]?.Value<long>()),
                         Album = albumName,
                         AlbumId = albumId,

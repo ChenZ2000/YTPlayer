@@ -164,6 +164,18 @@ namespace YTPlayer
             return ShowInternal(owner, text, caption, MessageBoxButtons.OKCancel, icon, defaultButton, "继续", "取消");
         }
 
+        internal static DialogResult ShowActionCancel(
+            IWin32Window owner,
+            string text,
+            string caption,
+            string actionText,
+            string cancelText,
+            MessageBoxIcon icon = MessageBoxIcon.Information)
+        {
+            return ShowInternal(owner, text, caption, MessageBoxButtons.OKCancel, icon,
+                MessageBoxDefaultButton.Button2, actionText, cancelText);
+        }
+
         private static DialogResult ShowInternal(
             IWin32Window? owner,
             string text,

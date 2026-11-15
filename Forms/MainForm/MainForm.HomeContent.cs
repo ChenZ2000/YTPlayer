@@ -311,10 +311,10 @@ public partial class MainForm
 				homeItems.Add(BuildHomeCategoryItem("user_albums", "收藏的专辑", userAlbumCount));
 				homeItems.Add(BuildHomeCategoryItem("artist_favorites", "收藏的歌手", artistFavoritesCount));
 				homeItems.Add(BuildHomeCategoryItem("user_podcasts", "收藏的播客", podcastFavoritesCount));
+				homeItems.Add(BuildHomeCategoryItem(PersonalFmCategoryId, PersonalFmAccessibleName, null, "专属于你的连续推荐电台"));
 				homeItems.Add(BuildHomeCategoryItem("user_cloud", "云盘", _cloudTotalCount, cloudDescription));
 				homeItems.Add(BuildHomeCategoryItem("daily_recommend", "每日推荐", null, dailyDescription));
 				homeItems.Add(BuildHomeCategoryItem("personalized", "为您推荐", null, personalizedDescription));
-				homeItems.Add(BuildHomeCategoryItem(PersonalFmCategoryId, PersonalFmAccessibleName, null, "专属于你的连续推荐电台"));
 				homeItems.Add(BuildHomeCategoryItem("highquality_playlists", "精品歌单", (highQualityCount > 0) ? highQualityCount : (int?)null));
 				homeItems.Add(BuildHomeCategoryItem("new_songs", "新歌速递", 5));
 				homeItems.Add(BuildHomeCategoryItem("new_albums", "新碟上架", newAlbumCount));
@@ -594,6 +594,7 @@ public partial class MainForm
 	{
 		const int pageSize = HighQualityPlaylistsPageSize;
 		CancellationToken viewToken = GetCurrentViewContentToken();
+		using (TrackListPopulation())
 		using (WorkScopes.BeginEnrichment("HighQualityPlaylistsAll", viewSource))
 		{
 			try
@@ -693,6 +694,7 @@ public partial class MainForm
 	{
 		const int pageSize = HighQualityPlaylistsPageSize;
 		CancellationToken viewToken = GetCurrentViewContentToken();
+		using (TrackListPopulation())
 		using (WorkScopes.BeginEnrichment("HighQualityPlaylists", viewSource))
 		{
 			try
@@ -1056,6 +1058,7 @@ public partial class MainForm
 	{
 		const int pageSize = NewSongsPageSize;
 		CancellationToken viewToken = GetCurrentViewContentToken();
+		using (TrackListPopulation())
 		using (WorkScopes.BeginEnrichment("NewSongs", viewSource))
 		{
 			try
@@ -1174,6 +1177,7 @@ public partial class MainForm
 	private async Task EnrichPersonalizedNewSongAsync(string viewSource, string accessibleName, int pendingFocusIndex)
 	{
 		CancellationToken viewToken = GetCurrentViewContentToken();
+		using (TrackListPopulation())
 		using (WorkScopes.BeginEnrichment("PersonalizedNewSong", viewSource))
 		{
 			try
@@ -1311,6 +1315,7 @@ public partial class MainForm
 	{
 		const int pageSize = PlaylistCategoryPageSize;
 		CancellationToken viewToken = GetCurrentViewContentToken();
+		using (TrackListPopulation())
 		using (WorkScopes.BeginEnrichment("PlaylistCategory", viewSource))
 		{
 			try
@@ -1610,6 +1615,7 @@ public partial class MainForm
 
 	private async Task LoadRemainingPodcastsByCategoryAsync(int categoryId, int baseLogicalOffset, int fetchOffsetSeed, List<PodcastRadioInfo> seedItems, string viewSource, string accessibleName, int knownTotalCount)
 	{
+		using var population = TrackListPopulation();
 		CancellationToken viewToken = GetCurrentViewContentToken();
 		List<PodcastRadioInfo> all = CloneList(seedItems);
 		int fetchOffset = Math.Max(0, fetchOffsetSeed);
@@ -1647,7 +1653,7 @@ public partial class MainForm
 				bool currentHasMore = hasMore;
 				await ExecuteOnUiThreadAsync(delegate
 				{
-					if (string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
+					if (!viewToken.IsCancellationRequested && string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
 					{
 						_currentPodcastCategoryId = categoryId;
 						_currentPodcastCategoryOffset = baseLogicalOffset;
@@ -1668,7 +1674,7 @@ public partial class MainForm
 				Debug.WriteLine($"[LoadPodcastsByCategory] 自动加载更多失败: {ex}");
 				await ExecuteOnUiThreadAsync(delegate
 				{
-					if (string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
+					if (!viewToken.IsCancellationRequested && string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
 					{
 						UpdateStatusBar("加载更多播客失败，请稍后刷新重试");
 					}

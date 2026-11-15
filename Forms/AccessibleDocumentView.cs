@@ -16,7 +16,7 @@ namespace YTPlayer.Forms
     /// navigation; only Tab, Shift+Tab and Escape are handed back to the containing dialog.</summary>
     internal sealed class AccessibleDocumentView : UserControl, IThemeAwareControl
     {
-        private readonly TextBox _fallback = new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true,
+        private readonly TextBox _fallback = new ReadOnlyTextBox { Dock = DockStyle.Fill,
             ScrollBars = ScrollBars.Vertical, BorderStyle = BorderStyle.None, TabStop = true };
         private readonly CancellationTokenSource _lifetime = new CancellationTokenSource();
         private readonly SemaphoreSlim _renderGate = new SemaphoreSlim(1, 1);

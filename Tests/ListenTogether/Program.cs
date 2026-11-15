@@ -171,8 +171,13 @@ internal static class Program
                 : new GZipStream(output, CompressionLevel.Optimal, true)) compressor.Write(b);
             return output.ToArray();
         }
+        byte[] objectPrefixCipher = Encrypt(Encoding.UTF8.GetBytes("{\"n\":272,\"code\":200,\"data\":{\"text\":\"一起听\"}}"));
+        byte[] arrayPrefixCipher = Encrypt(Encoding.UTF8.GetBytes("{\"n\":368,\"code\":200,\"data\":{\"text\":\"一起听\"}}"));
+        Check(objectPrefixCipher[0] == (byte)'{' && arrayPrefixCipher[0] == (byte)'[', "ciphertext fixtures exercise JSON prefix collisions");
         foreach (var (bytes, encoding, name) in new[] {
             (json, "", "plain JSON"), (Encrypt(json), "", "raw ciphertext"),
+            (objectPrefixCipher, "", "ciphertext beginning with object delimiter"),
+            (arrayPrefixCipher, "", "ciphertext beginning with array delimiter"),
             (Compress(Encrypt(json), true), "br", "Brotli compressed ciphertext"),
             (Compress(Encrypt(json), false), "gzip", "gzip compressed ciphertext"),
             (Compress(json, true), "br", "compressed plain JSON"),

@@ -174,26 +174,43 @@ public partial class MainForm
 		}
 		try
 		{
+			var mode = CapturePersonalFmMode();
 			int requestFocusIndex = ResolvePersonalFmFocusIndexForEntry(pendingFocusIndex);
 			ViewLoadRequest request = new ViewLoadRequest(PersonalFmCategoryId, PersonalFmAccessibleName, "正在加载私人 FM...", cancelActiveNavigation: true, pendingFocusIndex: requestFocusIndex);
 			ViewLoadResult<List<SongInfo>> loadResult = await RunViewLoadAsync(request, async delegate(CancellationToken viewToken)
 			{
-				viewToken.ThrowIfCancellationRequested();
-				List<SongInfo> cachedSongs = GetPersonalFmCachedSongsSnapshot();
-				if (cachedSongs.Count > 0)
+				try
 				{
-					return cachedSongs;
+					viewToken.ThrowIfCancellationRequested();
+					mode.Token.ThrowIfCancellationRequested();
+					List<SongInfo> cachedSongs = GetPersonalFmCachedSongsSnapshot();
+					if (cachedSongs.Count > 0)
+					{
+						return cachedSongs;
+					}
+					SongInfo firstSong = await FetchNextPersonalFmSongAsync(viewToken, allowDuplicateFallback: true).ConfigureAwait(continueOnCapturedContext: false);
+					if (firstSong == null)
+					{
+						return new List<SongInfo>();
+					}
+					List<SongInfo> initialSongs = new List<SongInfo> { firstSong };
+					lock (_personalFmStateLock)
+					{
+						viewToken.ThrowIfCancellationRequested();
+						mode.Token.ThrowIfCancellationRequested();
+						if (mode.Generation != _personalFmModeGeneration) throw new OperationCanceledException();
+						ResetPersonalFmCache(initialSongs, focusedIndex: 0);
+					}
+					return CloneList(initialSongs);
 				}
-				SongInfo firstSong = await FetchNextPersonalFmSongAsync(viewToken, allowDuplicateFallback: true).ConfigureAwait(continueOnCapturedContext: false);
-				if (firstSong == null)
+				catch (Exception) when (mode.Token.IsCancellationRequested || mode.Generation != _personalFmModeGeneration)
 				{
+					// A new mode owns the list and its status. Do not let the superseded load
+					// promote an error placeholder or announce cancellation over its result.
 					return new List<SongInfo>();
 				}
-				List<SongInfo> initialSongs = new List<SongInfo> { firstSong };
-				ResetPersonalFmCache(initialSongs, focusedIndex: 0);
-				return CloneList(initialSongs);
 			}, "加载私人 FM 已取消").ConfigureAwait(continueOnCapturedContext: true);
-			if (loadResult.IsCanceled)
+			if (loadResult.IsCanceled || mode.Token.IsCancellationRequested || mode.Generation != _personalFmModeGeneration)
 			{
 				return;
 			}
@@ -209,7 +226,7 @@ public partial class MainForm
 			RequestListFocus(PersonalFmCategoryId, effectiveFocusIndex);
 			DisplaySongs(songs, showPagination: false, hasNextPage: false, 1, preserveSelection: false, PersonalFmCategoryId, PersonalFmAccessibleName, skipAvailabilityCheck: false, announceHeader: true, suppressFocus: false);
 			ResetPersonalFmCache(songs, effectiveFocusIndex);
-			UpdateStatusBar($"私人 FM，共 {songs.Count} 首");
+			UpdateStatusBar(PersonalFmStatusName + $"，共 {songs.Count} 首");
 			FocusListAfterEnrich(effectiveFocusIndex, PersonalFmCategoryId);
 		}
 		catch (Exception ex)
@@ -288,6 +305,7 @@ public partial class MainForm
 	private async Task EnrichToplistAsync(string viewSource, string accessibleName, int pendingFocusIndex, int offset)
 	{
 		CancellationToken viewToken = GetCurrentViewContentToken();
+		using (TrackListPopulation())
 		using (WorkScopes.BeginEnrichment("Toplist", viewSource))
 		{
 			try
@@ -415,6 +433,7 @@ public partial class MainForm
 	private async Task EnrichDailyRecommendSongsAsync(string viewSource, string accessibleName, int pendingFocusIndex)
 	{
 		CancellationToken viewToken = GetCurrentViewContentToken();
+		using (TrackListPopulation())
 		using (WorkScopes.BeginEnrichment("DailyRecommendSongs", viewSource))
 		{
 			try
@@ -529,6 +548,7 @@ public partial class MainForm
 	private async Task EnrichDailyRecommendPlaylistsAsync(string viewSource, string accessibleName, int pendingFocusIndex)
 	{
 		CancellationToken viewToken = GetCurrentViewContentToken();
+		using (TrackListPopulation())
 		using (WorkScopes.BeginEnrichment("DailyRecommendPlaylists", viewSource))
 		{
 			try
@@ -643,6 +663,7 @@ public partial class MainForm
 	private async Task EnrichPersonalizedPlaylistsAsync(string viewSource, string accessibleName, int pendingFocusIndex)
 	{
 		CancellationToken viewToken = GetCurrentViewContentToken();
+		using (TrackListPopulation())
 		using (WorkScopes.BeginEnrichment("PersonalizedPlaylists", viewSource))
 		{
 			try
@@ -757,6 +778,7 @@ public partial class MainForm
 	private async Task EnrichPersonalizedNewSongsAsync(string viewSource, string accessibleName, int pendingFocusIndex)
 	{
 		CancellationToken viewToken = GetCurrentViewContentToken();
+		using (TrackListPopulation())
 		using (WorkScopes.BeginEnrichment("PersonalizedNewSongs", viewSource))
 		{
 			try

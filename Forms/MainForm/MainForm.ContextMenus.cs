@@ -2228,6 +2228,7 @@ public partial class MainForm
 		subscribePlaylistMenuItem.Visible = false;
 		unsubscribePlaylistMenuItem.Visible = false;
 		deletePlaylistMenuItem.Visible = false;
+		deletePlaylistMenuItem.Tag = null;
 		createPlaylistMenuItem.Visible = false;
 		subscribeSongAlbumMenuItem.Visible = false;
 		subscribeSongAlbumMenuItem.Tag = null;
@@ -2448,7 +2449,8 @@ public partial class MainForm
 			{
 				subscribePlaylistMenuItem.Visible = !flag && !flag2;
 				unsubscribePlaylistMenuItem.Visible = !flag && flag2;
-				deletePlaylistMenuItem.Visible = flag;
+				deletePlaylistMenuItem.Visible = !snapshot.IsCurrentPlayback && CanDeletePlaylistFromView(playlist, snapshot.ViewSource);
+				deletePlaylistMenuItem.Tag = deletePlaylistMenuItem.Visible ? playlist : null;
 			}
 			else
 			{
@@ -2473,6 +2475,8 @@ public partial class MainForm
 
 	private void ConfigureAlbumMenu(MenuContextSnapshot snapshot, bool isLoggedIn, ref bool showViewSection, ref CommentTarget? contextCommentTarget)
 	{
+		unsubscribeAlbumMenuItem.Text = string.Equals(snapshot.ViewSource, "recent_albums", StringComparison.OrdinalIgnoreCase)
+			? "取消收藏专辑(&U)" : "取消收藏专辑(&R)";
 		AlbumInfo album = snapshot.Album;
 		if (album != null)
 		{
@@ -2703,7 +2707,8 @@ public partial class MainForm
 		subscribeSongArtistMenuItem.Tag = null;
 		if (isCloudView && songInfo != null && songInfo.IsCloudSong)
 		{
-			deleteFromCloudMenuItem.Visible = true;
+			deleteFromCloudMenuItem.Visible = isLoggedIn;
+			deleteFromCloudMenuItem.Tag = songInfo;
 			cloudMenuSeparator.Visible = true;
 		}
 		else
@@ -2729,14 +2734,7 @@ public partial class MainForm
 			deleteRecentPlayMenuItem.Tag = (canDeleteRecentPlay ? songInfo : null);
 			addToPlaylistMenuItem.Visible = flag;
 			addToPlaylistMenuItem.Tag = (flag ? songInfo : null);
-			string playlistId = (snapshot.ViewSource.StartsWith("playlist:", StringComparison.OrdinalIgnoreCase) ? snapshot.ViewSource.Substring("playlist:".Length) : null);
-			bool flag5 = snapshot.ViewSource.StartsWith("playlist:", StringComparison.OrdinalIgnoreCase) || (_currentPlaylist != null && !string.IsNullOrWhiteSpace(_currentPlaylist.Id));
-			bool flag6 = _currentPlaylistOwnedByUser;
-			if (!flag6 && !string.IsNullOrWhiteSpace(playlistId) && _currentPlaylist != null && string.Equals(_currentPlaylist.Id, playlistId, StringComparison.OrdinalIgnoreCase))
-			{
-				flag6 = IsPlaylistOwnedByUser(_currentPlaylist, GetCurrentUserId());
-			}
-			bool flag7 = flag5 && flag6;
+
 			if (snapshot.IsCurrentPlayback)
 			{
 				removeFromPlaylistMenuItem.Visible = false;
@@ -2746,7 +2744,7 @@ public partial class MainForm
 			else
 			{
 				removeFromPlaylistMenuItem.Text = "从歌单中移除(&R)";
-				removeFromPlaylistMenuItem.Visible = flag && flag7 && !flag3;
+				removeFromPlaylistMenuItem.Visible = flag && !isCloudView && (flag3 || CanRemovePlaylistSong(snapshot.ViewSource));
 				removeFromPlaylistMenuItem.Tag = (removeFromPlaylistMenuItem.Visible ? songInfo : null);
 			}
 		}
@@ -2769,7 +2767,10 @@ public partial class MainForm
 		bool flag8 = isCloudView && songInfo != null && songInfo.IsCloudSong;
 		downloadSongMenuItem.Visible = !flag8;
 		downloadSongMenuItem.Tag = songInfo;
-		downloadSongMenuItem.Text = (isPodcastEpisodeContext ? "下载声音(&D)" : "下载歌曲(&D)");
+		bool reserveDislikeMnemonic = isLoggedIn && flag;
+		downloadSongMenuItem.Text = isPodcastEpisodeContext ? "下载声音(&D)" : reserveDislikeMnemonic ? "下载歌曲(&W)" : "下载歌曲(&D)";
+		downloadLyricsMenuItem.Text = reserveDislikeMnemonic ? "下载歌词(&Y)" : "下载歌词(&D)";
+		deleteFromCloudMenuItem.Text = "从云盘删除(&R)";
 		bool flag9 = !flag8 && !isPodcastEpisodeContext;
 		ConfigureLyricsLanguageMenuForSong(songInfo, flag9);
 		batchDownloadMenuItem.Visible = !flag8 && !snapshot.IsCurrentPlayback;

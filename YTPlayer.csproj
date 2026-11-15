@@ -97,6 +97,7 @@
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="Utils\DialogLayout.cs" />
+    <Compile Include="Utils\ReadOnlyTextBox.cs" />
     <Compile Include="Utils\SemanticDocument.cs" />
     <Compile Include="Forms\AccessibleDocumentView.cs" />
     <Compile Include="MainForm.cs">
@@ -107,8 +108,14 @@
     <Compile Include="Utils\ControlVisibilityObserver.cs" />
     <Compile Include="MainForm.Accessibility.cs" />
     <Compile Include="Forms\MainForm\MainForm.Navigation.cs" />
+    <Compile Include="Forms\MainForm\MainForm.NavigationFocus.cs" />
+    <Compile Include="Forms\MainForm\MainForm.PersonalFm.cs" />
+    <Compile Include="Models\PersonalFmMode.cs" />
     <Compile Include="Forms\MainForm\MainForm.CategoryNavigation.cs" />
     <Compile Include="Forms\MainForm\MainForm.ContextMenus.cs" />
+    <Compile Include="Forms\MainForm\MainForm.Removal.cs" />
+    <Compile Include="Forms\MainForm\MainForm.RecentRemoval.cs" />
+    <Compile Include="Utils\ListRemovalSelection.cs" />
     <Compile Include="Forms\MainForm\MainForm.Search.cs" />
     <Compile Include="Forms\MainForm\MainForm.Downloads.cs" />
     <Compile Include="Forms\MainForm\MainForm.Artists.cs" />
@@ -289,6 +296,7 @@
     <Compile Include="Models\CloudUploadResult.cs" />
     <Compile Include="Models\ArtistInfo.cs" />
     <Compile Include="Models\PlaylistInfo.cs" />
+    <Compile Include="Models\RecentPlayResourceType.cs" />
     <Compile Include="Models\CommentInfo.cs" />
     <Compile Include="Models\CommentTarget.cs" />
     <Compile Include="Models\ConfigModel.cs" />

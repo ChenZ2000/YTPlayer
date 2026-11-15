@@ -12,6 +12,8 @@ ContributorUrl: https://github.com/zjncn
 易听 (YTPlayer)
 无障碍的网易云音乐桌面客户端
 
+支持音乐播放与下载、私人 FM 多模式、一起听和听歌识曲，提供手机号及微信扫码等登录方式，兼顾键盘操作和屏幕阅读器使用。
+
 ---
 - 版本      : {{Version}}
 - 作者      : {{AuthorName}} ({{AuthorUrl}})

@@ -379,21 +379,37 @@ namespace YTPlayer.Core
 
         /// <summary>
         /// 获取私人FM歌曲 (私人雷达)
-        /// 参考: NeteaseCloudMusicApi/module/personal_fm.js
+        /// 参考 personal_fm_mode.js；沿用官方 Android 客户端的 EAPI 与完整会话头。
         /// </summary>
-        public async Task<List<SongInfo>> GetPersonalFMAsync()
+        public async Task<List<SongInfo>> GetPersonalFMAsync(PersonalFmMode? mode = null, CancellationToken cancellationToken = default)
         {
-            var payload = new Dictionary<string, object>();
-
-            var response = await PostWeApiAsync<JObject>("/v1/radio/get", payload);
-
-            if (response["code"]?.Value<int>() != 200)
+            cancellationToken.ThrowIfCancellationRequested();
+            mode ??= PersonalFmMode.Default;
+            var header = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+            string cookieHeader;
+            lock (_cookieLock)
             {
-                System.Diagnostics.Debug.WriteLine($"[API] 获取私人FM失败: {response["message"]}");
-                return new List<SongInfo>();
+                foreach (Cookie cookie in _cookieContainer.GetCookies(EAPI_URI)) header[cookie.Name] = cookie.Value;
+                cookieHeader = _cookieContainer.GetCookieHeader(EAPI_URI);
             }
-
-            var data = response["data"] as JArray;
+            header["MUSIC_U"] = _musicU ?? string.Empty;
+            header["__csrf"] = _csrfToken ?? string.Empty;
+            var payload = new Dictionary<string, object>
+            {
+                ["mode"] = mode.Mode,
+                ["limit"] = "3",
+                ["header"] = header,
+                ["e_r"] = "true"
+            };
+            if (mode.SubMode != null) payload["subMode"] = mode.SubMode;
+            var response = await PostEApiAsync<JObject>("/api/v1/radio/get", payload,
+                useIosHeaders: false, retryCount: MAX_RETRY_COUNT, skipErrorHandling: true,
+                cancellationToken: cancellationToken, cookieHeaderOverride: cookieHeader).ConfigureAwait(false);
+            int code = response?["code"]?.Value<int>() ?? -1;
+            if (code != 200)
+                throw new InvalidOperationException($"{response?["message"] ?? response?["msg"] ?? "私人 FM 请求未成功"}（{code}）");
+            if (!(response?["data"] is JArray data))
+                throw new InvalidOperationException("私人 FM 返回的歌曲列表格式不正确");
             return ParseSongList(data);
         }
 
@@ -668,71 +684,93 @@ namespace YTPlayer.Core
 
         /// <summary>
         /// 删除单首歌曲的最近播放记录。
-        /// 参考数据来源: api-enhanced/module/record_recent_song.js (/api/play-record/song/list)。
-        /// 删除接口未在参考项目中暴露，因此按同族端点做兼容尝试。
+        /// 官方 Android 运行时使用批量删除接口，并携带最近播放列表末尾的同步游标。
         /// </summary>
-        public async Task<bool> DeleteRecentPlayedSongAsync(string songId, CancellationToken cancellationToken = default)
+        public Task<bool> DeleteRecentPlayedSongAsync(string songId, CancellationToken cancellationToken = default)
+            => DeleteRecentPlayedResourceAsync(RecentPlayResourceType.Song, songId, cancellationToken);
+
+        /// <summary>
+        /// 删除资源的播放记录，不删除资源本身或改变收藏状态。
+        /// type 使用播放记录返回的资源类型；游标必须来自同一类型的原始列表。
+        /// </summary>
+        public async Task<bool> DeleteRecentPlayedResourceAsync(RecentPlayResourceType resourceType, string id, CancellationToken cancellationToken = default)
         {
-            if (string.IsNullOrWhiteSpace(songId))
+            cancellationToken.ThrowIfCancellationRequested();
+            var (listType, deleteType) = resourceType switch
+            {
+                RecentPlayResourceType.Song => ("song", "SONG"),
+                RecentPlayResourceType.Playlist => ("playlist", "PLAYLIST"),
+                RecentPlayResourceType.Album => ("album", "ALBUM"),
+                RecentPlayResourceType.Podcast => ("djradio", "DJ_RADIO"),
+                _ => throw new ArgumentOutOfRangeException(nameof(resourceType))
+            };
+            if (!long.TryParse(id, NumberStyles.None, CultureInfo.InvariantCulture, out long resourceId) || resourceId <= 0)
             {
                 return false;
             }
 
-            await EnforceThrottleAsync($"recent-song-delete:{songId}", TimeSpan.FromSeconds(1)).ConfigureAwait(false);
-
-            var payload = new Dictionary<string, object>
+            var header = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+            string cookieHeader;
+            string sessionMusicU;
+            lock (_cookieLock)
             {
-                { "id", songId },
-                { "ids", $"[{songId}]" },
-                { "songId", songId },
-                { "songIds", $"[{songId}]" },
-                { "resourceId", songId },
-                { "resourceIds", $"[{songId}]" },
-                { "resourceType", "song" },
-                { "type", "song" }
-            };
-
-            string[] endpoints =
-            {
-                "/api/play-record/song/delete",
-                "/api/play-record/song/del",
-                "/api/play-record/song/remove",
-                "/api/play-record/delete",
-                "/api/play-record/del",
-                "/api/pc/recent/listen/delete"
-            };
-
-            foreach (string endpoint in endpoints)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                try
-                {
-                    JObject response = await PostWeApiAsync<JObject>(
-                        endpoint,
-                        payload,
-                        skipErrorHandling: true,
-                        cancellationToken: cancellationToken,
-                        autoConvertApiSegment: true).ConfigureAwait(false);
-
-                    int code = response?["code"]?.Value<int>() ?? -1;
-                    string message = response?["message"]?.Value<string>() ?? response?["msg"]?.Value<string>() ?? string.Empty;
-                    System.Diagnostics.Debug.WriteLine($"[API] 删除最近播放记录 endpoint={endpoint}, song={songId}, code={code}, message={message}");
-                    if (code == 200)
-                    {
-                        return true;
-                    }
-                }
-                catch (OperationCanceledException)
-                {
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"[API] 删除最近播放记录 endpoint={endpoint} 失败: {ex.Message}");
-                }
+                foreach (Cookie cookie in _cookieContainer.GetCookies(EAPI_URI)) header[cookie.Name] = cookie.Value;
+                cookieHeader = _cookieContainer.GetCookieHeader(EAPI_URI);
+                sessionMusicU = _musicU ?? string.Empty;
+                header["MUSIC_U"] = sessionMusicU;
+                header["__csrf"] = _csrfToken ?? string.Empty;
             }
 
-            return false;
+            // 读取原始列表的末项；不能从过滤、排序后的 UI 列表或待删除歌曲取同步游标。
+            var listPayload = new Dictionary<string, object>
+            {
+                ["limit"] = 300,
+                ["header"] = new Dictionary<string, object>(header),
+                ["e_r"] = "true"
+            };
+            var listResponse = await PostEApiAsync<JObject>($"/api/play-record/{listType}/list", listPayload,
+                useIosHeaders: false, retryCount: MAX_RETRY_COUNT, skipErrorHandling: true,
+                cancellationToken: cancellationToken, cookieHeaderOverride: cookieHeader).ConfigureAwait(false);
+            EnsureRecentPlayRequestSucceeded(listResponse, "读取最近播放记录");
+            var records = listResponse?["data"]?["list"] as JArray;
+            if (records == null) throw new InvalidOperationException("最近播放记录格式无效，请刷新列表后重试。");
+            if (records.Count == 0) return true;
+
+            var lastRecord = records.Last;
+            if (!long.TryParse(lastRecord?["resourceId"]?.Value<string>(), NumberStyles.None, CultureInfo.InvariantCulture, out long lastResourceId) || lastResourceId <= 0 ||
+                !long.TryParse(lastRecord?["playTime"]?.Value<string>(), NumberStyles.None, CultureInfo.InvariantCulture, out long lastPlayTime) || lastPlayTime <= 0)
+            {
+                throw new InvalidOperationException("最近播放记录缺少删除所需的同步信息，请刷新列表后重试。");
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            lock (_cookieLock)
+            {
+                if (!string.Equals(_musicU ?? string.Empty, sessionMusicU, StringComparison.Ordinal))
+                    throw new InvalidOperationException("登录账号已变更，请刷新当前账号的最近播放记录后重试。");
+            }
+            var payload = new Dictionary<string, object>
+            {
+                ["type"] = deleteType,
+                ["resourceIds"] = JsonConvert.SerializeObject(new[] { resourceId }),
+                ["lastResourceId"] = lastResourceId,
+                ["lastPlayTime"] = lastPlayTime,
+                ["header"] = header,
+                ["e_r"] = "true"
+            };
+            var response = await PostEApiAsync<JObject>("/api/play-record/batch/delete", payload,
+                useIosHeaders: false, retryCount: MAX_RETRY_COUNT, skipErrorHandling: true,
+                cancellationToken: cancellationToken, cookieHeaderOverride: cookieHeader).ConfigureAwait(false);
+            EnsureRecentPlayRequestSucceeded(response, "删除最近播放记录");
+            return true;
+        }
+
+        private static void EnsureRecentPlayRequestSucceeded(JObject response, string operation)
+        {
+            int code = response?["code"]?.Value<int>() ?? -1;
+            if (code == 200) return;
+            string message = response?["message"]?.Value<string>() ?? response?["msg"]?.Value<string>() ?? "服务器未确认操作成功";
+            throw new InvalidOperationException($"{operation}失败：{message}（{code}）");
         }
 
         private static bool IsRecentSongEntryPodcastOrVoice(JToken? entry)
@@ -925,7 +963,7 @@ namespace YTPlayer.Core
 
                 int code = response?["code"]?.Value<int>() ?? -1;
                 System.Diagnostics.Debug.WriteLine($"[API] 标记歌曲不感兴趣 {songId}: code={code}");
-                return code == 200;
+                return EnsureSongDislikeSucceeded(response);
             }
             catch (OperationCanceledException)
             {
@@ -934,8 +972,47 @@ namespace YTPlayer.Core
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[API] 标记歌曲不感兴趣失败: {ex.Message}");
-                return false;
+                throw;
             }
+        }
+
+        /// <summary>
+        /// 私人 FM 不感兴趣。按官方 Android 运行时契约发送 EAPI，time 为毫秒字符串。
+        /// </summary>
+        public async Task<bool> MarkPersonalFmSongNotInterestedAsync(string songId, string algorithm = "", int playedMilliseconds = 0, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (string.IsNullOrWhiteSpace(songId)) return false;
+
+            var header = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+            string cookieHeader;
+            lock (_cookieLock)
+            {
+                foreach (Cookie cookie in _cookieContainer.GetCookies(EAPI_URI)) header[cookie.Name] = cookie.Value;
+                cookieHeader = _cookieContainer.GetCookieHeader(EAPI_URI);
+            }
+            header["MUSIC_U"] = _musicU ?? string.Empty;
+            header["__csrf"] = _csrfToken ?? string.Empty;
+            var payload = new Dictionary<string, object>
+            {
+                ["songId"] = songId,
+                ["alg"] = string.IsNullOrWhiteSpace(algorithm) ? "RT" : algorithm,
+                ["time"] = Math.Max(0, playedMilliseconds).ToString(CultureInfo.InvariantCulture),
+                ["header"] = header,
+                ["e_r"] = "true"
+            };
+            var response = await PostEApiAsync<JObject>("/api/v1/radio/trash/add", payload,
+                useIosHeaders: false, retryCount: MAX_RETRY_COUNT, skipErrorHandling: true,
+                cancellationToken: cancellationToken, cookieHeaderOverride: cookieHeader).ConfigureAwait(false);
+            return EnsureSongDislikeSucceeded(response);
+        }
+
+        private static bool EnsureSongDislikeSucceeded(JObject response)
+        {
+            int code = response?["code"]?.Value<int>() ?? -1;
+            if (code == 200) return true;
+            string message = response?["message"]?.Value<string>() ?? response?["msg"]?.Value<string>() ?? "服务器未确认操作成功";
+            throw new InvalidOperationException($"{message}（{code}）");
         }
 
         /// <summary>

@@ -106,10 +106,10 @@ public partial class MainForm
 			list.Add(BuildHomeCategoryItem("user_albums", "收藏的专辑", _homeCachedUserAlbumCount));
 			list.Add(BuildHomeCategoryItem("artist_favorites", "收藏的歌手", _homeCachedArtistFavoritesCount));
 			list.Add(BuildHomeCategoryItem("user_podcasts", "收藏的播客", _homeCachedPodcastFavoritesCount));
+			list.Add(BuildHomeCategoryItem(PersonalFmCategoryId, PersonalFmAccessibleName, null, "专属于你的连续推荐电台"));
 			list.Add(BuildHomeCategoryItem("user_cloud", "云盘", _cloudTotalCount > 0 ? _cloudTotalCount : (int?)null, cloudDescription));
 			list.Add(BuildHomeCategoryItem("daily_recommend", "每日推荐", null, dailyDescription));
 			list.Add(BuildHomeCategoryItem("personalized", "为您推荐", null, personalizedDescription));
-			list.Add(BuildHomeCategoryItem(PersonalFmCategoryId, PersonalFmAccessibleName, null, "专属于你的连续推荐电台"));
 		}
 		list.Add(BuildHomeCategoryItem("highquality_playlists", "精品歌单", _homeCachedHighQualityCount));
 		list.Add(BuildHomeCategoryItem("new_songs", "新歌速递", 5));
@@ -125,6 +125,7 @@ public partial class MainForm
 
 	private async Task EnrichHomePageAsync(bool isInitialLoad, CancellationToken externalToken)
 	{
+		using var population = TrackListPopulation();
 		CancellationToken viewToken = GetCurrentViewContentToken();
 		CancellationTokenSource linkedCts = null;
 		CancellationToken effectiveToken = LinkCancellationTokens(viewToken, externalToken, out linkedCts);

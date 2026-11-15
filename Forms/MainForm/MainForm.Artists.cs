@@ -714,6 +714,7 @@ public partial class MainForm
 	private async Task LoadRemainingArtistSongsByApiAsync(long artistId, string orderToken, string artistName, string viewSource, string accessibleName, List<SongInfo> seedSongs, int nextOffset, int totalCount)
 	{
 		CancellationToken token = GetCurrentViewContentToken();
+		using (TrackListPopulation())
 		using (WorkScopes.BeginEnrichment("ArtistSongsRemaining", viewSource))
 		{
 			List<SongInfo> allSongs = CloneList(seedSongs ?? new List<SongInfo>());
@@ -752,7 +753,7 @@ public partial class MainForm
 					bool currentHasMore = hasMore;
 					await ExecuteOnUiThreadAsync(delegate
 					{
-						if (string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
+						if (!token.IsCancellationRequested && string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
 						{
 							_currentArtistSongsOffset = 0;
 							_currentArtistSongsHasMore = false;
@@ -772,6 +773,7 @@ public partial class MainForm
 	{
 		string paginationKey = BuildArtistSongsPaginationKey(artistId, orderToken);
 		CancellationToken token = GetCurrentViewContentToken();
+		using (TrackListPopulation())
 		using (WorkScopes.BeginEnrichment("ArtistSongsAlbumIndexRemaining", viewSource))
 		{
 			List<SongInfo> allSongs = CloneList(seedSongs ?? new List<SongInfo>());
@@ -810,7 +812,7 @@ public partial class MainForm
 					bool currentHasMore = hasMore;
 					await ExecuteOnUiThreadAsync(delegate
 					{
-						if (string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
+						if (!token.IsCancellationRequested && string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
 						{
 							_currentArtistSongsOffset = 0;
 							_currentArtistSongsHasMore = false;
@@ -996,6 +998,7 @@ public partial class MainForm
 			return;
 		}
 		CancellationToken token = GetCurrentViewContentToken();
+		using (TrackListPopulation())
 		using (WorkScopes.BeginEnrichment("ArtistAlbumsRemaining", viewSource))
 		{
 			List<AlbumInfo> allAlbums = CloneList(seedAlbums ?? new List<AlbumInfo>());
@@ -1169,6 +1172,7 @@ public partial class MainForm
 
 	private async Task LoadRemainingArtistFavoritesAsync(int generation)
 	{
+		using var population = TrackListPopulation();
 		try
 		{
 			while (generation == _artistFavoritesProactiveLoadGeneration &&
@@ -1253,7 +1257,7 @@ public partial class MainForm
 			}
 			await ExecuteOnUiThreadAsync(delegate
 			{
-				if (!string.Equals(_currentViewSource, "artist_favorites", StringComparison.OrdinalIgnoreCase))
+				if (viewToken.IsCancellationRequested || !string.Equals(_currentViewSource, "artist_favorites", StringComparison.OrdinalIgnoreCase))
 				{
 					return;
 				}
@@ -1273,7 +1277,7 @@ public partial class MainForm
 				Debug.WriteLine($"[Artist] 自动加载更多收藏歌手失败: {ex}");
 				await ExecuteOnUiThreadAsync(delegate
 				{
-					if (string.Equals(_currentViewSource, "artist_favorites", StringComparison.OrdinalIgnoreCase))
+					if (!viewToken.IsCancellationRequested && string.Equals(_currentViewSource, "artist_favorites", StringComparison.OrdinalIgnoreCase))
 					{
 						UpdateStatusBar("加载更多收藏歌手失败，请稍后刷新重试");
 					}
@@ -1283,7 +1287,7 @@ public partial class MainForm
 		}
 		finally
 		{
-			_artistFavoritesLoadMoreInFlight = false;
+			if (!viewToken.IsCancellationRequested) _artistFavoritesLoadMoreInFlight = false;
 		}
 	}
 
@@ -1437,6 +1441,7 @@ private async Task EnrichArtistCategoryAllResultsAsync(int typeCode, int areaCod
 {
 	const int pageSize = 100;
 	CancellationToken viewToken = GetCurrentViewContentToken();
+	using (TrackListPopulation())
 	using (WorkScopes.BeginEnrichment("ArtistCategoryAll", viewSource))
 	{
 		try
@@ -1533,6 +1538,7 @@ private async Task EnrichArtistCategoryAllResultsAsync(int typeCode, int areaCod
 	{
 		const int pageSize = 100;
 		CancellationToken viewToken = GetCurrentViewContentToken();
+		using (TrackListPopulation())
 		using (WorkScopes.BeginEnrichment("ArtistCategory", viewSource))
 		{
 			try
@@ -1756,6 +1762,7 @@ private async Task EnrichArtistCategoryAllResultsAsync(int typeCode, int areaCod
 	{
 		const int pageSize = AlbumCategoryPageSize;
 		CancellationToken viewToken = GetCurrentViewContentToken();
+		using (TrackListPopulation())
 		using (WorkScopes.BeginEnrichment("AlbumCategoryAll", viewSource))
 		{
 			try
@@ -1852,6 +1859,7 @@ private async Task EnrichArtistCategoryAllResultsAsync(int typeCode, int areaCod
 	{
 		const int pageSize = AlbumCategoryPageSize;
 		CancellationToken viewToken = GetCurrentViewContentToken();
+		using (TrackListPopulation())
 		using (WorkScopes.BeginEnrichment("AlbumCategory", viewSource))
 		{
 			try

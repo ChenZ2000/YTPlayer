@@ -259,6 +259,9 @@ namespace YTPlayer.Models
         /// </summary>
         public string ViewSource { get; set; } = string.Empty;
 
+        /// <summary>推荐接口返回的算法标识，反馈私人 FM 时原样回传。</summary>
+        public string RecommendationAlgorithm { get; set; } = string.Empty;
+
         /// <summary>
         /// 播客节目 ID。
         /// </summary>

@@ -217,6 +217,9 @@ public partial class MainForm
 
         private void resultListView_MouseDown(object sender, MouseEventArgs e)
         {
+                if (e.Button == MouseButtons.Left || e.Button == MouseButtons.Right)
+                        CancelNavigationFocusForUserInput();
+
                 if (e.Button != MouseButtons.Left || resultListView == null)
                 {
                         return;

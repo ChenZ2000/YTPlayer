@@ -754,6 +754,7 @@ private void ActivateMixedSearchTypeOption()
 		CancellationToken viewToken = GetCurrentViewContentToken();
 		checked
 		{
+			using (TrackListPopulation())
 			using (WorkScopes.BeginEnrichment(workScopeName, viewSource))
 			{
 				CancellationTokenSource linkedCts = null;

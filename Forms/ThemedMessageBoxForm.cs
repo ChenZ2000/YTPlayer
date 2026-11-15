@@ -39,7 +39,7 @@ namespace YTPlayer.Forms
             string? acceptButtonText = null,
             string? cancelButtonText = null)
         {
-            string messageText = text ?? string.Empty;
+            string messageText = ReadOnlyTextBox.NormalizeLineEndings(text);
             string titleText = string.IsNullOrWhiteSpace(caption) ? "\u63D0\u793A" : caption;
             Text = titleText;
             AccessibleName = titleText;
@@ -94,7 +94,7 @@ namespace YTPlayer.Forms
                 _iconLabel.Visible = false;
                 _iconLabel.Margin = new Padding(0);
             }
-            _messageTextBox = new TextBox
+            _messageTextBox = new ReadOnlyTextBox
             {
                 Multiline = true,
                 ReadOnly = true,
@@ -148,12 +148,20 @@ namespace YTPlayer.Forms
         private void ThemedMessageBoxForm_Shown(object? sender, EventArgs e)
         {
             PromoteAndFocusMessageText(notifyAccessibility: true);
-            _remainingFocusRetries = MaxFocusRetryCount;
-            _focusRetryTimer.Start();
-            BeginInvoke(new Action(() =>
+            if (!_messageTextBox.Focused)
             {
-                EnsureMessageTextBoxFocused(notifyAccessibility: false);
-            }));
+                _remainingFocusRetries = MaxFocusRetryCount;
+                _focusRetryTimer.Start();
+            }
+        }
+
+        protected override void OnLoad(EventArgs e)
+        {
+            base.OnLoad(e);
+            // Set the initial position before the window accepts input. Shown is posted
+            // asynchronously; resetting the caret there can undo the user's first key.
+            ActiveControl = _messageTextBox;
+            _messageTextBox.Select(0, 0);
         }
 
         protected override void OnFormClosed(FormClosedEventArgs e)
@@ -166,7 +174,7 @@ namespace YTPlayer.Forms
 
         private void FocusRetryTimer_Tick(object? sender, EventArgs e)
         {
-            if (IsDisposed || !Visible)
+            if (IsDisposed || !Visible || ContainsFocus)
             {
                 _focusRetryTimer.Stop();
                 return;
@@ -191,13 +199,12 @@ namespace YTPlayer.Forms
 
         private bool EnsureMessageTextBoxFocused(bool notifyAccessibility)
         {
+            if (ContainsFocus && !_messageTextBox.Focused) return true;
             try
             {
                 if (_messageTextBox.CanFocus)
                 {
                     _messageTextBox.Focus();
-                    _messageTextBox.SelectionStart = 0;
-                    _messageTextBox.SelectionLength = 0;
                     if (_messageTextBox.Focused && notifyAccessibility)
                     {
                         RaiseFocusAccessibilityEvents(_messageTextBox);
@@ -229,7 +236,7 @@ namespace YTPlayer.Forms
         }
         private void MessageTextBox_KeyDown(object? sender, KeyEventArgs e)
         {
-            if ((e.KeyCode == Keys.Enter || e.KeyCode == Keys.Space) && AcceptButton is IButtonControl accept)
+            if (e.Modifiers == Keys.None && (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Space) && AcceptButton is IButtonControl accept)
             {
                 e.SuppressKeyPress = true;
                 e.Handled = true;

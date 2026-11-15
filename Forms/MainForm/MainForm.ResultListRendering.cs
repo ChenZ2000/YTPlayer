@@ -1042,14 +1042,14 @@ public partial class MainForm
                 if (!string.Equals(_currentViewSource, viewSource, StringComparison.OrdinalIgnoreCase))
                 {
                         string? previousViewSource = _currentViewSource;
-                        CapturePersonalFmSnapshotOnViewLeave(viewSource);
+                        CapturePersonalFmFocusOnViewLeave(viewSource);
                         _pendingSongFocusSatisfied = false;
                         _pendingSongFocusSatisfiedViewSource = null;
                         if (!string.IsNullOrWhiteSpace(_deferredPlaybackFocusViewSource) && !IsSameViewSourceForFocus(_deferredPlaybackFocusViewSource, viewSource))
                         {
                                 _deferredPlaybackFocusViewSource = null;
                         }
-                        if (!string.IsNullOrWhiteSpace(_pendingNavigationRestoreFocusViewSource) && !IsSameViewSourceForFocus(_pendingNavigationRestoreFocusViewSource, viewSource))
+                        if (_pendingNavigationFocus != null && !IsSameViewSourceForFocus(_pendingNavigationFocus.ViewSource, viewSource))
                         {
                                 ClearPendingNavigationRestoreFocus();
                         }

@@ -2274,6 +2274,8 @@ public partial class MainForm
 
 	private async Task LoadRemainingCloudSongsAsync(List<SongInfo> seedSongs, int nextOffset, int totalCount, long usedSize, long maxSize)
 	{
+		using var population = TrackListPopulation();
+		CancellationToken viewToken = GetCurrentViewContentToken();
 		List<SongInfo> allSongs = CloneList(seedSongs ?? new List<SongInfo>());
 		int offset = Math.Max(0, nextOffset);
 		int knownTotal = Math.Max(totalCount, allSongs.Count);
@@ -2285,18 +2287,19 @@ public partial class MainForm
 			{
 				while (hasMore && safety < 200)
 				{
-					if (!string.Equals(_currentViewSource, "user_cloud", StringComparison.OrdinalIgnoreCase))
+					if (viewToken.IsCancellationRequested || !string.Equals(_currentViewSource, "user_cloud", StringComparison.OrdinalIgnoreCase))
 					{
 						return;
 					}
 					int fetchOffset = offset;
-					CloudSongPageResult pageResult = await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.GetCloudSongsAsync(CloudPageSize, fetchOffset), $"user_cloud:offset{fetchOffset}", CancellationToken.None, delegate(int attempt, Exception _)
+					CloudSongPageResult pageResult = await FetchWithRetryUntilCancel((CancellationToken ct) => _apiClient.GetCloudSongsAsync(CloudPageSize, fetchOffset), $"user_cloud:offset{fetchOffset}", viewToken, delegate(int attempt, Exception _)
 					{
 						SafeInvoke(delegate
 						{
 							UpdateStatusBar($"加载云盘失败，正在重试（第 {attempt} 次）...");
 						});
 					}).ConfigureAwait(continueOnCapturedContext: false);
+					viewToken.ThrowIfCancellationRequested();
 					List<SongInfo> pageSongs = pageResult?.Songs ?? new List<SongInfo>();
 					if (pageSongs.Count == 0)
 					{
@@ -2315,7 +2318,7 @@ public partial class MainForm
 					int totalForStatus = knownTotal;
 					await ExecuteOnUiThreadAsync(delegate
 					{
-						if (string.Equals(_currentViewSource, "user_cloud", StringComparison.OrdinalIgnoreCase))
+						if (!viewToken.IsCancellationRequested && string.Equals(_currentViewSource, "user_cloud", StringComparison.OrdinalIgnoreCase))
 						{
 							_cloudPage = 1;
 							_cloudHasMore = false;
@@ -2341,7 +2344,7 @@ public partial class MainForm
 				Debug.WriteLine($"[Cloud] 自动加载更多云盘歌曲失败: {ex}");
 				await ExecuteOnUiThreadAsync(delegate
 				{
-					if (string.Equals(_currentViewSource, "user_cloud", StringComparison.OrdinalIgnoreCase))
+					if (!viewToken.IsCancellationRequested && string.Equals(_currentViewSource, "user_cloud", StringComparison.OrdinalIgnoreCase))
 					{
 						UpdateStatusBar("加载更多云盘歌曲失败，请稍后刷新重试");
 					}
@@ -2413,46 +2416,50 @@ public partial class MainForm
 		return Task.CompletedTask;
 	}
 
-	private async Task DeleteSelectedCloudSongAsync()
+	private async Task DeleteSelectedCloudSongAsync(object? sender = null)
 	{
-		SongInfo song = GetSelectedCloudSong();
-		if (song == null)
+		SongInfo song = GetSelectedSongFromContextMenu(sender) ?? GetSelectedCloudSong();
+		if (!IsUserLoggedIn() || song == null || !song.IsCloudSong || string.IsNullOrWhiteSpace(song.CloudSongId) ||
+			!string.Equals(_currentViewSource, "user_cloud", StringComparison.OrdinalIgnoreCase)) return;
+		long accountId = GetCurrentUserId();
+		string requestKey = $"{accountId}:cloud:{song.CloudSongId}";
+		if (_pendingListRemovals.Contains(requestKey)) return;
+		if (MessageBox.Show("确定要从云盘删除歌曲：\n" + song.Name + " - " + song.Artist, "确认删除", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+		if (!_pendingListRemovals.Add(requestKey)) return;
+		try
 		{
-			MessageBox.Show("请选择要删除的云盘歌曲", "提示", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
-		}
-		else if (string.IsNullOrEmpty(song.CloudSongId))
-		{
-			MessageBox.Show("无法删除选中的歌曲", "提示", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
-		}
-		else
-		{
-			if (MessageBox.Show("确定要从云盘删除歌曲：\n" + song.Name + " - " + song.Artist, "确认删除", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+			AnnounceStatusBarMessage("正在删除云盘歌曲...");
+			if (await _apiClient.DeleteCloudSongsAsync(new string[] { song.CloudSongId }))
 			{
-				return;
-			}
-			string fallbackFocusId = DetermineNeighborCloudSongId(song);
-			try
-			{
-				AnnounceStatusBarMessage("正在删除云盘歌曲...");
-				if (await _apiClient.DeleteCloudSongsAsync(new string[1] { song.CloudSongId }))
+				if (accountId != GetCurrentUserId()) return;
+				if (IsRemovalViewCurrent("user_cloud", accountId))
 				{
-					UpdateStatusBar("云盘歌曲已删除");
-					_lastSelectedCloudSongId = fallbackFocusId;
-					RequestCloudRefresh(fallbackFocusId, preserveSelection: false);
+					BeginViewContentOperation(cancelNavigation: false);
+					if (RemoveSongFromVisibleList(candidate => candidate.IsCloudSong && string.Equals(candidate.CloudSongId, song.CloudSongId, StringComparison.Ordinal)))
+					{
+						_cloudTotalCount = Math.Max(_currentSongs.Count, _cloudTotalCount - 1);
+						_cloudUsedSize = Math.Max(0, _cloudUsedSize - Math.Max(0, song.CloudFileSize));
+					}
+					_pendingCloudFocusId = null;
+					_lastSelectedCloudSongId = GetSelectedCloudSong()?.CloudSongId;
+					if (_cloudTotalCount > _currentSongs.Count)
+						LoadRemainingCloudSongsAsync(new List<SongInfo>(_currentSongs), _currentSongs.Count, _cloudTotalCount, _cloudUsedSize, _cloudMaxSize)
+							.SafeFireAndForget("cloud loading after removal");
 				}
-				else
-				{
-					MessageBox.Show("删除云盘歌曲失败，请稍后重试。", "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
-					UpdateStatusBar("删除云盘歌曲失败");
-				}
+				AnnounceStatusBarMessage("云盘歌曲已删除");
 			}
-			catch (Exception ex)
+			else
 			{
-				Exception ex2 = ex;
-				MessageBox.Show("删除云盘歌曲失败：" + ex2.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+				MessageBox.Show("删除云盘歌曲失败，请稍后重试。", "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 				UpdateStatusBar("删除云盘歌曲失败");
 			}
 		}
+		catch (Exception ex)
+		{
+			MessageBox.Show("删除云盘歌曲失败：" + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+			UpdateStatusBar("删除云盘歌曲失败");
+		}
+		finally { _pendingListRemovals.Remove(requestKey); }
 	}
 
 	private SongInfo? GetSelectedCloudSong()
@@ -2588,41 +2595,9 @@ public partial class MainForm
 
 	private async void deleteFromCloudMenuItem_Click(object sender, EventArgs e)
 	{
-		await DeleteSelectedCloudSongAsync();
+		await DeleteSelectedCloudSongAsync(sender);
 	}
 
-	private string? DetermineNeighborCloudSongId(SongInfo currentSong)
-	{
-		if (currentSong == null || _currentSongs == null || _currentSongs.Count == 0)
-		{
-			return null;
-		}
-		int num = _currentSongs.IndexOf(currentSong);
-		if (num < 0)
-		{
-			return null;
-		}
-		checked
-		{
-			for (int i = num + 1; i < _currentSongs.Count; i++)
-			{
-				SongInfo songInfo = _currentSongs[i];
-				if (songInfo != null && songInfo.IsCloudSong && !string.IsNullOrEmpty(songInfo.CloudSongId))
-				{
-					return songInfo.CloudSongId;
-				}
-			}
-			for (int num2 = num - 1; num2 >= 0; num2--)
-			{
-				SongInfo songInfo2 = _currentSongs[num2];
-				if (songInfo2 != null && songInfo2.IsCloudSong && !string.IsNullOrEmpty(songInfo2.CloudSongId))
-				{
-					return songInfo2.CloudSongId;
-				}
-			}
-			return null;
-		}
-	}
 
 	private void OnCloudUploadTaskCompleted(UploadTask task)
 	{

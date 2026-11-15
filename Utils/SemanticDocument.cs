@@ -48,7 +48,8 @@ namespace YTPlayer.Utils
         internal SemanticDocumentBuilder Paragraph(string? text, bool markdown = false)
         {
             if (string.IsNullOrWhiteSpace(text)) return this;
-            _html.Append("<p>").Append(Inline(text, markdown).Replace("\r\n", "\n").Replace("\n", "<br>")).Append("</p>");
+            text = ReadOnlyTextBox.NormalizeLineEndings(text);
+            _html.Append("<p>").Append(Inline(text, markdown).Replace("\r\n", "<br>")).Append("</p>");
             _text.AppendLine(text).AppendLine();
             return this;
         }
@@ -61,8 +62,9 @@ namespace YTPlayer.Utils
             _html.Append('<').Append(tag).Append('>');
             foreach (string value in items)
             {
-                _html.Append("<li>").Append(Inline(value, markdown).Replace("\r\n", "\n").Replace("\n", "<br>")).Append("</li>");
-                _text.Append("• ").AppendLine(value);
+                string text = ReadOnlyTextBox.NormalizeLineEndings(value);
+                _html.Append("<li>").Append(Inline(text, markdown).Replace("\r\n", "<br>")).Append("</li>");
+                _text.Append("• ").AppendLine(text);
             }
             _html.Append("</").Append(tag).Append('>');
             _text.AppendLine();
@@ -98,7 +100,7 @@ namespace YTPlayer.Utils
         // links. Preserve those structures instead of displaying Markdown or decorative separators.
         internal SemanticDocumentBuilder Markdown(string markdown)
         {
-            var lines = markdown.Replace("\r\n", "\n").Split('\n');
+            var lines = ReadOnlyTextBox.NormalizeLineEndings(markdown).Split(new[] { "\r\n" }, StringSplitOptions.None);
             var paragraph = new List<string>();
             var list = new List<string>();
             bool ordered = false;

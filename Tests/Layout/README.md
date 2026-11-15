@@ -61,3 +61,9 @@
 真实窗口验证区分当前显示器 DPI 和 Windows 96 DPI 进程虚拟化。125%、150%、300% 是几何/绘图参数注入，不代表有这些缩放比例的物理显示器。系统颜色测试使用内部覆盖开关，不修改 Windows 高对比度设置。当前 Windows/WinForms 环境的滑块 UIA 暴露 ValuePattern，原生范围通过 TrackBar 消息核验；不会把不存在的 RangeValuePattern 声称为已验证。
 
 检测到 NVDA 正在运行，只说明控制 DLL 可联通。自动化会验证角色、完整名称、值、范围、焦点顺序和纯视觉刷新不增加名称/值/焦点事件；NVDA 的实际逐字朗读、真实跨显示器 DPI 切换，以及系统高对比度切换后的桌面表现，仍应由人工实际体验确认。
+
+## 多行提示与相关回归
+
+`MessageTextTests` 随布局脚本一并运行，覆盖多种换行符的统一、原生编辑框逐行光标移动、UIA 文本行读取、选择复制，以及提示窗口的 Enter/Esc 和 Tab 焦点行为。测试同时检查更新器、一起听、购买提示及网页式内容的纯文本备用视图。
+
+其他相关测试位于 `Tests/Documents`（语义文档、WebView2 与 Tab 导航）、`Tests/MenuAccessibility`（菜单的 MSAA/UIA 事件，使用 `--test` 运行）、`Tests/Navigation`（移除操作、分批加载焦点恢复和私人 FM 模式切换）及 `Tests/PersonalFm`（模式参数和响应协议）。这些测试使用隔离数据；`Tests/PersonalFm` 只有显式传入 `--live <账号文件路径>` 时才读取已有会话并执行真实取歌验证，日志仅输出脱敏摘要。

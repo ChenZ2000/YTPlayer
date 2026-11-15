@@ -163,7 +163,7 @@ namespace YTPlayer
 
             root.Controls.Add(connectPanel, 0, 3);
             root.Controls.Add(_statusLabel, 0, 4);
-            _playbackTextBox = new TextBox
+            _playbackTextBox = new Utils.ReadOnlyTextBox
             {
                 ReadOnly = true, Multiline = true, Dock = DockStyle.Fill,
                 MinimumSize = new Size(0, 60),
@@ -220,7 +220,7 @@ namespace YTPlayer
 
         public void SetPlaybackSummary(string? summary)
         {
-            string text = string.IsNullOrWhiteSpace(summary) ? "加入房间后显示歌曲、播放状态和进度。" : summary;
+            string text = Utils.ReadOnlyTextBox.NormalizeLineEndings(string.IsNullOrWhiteSpace(summary) ? "加入房间后显示歌曲、播放状态和进度。" : summary);
             if (_playbackTextBox.Text == text) return;
             int start = _playbackTextBox.SelectionStart, length = _playbackTextBox.SelectionLength;
             _playbackTextBox.Text = text;

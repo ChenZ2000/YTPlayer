@@ -736,7 +736,8 @@ namespace YTPlayer.Core
                         }
                     }
 
-                    bool looksLikeJson = LooksLikePlainJson(candidatePlainBytes);
+                    // EAPI 密文也可能以 '{' 或 '[' 开头，必须验证完整 JSON 后才能跳过解密。
+                    bool looksLikeJson = IsCompletePlainJson(candidatePlainBytes);
                     if (looksLikeJson && !ReferenceEquals(candidatePlainBytes, rawBytes))
                     {
                         System.Diagnostics.Debug.WriteLine("[DEBUG EAPI] 原始响应解压后已是明文JSON，跳过解密。");
@@ -924,6 +925,20 @@ namespace YTPlayer.Core
             }
 
             return false;
+        }
+
+        private static bool IsCompletePlainJson(byte[] data)
+        {
+            if (!LooksLikePlainJson(data)) return false;
+            try
+            {
+                JToken.Parse(Encoding.UTF8.GetString(data).TrimStart('\uFEFF'));
+                return true;
+            }
+            catch (JsonReaderException)
+            {
+                return false;
+            }
         }
 
         private static byte[] PrepareEapiCipherBytes(byte[] rawBytes)

@@ -23,6 +23,9 @@ namespace YTPlayer.Models
         /// </summary>
         public string PlaybackOrder { get; set; } = "顺序播放";
 
+        /// <summary>私人 FM 推荐模式，与播放次序分别保存。</summary>
+        public string PersonalFmModeKey { get; set; } = "DEFAULT";
+
         /// <summary>
         /// 默认音质
         /// Python: cfg.setdefault("default_quality", "超清母带")

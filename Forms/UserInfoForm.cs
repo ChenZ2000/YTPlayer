@@ -168,141 +168,17 @@ namespace YTPlayer.Forms
             this.Close();
         }
 
-        /// <summary>
-        /// 显示自绘提示对话框。
-        /// </summary>
         private DialogResult ShowInfoDialog(string text, string caption)
         {
-            using (var dialog = new Form())
-            using (var iconBox = new PictureBox())
-            using (var messageLabel = new Label())
-            using (var okButton = new Button())
-            using (var layout = new TableLayoutPanel())
-            {
-                dialog.Text = caption ?? string.Empty;
-                dialog.StartPosition = FormStartPosition.CenterParent;
-                dialog.FormBorderStyle = FormBorderStyle.FixedDialog;
-                dialog.MaximizeBox = false;
-                dialog.MinimizeBox = false;
-                dialog.ShowIcon = false;
-                dialog.ShowInTaskbar = false;
-                dialog.Font = SystemFonts.MessageBoxFont;
-                dialog.AutoSize = true;
-                dialog.AutoSizeMode = AutoSizeMode.GrowAndShrink;
-                dialog.Padding = new Padding(12, 12, 12, 12);
-
-                layout.ColumnCount = 2;
-                layout.RowCount = 2;
-                layout.AutoSize = true;
-                layout.AutoSizeMode = AutoSizeMode.GrowAndShrink;
-                layout.Dock = DockStyle.Fill;
-                layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-                layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-                layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-                layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-
-                iconBox.Image = SystemIcons.Information.ToBitmap();
-                iconBox.SizeMode = PictureBoxSizeMode.CenterImage;
-                iconBox.Margin = new Padding(0, 0, 12, 0);
-                iconBox.Width = 32;
-                iconBox.Height = 32;
-
-                messageLabel.Text = text ?? string.Empty;
-                messageLabel.AutoSize = true;
-                messageLabel.MaximumSize = new Size(360, 0);
-                messageLabel.Margin = new Padding(0);
-
-                okButton.Text = "确定";
-                okButton.AutoSize = true;
-                okButton.DialogResult = DialogResult.OK;
-                okButton.Margin = new Padding(0, 12, 0, 0);
-
-                layout.Controls.Add(iconBox, 0, 0);
-                layout.SetRowSpan(iconBox, 2);
-                layout.Controls.Add(messageLabel, 1, 0);
-                layout.Controls.Add(okButton, 1, 1);
-
-                dialog.Controls.Add(layout);
-                dialog.AcceptButton = okButton;
-                dialog.CancelButton = okButton;
-                ThemeManager.ApplyTheme(dialog);
-
-                return dialog.ShowDialog(this);
-            }
+            return MessageBox.Show(this, text, caption, MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         private DialogResult ShowConfirmDialog(string text, string caption)
         {
-            using (var dialog = new Form())
-            using (var iconBox = new PictureBox())
-            using (var messageLabel = new Label())
-            using (var yesButton = new Button())
-            using (var noButton = new Button())
-            using (var buttonPanel = new FlowLayoutPanel())
-            using (var layout = new TableLayoutPanel())
-            {
-                dialog.Text = caption ?? string.Empty;
-                dialog.StartPosition = FormStartPosition.CenterParent;
-                dialog.FormBorderStyle = FormBorderStyle.FixedDialog;
-                dialog.MaximizeBox = false;
-                dialog.MinimizeBox = false;
-                dialog.ShowIcon = false;
-                dialog.ShowInTaskbar = false;
-                dialog.Font = SystemFonts.MessageBoxFont;
-                dialog.AutoSize = true;
-                dialog.AutoSizeMode = AutoSizeMode.GrowAndShrink;
-                dialog.Padding = new Padding(12, 12, 12, 12);
-
-                layout.ColumnCount = 2;
-                layout.RowCount = 2;
-                layout.AutoSize = true;
-                layout.AutoSizeMode = AutoSizeMode.GrowAndShrink;
-                layout.Dock = DockStyle.Fill;
-                layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-                layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-                layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-                layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-
-                iconBox.Image = SystemIcons.Question.ToBitmap();
-                iconBox.SizeMode = PictureBoxSizeMode.CenterImage;
-                iconBox.Margin = new Padding(0, 0, 12, 0);
-                iconBox.Width = 32;
-                iconBox.Height = 32;
-
-                messageLabel.Text = text ?? string.Empty;
-                messageLabel.AutoSize = true;
-                messageLabel.MaximumSize = new Size(360, 0);
-                messageLabel.Margin = new Padding(0);
-
-                yesButton.Text = "是";
-                yesButton.AutoSize = true;
-                yesButton.DialogResult = DialogResult.Yes;
-                yesButton.Margin = new Padding(0, 0, 8, 0);
-
-                noButton.Text = "否";
-                noButton.AutoSize = true;
-                noButton.DialogResult = DialogResult.No;
-                noButton.Margin = new Padding(0);
-
-                buttonPanel.AutoSize = true;
-                buttonPanel.FlowDirection = FlowDirection.LeftToRight;
-                buttonPanel.WrapContents = false;
-                buttonPanel.Controls.Add(yesButton);
-                buttonPanel.Controls.Add(noButton);
-
-                layout.Controls.Add(iconBox, 0, 0);
-                layout.SetRowSpan(iconBox, 2);
-                layout.Controls.Add(messageLabel, 1, 0);
-                layout.Controls.Add(buttonPanel, 1, 1);
-
-                dialog.Controls.Add(layout);
-                dialog.AcceptButton = yesButton;
-                dialog.CancelButton = noButton;
-                ThemeManager.ApplyTheme(dialog);
-
-                return dialog.ShowDialog(this);
-            }
+            return MessageBox.Show(this, text, caption, MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question, MessageBoxDefaultButton.Button2);
         }
+
     }
 }
 

@@ -148,9 +148,11 @@ internal static class Program
             Check((int)(await Evaluate(view, "document.querySelectorAll('a:not([tabindex=\"-1\"])').length")) == 0, name + " links do not trap Tab");
             if (name == "shortcuts")
             {
-                int expected = DocumentationLoader.ReadMarkdown("Docs.KeyboardShortcuts.md").Split('\n').Count(line => line.TrimStart().StartsWith("- ") && line.Contains('|'));
+                string[] shortcutLines = DocumentationLoader.ReadMarkdown("Docs.KeyboardShortcuts.md").Split('\n');
+                int expected = shortcutLines.Count(line => line.TrimStart().StartsWith("- ") && line.Contains('|'));
                 Check((int)(await Evaluate(view, "document.querySelectorAll('tbody tr').length")) == expected, "every shortcut preserved");
-                Check((int)(await Evaluate(view, "document.querySelectorAll('table').length")) == 3, "three shortcut tables");
+                int expectedGroups = shortcutLines.Count(line => line.TrimStart().StartsWith("### "));
+                Check((int)(await Evaluate(view, "document.querySelectorAll('table').length")) == expectedGroups, "every shortcut group has a table");
                 Check((int)(await Evaluate(view, "document.querySelectorAll('th:not([scope])').length")) == 0, "all table headers scoped");
             }
             view.FocusDocument();

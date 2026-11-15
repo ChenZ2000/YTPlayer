@@ -70,6 +70,8 @@ namespace YTPlayer.Forms
             return string.Equals(tag.Comment.UserId, _currentUserId, StringComparison.OrdinalIgnoreCase);
         }
 
+        private readonly System.Collections.Generic.HashSet<string> _pendingCommentDeletes = new System.Collections.Generic.HashSet<string>(StringComparer.Ordinal);
+
         private async Task DeleteSelectedCommentAsync()
         {
             var tag = GetSelectedCommentTag();
@@ -78,90 +80,59 @@ namespace YTPlayer.Forms
                 return;
             }
 
-            if (!CanDeleteComment(tag))
-            {
-                return;
-            }
-
-            if (!ConfirmDeleteComment())
+            if (!CanDeleteComment(tag) || _pendingCommentDeletes.Contains(tag.Comment.CommentId))
             {
                 return;
             }
 
             var node = _commentTree.SelectedNode;
-            if (node == null)
+            if (node == null || !ConfirmDeleteComment())
             {
                 return;
             }
 
-            var result = await _apiClient.DeleteCommentAsync(
-                _target.ResourceId,
-                tag.Comment.CommentId,
-                _target.Type,
-                _cts?.Token ?? default);
-
-            if (!result.Success)
+            if (node.TreeView != _commentTree)
             {
-                if (!TryShowRiskDialog(result))
+                return;
+            }
+
+            if (!_pendingCommentDeletes.Add(tag.Comment.CommentId)) return;
+            try
+            {
+                var result = await _apiClient.DeleteCommentAsync(
+                    _target.ResourceId,
+                    tag.Comment.CommentId,
+                    _target.Type,
+                    _cts?.Token ?? default);
+
+                if (IsDisposed || Disposing) return;
+                if (!result.Success)
                 {
-                    MessageBox.Show(this,
-                        string.IsNullOrWhiteSpace(result.Message) ? "删除评论失败，请稍后重试。" : result.Message,
-                        "提示",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Warning);
+                    if (!TryShowRiskDialog(result))
+                    {
+                        MessageBox.Show(this,
+                            string.IsNullOrWhiteSpace(result.Message) ? "删除评论失败，请稍后重试。" : result.Message,
+                            "提示",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Warning);
+                    }
+                    return;
                 }
-                return;
-            }
 
-            RemoveDeletedCommentNode(node, tag);
+                if (!IsDisposed && node.TreeView == _commentTree) RemoveDeletedCommentNode(node, tag);
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                if (!IsDisposed) MessageBox.Show(this, "删除评论失败：" + ex.Message, "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            finally { _pendingCommentDeletes.Remove(tag.Comment.CommentId); }
         }
 
         private bool ConfirmDeleteComment()
         {
-            using var dialog = new Form
-            {
-                Text = "删除评论",
-                StartPosition = FormStartPosition.CenterParent,
-                FormBorderStyle = FormBorderStyle.FixedDialog,
-                MinimizeBox = false,
-                MaximizeBox = false,
-                ShowInTaskbar = false,
-                ClientSize = new Size(320, 140),
-                Font = Font
-            };
-
-            var messageLabel = new Label
-            {
-                AutoSize = false,
-                Text = "确定要删除这条评论吗？",
-                TextAlign = ContentAlignment.MiddleLeft,
-                Location = new Point(16, 18),
-                Size = new Size(288, 40)
-            };
-
-            var okButton = new Button
-            {
-                Text = "确定",
-                DialogResult = DialogResult.Yes,
-                Size = new Size(88, 30),
-                Location = new Point(128, 86)
-            };
-
-            var cancelButton = new Button
-            {
-                Text = "取消",
-                DialogResult = DialogResult.No,
-                Size = new Size(88, 30),
-                Location = new Point(224, 86)
-            };
-
-            dialog.Controls.Add(messageLabel);
-            dialog.Controls.Add(okButton);
-            dialog.Controls.Add(cancelButton);
-            dialog.AcceptButton = okButton;
-            dialog.CancelButton = cancelButton;
-
-            return dialog.ShowDialog(this) == DialogResult.Yes;
+            return MessageBox.Show(this, "确定要删除这条评论吗？", "删除评论", MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) == DialogResult.Yes;
         }
 
         private bool TryShowRiskDialog(CommentMutationResult result)
@@ -186,72 +157,20 @@ namespace YTPlayer.Forms
             }
             string? url = string.IsNullOrWhiteSpace(result.RiskUrl) ? null : result.RiskUrl;
 
-            using var dialog = new Form
+            if (string.IsNullOrWhiteSpace(url))
             {
-                Text = title,
-                StartPosition = FormStartPosition.CenterParent,
-                FormBorderStyle = FormBorderStyle.FixedDialog,
-                MinimizeBox = false,
-                MaximizeBox = false,
-                ShowInTaskbar = false,
-                ClientSize = new Size(360, 170),
-                Font = Font
-            };
-
-            var messageLabel = new Label
-            {
-                AutoSize = false,
-                Text = message,
-                Location = new Point(16, 16),
-                Size = new Size(328, 80)
-            };
-
-            Button? detailButton = null;
-            int buttonTop = 118;
-            int right = 256;
-            if (!string.IsNullOrWhiteSpace(url))
-            {
-                detailButton = new Button
-                {
-                    Text = "查看详情",
-                    DialogResult = DialogResult.OK,
-                    Size = new Size(88, 30),
-                    Location = new Point(right - 96, buttonTop)
-                };
-                detailButton.Click += (_, _) =>
-                {
-                    try
-                    {
-                        Process.Start(new ProcessStartInfo
-                        {
-                            FileName = url,
-                            UseShellExecute = true
-                        });
-                    }
-                    catch
-                    {
-                    }
-                };
+                MessageBox.Show(this, message, title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
-
-            var closeButton = new Button
+            else if (MessageBox.ShowActionCancel(this, message, title, "查看详情", "关闭", MessageBoxIcon.Warning) == DialogResult.OK)
             {
-                Text = "关闭",
-                DialogResult = DialogResult.Cancel,
-                Size = new Size(88, 30),
-                Location = new Point(right, buttonTop)
-            };
-
-            dialog.Controls.Add(messageLabel);
-            if (detailButton != null)
-            {
-                dialog.Controls.Add(detailButton);
-                dialog.AcceptButton = detailButton;
+                try
+                {
+                    Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true });
+                }
+                catch
+                {
+                }
             }
-            dialog.Controls.Add(closeButton);
-            dialog.CancelButton = closeButton;
-
-            dialog.ShowDialog(this);
             return true;
         }
 
@@ -646,6 +565,18 @@ namespace YTPlayer.Forms
 
         private void RemoveDeletedCommentNode(TreeNode node, CommentNodeTag tag)
         {
+            if (node.TreeView != _commentTree) return;
+            // Never move to a visible child that is about to be removed with its parent.
+            TreeNode? selected = _commentTree.SelectedNode;
+            for (TreeNode? ancestor = selected; ancestor != null; ancestor = ancestor.Parent)
+            {
+                if (ancestor == node)
+                {
+                    _commentTree.SelectedNode = node.NextNode ?? node.PrevNode ?? node.Parent;
+                    break;
+                }
+            }
+
             if (tag.IsTopLevel)
             {
                 RemoveNodeSafe(node);

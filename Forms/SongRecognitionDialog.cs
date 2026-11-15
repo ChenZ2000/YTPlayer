@@ -15,7 +15,7 @@ namespace YTPlayer.Forms
     {
         private readonly ComboBox _device = new() { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill, AccessibleName = "聆听设备" };
         private readonly ComboBox _duration = new() { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill, AccessibleName = "最长聆听时间" };
-        private readonly TextBox _status = new() { ReadOnly = true, Multiline = true, Dock = DockStyle.Fill, AccessibleName = "识曲状态", Text = "选择麦克风收音，或选择系统内录识别电脑正在播放的音乐。识别成功后自动结束。" };
+        private readonly TextBox _status = new ReadOnlyTextBox { Dock = DockStyle.Fill, AccessibleName = "识曲状态", Text = "选择麦克风收音，或选择系统内录识别电脑正在播放的音乐。识别成功后自动结束。" };
         private readonly Button _start = new() { Text = "开始(&S)", AutoSize = true, AccessibleName = "开始听歌识曲" };
         private readonly Button _cancel = new() { Text = "取消（Esc）(&C)", AutoSize = true, AccessibleName = "取消听歌识曲", DialogResult = DialogResult.Cancel };
         private readonly Func<AudioInputDeviceInfo, int, CancellationToken, IProgress<SongRecognitionProgress>, Task<SongRecognitionResult>> _recognize;

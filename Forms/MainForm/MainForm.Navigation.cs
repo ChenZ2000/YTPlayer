@@ -95,11 +95,19 @@ public partial class MainForm
 			ViewSource = viewSource,
 			ViewName = resultListView.AccessibleName,
 			SelectedIndex = selectedListViewIndex,
+			SelectedItemKey = GetNavigationItemKey(selectedListViewIndex),
 			SelectedDataIndex = -1
 		};
 		if (selectedListViewItemSafe != null && selectedListViewItemSafe.Tag is int num && num >= 0)
 		{
 			navigationHistoryItem.SelectedDataIndex = num;
+		}
+		// Leaving again while later pages are loading must retain the unresolved target.
+		if (HasPendingNavigationRestoreFocus(viewSource) && _pendingNavigationFocus != null)
+		{
+			navigationHistoryItem.SelectedIndex = _pendingNavigationFocus.Index;
+			navigationHistoryItem.SelectedDataIndex = -1;
+			navigationHistoryItem.SelectedItemKey = _pendingNavigationFocus.ItemKey;
 		}
 		DebugLogListFocusState("CreateCurrentState", viewSource, navigationHistoryItem);
 		if (_isHomePage || string.Equals(viewSource, "homepage", StringComparison.OrdinalIgnoreCase))
@@ -432,7 +440,8 @@ public partial class MainForm
 		checked
 		{
 			_autoFocusSuppressionDepth++;
-			bool handledByView = false;
+			PendingNavigationFocus? navigationFocus = null;
+			bool restored = false;
 			try
 			{
 				ClearPlaybackFollowPendingState();
@@ -448,10 +457,11 @@ public partial class MainForm
 						pendingRestoreViewSource = "album:" + state.AlbumId;
 					}
 				}
-				int pendingRestoreIndex = (state.SelectedDataIndex >= 0) ? state.SelectedDataIndex : state.SelectedIndex;
-				if (!string.IsNullOrWhiteSpace(pendingRestoreViewSource) && pendingRestoreIndex >= 0)
+				int pendingRestoreIndex = Math.Max(0, (state.SelectedDataIndex >= 0) ? state.SelectedDataIndex : state.SelectedIndex);
+				if (!string.IsNullOrWhiteSpace(pendingRestoreViewSource))
 				{
-					SetPendingNavigationRestoreFocus(pendingRestoreViewSource, pendingRestoreIndex);
+					SetPendingNavigationRestoreFocus(pendingRestoreViewSource, pendingRestoreIndex, state.SelectedItemKey, initializing: true);
+					navigationFocus = _pendingNavigationFocus;
 				}
 				else
 				{
@@ -485,7 +495,6 @@ public partial class MainForm
 					break;
 				case "search":
 					await LoadSearchResults(state.SearchKeyword, state.SearchType, state.CurrentPage, skipSave: true, (state.SelectedDataIndex >= 0) ? state.SelectedDataIndex : state.SelectedIndex);
-					handledByView = true;
 					break;
 				case "artist_entries":
 					if (state.ArtistId > 0)
@@ -531,7 +540,6 @@ public partial class MainForm
 					break;
 				case "artist_category_list":
 					await LoadArtistsByCategoryAsync(state.ArtistType, state.ArtistArea, state.ArtistOffset, skipSave: true, pendingFocusIndex: state.SelectedIndex);
-					handledByView = true;
 					break;
 				case "new_album_category_periods":
 					await LoadAlbumCategoryTypesAsync(skipSave: true);
@@ -541,7 +549,6 @@ public partial class MainForm
 					break;
 				case "new_album_category_list":
 					await LoadAlbumsByCategoryAsync(state.AlbumCategoryType, state.AlbumCategoryArea, state.AlbumCategoryOffset, skipSave: true, pendingFocusIndex: state.SelectedIndex);
-					handledByView = true;
 					break;
 				case "podcast":
 					if (state.PodcastRadioId <= 0)
@@ -559,72 +566,25 @@ public partial class MainForm
 					|| GetCurrentViewContentToken().IsCancellationRequested || !IsNavigationStateApplied(state))
 				{
 					Debug.WriteLine("[Navigation] 页面状态未切换，当前 view=" + _currentViewSource + ", 期望=" + state.ViewSource);
-					ClearPendingNavigationRestoreFocus();
+					if (ReferenceEquals(navigationFocus, _pendingNavigationFocus)) ClearPendingNavigationRestoreFocus();
 					return false;
 				}
 				ClearPlaybackFollowPendingState();
-				if (handledByView)
+				if (ReferenceEquals(navigationFocus, _pendingNavigationFocus) && navigationFocus != null)
 				{
-					UpdateStatusBar("返回到: " + state.ViewName);
-					return true;
+					BindPendingNavigationFocus(_currentViewSource, GetCurrentViewContentToken());
+					if (resultListView.CanFocus && !resultListView.Focused) resultListView.Focus();
 				}
-				DebugLogListFocusState("Restore: after load", _currentViewSource, state);
-				int resolvedIndex = -1;
-				if (state.SelectedIndex >= 0 && state.SelectedIndex < resultListView.Items.Count)
-				{
-					resolvedIndex = state.SelectedIndex;
-				}
-				else if (state.SelectedDataIndex >= 0 && resultListView.Items.Count > 0)
-				{
-					for (int i = 0; i < resultListView.Items.Count; i++)
-					{
-						if (resultListView.Items[i].Tag is int dataIndex && dataIndex == state.SelectedDataIndex)
-						{
-							resolvedIndex = i;
-							break;
-						}
-					}
-					if (resolvedIndex < 0 && state.SelectedDataIndex < resultListView.Items.Count)
-					{
-						resolvedIndex = state.SelectedDataIndex;
-					}
-				}
-				else if (resultListView.Items.Count > 0)
-				{
-					resolvedIndex = Math.Min(Math.Max(state.SelectedIndex, 0), resultListView.Items.Count - 1);
-				}
-				DebugLogListFocusState("Restore: resolved", _currentViewSource, state, resolvedIndex);
-				if (resolvedIndex >= 0 && resolvedIndex < resultListView.Items.Count)
-				{
-					if (!IsListSelectionAndFocusAt(resolvedIndex))
-					{
-						EnsureListSelectionWithoutFocus(resolvedIndex);
-					}
-					if (resultListView.CanFocus && !resultListView.Focused)
-					{
-						resultListView.Focus();
-					}
-					_lastListViewFocusedIndex = resolvedIndex;
-					SetPendingNavigationRestoreFocus(_currentViewSource, resolvedIndex);
-				}
-				else
-				{
-					if (resultListView.CanFocus && !resultListView.Focused)
-					{
-						resultListView.Focus();
-					}
-					ClearPendingNavigationRestoreFocus(_currentViewSource);
-				}
-				DebugLogListFocusState("Restore: applied", _currentViewSource, state, resolvedIndex);
 				_pendingListFocusIndex = -1;
 				_pendingListFocusViewSource = null;
 				_pendingListFocusFromPlayback = false;
 				UpdateStatusBar("返回到: " + state.ViewName);
+				restored = true;
 				return true;
 			}
 			catch (OperationCanceledException)
 			{
-				ClearPendingNavigationRestoreFocus();
+				if (ReferenceEquals(navigationFocus, _pendingNavigationFocus)) ClearPendingNavigationRestoreFocus();
 				return false;
 			}
 			catch (Exception ex)
@@ -632,12 +592,18 @@ public partial class MainForm
 				Debug.WriteLine($"[Navigation] 恢复状态失败: {ex}");
 				MessageBox.Show("返回失败: " + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Hand);
 				UpdateStatusBar("返回失败");
-				ClearPendingNavigationRestoreFocus();
+				if (ReferenceEquals(navigationFocus, _pendingNavigationFocus)) ClearPendingNavigationRestoreFocus();
 				return false;
 			}
 			finally
 			{
 				_autoFocusSuppressionDepth = previousAutoFocusDepth;
+				if (ReferenceEquals(navigationFocus, _pendingNavigationFocus) && navigationFocus != null)
+				{
+					navigationFocus.Initializing = false;
+					if (restored) ApplyPendingNavigationRestoreFocus(_currentViewSource);
+					else ClearPendingNavigationRestoreFocus();
+				}
 			}
 		}
 	}

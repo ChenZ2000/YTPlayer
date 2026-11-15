@@ -247,6 +247,7 @@ public partial class MainForm
 
 	private async Task LoadRemainingUserPlaylistsAsync(int generation)
 	{
+		using var population = TrackListPopulation();
 		try
 		{
 			while (generation == _userPlaylistsProactiveLoadGeneration &&
@@ -311,7 +312,7 @@ public partial class MainForm
 			merged = NormalizeUserPlaylists(merged);
 			await ExecuteOnUiThreadAsync(delegate
 			{
-				if (!string.Equals(_currentViewSource, "user_playlists", StringComparison.OrdinalIgnoreCase))
+				if (viewToken.IsCancellationRequested || !string.Equals(_currentViewSource, "user_playlists", StringComparison.OrdinalIgnoreCase))
 				{
 					return;
 				}
@@ -332,7 +333,7 @@ public partial class MainForm
 				Debug.WriteLine($"[LoadUserPlaylists] 自动加载更多失败: {ex}");
 				await ExecuteOnUiThreadAsync(delegate
 				{
-					if (string.Equals(_currentViewSource, "user_playlists", StringComparison.OrdinalIgnoreCase))
+					if (!viewToken.IsCancellationRequested && string.Equals(_currentViewSource, "user_playlists", StringComparison.OrdinalIgnoreCase))
 					{
 						UpdateStatusBar("加载更多歌单失败，请稍后刷新重试");
 					}
@@ -342,7 +343,7 @@ public partial class MainForm
 		}
 		finally
 		{
-			_userPlaylistsLoadMoreInFlight = false;
+			if (!viewToken.IsCancellationRequested) _userPlaylistsLoadMoreInFlight = false;
 		}
 	}
 
@@ -469,6 +470,7 @@ public partial class MainForm
 
 	private async Task LoadRemainingUserAlbumsAsync(int generation)
 	{
+		using var population = TrackListPopulation();
 		try
 		{
 			while (generation == _userAlbumsProactiveLoadGeneration &&
@@ -527,7 +529,7 @@ public partial class MainForm
 			}
 			await ExecuteOnUiThreadAsync(delegate
 			{
-				if (!string.Equals(_currentViewSource, "user_albums", StringComparison.OrdinalIgnoreCase))
+				if (viewToken.IsCancellationRequested || !string.Equals(_currentViewSource, "user_albums", StringComparison.OrdinalIgnoreCase))
 				{
 					return;
 				}
@@ -547,7 +549,7 @@ public partial class MainForm
 				Debug.WriteLine($"[LoadUserAlbums] 自动加载更多失败: {ex}");
 				await ExecuteOnUiThreadAsync(delegate
 				{
-					if (string.Equals(_currentViewSource, "user_albums", StringComparison.OrdinalIgnoreCase))
+					if (!viewToken.IsCancellationRequested && string.Equals(_currentViewSource, "user_albums", StringComparison.OrdinalIgnoreCase))
 					{
 						UpdateStatusBar("加载更多收藏专辑失败，请稍后刷新重试");
 					}
@@ -557,7 +559,7 @@ public partial class MainForm
 		}
 		finally
 		{
-			_userAlbumsLoadMoreInFlight = false;
+			if (!viewToken.IsCancellationRequested) _userAlbumsLoadMoreInFlight = false;
 		}
 	}
 
